@@ -250,14 +250,22 @@ def test_decode_rejects_token_without_timestamps_when_ttl_required() -> None:
     "payload",
     [
         {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "e": float("nan")},
+        {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "e": float("inf")},
         {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "e": "bad"},
         {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "e": True},
+        {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "e": 10**400},
+        {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "e": -(10**400)},
+        {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "i": float("nan")},
+        {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "i": "bad"},
+        {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "i": True},
+        {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "i": 10**400},
+        {"v": 1, "d": "f", "o": "o", "k": [["s", "1"]], "i": -(10**400)},
     ],
 )
 def test_decode_rejects_malformed_expiration_claim(payload: dict[str, Any]) -> None:
     raw = json.dumps(payload, separators=(",", ":"), allow_nan=True).encode("utf-8")
     body = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-    with pytest.raises(InvalidCursorError):
+    with pytest.raises(InvalidCursorError, match="Invalid pagination cursor: malformed token"):
         decode_cursor(body, "o", 1)
 
 

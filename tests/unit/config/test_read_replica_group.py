@@ -5,7 +5,13 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, ReadReplicaGroup
+from sqlspec.config import (
+    AsyncDatabaseConfig,
+    NoPoolAsyncConfig,
+    NoPoolSyncConfig,
+    ReadReplicaGroup,
+    SyncDatabaseConfig,
+)
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     ImproperConfigurationError,
@@ -381,3 +387,156 @@ async def test_causal_validator_failure_respects_primary_fallback_policy(endpoin
             with group.provide_session(primary=primary, causal_token="lsn-13"):
                 pytest.fail("strict primary must reject fallback")
     assert primary.events == []
+
+
+class _PooledSyncEndpoint(SyncDatabaseConfig[Any, Any, Any]):
+    __slots__ = ("closed_count", "created_count", "events", "fail_exc")
+
+    def __init__(self, *, fail_exc: Exception | None = None, **kwargs: Any) -> None:
+        self.events: list[str] = []
+        self.created_count = 0
+        self.closed_count = 0
+        self.fail_exc = fail_exc
+        super().__init__(**kwargs)
+
+    @contextmanager
+    def provide_session(self, *args: Any, **kwargs: Any) -> Generator[Any]:
+        self.create_pool()
+        yield self.connection_config.get("dsn", "primary")
+
+    def _create_pool(self) -> Any:
+        self.events.append("create_pool")
+        if self.fail_exc is not None:
+            raise self.fail_exc
+        self.created_count += 1
+        return {"pool": self.connection_config.get("dsn", "sync"), "n": self.created_count}
+
+    def _close_pool(self) -> None:
+        self.events.append("close_pool")
+        self.closed_count += 1
+
+
+class _PooledAsyncEndpoint(AsyncDatabaseConfig[Any, Any, Any]):
+    __slots__ = ("closed_count", "created_count", "events", "fail_exc")
+
+    def __init__(self, *, fail_exc: Exception | None = None, **kwargs: Any) -> None:
+        self.events: list[str] = []
+        self.created_count = 0
+        self.closed_count = 0
+        self.fail_exc = fail_exc
+        super().__init__(**kwargs)
+
+    @asynccontextmanager
+    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Any]:
+        await self.create_pool()
+        yield self.connection_config.get("dsn", "primary")
+
+    async def _create_pool(self) -> Any:
+        self.events.append("create_pool")
+        if self.fail_exc is not None:
+            raise self.fail_exc
+        self.created_count += 1
+        return {"pool": self.connection_config.get("dsn", "async"), "n": self.created_count}
+
+    async def _close_pool(self) -> None:
+        self.events.append("close_pool")
+        self.closed_count += 1
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_create_pool_skips_replica_walk_once_initialized_and_resets_on_close(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    endpoint_cls: Any = _PooledAsyncEndpoint if asynchronous else _PooledSyncEndpoint
+    replica = endpoint_cls(connection_config={"dsn": "replica"})
+    primary = endpoint_cls(connection_config={"dsn": "primary"}, replicas=[replica])
+    group = primary.replica_groups["default"]
+    walk_calls = 0
+    original_create_pools = ReadReplicaGroup.create_pools
+
+    def spy_create_pools(group_self: ReadReplicaGroup) -> Any:
+        nonlocal walk_calls
+        if group_self is group:
+            walk_calls += 1
+        return original_create_pools(group_self)
+
+    monkeypatch.setattr(ReadReplicaGroup, "create_pools", spy_create_pools)
+
+    assert primary._replica_pools_initialized is False
+    if asynchronous:
+        pool_a = await primary.create_pool()
+        assert primary._replica_pools_initialized is True
+        pool_b = await primary.create_pool()
+        assert pool_b is pool_a
+        assert walk_calls == 1
+        await primary.close_pool()
+        assert primary._replica_pools_initialized is False
+        pool_c = await primary.create_pool()
+        assert pool_c is not pool_a
+        assert walk_calls == 2
+    else:
+        pool_a = primary.create_pool()
+        assert primary._replica_pools_initialized is True
+        pool_b = primary.create_pool()
+        assert pool_b is pool_a
+        assert walk_calls == 1
+        primary.close_pool()
+        assert primary._replica_pools_initialized is False
+        pool_c = primary.create_pool()
+        assert pool_c is not pool_a
+        assert walk_calls == 2
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "exc_factory",
+    [
+        lambda: DatabaseConnectionError("replica connect failed"),
+        lambda: OperationalError("replica operational failure"),
+        lambda: OSError("replica socket refused"),
+    ],
+)
+async def test_unreachable_replica_during_primary_create_pool_is_isolated_and_recovers_lazily(
+    asynchronous: bool, exc_factory: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = [0.0]
+    endpoint_cls: Any = _PooledAsyncEndpoint if asynchronous else _PooledSyncEndpoint
+    unreachable = endpoint_cls(connection_config={"dsn": "replica-a"}, fail_exc=exc_factory())
+    group = ReadReplicaGroup([unreachable], failure_threshold=1, recovery_seconds=5.0, clock=lambda: now[0])
+    primary = endpoint_cls(connection_config={"dsn": "primary"}, replicas={"default": group})
+
+    with caplog.at_level("WARNING", logger="sqlspec.config"):
+        if asynchronous:
+            pool = await primary.create_pool()
+        else:
+            pool = primary.create_pool()
+
+    assert pool is not None
+    assert primary._replica_pools_initialized is True
+    assert unreachable.connection_instance is None
+    assert group.breaker.is_available(0) is False
+    assert any("Replica pool initialization failed" in record.message for record in caplog.records)
+
+    if asynchronous:
+        async with primary.provide_session() as session_val:
+            assert session_val == "primary"
+        async with primary.provide_read_session() as read_val:
+            assert read_val == "primary"
+    else:
+        with primary.provide_session() as session_val:
+            assert session_val == "primary"
+        with primary.provide_read_session() as read_val:
+            assert read_val == "primary"
+
+    unreachable.fail_exc = None
+    now[0] = 6.0
+
+    if asynchronous:
+        async with primary.provide_read_session() as recovered_val:
+            assert recovered_val == "replica-a"
+    else:
+        with primary.provide_read_session() as recovered_val:
+            assert recovered_val == "replica-a"
+
+    assert unreachable.connection_instance is not None
+    assert group.breaker.is_available(0) is True

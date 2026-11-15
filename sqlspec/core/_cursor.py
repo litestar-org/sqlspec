@@ -397,25 +397,24 @@ def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt
     return _xor_keystream(enc_key, nonce, ciphertext)
 
 
+def _parse_timestamp_claim(raw_value: Any) -> float:
+    if type(raw_value) is bool or not isinstance(raw_value, (int, float)):
+        msg = "Invalid pagination cursor: malformed token"
+        raise InvalidCursorError(msg)
+    try:
+        numeric_value = float(raw_value)
+    except OverflowError as exc:
+        msg = "Invalid pagination cursor: malformed token"
+        raise InvalidCursorError(msg) from exc
+    if not math.isfinite(numeric_value):
+        msg = "Invalid pagination cursor: malformed token"
+        raise InvalidCursorError(msg)
+    return numeric_value
+
+
 def _validate_payload_timestamps(payload: dict[str, Any], ttl_seconds: "float | None") -> None:
-    issued_at: float | None = None
-    expires_at: float | None = None
-    if "i" in payload:
-        raw_issued = payload["i"]
-        if type(raw_issued) is bool or not isinstance(raw_issued, (int, float)) or not math.isfinite(float(raw_issued)):
-            msg = "Invalid pagination cursor: malformed token"
-            raise InvalidCursorError(msg)
-        issued_at = float(raw_issued)
-    if "e" in payload:
-        raw_expires = payload["e"]
-        if (
-            type(raw_expires) is bool
-            or not isinstance(raw_expires, (int, float))
-            or not math.isfinite(float(raw_expires))
-        ):
-            msg = "Invalid pagination cursor: malformed token"
-            raise InvalidCursorError(msg)
-        expires_at = float(raw_expires)
+    issued_at: float | None = _parse_timestamp_claim(payload["i"]) if "i" in payload else None
+    expires_at: float | None = _parse_timestamp_claim(payload["e"]) if "e" in payload else None
     now = time.time()
     if expires_at is not None and now >= expires_at:
         msg = "Invalid pagination cursor: expired"

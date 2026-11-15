@@ -2023,3 +2023,69 @@ def test_sql_explain_preserves_execute_many_positional_parameters() -> None:
     compiled_sql, compiled_params = explained.compile()
     assert compiled_sql.startswith("EXPLAIN")
     assert compiled_params == [(1, 2), (3, 4)]
+
+
+def test_statement_config_with_script_mode_caches_frozen_variant() -> None:
+    """Frozen StatementConfig caches its static script compilation variant across SQL.as_script() calls."""
+    frozen = StatementConfig(dialect="sqlite")
+    frozen.freeze()
+    script_cfg_1 = frozen._with_script_mode()
+    script_cfg_2 = frozen._with_script_mode()
+    assert script_cfg_1 is script_cfg_2
+    assert script_cfg_1 is not frozen
+    assert script_cfg_1._is_frozen is True
+    assert script_cfg_1.parameter_config.needs_static_script_compilation is True
+    assert script_cfg_1._with_script_mode() is script_cfg_1
+
+    stmt_1 = SQL("SELECT ?", 1, statement_config=frozen).as_script()
+    stmt_2 = SQL("SELECT ?", 2, statement_config=frozen).as_script()
+    assert stmt_1.statement_config is script_cfg_1
+    assert stmt_2.statement_config is script_cfg_1
+
+    unfrozen = StatementConfig(dialect="sqlite")
+    unfrozen_script_1 = unfrozen._with_script_mode()
+    unfrozen_script_2 = unfrozen._with_script_mode()
+    assert unfrozen_script_1 is not unfrozen
+    assert unfrozen_script_1 is not unfrozen_script_2
+    assert unfrozen_script_1._is_frozen is False
+    assert unfrozen_script_1.parameter_config.needs_static_script_compilation is True
+
+
+def _static_output_transformer(sql: str, params: Any) -> tuple[str, Any]:
+    return sql, params
+
+
+def _static_stmt_transformer(expr: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
+    return expr, params
+
+
+def test_statement_config_precomputes_uncacheable_transformers() -> None:
+    """StatementConfig._has_uncacheable_transformers reflects AST and dynamic transformers at init."""
+    static_cfg = StatementConfig(
+        output_transformer=_static_output_transformer, statement_transformers=(_static_stmt_transformer,)
+    )
+    assert static_cfg._has_uncacheable_transformers is False
+
+    def local_output(sql: str, params: Any) -> tuple[str, Any]:
+        return sql, params
+
+    def local_stmt(expr: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
+        return expr, params
+
+    def ast_transformer(expr: exp.Expr, params: Any, _profile: Any, _is_many: bool) -> tuple[exp.Expr, Any]:
+        return expr, params
+
+    assert StatementConfig(output_transformer=local_output)._has_uncacheable_transformers is True
+    assert StatementConfig(statement_transformers=(local_stmt,))._has_uncacheable_transformers is True
+    assert (
+        StatementConfig(
+            parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=local_output)
+        )._has_uncacheable_transformers
+        is True
+    )
+    assert (
+        StatementConfig(
+            parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=ast_transformer)
+        )._has_uncacheable_transformers
+        is True
+    )

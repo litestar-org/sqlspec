@@ -79,6 +79,8 @@ TYPED_PARAMETER_SLOTS: Final[tuple[str, ...]] = ("_hash", "original_type", "sema
 PARAMETER_INFO_SLOTS: Final[tuple[str, ...]] = ("name", "ordinal", "placeholder_text", "position", "style")
 PARAMETER_STYLE_CONFIG_SLOTS: Final[tuple[str, ...]] = (
     "_hash_cache",
+    "_positional_default_execution",
+    "_supports_named_execution",
     "allow_mixed_parameter_styles",
     "ast_transformer",
     "default_execution_parameter_style",
@@ -118,6 +120,7 @@ DRIVER_PARAMETER_PROFILE_SLOTS: Final[tuple[str, ...]] = (
 PARAMETER_PROFILE_SLOTS: Final[tuple[str, ...]] = (
     "_parameters",
     "_placeholder_counts",
+    "is_positional_only",
     "named_parameters",
     "reused_ordinals",
     "styles",
@@ -164,6 +167,7 @@ _POSITIONAL_STYLES: Final[frozenset["ParameterStyle"]] = frozenset({
 })
 _NAMED_STYLE_VALUES: Final[frozenset[str]] = frozenset(style.value for style in _NAMED_STYLES)
 _POSITIONAL_STYLE_VALUES: Final[frozenset[str]] = frozenset(style.value for style in _POSITIONAL_STYLES)
+_CACHED_POSITIONAL_STYLE_VALUES: Final[frozenset[str]] = _POSITIONAL_STYLE_VALUES
 _EXPANDING_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
     ParameterStyle.QMARK,
     ParameterStyle.POSITIONAL_PYFORMAT,
@@ -277,13 +281,21 @@ class ParameterStyleConfig:
         self.json_serializer = json_serializer
         self.json_deserializer = json_deserializer
         self._hash_cache: int | None = None
+        self._positional_default_execution: bool = self.default_execution_parameter_style in _POSITIONAL_STYLES
+        self._supports_named_execution: bool = bool(
+            self.supported_execution_parameter_styles
+            and (
+                ParameterStyle.NAMED_PYFORMAT in self.supported_execution_parameter_styles
+                or ParameterStyle.NAMED_COLON in self.supported_execution_parameter_styles
+            )
+        )
 
     def __hash__(self) -> int:
         if self._hash_cache is None:
             coercion_items: tuple[tuple[type, Any], ...] | None = None
             if self.type_coercion_map:
                 items: list[tuple[type, Any]] = []
-                for key, value in sorted(self.type_coercion_map.items(), key=lambda kv: str(kv[0])):
+                for key, value in sorted(self.type_coercion_map.items(), key=_coercion_item_sort_key):
                     try:
                         hash(value)
                     except TypeError:
@@ -478,6 +490,7 @@ class ParameterProfile:
     """Aggregate metadata describing detected parameters."""
 
     __slots__ = PARAMETER_PROFILE_SLOTS
+    is_positional_only: bool
     named_parameters: tuple[str, ...]
     reused_ordinals: tuple[int, ...]
     styles: tuple[str, ...]
@@ -494,6 +507,10 @@ class ParameterProfile:
                 self.styles = tuple(sorted(unique_styles))
         else:
             self.styles = ()
+
+        self.is_positional_only = bool(param_tuple) and all(
+            style in _CACHED_POSITIONAL_STYLE_VALUES for style in self.styles
+        )
 
         placeholder_counts: dict[str, int] = {}
         reused_ordinals: list[int] = []
@@ -619,6 +636,10 @@ class _TupleAdapter:
         if self._as_list:
             return self._serializer(list(value))
         return self._serializer(value)
+
+
+def _coercion_item_sort_key(item: "tuple[type, Callable[[Any], Any]]") -> str:
+    return str(item[0])
 
 
 def _wrap_parameter_by_type(value: Any, semantic_name: "str | None" = None) -> Any:

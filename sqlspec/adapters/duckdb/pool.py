@@ -44,6 +44,15 @@ POOL_RECYCLE: Final[int] = 86400
 HEALTH_CHECK_INTERVAL: Final[float] = 30.0
 SECRET_CONFLICT_ATTEMPTS: Final[int] = 5
 SECRET_CONFLICT_BACKOFF: Final[float] = 0.005
+_MAX_IDLE_TASK_CONNECTIONS: Final[int] = 8
+_TASK_STORAGE_STATE_KEYS: Final[tuple[str, ...]] = (
+    "storage_extensions",
+    "storage_secrets",
+    "secret_refresh_times",
+    "storage_protocols",
+    "profile_path",
+    "_cached_storage_settings",
+)
 _SECRET_LOCK: Final = threading.Lock()
 _SECRET_VISIBLE_SETTINGS: Final[frozenset[str]] = frozenset({
     "endpoint",
@@ -86,6 +95,7 @@ class DuckDBConnectionPool:
         "_generation",
         "_has_dynamic_secrets",
         "_health_check_interval",
+        "_idle_task_states",
         "_installed_signatures",
         "_is_memory_db",
         "_lock",
@@ -130,6 +140,7 @@ class DuckDBConnectionPool:
         self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
         self._connection_registry: set[DuckDBConnection] = set()
+        self._idle_task_states: list[dict[str, Any]] = []
         self._generation = 0
         self._lock = threading.RLock()
         self._pool_id = str(uuid4())[:8]
@@ -319,11 +330,17 @@ class DuckDBConnectionPool:
         if task_states is not None:
             task_states.clear()
         with self._lock:
-            orphaned = list(self._connection_registry)
+            idle_states = list(self._idle_task_states)
+            self._idle_task_states.clear()
+            orphaned = set(self._connection_registry)
             self._connection_registry.clear()
             profile_paths = list(self._profile_paths.values())
             self._profile_paths.clear()
             self._generation += 1
+        for state in idle_states:
+            idle_connection = cast("DuckDBConnection | None", state.get("connection"))
+            if idle_connection is not None:
+                orphaned.add(idle_connection)
         for connection in orphaned:
             with suppress(Exception):
                 connection.close()
@@ -534,10 +551,49 @@ class DuckDBConnectionPool:
             thread_dict["_task_states"] = task_states
         state = task_states.get(task)
         if state is None:
-            state = {}
+            state = self._pop_idle_task_state() or {}
             task_states[task] = state
             task.add_done_callback(partial(self._retire_finished_task_state, task_states))
         return state
+
+    def _pop_idle_task_state(self) -> "dict[str, Any] | None":
+        now = time.time()
+        while True:
+            with self._lock:
+                if not self._idle_task_states:
+                    return None
+                candidate = self._idle_task_states.pop()
+                current_generation = self._generation
+            connection = cast("DuckDBConnection | None", candidate.get("connection"))
+            if connection is None:
+                continue
+            if candidate.get("generation") != current_generation:
+                self._retire_connection(connection)
+                continue
+            created_at = float(candidate.get("created_at", 0.0))
+            if self._recycle > 0 and (now - created_at) > self._recycle:
+                self._retire_connection(connection)
+                continue
+            idle_time = now - float(candidate.get("last_used", 0.0))
+            if idle_time > self._health_check_interval and not self._is_connection_alive(connection):
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "pool.connection.recycle",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    database=self._database_name,
+                    idle_seconds=round(idle_time, 1),
+                    reason="failed_health_check",
+                )
+                self._retire_connection(connection)
+                continue
+            with self._lock:
+                if self._generation != current_generation or connection not in self._connection_registry:
+                    self._retire_connection(connection)
+                    return None
+            candidate["last_used"] = now
+            return candidate
 
     def _existing_checkout_state(self) -> "dict[str, Any] | None":
         """Return an existing checkout state mapping without allocating a new task slot."""
@@ -561,9 +617,24 @@ class DuckDBConnectionPool:
         connection = cast("DuckDBConnection | None", state.get("connection"))
         if connection is None:
             return
-        with self._lock:
-            if self._is_memory_db and len(self._connection_registry) <= 1:
-                return
+        if int(state.get("depth", 0)) == 0:
+            with self._lock:
+                if (
+                    state.get("generation") == self._generation
+                    and connection in self._connection_registry
+                    and len(self._idle_task_states) < _MAX_IDLE_TASK_CONNECTIONS
+                ):
+                    idle_state: dict[str, Any] = {
+                        "connection": connection,
+                        "created_at": state["created_at"],
+                        "last_used": state["last_used"],
+                        "generation": self._generation,
+                    }
+                    for key in _TASK_STORAGE_STATE_KEYS:
+                        if key in state:
+                            idle_state[key] = state[key]
+                    self._idle_task_states.append(idle_state)
+                    return
         self._retire_connection(connection)
 
     def _retire_connection(self, connection: DuckDBConnection) -> None:
@@ -610,10 +681,8 @@ class DuckDBConnectionPool:
 
 
 def _current_async_task() -> "asyncio.Task[Any] | None":
-    try:
-        return asyncio.current_task()
-    except RuntimeError:
-        return None
+    loop = asyncio._get_running_loop()
+    return asyncio.current_task(loop) if loop is not None else None
 
 
 def _sanitize_database_name(database: object) -> str:

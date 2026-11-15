@@ -191,23 +191,11 @@ _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
     ParameterStyle.NAMED_DOLLAR.value,
     ParameterStyle.NAMED_PYFORMAT.value,
 ))
-_CACHED_POSITIONAL_STYLES: Final[frozenset[str]] = frozenset((
-    ParameterStyle.QMARK.value,
-    ParameterStyle.NUMERIC.value,
-    ParameterStyle.POSITIONAL_COLON.value,
-    ParameterStyle.POSITIONAL_PYFORMAT.value,
-))
 _POSITIONAL_DRIVER_STYLES: Final[frozenset[ParameterStyle]] = frozenset((
     ParameterStyle.NUMERIC,
     ParameterStyle.QMARK,
     ParameterStyle.POSITIONAL_COLON,
     ParameterStyle.POSITIONAL_PYFORMAT,
-))
-_NAMED_EXECUTION_STYLES: Final[frozenset[ParameterStyle]] = frozenset((
-    ParameterStyle.NAMED_COLON,
-    ParameterStyle.NAMED_PYFORMAT,
-    ParameterStyle.NAMED_AT,
-    ParameterStyle.NAMED_DOLLAR,
 ))
 _TOP_LIMIT_DIALECTS: Final[frozenset[str]] = frozenset({"tsql", "mssql"})
 _DYNAMIC_CALLABLE_COUNTER: Final = _itertools_count(1)
@@ -1917,15 +1905,20 @@ class CommonDriverAttributesMixin:
             and not cached.applied_wrap_types
             and not config.type_coercion_map
             and not cached.needs_style_remap
-            and not isinstance(params, Mapping)
+            and not _is_mapping_params(params)
         ):
             return params
-        rebound_input = _prepare_cached_rebind_input(
-            params, cached.parameter_profile, input_named_parameters=cached.input_named_parameters, is_many=False
+        profile = cached.parameter_profile
+        rebound_input = (
+            _prepare_cached_rebind_input(
+                params, profile, input_named_parameters=cached.input_named_parameters, is_many=False
+            )
+            if profile is not None and profile.is_positional_only
+            else params
         )
         return self._stmt_cache_rebind_processor.transform_cached_parameters(
             rebound_input,
-            cached.parameter_profile,
+            profile,
             config,
             input_named_parameters=cached.input_named_parameters,
             is_many=False,
@@ -2289,7 +2282,7 @@ class CommonDriverAttributesMixin:
             self.connection is not _DETACHED_CONNECTION
             and self._stmt_cache_max_size > 0
             and not self.statement_config._has_transformers
-            and not _has_uncacheable_transformers(self.statement_config)
+            and not self.statement_config._has_uncacheable_transformers
         )
 
     def _require_capability(self, capability_flag: str) -> None:
@@ -2434,7 +2427,7 @@ class CommonDriverAttributesMixin:
             cached.input_named_parameters
             or cached.applied_wrap_types
             or cached.needs_style_remap
-            or isinstance(params, Mapping)
+            or _is_mapping_params(params)
         )
         if not needs_rebind and params:
             param_values = _cache_param_values(params)
@@ -2815,24 +2808,22 @@ class CommonDriverAttributesMixin:
                 and isinstance(prepared_statement._processed_state, ProcessedState)
                 else None
             )
-            if processed_state is not None and _is_positional_only_profile(processed_state.parameter_profile):
+            if (
+                processed_state is not None
+                and processed_state.parameter_profile is not None
+                and processed_state.parameter_profile.is_positional_only
+            ):
                 aligned_values = _align_positional_mapping(parameters, processed_state.parameter_profile)
                 return [coerce_value(value, type_coercion_map, fallback_items) for value in aligned_values]
 
             param_config = statement_config.parameter_config
-            supported_exec = param_config.supported_execution_parameter_styles
-            default_exec = param_config.default_execution_parameter_style
-            supports_named_exec = bool(
-                supported_exec
-                and (ParameterStyle.NAMED_PYFORMAT in supported_exec or ParameterStyle.NAMED_COLON in supported_exec)
-            )
-            if supports_named_exec and not (
-                default_exec in _POSITIONAL_DRIVER_STYLES
-                and all(_parameter_sort_key((key, None)) != float("inf") for key in parameters)
+            if param_config._supports_named_execution and not (
+                param_config._positional_default_execution and _all_keys_positional(parameters)
             ):
                 return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map, fallback_items)
-            if param_config.default_parameter_style in _POSITIONAL_DRIVER_STYLES or (
-                default_exec in _POSITIONAL_DRIVER_STYLES and default_exec not in _NAMED_EXECUTION_STYLES
+            if (
+                param_config.default_parameter_style in _POSITIONAL_DRIVER_STYLES
+                or param_config._positional_default_execution
             ):
                 sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
                 return [coerce_value(value, type_coercion_map, fallback_items) for _, value in sorted_items]
@@ -2970,7 +2961,7 @@ class CommonDriverAttributesMixin:
         if (
             cache_config.compiled_cache_enabled
             and statement_config.enable_caching
-            and not _has_uncacheable_transformers(statement_config)
+            and not statement_config._has_uncacheable_transformers
         ):
             cache_key = self._compile_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
@@ -2985,11 +2976,15 @@ class CommonDriverAttributesMixin:
             if cached_result is not None:
                 parameter_profile = cached_result.parameter_profile
                 if parameter_profile is not None:
-                    rebound_input = _prepare_cached_rebind_input(
-                        statement.parameters,
-                        parameter_profile,
-                        input_named_parameters=cached_result.input_named_parameters,
-                        is_many=statement.is_many,
+                    rebound_input = (
+                        _prepare_cached_rebind_input(
+                            statement.parameters,
+                            parameter_profile,
+                            input_named_parameters=cached_result.input_named_parameters,
+                            is_many=statement.is_many,
+                        )
+                        if parameter_profile.is_positional_only
+                        else statement.parameters
                     )
                     prepared_parameters = self._stmt_cache_rebind_processor.transform_cached_parameters(
                         rebound_input,
@@ -3639,10 +3634,23 @@ def _parameter_sort_key(item: "tuple[str, object]") -> float:
     return float("inf")
 
 
-def _is_positional_only_profile(parameter_profile: Any) -> bool:
-    if parameter_profile is None or not parameter_profile.parameters:
-        return False
-    return all(style in _CACHED_POSITIONAL_STYLES for style in parameter_profile.styles)
+def _is_mapping_params(params: Any) -> bool:
+    return type(params) is dict or (type(params) not in (tuple, list) and isinstance(params, Mapping))
+
+
+def _is_positional_param_key(key: str) -> bool:
+    if key.isdigit():
+        return True
+    if len(key) > 1 and key[0] in {"$", ":", "?"} and key[1:].isdigit():
+        return True
+    return key.startswith("param_") and key[6:].isdigit()
+
+
+def _all_keys_positional(parameters: "dict[str, Any]") -> bool:
+    for key in parameters:  # noqa: SIM110
+        if not _is_positional_param_key(key):
+            return False
+    return True
 
 
 def _lookup_mapping_value_for_param(
@@ -3699,23 +3707,23 @@ def _prepare_single_cached_mapping(
 def _prepare_cached_rebind_input(
     params: Any, parameter_profile: Any, *, input_named_parameters: "tuple[str, ...]", is_many: bool
 ) -> Any:
-    if params is None or parameter_profile is None or not _is_positional_only_profile(parameter_profile):
+    if params is None or parameter_profile is None or not parameter_profile.is_positional_only:
         return params
     if not is_many:
-        if isinstance(params, Mapping):
+        if _is_mapping_params(params):
             return _prepare_single_cached_mapping(params, parameter_profile, input_named_parameters)
         return params
     if isinstance(params, (list, tuple)) and params:
         has_mapping = False
         for row in params:
-            if isinstance(row, Mapping):
+            if _is_mapping_params(row):
                 has_mapping = True
                 break
         if not has_mapping:
             return params
         updated_rows = [
             _prepare_single_cached_mapping(row, parameter_profile, input_named_parameters)
-            if isinstance(row, Mapping)
+            if _is_mapping_params(row)
             else row
             for row in params
         ]

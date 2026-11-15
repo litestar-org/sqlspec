@@ -3855,3 +3855,80 @@ def test_extract_parameters_detects_adjacent_named_placeholders_without_whitespa
     validator = ParameterValidator()
     extracted = validator.extract_parameters("INSERT INTO t VALUES (:a,:b,:c)", dialect=dialect)
     assert [info.name for info in extracted] == ["a", "b", "c"]
+
+
+@pytest.mark.parametrize(
+    ("styles", "expected"),
+    [
+        ((), False),
+        ((ParameterStyle.QMARK,), True),
+        ((ParameterStyle.NUMERIC,), True),
+        ((ParameterStyle.POSITIONAL_COLON,), True),
+        ((ParameterStyle.POSITIONAL_PYFORMAT,), True),
+        ((ParameterStyle.QMARK, ParameterStyle.NUMERIC), True),
+        ((ParameterStyle.NAMED_COLON,), False),
+        ((ParameterStyle.NAMED_PYFORMAT,), False),
+        ((ParameterStyle.QMARK, ParameterStyle.NAMED_COLON), False),
+    ],
+)
+def test_parameter_profile_precomputes_is_positional_only(styles: tuple[ParameterStyle, ...], expected: bool) -> None:
+    infos = [
+        ParameterInfo(
+            name=None if style.value != "named_colon" else "x",
+            style=style,
+            position=idx,
+            ordinal=idx,
+            placeholder_text="?",
+        )
+        for idx, style in enumerate(styles)
+    ]
+    profile = ParameterProfile(infos)
+    assert profile.is_positional_only is expected
+
+
+def test_parameter_style_config_precomputes_execution_flags_and_hash_sorting() -> None:
+    qmark_cfg = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        type_coercion_map={int: str, str: str.upper},
+    )
+    assert qmark_cfg._positional_default_execution is True
+    assert qmark_cfg._supports_named_execution is False
+
+    psycopg_like_cfg = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
+        type_coercion_map={str: str.upper, int: str},
+    )
+    assert psycopg_like_cfg._positional_default_execution is True
+    assert psycopg_like_cfg._supports_named_execution is True
+    assert hash(qmark_cfg) != hash(psycopg_like_cfg)
+    assert hash(
+        ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            default_execution_parameter_style=ParameterStyle.QMARK,
+            supported_execution_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={str: str.upper, int: str},
+        )
+    ) == hash(qmark_cfg)
+
+
+def test_driver_common_is_mapping_params_and_all_keys_positional() -> None:
+    from types import MappingProxyType
+
+    from sqlspec.driver._common import _all_keys_positional, _is_mapping_params
+
+    assert _is_mapping_params({"a": 1}) is True
+    assert _is_mapping_params(MappingProxyType({"a": 1})) is True
+    assert _is_mapping_params((1, 2)) is False
+    assert _is_mapping_params([1, 2]) is False
+    assert _is_mapping_params("abc") is False
+
+    assert _all_keys_positional({"1": "a", "$2": "b", ":3": "c", "?4": "d", "param_0": "e"}) is True
+    assert _all_keys_positional({"id": 1, "1": "a"}) is False
+    assert _all_keys_positional({"param_x": 1}) is False

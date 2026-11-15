@@ -589,3 +589,109 @@ def test_sqlite_pool_respects_explicit_uri_false_for_memory_substrings(
         assert (tmp_path / db_name).exists()
     finally:
         pool.close()
+
+
+def test_current_async_task_returns_none_without_running_loop() -> None:
+    """_current_async_task returns None synchronously and the active Task inside an event loop."""
+    assert sqlite_pool_module._current_async_task() is None
+
+    async def _inside() -> bool:
+        return sqlite_pool_module._current_async_task() is asyncio.current_task()
+
+    assert asyncio.run(_inside()) is True
+
+
+@pytest.mark.parametrize("db_kind", ["file", "shared_memory", "private_memory"])
+def test_sqlite_pool_reuses_idle_connections_for_sequential_asyncio_tasks(
+    tmp_path: Path, db_kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sequential asyncio tasks reuse idle task connections without opening N connections."""
+    if db_kind == "file":
+        pool = SqliteConnectionPool({"database": str(tmp_path / "sequential.db")})
+    elif db_kind == "shared_memory":
+        pool = SqliteConnectionPool({"database": f"file:seq_{id(tmp_path)}?mode=memory&cache=shared", "uri": True})
+    else:
+        pool = SqliteConnectionPool({"database": ":memory:"})
+
+    original_new_connection = SqliteConnectionPool.new_connection
+    created_connections: list[Any] = []
+
+    def counting_new_connection(pool_self: SqliteConnectionPool) -> Any:
+        conn = original_new_connection(pool_self)
+        if pool_self is pool:
+            created_connections.append(conn)
+        return conn
+
+    monkeypatch.setattr(SqliteConnectionPool, "new_connection", counting_new_connection)
+
+    async def _run() -> list[int]:
+        seen_ids: list[int] = []
+
+        async def worker(idx: int) -> None:
+            with pool.get_connection() as conn:
+                seen_ids.append(id(conn))
+                assert conn.execute("SELECT ?", (idx,)).fetchone() == (idx,)
+
+        for idx in range(20):
+            await asyncio.create_task(worker(idx))
+
+        return seen_ids
+
+    try:
+        seen_ids = asyncio.run(_run())
+        assert len(created_connections) == 1
+        assert len(set(seen_ids)) == 1
+        assert pool.size() == 0
+        assert len(pool._idle_task_connections) == 1
+    finally:
+        pool.close()
+
+    assert pool._idle_task_connections == []
+    with pytest.raises(sqlite3.ProgrammingError):
+        created_connections[0].execute("SELECT 1")
+
+
+def test_sqlite_pool_caps_idle_task_connections_and_closes_dirty_connections(tmp_path: Path) -> None:
+    """Concurrent tasks isolate connections, idle cache caps at 8, and dirty transactions close."""
+    pool = SqliteConnectionPool({"database": str(tmp_path / "cap.db")})
+
+    async def _run() -> None:
+        all_entered = asyncio.Event()
+        entered = 0
+        seen_ids: list[int] = []
+
+        async def concurrent_worker() -> None:
+            nonlocal entered
+            with pool.get_connection() as conn:
+                seen_ids.append(id(conn))
+                entered += 1
+                if entered == 12:
+                    all_entered.set()
+                await all_entered.wait()
+
+        tasks = [asyncio.create_task(concurrent_worker()) for _ in range(12)]
+        await asyncio.gather(*tasks)
+        assert len(set(seen_ids)) == 12
+        assert pool.size() == 0
+        assert len(pool._idle_task_connections) == 8
+
+        dirty_conns: list[Any] = []
+
+        async def dirty_worker() -> None:
+            conn = pool.acquire()
+            dirty_conns.append(conn)
+            conn.execute("CREATE TABLE IF NOT EXISTS dirty_t (x INT)")
+            conn.execute("INSERT INTO dirty_t VALUES (1)")
+            assert conn.in_transaction
+
+        await asyncio.create_task(dirty_worker())
+        assert pool.size() == 0
+        assert len(pool._idle_task_connections) == 7
+        with pytest.raises(sqlite3.ProgrammingError):
+            dirty_conns[0].execute("SELECT 1")
+
+    try:
+        asyncio.run(_run())
+    finally:
+        pool.close()
+    assert pool._idle_task_connections == []

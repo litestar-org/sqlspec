@@ -1,5 +1,6 @@
 """DuckDB configuration tests covering statement config builders."""
 
+import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any, NotRequired, get_type_hints
@@ -26,7 +27,7 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
-from sqlspec.adapters.duckdb.pool import _SQL_IDENTIFIER_RE, _validate_sql_identifier
+from sqlspec.adapters.duckdb.pool import _SQL_IDENTIFIER_RE, DuckDBConnectionPool, _validate_sql_identifier
 from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -486,3 +487,67 @@ def test_adbc_duckdb_rejects_named_memory_database(conn_cfg: dict[str, Any]) -> 
     """Named ':memory:<name>' identifiers are rejected for DuckDB ADBC to avoid local file creation."""
     with pytest.raises(ImproperConfigurationError, match="DuckDB ADBC"):
         build_adbc_connection_config(conn_cfg)
+
+
+@pytest.mark.parametrize("use_memory", [False, True])
+def test_duckdb_config_reuses_idle_task_connections_sequentially_and_isolates_concurrent(
+    tmp_path: Path, use_memory: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sequential asyncio tasks reuse idle DuckDB connections while concurrent tasks isolate them."""
+    db_target = ":memory:" if use_memory else str(tmp_path / "seq_tasks.duckdb")
+    config = DuckDBConfig(connection_config={"database": db_target})
+    pool = config.provide_pool()
+    original_new_connection = DuckDBConnectionPool.new_connection
+    created_connections: list[Any] = []
+
+    def counting_new_connection(pool_self: DuckDBConnectionPool, record_thread_state: bool = False) -> Any:
+        conn = original_new_connection(pool_self, record_thread_state=record_thread_state)
+        if pool_self is pool:
+            created_connections.append(conn)
+        return conn
+
+    monkeypatch.setattr(DuckDBConnectionPool, "new_connection", counting_new_connection)
+
+    async def _run() -> None:
+        seq_ids: list[int] = []
+
+        async def sequential_worker(idx: int) -> None:
+            with config.provide_session() as session:
+                seq_ids.append(id(session.connection))
+                assert session.select_value("SELECT ?", idx) == idx
+
+        for idx in range(12):
+            await asyncio.create_task(sequential_worker(idx))
+        await asyncio.sleep(0)
+
+        assert len(created_connections) == 1
+        assert len(set(seq_ids)) == 1
+        assert len(pool._idle_task_states) == 1
+
+        all_entered = asyncio.Event()
+        entered = 0
+        conc_ids: list[int] = []
+
+        async def concurrent_worker() -> None:
+            nonlocal entered
+            with config.provide_session() as session:
+                conc_ids.append(id(session.connection))
+                entered += 1
+                if entered == 10:
+                    all_entered.set()
+                await all_entered.wait()
+
+        tasks = [asyncio.create_task(concurrent_worker()) for _ in range(10)]
+        await asyncio.gather(*tasks)
+        await asyncio.sleep(0)
+        assert len(set(conc_ids)) == 10
+        assert len(created_connections) == 10
+        assert len(pool._idle_task_states) == 8
+
+    try:
+        asyncio.run(_run())
+    finally:
+        config.close_pool()
+
+    assert pool._idle_task_states == []
+    assert pool.size() == 0

@@ -3,6 +3,7 @@
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
+from types import BuiltinFunctionType, FunctionType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import sqlglot
@@ -703,11 +704,7 @@ class SQL:
         """
         new_sql = self._copy_base(self._raw_expression or self._raw_sql)
         new_sql._is_script = True
-        param_config = self._statement_config.parameter_config
-        if not param_config.needs_static_script_compilation:
-            new_sql._statement_config = self._statement_config.replace(
-                parameter_config=param_config.replace(needs_static_script_compilation=True)
-            )
+        new_sql._statement_config = self._statement_config._with_script_mode()
         return new_sql
 
     def copy(self, statement: "str | exp.Expr | None" = None, parameters: Any | None = None, **kwargs: Any) -> "SQL":
@@ -1780,8 +1777,10 @@ class StatementConfig:
     __slots__ = (
         *SQL_CONFIG_SLOTS,
         "_dialect_variants",
-        "_has_transformers",
         "_has_output_transformer",
+        "_has_transformers",
+        "_has_uncacheable_transformers",
+        "_script_variant",
         "_user_statement_transformers",
     )
 
@@ -1885,8 +1884,12 @@ class StatementConfig:
         self._hash_cache: int | None = None
         self._is_frozen = False
         self._dialect_variants: dict[str, StatementConfig] | None = None
+        self._script_variant: StatementConfig | None = None
         self._has_transformers = bool(self._user_statement_transformers)
         self._has_output_transformer = self.output_transformer is not None
+        self._has_uncacheable_transformers = _config_has_uncacheable_transformers(
+            self.parameter_config, self.output_transformer, self.statement_transformers
+        )
 
     def __hash__(self) -> int:
         """Hash based on configuration settings."""
@@ -2050,6 +2053,26 @@ class StatementConfig:
             variants[dialect] = derived
         return derived
 
+    def _with_script_mode(self) -> "StatementConfig":
+        """Return this configuration with static script compilation enabled.
+
+        Frozen configurations reuse one derived configuration so its cached fingerprint and
+        processing caches carry over between script executions.
+
+        Returns:
+            Configuration whose ``parameter_config.needs_static_script_compilation`` is True.
+        """
+        if self.parameter_config.needs_static_script_compilation:
+            return self
+        if not self._is_frozen:
+            return self.replace(parameter_config=self.parameter_config.replace(needs_static_script_compilation=True))
+        derived = self._script_variant
+        if derived is None:
+            derived = self.replace(parameter_config=self.parameter_config.replace(needs_static_script_compilation=True))
+            derived.freeze()
+            self._script_variant = derived
+        return derived
+
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
         """Compare parameter configs."""
         return bool(
@@ -2184,3 +2207,25 @@ def _raw_condition(condition: str, dialect: "str | None" = None) -> exp.Expr:
 def _has_unquoted_semicolon(fragment: str, dialect: "str | None" = None) -> bool:
     """Return whether a SQL fragment contains a statement separator outside comments and quoted literals."""
     return contains_statement_terminator(fragment, dialect)
+
+
+def _is_dynamic_callable(func: Any) -> bool:
+    if func is None:
+        return False
+    if isinstance(func, (FunctionType, BuiltinFunctionType)):
+        qualname = getattr(func, "__qualname__", "") or ""
+        return "<locals>" in qualname or getattr(func, "__closure__", None) is not None
+    func_type = type(func)
+    return (
+        getattr(func_type, "__hash__", None) is object.__hash__ or getattr(func_type, "__eq__", None) is object.__eq__
+    )
+
+
+def _config_has_uncacheable_transformers(
+    param_config: "ParameterStyleConfig", output_transformer: Any, statement_transformers: "tuple[Any, ...]"
+) -> bool:
+    if param_config.ast_transformer is not None:
+        return True
+    if _is_dynamic_callable(output_transformer) or _is_dynamic_callable(param_config.output_transformer):
+        return True
+    return any(_is_dynamic_callable(transformer) for transformer in statement_transformers)

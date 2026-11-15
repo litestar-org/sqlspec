@@ -997,6 +997,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "_migration_lock",
         "_observability_runtime",
         "_replica_groups",
+        "_replica_pools_initialized",
         "_storage_capabilities",
         "_tenant_key",
         "bind_key",
@@ -1011,6 +1012,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     _tenant_key: Any
     _is_replica: bool
     _replica_groups: "dict[str, ReadReplicaGroup[Any]]"
+    _replica_pools_initialized: bool
     _migration_loader: "SQLFileLoader | None"
     _migration_commands: "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] | None"
     _migration_lock: "threading.RLock"
@@ -1705,10 +1707,12 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     def _create_replica_pools_sync(self) -> None:
         for group in self._replica_groups.values():
             group.create_pools()
+        self._replica_pools_initialized = True
 
     async def _create_replica_pools_async(self) -> None:
         for group in self._replica_groups.values():
             await cast("Awaitable[list[Any]]", group.create_pools())
+        self._replica_pools_initialized = True
 
     def _close_pools_sync(self, close_primary: Callable[[], None] | None = None) -> None:
         error: BaseException | None = None
@@ -1723,6 +1727,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
                 group.close_pools()
             except BaseException as exc:
                 error = error or exc
+        self._replica_pools_initialized = False
         if error is not None:
             raise error
 
@@ -1739,6 +1744,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
                 await cast("Awaitable[None]", group.close_pools())
             except BaseException as exc:
                 error = error or exc
+        self._replica_pools_initialized = False
         if error is not None:
             raise error
 
@@ -2104,6 +2110,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """
         self._is_replica = is_replica
         self._replica_groups = {}
+        self._replica_pools_initialized = False
         self._migration_lock = threading.RLock()
         self._migration_loader = None
         self._migration_commands = None
@@ -2398,7 +2405,8 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         raise NotImplementedError
 
     def create_pool(self) -> None:
-        self._create_replica_pools_sync()
+        if not self._replica_pools_initialized:
+            self._create_replica_pools_sync()
 
     def close_pool(self) -> None:
         self._close_pools_sync()
@@ -2518,7 +2526,8 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         raise NotImplementedError
 
     async def create_pool(self) -> None:
-        await self._create_replica_pools_async()
+        if not self._replica_pools_initialized:
+            await self._create_replica_pools_async()
 
     async def close_pool(self) -> None:
         await self._close_pools_async()
@@ -2574,7 +2583,8 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         """
         existing_pool = self.connection_instance
         if existing_pool is not None:
-            self._create_replica_pools_sync()
+            if not self._replica_pools_initialized:
+                self._create_replica_pools_sync()
             return existing_pool
 
         created_pool = create_sync_pool(
@@ -2757,7 +2767,8 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         """
         existing_pool = self.connection_instance
         if existing_pool is not None:
-            await self._create_replica_pools_async()
+            if not self._replica_pools_initialized:
+                await self._create_replica_pools_async()
             return existing_pool
 
         created_pool = await create_async_pool(
@@ -3014,10 +3025,22 @@ class ReadReplicaGroup(Generic[ConfigT]):
         return self._is_async
 
     def create_pools(self) -> "list[Any] | Awaitable[list[Any]]":
-        """Create every replica pool."""
+        """Create every replica pool, isolating transient connection failures per replica."""
         if self._is_async:
             return self._create_async_pools()
-        return [config.create_pool() for config in self._configs]
+        pools: list[Any] = []
+        for idx, config in enumerate(self._configs):
+            try:
+                pools.append(config.create_pool())
+            except (DatabaseConnectionError, OperationalError, OSError) as exc:
+                self._breaker.record_failure(idx)
+                logger.warning(
+                    "Replica pool initialization failed for %r[%d]; continuing with primary and lazy retry: %s",
+                    self._name,
+                    idx,
+                    exc,
+                )
+        return pools
 
     def close_pools(self) -> "Awaitable[None] | None":
         """Close every pool before propagating the first close error."""
@@ -3065,7 +3088,19 @@ class ReadReplicaGroup(Generic[ConfigT]):
         return self._provide(True, args, kwargs, primary, causal_token, max_staleness_seconds)
 
     async def _create_async_pools(self) -> list[Any]:
-        return [await cast("Awaitable[Any]", config.create_pool()) for config in self._configs]
+        pools: list[Any] = []
+        for idx, config in enumerate(self._configs):
+            try:
+                pools.append(await cast("Awaitable[Any]", config.create_pool()))
+            except (DatabaseConnectionError, OperationalError, OSError) as exc:
+                self._breaker.record_failure(idx)
+                logger.warning(
+                    "Replica pool initialization failed for %r[%d]; continuing with primary and lazy retry: %s",
+                    self._name,
+                    idx,
+                    exc,
+                )
+        return pools
 
     async def _close_async_pools(self) -> None:
         error: BaseException | None = None
