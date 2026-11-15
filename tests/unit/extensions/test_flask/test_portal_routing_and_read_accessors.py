@@ -135,7 +135,7 @@ def test_flask_read_and_routing_sessions_with_autocommit(tmp_path: Path, async_c
 
     @app.post("/route")
     def route() -> dict[str, str]:
-        router = plugin.get_routing_session()
+        router = plugin.get_db_routing_session()
         before = router.select_value("SELECT origin FROM notes WHERE id=1")
         router.execute("INSERT INTO notes VALUES (4,'new')")
         assert cast(RoutingEntry, RoutingContext.get_entry("shop")).pinned_by_write
@@ -172,19 +172,19 @@ def test_flask_signed_cookie_and_redirect_commit_policy_on_routing_session(tmp_p
 
     @app.get("/inspect")
     def inspect_route() -> dict[str, Any]:
-        router = plugin.get_routing_session()
+        router = plugin.get_db_routing_session()
         entry = RoutingContext.get_entry("shop") or RoutingEntry()
         return {"origin": router.select_value("SELECT origin FROM notes WHERE id=1"), "token": entry.causal_token}
 
     @app.post("/redirect-write")
     def redirect_write() -> Response:
-        router = plugin.get_routing_session()
+        router = plugin.get_db_routing_session()
         router.execute("INSERT INTO notes VALUES (4,'redirected')")
         return Response(status=302, headers={"Location": "/inspect"})
 
     @app.post("/bad-write")
     def bad_write() -> Response:
-        router = plugin.get_routing_session()
+        router = plugin.get_db_routing_session()
         router.execute("INSERT INTO notes VALUES (5,'rolled-back')")
         return Response(status=400)
 
@@ -252,7 +252,7 @@ def test_flask_streamed_response_finalizes_and_releases_routing_session(
 
     @app.get("/stream-route")
     def stream_route() -> Response:
-        router = plugin.get_routing_session()
+        router = plugin.get_db_routing_session()
         before = router.select_value("SELECT origin FROM notes WHERE id=1")
         router.execute("INSERT INTO notes VALUES (4, 'streamed')")
 

@@ -53,7 +53,7 @@ def test_sanic_read_routing_and_request_scope_reset(tmp_path: Path, async_config
 
     @app.post("/route")
     async def route(request: Any) -> Any:
-        session = plugin.get_routing_session(request)
+        session = plugin.get_db_routing_session(request)
         if async_config:
             before = await session.select_value("SELECT origin FROM notes WHERE id=1")
             await session.execute("INSERT INTO notes VALUES (4,'new')")
@@ -83,7 +83,7 @@ def test_sanic_complete_signal_closes_residual_routing_lease(tmp_path: Path) -> 
 
     @app.get("/abort")
     async def abort(request: Any) -> Any:
-        session = await plugin.get_routing_session_async(request)
+        session = await plugin.get_db_routing_session_async(request)
         await session.execute("INSERT INTO notes VALUES (4,'uncommitted')")
         await app.dispatch("http.lifecycle.complete", context={"request": request}, inline=True)
         with pytest.raises(SQLSpecError, match="closed"):
@@ -113,9 +113,9 @@ def test_sanic_safe_routing_defaults_and_deferred_routing_error(tmp_path: Path) 
 
     @app.get("/inspect")
     async def inspect_route(request: Any) -> Any:
-        deferred = plugin.get_routing_session(request)
+        deferred = plugin.get_db_routing_session(request)
         assert isinstance(deferred, DeferredAsyncSession)
-        with pytest.raises(ImproperConfigurationError, match="get_routing_session_async"):
+        with pytest.raises(ImproperConfigurationError, match="get_db_routing_session_async"):
             _ = deferred.primary_session
         origin = await deferred.select_value("SELECT origin FROM notes WHERE id=1")
         entry = RoutingContext.get_entry("shop") or RoutingEntry()
@@ -151,7 +151,7 @@ async def test_sanic_unawaited_deferred_sessions_are_detached(tmp_path: Path, ab
     async def leaked_route(request: Any) -> Any:
         primary_deferred = plugin.get_session(request)
         read_deferred = plugin.get_replica_session(request)
-        routing_deferred = plugin.get_routing_session(request)
+        routing_deferred = plugin.get_db_routing_session(request)
         assert isinstance(primary_deferred, DeferredAsyncSession)
         assert isinstance(read_deferred, DeferredAsyncSession)
         assert isinstance(routing_deferred, DeferredAsyncSession)
@@ -197,7 +197,7 @@ async def test_sanic_routing_commit_failure_rolls_back_before_closing(
 
     @app.post("/write")
     async def write_route(request: Any) -> Any:
-        router = await plugin.get_routing_session_async(request)
+        router = await plugin.get_db_routing_session_async(request)
         await router.execute("INSERT INTO notes VALUES (4,'uncommitted')")
         return json({"ok": True})
 

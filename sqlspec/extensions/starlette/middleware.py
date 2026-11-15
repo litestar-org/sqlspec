@@ -557,7 +557,7 @@ def get_request_resource(request: "Request", config_state: "SQLSpecConfigState",
         current = get_state_value(request.state, deferred_key, None)
         if current is None:
             accessor = (
-                "await plugin.get_routing_session_async(request)"
+                "await plugin.get_db_routing_session_async(request)"
                 if kind == "routing"
                 else "await plugin.get_replica_session_async(request)"
             )

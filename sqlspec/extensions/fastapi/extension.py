@@ -273,7 +273,7 @@ class SQLSpecPlugin(_StarlettePlugin):
                     return await self.get_replica_session_async(request, state.config)
                 if kind == "connection":
                     return await self.get_replica_connection_async(request, state.config)
-                return await self.get_routing_session_async(request, state.config)
+                return await self.get_db_routing_session_async(request, state.config)
 
             return async_dependency
 
@@ -282,7 +282,7 @@ class SQLSpecPlugin(_StarlettePlugin):
                 return self.get_replica_session(request, state.config)
             if kind == "connection":
                 return self.get_replica_connection(request, state.config)
-            return self.get_routing_session(request, state.config)
+            return self.get_db_routing_session(request, state.config)
 
         return sync_dependency
 

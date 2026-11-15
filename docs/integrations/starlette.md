@@ -91,7 +91,7 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 `db_ext.get_replica_session(request, key=...)` returns a reader session. For an async config it is a `DeferredAsyncSession`: the first awaited database call opens the physical connection. Use `await db_ext.get_replica_session_async(request, key=...)` when the handler needs an acquired session immediately. The raw helpers are `get_replica_connection` and `get_replica_connection_async`.
 
-`get_routing_session` and `get_routing_session_async` create an opt-in facade that selects a reader or pins primary as work requires. Pure ASGI middleware scopes the request and closes owned checkouts. Add `SQLSpecRoutingMiddleware` from `sqlspec.utils.routing` to read routing hints and scope primary pins. Tenant identity remains a separate access check. See [Read Replicas](../learn/recipes/read-replicas.md).
+`get_db_routing_session` and `get_db_routing_session_async` create an opt-in facade that selects a reader or pins primary as work requires. Pure ASGI middleware scopes the request and closes owned checkouts. Add `SQLSpecRoutingMiddleware` from `sqlspec.utils.routing` to read routing hints and scope primary pins. Tenant identity remains a separate access check. See [Read Replicas](../learn/recipes/read-replicas.md).
 
 ## Connection Lifetime
 

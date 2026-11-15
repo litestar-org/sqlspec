@@ -300,7 +300,7 @@ class SQLSpecPlugin:
         """Return the request-owned raw read connection."""
         return self._get_read_routing_resource(key, "connection")
 
-    def get_routing_session(self, key: Any = None) -> Any:
+    def get_db_routing_session(self, key: Any = None) -> Any:
         """Return the request's lazy automatic routing facade."""
         return self._get_read_routing_resource(key, "routing")
 

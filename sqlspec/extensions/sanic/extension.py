@@ -316,11 +316,11 @@ class SQLSpecPlugin:
         """Open and return the request's lazy read connection."""
         return await self._read_routing_resource_async(request, key, "connection")
 
-    def get_routing_session(self, request: Any, key: Any = None) -> Any:
+    def get_db_routing_session(self, request: Any, key: Any = None) -> Any:
         """Return the request's lazy routing session."""
         return self._read_routing_resource(request, key, "routing")
 
-    async def get_routing_session_async(self, request: Any, key: Any = None) -> Any:
+    async def get_db_routing_session_async(self, request: Any, key: Any = None) -> Any:
         """Open and return the request's lazy routing session."""
         return await self._read_routing_resource_async(request, key, "routing")
 
@@ -365,7 +365,7 @@ class SQLSpecPlugin:
             current = get_context_value(request.ctx, deferred_key, None)
             if current is None:
                 accessor = (
-                    "await plugin.get_routing_session_async(request)"
+                    "await plugin.get_db_routing_session_async(request)"
                     if kind == "routing"
                     else "await plugin.get_replica_session_async(request)"
                 )

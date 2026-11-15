@@ -52,12 +52,12 @@ def test_read_and_routing_accessors_select_and_pin(tmp_path: Path, async_config:
         return JSONResponse({"origin": origin})
 
     async def route(request: Request) -> JSONResponse:
-        facade = plugin.get_routing_session(request)
+        facade = plugin.get_db_routing_session(request)
         if async_config:
             assert isinstance(facade, DeferredAsyncSession)
             before = await facade.select_value("SELECT origin FROM notes WHERE id=1")
-            real = await plugin.get_routing_session_async(request)
-            assert plugin.get_routing_session(request) is real
+            real = await plugin.get_db_routing_session_async(request)
+            assert plugin.get_db_routing_session(request) is real
             await facade.execute("INSERT INTO notes VALUES (4,'new')")
             after = await facade.select_value("SELECT origin FROM notes WHERE id=1")
         else:
@@ -151,9 +151,9 @@ def test_starlette_safe_routing_defaults_signed_cookie_and_deferred_error(tmp_pa
     )
 
     async def inspect_route(request: Request) -> JSONResponse:
-        deferred = plugin.get_routing_session(request)
+        deferred = plugin.get_db_routing_session(request)
         assert isinstance(deferred, DeferredAsyncSession)
-        with pytest.raises(ImproperConfigurationError, match="get_routing_session_async"):
+        with pytest.raises(ImproperConfigurationError, match="get_db_routing_session_async"):
             _ = deferred.primary_session
         origin = await deferred.select_value("SELECT origin FROM notes WHERE id=1")
         entry = RoutingContext.get_entry("shop") or RoutingEntry()
@@ -239,8 +239,8 @@ def test_starlette_commit_failure_rolls_back_and_finalizes_remaining_configs(
     monkeypatch.setattr(SyncRoutingSession, "rollback", track_rollback)
 
     async def write_both(request: Request) -> JSONResponse:
-        router_a: Any = plugin.get_routing_session(request, "a_router")
-        router_b: Any = plugin.get_routing_session(request, "b_router")
+        router_a: Any = plugin.get_db_routing_session(request, "a_router")
+        router_b: Any = plugin.get_db_routing_session(request, "b_router")
         router_a.execute("INSERT INTO notes VALUES (4,'a')")
         router_b.execute("INSERT INTO notes VALUES (4,'b')")
         return JSONResponse({"ok": True})
@@ -270,7 +270,7 @@ async def test_starlette_unawaited_deferred_sessions_are_detached_after_response
     async def leaked_route(request: Request) -> JSONResponse:
         primary_deferred = plugin.get_session(request)
         read_deferred = plugin.get_replica_session(request)
-        routing_deferred = plugin.get_routing_session(request)
+        routing_deferred = plugin.get_db_routing_session(request)
         assert isinstance(primary_deferred, DeferredAsyncSession)
         assert isinstance(read_deferred, DeferredAsyncSession)
         assert isinstance(routing_deferred, DeferredAsyncSession)
@@ -315,7 +315,7 @@ def test_starlette_primary_commit_failure_still_rolls_back_routing_session(
 
     async def handler(request: Request) -> JSONResponse:
         plugin.get_session(request)
-        router: Any = plugin.get_routing_session(request)
+        router: Any = plugin.get_db_routing_session(request)
         router.execute("INSERT INTO notes VALUES (4,'routing_uncommitted')")
         return JSONResponse({"ok": True})
 

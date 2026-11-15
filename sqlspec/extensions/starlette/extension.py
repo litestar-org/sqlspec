@@ -432,7 +432,7 @@ class SQLSpecPlugin:
             raise ImproperConfigurationError(msg)
         return await get_request_resource_async(request, selected, resource_key, "connection")
 
-    def get_routing_session(self, request: "Request", key: Any = None) -> Any:
+    def get_db_routing_session(self, request: "Request", key: Any = None) -> Any:
         """Return a request-owned routing session."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
         resource_key = selected.routing_session_key
@@ -441,7 +441,7 @@ class SQLSpecPlugin:
             raise ImproperConfigurationError(msg)
         return get_request_resource(request, selected, resource_key, "routing")
 
-    async def get_routing_session_async(self, request: "Request", key: Any = None) -> Any:
+    async def get_db_routing_session_async(self, request: "Request", key: Any = None) -> Any:
         """Open and return a request-owned routing session."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
         resource_key = selected.routing_session_key

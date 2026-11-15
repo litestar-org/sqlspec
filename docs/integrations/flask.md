@@ -83,7 +83,7 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 ## Read Replica Sessions and Portal Context
 
-`db_ext.get_replica_session(key=...)` uses the selected reader on first database use. `get_replica_connection(key=...)` exposes its physical connection after checkout. `get_routing_session(key=...)` supplies the opt-in routing facade. A bind key or config instance selects the database.
+`db_ext.get_replica_session(key=...)` uses the selected reader on first database use. `get_replica_connection(key=...)` exposes its physical connection after checkout. `get_db_routing_session(key=...)` supplies the opt-in routing facade. A bind key or config instance selects the database.
 
 For an async adapter, Flask runs these calls through `PortalProvider`. Tenant and routing payloads copy into that work. Writes merge their primary pin back to the request; a portal timeout pins conservatively before it raises if completion is uncertain. Each request still owns cleanup. Use explicit worker scopes outside HTTP requests. See [Replica Operations](../learn/recipes/read-replicas-operations.md) for lag and failure behavior.
 
