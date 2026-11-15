@@ -3136,7 +3136,12 @@ class ReadReplicaGroup(Generic[ConfigT]):
             self._provide_sync(session, args, kwargs, primary, causal_token, staleness, receipt), receipt
         )
 
-    def _validate_sync_causal(self, value: Any, causal_token: str | None) -> bool:
+    def _is_caught_up_sync(self, value: Any, causal_token: str | None) -> bool:
+        """Return whether the replica has caught up to the causal token.
+
+        Raises:
+            ImproperConfigurationError: If the causal validator is asynchronous.
+        """
         if causal_token is None or self._causal_validator is None:
             return True
         result = self._causal_validator(value, causal_token)
@@ -3147,7 +3152,7 @@ class ReadReplicaGroup(Generic[ConfigT]):
             raise ImproperConfigurationError(msg)
         return result
 
-    async def _validate_async_causal(self, value: Any, causal_token: str | None) -> bool:
+    async def _is_caught_up_async(self, value: Any, causal_token: str | None) -> bool:
         if causal_token is None or self._causal_validator is None:
             return True
         result = self._causal_validator(value, causal_token)
@@ -3185,7 +3190,7 @@ class ReadReplicaGroup(Generic[ConfigT]):
                 stack.__exit__(*sys.exc_info())
                 raise
             try:
-                caught_up = self._validate_sync_causal(value, causal_token)
+                caught_up = self._is_caught_up_sync(value, causal_token)
             except (DatabaseConnectionError, OperationalError, OSError, TimeoutError) as exc:
                 try:
                     stack.__exit__(*sys.exc_info())
@@ -3254,7 +3259,7 @@ class ReadReplicaGroup(Generic[ConfigT]):
                 await stack.__aexit__(*sys.exc_info())
                 raise
             try:
-                caught_up = await self._validate_async_causal(value, causal_token)
+                caught_up = await self._is_caught_up_async(value, causal_token)
             except (DatabaseConnectionError, OperationalError, OSError, TimeoutError) as exc:
                 try:
                     await stack.__aexit__(*sys.exc_info())

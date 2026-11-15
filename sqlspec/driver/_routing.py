@@ -958,7 +958,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             )
             selection_receipt = getattr(context, "_selection_receipt", None)
             self._release_replica()
-            adopted_context: _AdoptedReadSyncContext | None = None
+            entered_context: _EnteredReadSyncContext | None = None
             if self._can_reuse_primary_fallback(strict_replica=strict_replica):
                 token = RoutingContext._set_primary_fallback(self._config, self._primary_driver)
                 try:
@@ -973,8 +973,8 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                     self._replica_max_staleness = max_staleness
                     self._replica_strict = strict_replica
                     return cast("SyncDriverT", self._replica_driver)
-                adopted_context = _AdoptedReadSyncContext(context, driver, selection_receipt)
-                context = adopted_context
+                entered_context = _EnteredReadSyncContext(context, driver, selection_receipt)
+                context = entered_context
             if self._registry_lifecycle:
                 from sqlspec.base import _RuntimeReadSyncContext
 
@@ -984,8 +984,8 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                 driver = lease_stack.enter_context(context)
             except BaseException:
                 try:
-                    if adopted_context is not None:
-                        adopted_context._close_on_error(*sys.exc_info())
+                    if entered_context is not None:
+                        entered_context._close_on_error(*sys.exc_info())
                 finally:
                     lease_stack.close()
                 raise
@@ -1683,7 +1683,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             )
             selection_receipt = getattr(context, "_selection_receipt", None)
             await self._release_replica()
-            adopted_context: _AdoptedReadAsyncContext | None = None
+            entered_context: _EnteredReadAsyncContext | None = None
             if self._can_reuse_primary_fallback(strict_replica=strict_replica):
                 token = RoutingContext._set_primary_fallback(self._config, self._primary_driver)
                 try:
@@ -1698,8 +1698,8 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                     self._replica_max_staleness = max_staleness
                     self._replica_strict = strict_replica
                     return cast("AsyncDriverT", self._replica_driver)
-                adopted_context = _AdoptedReadAsyncContext(context, driver, selection_receipt)
-                context = adopted_context
+                entered_context = _EnteredReadAsyncContext(context, driver, selection_receipt)
+                context = entered_context
             if self._registry_lifecycle:
                 from sqlspec.base import _RuntimeReadAsyncContext
 
@@ -1709,8 +1709,8 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                 driver = await lease_stack.enter_async_context(context)
             except BaseException:
                 try:
-                    if adopted_context is not None:
-                        await adopted_context._close_on_error(*sys.exc_info())
+                    if entered_context is not None:
+                        await entered_context._close_on_error(*sys.exc_info())
                 finally:
                     await lease_stack.aclose()
                 raise
@@ -2120,7 +2120,7 @@ class _AsyncRoutingDataDictionary(Generic[AsyncDriverT]):
         return await primary.data_dictionary.get_foreign_keys(primary, table, schema)
 
 
-class _AdoptedReadSyncContext:
+class _EnteredReadSyncContext:
     """Adapt an already-entered sync read context onto a lifetime stack."""
 
     __slots__ = ("_closed", "_context", "_driver", "_selection_receipt")
@@ -2150,7 +2150,7 @@ class _AdoptedReadSyncContext:
             self._context.__exit__(exc_type, exc_val, exc_tb)
 
 
-class _AdoptedReadAsyncContext:
+class _EnteredReadAsyncContext:
     """Adapt an already-entered async read context onto a lifetime stack."""
 
     __slots__ = ("_closed", "_context", "_driver", "_selection_receipt")
