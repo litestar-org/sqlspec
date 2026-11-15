@@ -2243,6 +2243,7 @@ def adk_store_mysqlconnector_async(mysql_service: MySQLService) -> "Callable[...
         suffix = uuid4().hex[:8]
         connection_config = _mysql_connection_config(mysql_service)
         connection_config["use_pure"] = True
+        connection_config["pool_size"] = 10
         config = MysqlConnectorAsyncConfig(
             connection_config=connection_config, extension_config=_adk_extension_config(suffix)
         )
@@ -2261,6 +2262,7 @@ def adk_store_mysqlconnector_sync(mysql_service: MySQLService) -> "Callable[...,
         suffix = uuid4().hex[:8]
         connection_config = _mysql_connection_config(mysql_service)
         connection_config["use_pure"] = True
+        connection_config["pool_size"] = 10
         config = MysqlConnectorSyncConfig(
             connection_config=connection_config, extension_config=_adk_extension_config(suffix)
         )

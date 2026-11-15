@@ -1929,7 +1929,7 @@ def _postgres_em_arrays_json_sync(sync_driver: "SyncContractDriver", case: Drive
     sync_driver.execute(f"CREATE TABLE {json_table} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB)")
     sync_driver.commit()
     try:
-        payloads = [("J1", to_json({"type": "test", "value": 100})), ("J2", to_json({"type": "prod", "value": 200}))]
+        payloads = [("J1", {"type": "test", "value": 100}), ("J2", {"type": "prod", "value": 200})]
         sync_driver.execute_many(f"INSERT INTO {json_table} (name, metadata) VALUES (?, ?)", payloads)
         sync_driver.commit()
         rows = sync_driver.execute(f"SELECT name, metadata->>'type' AS type FROM {json_table} ORDER BY name").get_data()
@@ -2014,7 +2014,7 @@ async def _postgres_execute_many_specifics_async(driver: object, case: DriverCas
     await async_driver.execute(f"CREATE TABLE {json_table} (id SERIAL PRIMARY KEY, name TEXT, metadata JSONB)")
     await async_driver.commit()
     try:
-        payloads = [("J1", to_json({"type": "test", "value": 100})), ("J2", to_json({"type": "prod", "value": 200}))]
+        payloads = [("J1", {"type": "test", "value": 100}), ("J2", {"type": "prod", "value": 200})]
         await async_driver.execute_many(f"INSERT INTO {json_table} (name, metadata) VALUES (?, ?)", payloads)
         await async_driver.commit()
         rows = (

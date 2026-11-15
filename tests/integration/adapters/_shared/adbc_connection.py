@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import SQLSpecError
 from tests.integration.fixtures.adbc import xfail_if_driver_missing
 
 if TYPE_CHECKING:
@@ -83,7 +83,7 @@ def test_bigquery_connection(bigquery_service: "BigQueryService") -> None:
         }
     )
 
-    with pytest.raises(ImproperConfigurationError, match=r"adbc\.bigquery\.sql\.endpoint"), config.create_connection():
+    with pytest.raises(SQLSpecError, match=r"adbc\.bigquery\.sql\.endpoint"), config.create_connection():
         pass
 
 
