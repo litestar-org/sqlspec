@@ -1665,7 +1665,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             return self._replica_groups[group_key], entry
         if effective_group is None and (entry is None or entry.mode != "replica"):
             return None, entry
-        msg = f"Unknown replica replica_group {group_key!r}; available groups: {sorted(self._replica_groups)}"
+        msg = f"Unknown replica group {group_key!r}; available groups: {sorted(self._replica_groups)}"
         raise RoutingContextError(msg)
 
     def _provide_read(

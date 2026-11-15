@@ -1419,11 +1419,43 @@ def test_compiler_rejects_placeholder_with_sql_text() -> None:
 
 
 def test_compiler_accepts_identifier_and_anonymous_placeholders() -> None:
-    expression = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this="x_1")))
+    named = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this="x_1")))
+    anonymous = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder()))
 
-    compiled_sql, _ = SQL(expression, x_1=1, statement_config=get_default_config()).compile()
+    named_sql, named_params = SQL(named, x_1=1, statement_config=get_default_config()).compile()
+    anonymous_sql, _ = SQL(anonymous, 1, statement_config=get_default_config()).compile()
 
-    assert "x_1" in compiled_sql or "?" in compiled_sql
+    assert named_sql == "SELECT * FROM t WHERE a = ?"
+    assert list(named_params) == [1]
+    assert anonymous_sql == "SELECT * FROM t WHERE a = ?"
+
+
+@pytest.mark.parametrize("name", ["naïve", "名前", "_x1", "7"])
+def test_compiler_accepts_unicode_placeholder_names(name: str) -> None:
+    expression = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this=name)))
+
+    compiled_sql, _ = SQL(expression, **{name: 1}, statement_config=get_default_config()).compile()
+
+    assert compiled_sql.startswith("SELECT * FROM t WHERE a = ")
+
+
+@pytest.mark.parametrize("modifier", ["where_eq", "paginate"])
+def test_unicode_scanner_placeholder_survives_modifiers(modifier: str) -> None:
+    statement = SQL("SELECT * FROM t WHERE a = :naïve", naïve=1)
+    statement = statement.where_eq("b", 2) if modifier == "where_eq" else statement.paginate(1, 10)
+
+    compiled_sql, params = statement.compile()
+
+    assert "naïve" in compiled_sql or "?" in compiled_sql
+    assert 1 in list(params.values() if isinstance(params, dict) else params)
+
+
+@pytest.mark.parametrize("name", ["x OR 1=1", "a b", "x'y", "1abc;"])
+def test_compiler_rejects_non_identifier_placeholder_names(name: str) -> None:
+    expression = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this=name)))
+
+    with pytest.raises(SQLBuilderError, match="Invalid placeholder name"):
+        SQL(expression, statement_config=get_default_config()).compile()
 
 
 def test_deep_sql_where_chain_raises_parsing_error() -> None:

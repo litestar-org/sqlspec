@@ -27,6 +27,7 @@ from sqlspec.core import (
     hash_sql_statement,
 )
 from sqlspec.core.hashing import _hash_value
+from tests.conftest import requires_patchable_internals
 
 
 def test_hash_expression_none() -> None:
@@ -602,6 +603,7 @@ def test_expression_fingerprint_is_128_bit() -> None:
     assert len(key.removeprefix("opt:")) == 32
 
 
+@requires_patchable_internals
 def test_expression_fingerprint_depends_on_sql_text(monkeypatch: pytest.MonkeyPatch) -> None:
     """Statements with a colliding structural hash still receive different cache keys."""
     monkeypatch.setattr("sqlspec.core.hashing.hash_expression", lambda *_args, **_kwargs: "constant")

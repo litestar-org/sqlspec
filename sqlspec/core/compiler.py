@@ -7,6 +7,7 @@ Components:
 """
 
 import logging
+import re
 from collections import OrderedDict
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, final
@@ -25,7 +26,6 @@ from sqlspec.core.parameters import (
     value_fingerprint,
 )
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
-from sqlspec.core.query_modifiers import is_valid_parameter_name
 from sqlspec.core.sqlcommenter import _append_comment, _comment_attributes
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import get_value_attribute
@@ -170,6 +170,7 @@ _RETURNS_ROWS_ROOT_TYPES: Final[tuple[type[exp.Expr], ...]] = (
     exp.TableSample,
     exp.Summarize,
 )
+_PLACEHOLDER_NAME_RE: Final[re.Pattern[str]] = re.compile(r"[^\W\d]\w*|\d+")
 _READ_ONLY_TABLE_HINTS: Final[frozenset[str]] = frozenset({"NOLOCK", "READUNCOMMITTED"})
 _READ_ONLY_EXTRA_AST_TYPES: Final[tuple[type[exp.Expr], ...]] = (exp.Column, exp.WithTableHint, exp.Func)
 _POSITIONAL_NON_INDEXED_STYLES: Final[frozenset[str]] = frozenset({"qmark", "pyformat_positional"})
@@ -1369,7 +1370,10 @@ class SQLProcessor:
 
 
 def validate_placeholder_names(expression: "exp.Expr") -> None:
-    """Reject named placeholders whose text is not an ASCII identifier or positional number.
+    """Reject named placeholders whose text is not a Unicode identifier or positional number.
+
+    Accepts the Unicode identifier or digit-only names the parameter scanner produces
+    and rejects anything containing whitespace, operators, or quotes.
 
     Args:
         expression: Expression about to be rendered into SQL text.
@@ -1379,7 +1383,7 @@ def validate_placeholder_names(expression: "exp.Expr") -> None:
     """
     for node in expression.find_all(exp.Placeholder):
         name = node.this
-        if isinstance(name, str) and not is_valid_parameter_name(name):
+        if isinstance(name, str) and _PLACEHOLDER_NAME_RE.fullmatch(name) is None:
             msg = f"Invalid placeholder name {name!r}"
             raise sqlspec.exceptions.SQLBuilderError(msg)
 

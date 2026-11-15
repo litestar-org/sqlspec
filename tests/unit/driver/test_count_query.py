@@ -1519,3 +1519,17 @@ def test_duckdb_paginate_total_counts_own_tenant(label: int) -> None:
         )
     assert page.total == 2
     assert sorted(item["id"] for item in page.items) == [1, 2]
+
+
+def test_select_with_total_handles_unicode_named_parameter(sqlite_driver: "SqliteDriver") -> None:
+    sqlite_driver.connection.executescript("""
+        CREATE TABLE unicode_bind_items (id INTEGER PRIMARY KEY, a INTEGER);
+        INSERT INTO unicode_bind_items (id, a) VALUES (1, 1), (2, 1), (3, 2);
+    """)
+
+    rows, total = sqlite_driver.select_with_total(
+        "SELECT id FROM unicode_bind_items WHERE a = :naïve ORDER BY id LIMIT 1", naïve=1
+    )
+
+    assert total == 2
+    assert [row["id"] for row in rows] == [1]

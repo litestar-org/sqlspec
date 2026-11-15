@@ -50,6 +50,7 @@ from sqlspec.core import (
     get_cache_config,
     hash_optimized_expression,
 )
+from sqlspec.core.compiler import validate_placeholder_names
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.hashing import _expression_cache_fingerprint
 from sqlspec.core.query_modifiers import is_valid_parameter_name, sanitize_parameter_name
@@ -367,6 +368,8 @@ class QueryBuilder:
                 self._raise_builder_error(f"Error generating SQL from expression: {e!s}", e)
 
         final_expression = self._prepare_dialect_expression(final_expression, target_dialect, dialect)
+        if isinstance(final_expression, exp.Expr):
+            validate_placeholder_names(final_expression)
 
         try:
             if isinstance(final_expression, exp.Expr):

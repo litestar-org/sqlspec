@@ -611,8 +611,8 @@ class SnowflakeDialectConfig(_EagerDialectConfig):
         patterns: list[tuple[TokenType, TokenPattern]] = [
             (TokenType.STRING_LITERAL, r"'(?:''|\\.|[^'\\])*(?:'|\\?\Z)"),
             (TokenType.QUOTED_IDENTIFIER, r'"(?:""|\\.|[^"\\])*(?:"|\\?\Z)'),
-            (TokenType.STRING_LITERAL, r"\$\$[\s\S]*?\$\$"),
-            (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
+            (TokenType.STRING_LITERAL, r"\$\$[\s\S]*?(?:\$\$|\Z)"),
+            (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?(?:\*/|\Z)"),
             (TokenType.COMMENT_LINE, r"--[^\r\n]*"),
             (TokenType.COMMENT_LINE, r"(?<!:)//[^\r\n]*"),
             (TokenType.OTHER, r"\bBEGIN\b(?=" + _SNOWFLAKE_KEYWORD_GAP + r"(?:;|TRANSACTION\b|WORK\b|NAME\b))"),

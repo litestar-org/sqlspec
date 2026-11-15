@@ -16,6 +16,7 @@ Tests cover:
 import string
 
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder import _parsing_utils, _select, parse_condition_expression
@@ -535,4 +536,11 @@ def test_deep_builder_chain_keeps_builder_error() -> None:
     for index in range(400):
         query = query.where_eq(f"c{index}", index)
     with pytest.raises(SQLBuilderError, match="recursion"):
+        query.build()
+
+
+def test_build_rejects_hand_built_placeholder_with_sql_text() -> None:
+    query = sql.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this="x OR 1=1")))
+
+    with pytest.raises(SQLBuilderError, match="Invalid placeholder name"):
         query.build()
