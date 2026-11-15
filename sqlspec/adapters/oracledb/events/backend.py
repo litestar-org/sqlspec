@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.oracledb._typing import DEQ_IMMEDIATE, DEQ_ON_COMMIT
-from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub
+from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub, format_aq_correlation
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
-from sqlspec.extensions.events import EventMessage, normalize_event_channel_name, parse_event_timestamp
+from sqlspec.extensions.events import EventMessage, parse_event_timestamp
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import from_json
@@ -76,7 +76,11 @@ class OracleSyncAQEventBackend:
                 msg = "Oracle driver does not expose a raw connection"
                 raise ImproperConfigurationError(msg)
             queue = _get_publish_queue(connection, channel, self._queue_name)
-            queue.enqone(connection.msgproperties(payload=envelope, correlation=normalize_event_channel_name(channel)))
+            queue.enqone(
+                connection.msgproperties(
+                    payload=envelope, correlation=format_aq_correlation(channel, self.backend_name)
+                )
+            )
             driver.commit()
         self._runtime.increment_metric("events.publish.native")
         return event_id
@@ -149,7 +153,9 @@ class OracleAsyncAQEventBackend:
                 raise ImproperConfigurationError(msg)
             queue = _get_publish_queue(connection, channel, self._queue_name)
             await queue.enqone(
-                connection.msgproperties(payload=envelope, correlation=normalize_event_channel_name(channel))
+                connection.msgproperties(
+                    payload=envelope, correlation=format_aq_correlation(channel, self.backend_name)
+                )
             )
             await driver.commit()
         self._runtime.increment_metric("events.publish.native")

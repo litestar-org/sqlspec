@@ -21,7 +21,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
-__all__ = ("OracleAsyncAQHub", "OracleSyncAQHub")
+__all__ = ("OracleAsyncAQHub", "OracleSyncAQHub", "format_aq_correlation")
 
 logger = get_logger("sqlspec.adapters.oracledb.events.hub")
 
@@ -85,7 +85,7 @@ class OracleSyncAQHub:
                 self._visibility,
                 self._default_visibility,
                 wait_seconds,
-                normalize_event_channel_name(channel),
+                format_aq_correlation(channel, self._backend_name),
                 allow_condition=self._backend_name != "txeventq",
             )
             try:
@@ -226,7 +226,7 @@ class OracleAsyncAQHub:
                 self._visibility,
                 self._default_visibility,
                 wait_seconds,
-                normalize_event_channel_name(channel),
+                format_aq_correlation(channel, self._backend_name),
                 allow_condition=self._backend_name != "txeventq",
             )
             try:
@@ -323,6 +323,21 @@ class OracleAsyncAQHub:
             await session_cm.__aexit__(None, None, None)
 
 
+def format_aq_correlation(channel: str, backend_name: str = "aq") -> str:
+    """Return a wildcard-safe Oracle correlation identifier for ``channel``.
+
+    Classic AQ supports exact ``corrid`` predicates via ``deqoptions.condition``,
+    so normalized channel names pass through verbatim. TxEventQ rejects
+    ``deqoptions.condition`` and evaluates ``deqoptions.correlation`` with SQL
+    ``LIKE`` semantics, so translating ``_`` to ``-`` preserves an injective,
+    wildcard-free correlation key across valid normalized channels.
+    """
+    normalized = normalize_event_channel_name(channel)
+    if backend_name == "txeventq":
+        return normalized.replace("_", "-")
+    return normalized
+
+
 def _apply_deq_options(
     queue: Any,
     visibility: "int | None",
@@ -338,7 +353,7 @@ def _apply_deq_options(
     wildcards, so classic AQ channel names containing either character filter on
     exact ``corrid`` equality via ``deqoptions.condition`` instead. Transactional
     Event Queues (``txeventq``) reject SQL ``condition`` filters and must reject
-    channel names containing ``_`` or ``%`` rather than silently matching wildcards.
+    raw ``_`` or ``%`` patterns rather than silently matching wildcards.
     """
     options = queue.deqoptions
     options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)

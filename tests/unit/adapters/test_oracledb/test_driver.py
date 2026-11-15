@@ -24,7 +24,13 @@ from sqlspec.adapters.oracledb.core import (
     truncate_utf8_bytes,
 )
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
-from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub, _apply_deq_options
+from sqlspec.adapters.oracledb.events._hub import (
+    OracleAsyncAQHub,
+    OracleSyncAQHub,
+    _apply_deq_options,
+    format_aq_correlation,
+)
+from sqlspec.adapters.oracledb.events.backend import OracleAsyncTxEventQEventBackend, OracleSyncTxEventQEventBackend
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, SQLSpecError
 from sqlspec.storage.pipeline import ResolvedStorageTarget
@@ -741,21 +747,44 @@ async def test_oracle_aq_hubs_avoid_wildcard_correlation_for_underscores(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("channel", ["meta_channel", "events%all"], ids=["underscore", "percent"])
-async def test_oracle_txeventq_hubs_reject_wildcard_correlation(is_async: bool, channel: str) -> None:
-    """TxEventQ dequeue rejects '_' and '%' channel names with EventChannelError instead of LIKE wildcard matching."""
+async def test_oracle_txeventq_hubs_translate_underscore_correlation(is_async: bool) -> None:
+    """TxEventQ publish and dequeue map '_' to '-' in correlation without SQL condition filters."""
+    assert format_aq_correlation("meta_channel", "txeventq") == "meta-channel"
+    assert format_aq_correlation("meta_channel", "aq") == "meta_channel"
+    assert format_aq_correlation("notifications", "txeventq") == "notifications"
+
     deqoptions = SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
     queue = MagicMock()
     queue.deqoptions = deqoptions
     config = MagicMock()
+    config.is_async = is_async
     config.get_observability_runtime.return_value = MagicMock()
 
-    with pytest.raises(EventChannelError, match="LIKE wildcards"):
-        _apply_deq_options(queue, None, None, 0.5, channel, allow_condition=False)
+    recorded_props: list[dict[str, Any]] = []
+    pub_queue = MagicMock()
 
-    hub_match = "LIKE wildcards" if "_" in channel else "Invalid events channel name"
+    def _msgproperties(**kwargs: Any) -> SimpleNamespace:
+        recorded_props.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    pub_conn = MagicMock()
+    pub_conn.msgproperties.side_effect = _msgproperties
+    pub_conn.queue.return_value = pub_queue
+    pub_driver = MagicMock()
+    pub_driver.connection = pub_conn
 
     if is_async:
+        pub_queue.enqone = AsyncMock()
+        pub_driver.commit = AsyncMock()
+        pub_cm = MagicMock()
+        pub_cm.__aenter__ = AsyncMock(return_value=pub_driver)
+        pub_cm.__aexit__ = AsyncMock(return_value=None)
+        config.provide_session.return_value = pub_cm
+
+        with patch("sqlspec.adapters.oracledb.events.backend.resolve_adapter_name", return_value="oracledb"):
+            backend: Any = OracleAsyncTxEventQEventBackend(config)
+            await backend.publish("meta_channel", {"action": "with_meta"})
+
         queue.deqone = AsyncMock(return_value=None)
         driver = MagicMock()
         driver.rollback = AsyncMock()
@@ -768,10 +797,18 @@ async def test_oracle_txeventq_hubs_reject_wildcard_correlation(is_async: bool, 
             backend_name="txeventq",
         )
         hub._session_driver = driver
-        hub._queues[channel] = queue
-        with pytest.raises(EventChannelError, match=hub_match):
-            await hub.dequeue(channel, 0.5)
+        hub._queues["meta_channel"] = queue
+        assert await hub.dequeue("meta_channel", 0.5) is None
     else:
+        pub_cm = MagicMock()
+        pub_cm.__enter__ = MagicMock(return_value=pub_driver)
+        pub_cm.__exit__ = MagicMock(return_value=None)
+        config.provide_session.return_value = pub_cm
+
+        with patch("sqlspec.adapters.oracledb.events.backend.resolve_adapter_name", return_value="oracledb"):
+            backend = OracleSyncTxEventQEventBackend(config)
+            backend.publish("meta_channel", {"action": "with_meta"})
+
         queue.deqone.return_value = None
         driver = MagicMock()
         hub = OracleSyncAQHub(
@@ -783,14 +820,56 @@ async def test_oracle_txeventq_hubs_reject_wildcard_correlation(is_async: bool, 
             backend_name="txeventq",
         )
         hub._session_driver = driver
-        hub._queues[channel] = queue
-        with pytest.raises(EventChannelError, match=hub_match):
-            hub.dequeue(channel, 0.5)
+        hub._queues["meta_channel"] = queue
+        assert hub.dequeue("meta_channel", 0.5) is None
+
+    assert recorded_props[0]["correlation"] == "meta-channel"
+    assert recorded_props[0]["payload"]["channel"] == "meta_channel"
+    assert deqoptions.condition is None
+    assert deqoptions.correlation == "meta-channel"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("pattern", ["raw_underscore", "events%all"], ids=["underscore", "percent"])
+async def test_oracle_txeventq_apply_deq_options_rejects_raw_wildcards(is_async: bool, pattern: str) -> None:
+    """Direct _apply_deq_options with allow_condition=False rejects raw LIKE wildcards and invalid channels fail dequeue."""
+    deqoptions = SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
+    queue = MagicMock()
+    queue.deqoptions = deqoptions
+    config = MagicMock()
+    config.get_observability_runtime.return_value = MagicMock()
+
+    with pytest.raises(EventChannelError, match="LIKE wildcards"):
+        _apply_deq_options(queue, None, None, 0.5, pattern, allow_condition=False)
 
     assert deqoptions.condition is None
     assert deqoptions.correlation is None
 
-    plain_queue = SimpleNamespace(deqoptions=SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None))
-    _apply_deq_options(plain_queue, None, None, 0.5, "notifications", allow_condition=False)
-    assert plain_queue.deqoptions.condition is None
-    assert plain_queue.deqoptions.correlation == "notifications"
+    if pattern == "events%all":
+        if is_async:
+            hub: Any = OracleAsyncAQHub(
+                config,
+                queue_name_template="SQLSPEC_TXEVENTQ",
+                visibility=None,
+                default_visibility=None,
+                wait_ceiling=5,
+                backend_name="txeventq",
+            )
+            hub._session_driver = MagicMock()
+            hub._queues[pattern] = queue
+            with pytest.raises(EventChannelError, match="Invalid events channel name"):
+                await hub.dequeue(pattern, 0.5)
+        else:
+            hub = OracleSyncAQHub(
+                config,
+                queue_name_template="SQLSPEC_TXEVENTQ",
+                visibility=None,
+                default_visibility=None,
+                wait_ceiling=5,
+                backend_name="txeventq",
+            )
+            hub._session_driver = MagicMock()
+            hub._queues[pattern] = queue
+            with pytest.raises(EventChannelError, match="Invalid events channel name"):
+                hub.dequeue(pattern, 0.5)
