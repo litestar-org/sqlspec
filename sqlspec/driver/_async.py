@@ -35,7 +35,6 @@ from sqlspec.data_dictionary import (
 from sqlspec.data_dictionary._index_ddl import AsyncWithoutIndexesContext
 from sqlspec.driver._common import (
     _CLOSED_CONNECTION,
-    _CLOSED_CONNECTION_MESSAGE,
     AsyncExceptionHandler,
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -53,7 +52,7 @@ from sqlspec.driver._common import (
 from sqlspec.driver._exception_handler import _run_with_async_exception_handler
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._stream import AsyncRowStream, _LazyEagerAsyncRowSource
+from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, AsyncRowStream, _LazyEagerAsyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.observability._common import redact_sql_literals
@@ -1995,6 +1994,17 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
+
+    async def _connection_in_transaction_async(self) -> bool:
+        """Return whether an awaited probe of the connection reports an open transaction.
+
+        Adapters whose transaction state is only readable through an awaited call override this
+        method. Callers combine it with :meth:`_connection_in_transaction`.
+
+        Returns:
+            False for adapters without an awaited transaction probe.
+        """
+        return False
 
     async def _ensure_transaction_for_cached_sql(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"

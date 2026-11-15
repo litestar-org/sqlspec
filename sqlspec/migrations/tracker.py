@@ -19,11 +19,10 @@ from sqlspec.exceptions import IntegrityError, MigrationError, SQLSpecError
 from sqlspec.migrations.base import (
     _PG_RELATION_GUARD_SQL,
     BaseMigrationTracker,
-    _driver_in_transaction_async,
-    _driver_in_transaction_sync,
     _extract_catalog_rows,
     _supports_postgres_row_security,
 )
+from sqlspec.migrations.runner import _driver_in_transaction_async, _driver_in_transaction_sync
 from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context

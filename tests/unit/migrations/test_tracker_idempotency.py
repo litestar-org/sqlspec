@@ -28,6 +28,19 @@ from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCom
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 
+class _IdleTransactionProbes:
+    """Driver transaction probes reporting no open transaction; fakes override the probe they model."""
+
+    def _connection_in_transaction(self) -> bool:
+        return False
+
+    def _has_implicit_transaction(self) -> bool:
+        return False
+
+    async def _connection_in_transaction_async(self) -> bool:
+        return False
+
+
 def test_sync_update_version_record_success() -> None:
     """Test sync update succeeds when old version exists."""
     tracker = SyncMigrationTracker()
@@ -769,7 +782,7 @@ async def test_tracker_acquire_lock_dialect_statements_and_release_on_error(
         "rollback": _rollback_async if is_async else _rollback,
         "_connection_in_transaction": lambda _self: tx_state["active"],
     }
-    driver_cls = type(f"_Fake{dialect.title()}Driver", (), attrs)
+    driver_cls = type(f"_Fake{dialect.title()}Driver", (_IdleTransactionProbes,), attrs)
     driver: Any = driver_cls()
 
     if is_async:
@@ -924,7 +937,7 @@ async def test_postgres_acquire_lock_rolls_back_before_unlock_and_preserves_prim
 
     pg_cls = type(
         "_PgUnwindDriver",
-        (),
+        (_IdleTransactionProbes,),
         {
             "dialect": "postgres",
             "execute": _exec_async if is_async else _exec_sync,
@@ -1392,21 +1405,16 @@ async def test_tracker_migrate_schema_cleans_up_savepoint_and_tx_on_cancellation
 @pytest.mark.anyio
 @pytest.mark.parametrize("dialect", ["postgres", "mysql", "mssql", "sqlite"])
 async def test_async_acquire_lock_uses_transaction_open_and_unlocks_on_cancellation(dialect: str) -> None:
-    """Async lock context manager uses _connection_in_transaction_async when available and releases locks on CancelledError."""
+    """Async lock context manager consults the awaited transaction probe and releases locks on CancelledError."""
     events: list[str] = []
     open_tx = {"active": False}
 
-    class _AsyncLockDriver:
+    class _AsyncLockDriver(_IdleTransactionProbes):
         dialect = ""
 
         async def _connection_in_transaction_async(self) -> bool:
             events.append("tx_open")
             return open_tx["active"]
-
-        def _connection_in_transaction(self) -> bool:
-            raise AssertionError(
-                "sync _connection_in_transaction should not be called when _connection_in_transaction_async exists"
-            )
 
         async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
             sql_text = str(stmt)
@@ -1472,14 +1480,11 @@ async def test_lock_context_chains_commit_error_over_step_error(tmp_path: Path, 
         )
         cmds_async = AsyncMigrationCommands(cfg_async)
 
-        class _AsyncCommitFailDriver:
+        class _AsyncCommitFailDriver(_IdleTransactionProbes):
             dialect = "sqlite"
 
             async def _connection_in_transaction_async(self) -> bool:
                 return tx_state["active"]
-
-            def _connection_in_transaction(self) -> bool:
-                raise AssertionError("sync _connection_in_transaction should not be called")
 
             async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
                 if str(stmt) == "BEGIN IMMEDIATE":
@@ -1509,7 +1514,7 @@ async def test_lock_context_chains_commit_error_over_step_error(tmp_path: Path, 
     )
     cmds_sync = SyncMigrationCommands(cfg_sync)
 
-    class _SyncCommitFailDriver:
+    class _SyncCommitFailDriver(_IdleTransactionProbes):
         dialect = "sqlite"
 
         def _connection_in_transaction(self) -> bool:
@@ -1548,7 +1553,7 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
     if is_async:
         async_tracker = AsyncMigrationTracker()
 
-        class _BrokenAsyncDriver:
+        class _BrokenAsyncDriver(_IdleTransactionProbes):
             dialect = backend
 
             async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
@@ -1581,7 +1586,7 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
 
     sync_tracker = SyncMigrationTracker()
 
-    class _BrokenSyncDriver:
+    class _BrokenSyncDriver(_IdleTransactionProbes):
         dialect = backend
 
         def execute(self, stmt: Any, _params: Any = None) -> SQLResult:

@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from sqlspec.core import SQL
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
@@ -36,6 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
 
     from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.base import ExtensionReconcilerDescriptor, LoadedMigrationMetadata
     from sqlspec.observability import ObservabilityRuntime
 
@@ -58,6 +58,40 @@ _CHECKSUM_HEADER_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"|Version:[ \t]*[A-Za-z0-9_.]+)\s*$",
     re.MULTILINE,
 )
+
+
+def _driver_in_transaction_sync(driver: Any) -> bool:
+    """Return whether a synchronous driver holds an explicit or implicit open transaction.
+
+    Args:
+        driver: Synchronous driver adapter.
+
+    Returns:
+        True when the driver reports an open transaction.
+    """
+    try:
+        if driver._connection_in_transaction():
+            return True
+    except NotImplementedError:
+        pass
+    return bool(driver._has_implicit_transaction())
+
+
+async def _driver_in_transaction_async(driver: Any) -> bool:
+    """Return whether an asynchronous driver holds an open transaction.
+
+    Args:
+        driver: Asynchronous driver adapter.
+
+    Returns:
+        True when the awaited probe or the synchronous state reports an open transaction.
+    """
+    if await driver._connection_in_transaction_async():
+        return True
+    try:
+        return bool(driver._connection_in_transaction())
+    except NotImplementedError:
+        return False
 
 
 def _checksum_substitution(strip_names: bool) -> "Callable[[re.Match[str]], str]":
@@ -663,97 +697,6 @@ class BaseMigrationRunner:
         return context
 
     @staticmethod
-    def _has_active_implicit_transaction(driver: "SyncDriverAdapterBase | AsyncDriverAdapterBase") -> bool:
-        """Return True when a non-transactional driver currently holds an open implicit DBAPI transaction."""
-        driver_dict = getattr(driver, "__dict__", {})
-        driver_type = type(driver)
-        has_explicit_hook = "_connection_in_transaction" in driver_dict or hasattr(
-            driver_type, "_connection_in_transaction"
-        )
-        has_implicit_hook = "_has_implicit_transaction" in driver_dict or hasattr(
-            driver_type, "_has_implicit_transaction"
-        )
-        if not isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)) and not (
-            has_explicit_hook or has_implicit_hook
-        ):
-            return False
-        if has_explicit_hook or isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)):
-            try:
-                in_tx: Any = driver._connection_in_transaction()
-            except (NotImplementedError, AttributeError):
-                in_tx = False
-            if inspect.isawaitable(in_tx):
-                if inspect.iscoroutine(in_tx):
-                    in_tx.close()
-                in_tx = False
-            if in_tx is True:
-                return True
-        if has_implicit_hook:
-            implicit_fn = getattr(driver, "_has_implicit_transaction", None)
-            if not callable(implicit_fn):
-                return False
-            try:
-                implicit_tx: Any = implicit_fn()
-            except (NotImplementedError, AttributeError):
-                return False
-            if inspect.isawaitable(implicit_tx):
-                if inspect.iscoroutine(implicit_tx):
-                    implicit_tx.close()
-                return False
-            return implicit_tx is True
-        return False
-
-    @staticmethod
-    async def _has_active_implicit_transaction_async(driver: "SyncDriverAdapterBase | AsyncDriverAdapterBase") -> bool:
-        """Return True when an async non-transactional driver currently holds an open implicit transaction."""
-        driver_dict = getattr(driver, "__dict__", {})
-        driver_type = type(driver)
-        if "_connection_in_transaction_async" in driver_dict or hasattr(
-            driver_type, "_connection_in_transaction_async"
-        ):
-            connection_in_transaction = getattr(driver, "_connection_in_transaction_async", None)
-            if callable(connection_in_transaction):
-                try:
-                    open_res: Any = connection_in_transaction()
-                    if inspect.isawaitable(open_res):
-                        open_res = await open_res
-                except (NotImplementedError, AttributeError):
-                    open_res = False
-                if open_res is True:
-                    return True
-        has_explicit_hook = "_connection_in_transaction" in driver_dict or hasattr(
-            driver_type, "_connection_in_transaction"
-        )
-        has_implicit_hook = "_has_implicit_transaction" in driver_dict or hasattr(
-            driver_type, "_has_implicit_transaction"
-        )
-        if not isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)) and not (
-            has_explicit_hook or has_implicit_hook
-        ):
-            return False
-        if has_explicit_hook or isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)):
-            try:
-                in_tx: Any = driver._connection_in_transaction()
-                if inspect.isawaitable(in_tx):
-                    in_tx = await in_tx
-            except (NotImplementedError, AttributeError):
-                in_tx = False
-            if in_tx is True:
-                return True
-        if has_implicit_hook:
-            implicit_fn = getattr(driver, "_has_implicit_transaction", None)
-            if not callable(implicit_fn):
-                return False
-            try:
-                implicit_tx: Any = implicit_fn()
-                if inspect.isawaitable(implicit_tx):
-                    implicit_tx = await implicit_tx
-            except (NotImplementedError, AttributeError):
-                return False
-            return implicit_tx is True
-        return False
-
-    @staticmethod
     def _validate_reconciler_return_value(descriptor: "ExtensionReconcilerDescriptor", result: Any) -> None:
         """Validate that a reconcile(context) callback returned None."""
         if result is not None:
@@ -1178,7 +1121,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
         if id(driver) in self._step_savepoint_drivers:
             return
-        if self._has_active_implicit_transaction(driver):
+        if _driver_in_transaction_sync(driver):
             driver.commit()
 
     def _invoke_reconciler(
@@ -1421,7 +1364,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
         in_implicit_tx = False
         if not in_transaction and id(driver) not in self._step_savepoint_drivers:
             with contextlib.suppress(Exception):
-                in_implicit_tx = self._has_active_implicit_transaction(driver)
+                in_implicit_tx = _driver_in_transaction_sync(driver)
         if in_transaction or in_implicit_tx:
             self._attempt_recovery(driver.rollback, "rollback")
         if not schema_active:
@@ -1700,7 +1643,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
         if id(driver) in self._step_savepoint_drivers:
             return
-        if await self._has_active_implicit_transaction_async(driver):
+        if await _driver_in_transaction_async(driver):
             await driver.commit()
 
     async def _invoke_reconciler(
@@ -1941,7 +1884,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         in_implicit_tx = False
         if not in_transaction and id(driver) not in self._step_savepoint_drivers:
             with contextlib.suppress(Exception):
-                in_implicit_tx = await self._has_active_implicit_transaction_async(driver)
+                in_implicit_tx = await _driver_in_transaction_async(driver)
         if in_transaction or in_implicit_tx:
             await self._attempt_recovery(driver.rollback, "rollback")
         if not schema_active:

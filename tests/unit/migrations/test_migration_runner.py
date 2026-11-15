@@ -1752,7 +1752,16 @@ class _RunnerMode:
         return runner_class(tmp_path, {}, context, {})
 
     def driver(self) -> Mock:
-        return AsyncMock() if self.is_async else Mock()
+        """Return a mock driver whose transaction probes report no open transaction."""
+        driver = AsyncMock() if self.is_async else Mock()
+        driver._connection_in_transaction = lambda: False
+        driver._has_implicit_transaction = lambda: False
+
+        async def no_awaited_transaction() -> bool:
+            return False
+
+        driver._connection_in_transaction_async = no_awaited_transaction
+        return driver
 
     def callback(self, **kwargs: Any) -> Mock:
         return AsyncMock(**kwargs) if self.is_async else Mock(**kwargs)

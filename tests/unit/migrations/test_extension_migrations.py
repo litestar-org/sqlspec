@@ -31,7 +31,7 @@ from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError
 from sqlspec.migrations.base import ExtensionReconcilerDescriptor
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
-from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
+from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner, _driver_in_transaction_async
 from sqlspec.migrations.utils import UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS, validate_builtin_reconcile_adapter
 
 
@@ -585,7 +585,7 @@ def test_adbc_driver_and_runner_implicit_transaction_detection() -> None:
     from unittest.mock import MagicMock
 
     from sqlspec.adapters.adbc.driver import AdbcDriver
-    from sqlspec.migrations.runner import BaseMigrationRunner
+    from sqlspec.migrations.runner import _driver_in_transaction_sync
 
     fake_adbc_conn = SimpleNamespace(
         _commit_supported=True, _autocommit=False, adbc_connection=SimpleNamespace(get_option=lambda _k: "true")
@@ -611,46 +611,23 @@ def test_adbc_driver_and_runner_implicit_transaction_detection() -> None:
     drv.connection = cast("Any", SimpleNamespace(autocommit=None))
     assert drv._has_implicit_transaction() is False
 
-    async def _coro() -> bool:
-        return True
+    assert _driver_in_transaction_sync(drv) is False
 
-    assert BaseMigrationRunner._has_active_implicit_transaction(cast("Any", SimpleNamespace())) is False
-    assert (
-        BaseMigrationRunner._has_active_implicit_transaction(
-            cast("Any", SimpleNamespace(_connection_in_transaction=lambda: True))
-        )
-        is True
+    drv.connection = cast("Any", SimpleNamespace(autocommit=False))
+    assert _driver_in_transaction_sync(drv) is True
+
+    drv._transaction_active = True
+    assert _driver_in_transaction_sync(drv) is True
+
+    def _not_implemented() -> bool:
+        raise NotImplementedError
+
+    probe_only_implicit = SimpleNamespace(
+        _connection_in_transaction=_not_implemented, _has_implicit_transaction=lambda: True
     )
-    assert (
-        BaseMigrationRunner._has_active_implicit_transaction(
-            cast(
-                "Any",
-                SimpleNamespace(
-                    _connection_in_transaction=lambda: (_ for _ in ()).throw(NotImplementedError()),
-                    _has_implicit_transaction="not-callable",
-                ),
-            )
-        )
-        is False
-    )
-    assert (
-        BaseMigrationRunner._has_active_implicit_transaction(
-            cast(
-                "Any",
-                SimpleNamespace(
-                    _connection_in_transaction=_coro,
-                    _has_implicit_transaction=lambda: (_ for _ in ()).throw(AttributeError()),
-                ),
-            )
-        )
-        is False
-    )
-    assert (
-        BaseMigrationRunner._has_active_implicit_transaction(
-            cast("Any", SimpleNamespace(_connection_in_transaction=lambda: False, _has_implicit_transaction=_coro))
-        )
-        is False
-    )
+    probe_none = SimpleNamespace(_connection_in_transaction=_not_implemented, _has_implicit_transaction=lambda: False)
+    assert _driver_in_transaction_sync(probe_only_implicit) is True
+    assert _driver_in_transaction_sync(probe_none) is False
 
 
 @pytest.mark.anyio
@@ -773,44 +750,21 @@ async def test_async_runner_implicit_transaction_helpers_and_reconciler_nontrans
     async def _open_false() -> bool:
         return False
 
-    async def _not_impl() -> bool:
+    def _not_implemented() -> bool:
         raise NotImplementedError
 
-    def _attr_err() -> bool:
-        raise AttributeError
-
-    assert await AsyncMigrationRunner._has_active_implicit_transaction_async(cast("Any", SimpleNamespace())) is False  # pyright: ignore[reportPrivateUsage]
-    assert (
-        await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
-            cast("Any", SimpleNamespace(_connection_in_transaction_async=_open_true))
-        )
-        is True
+    awaited_open = SimpleNamespace(
+        _connection_in_transaction_async=_open_true, _connection_in_transaction=_not_implemented
     )
-    assert (
-        await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
-            cast("Any", SimpleNamespace(_connection_in_transaction=_open_true))
-        )
-        is True
+    sync_open = SimpleNamespace(_connection_in_transaction_async=_open_false, _connection_in_transaction=lambda: True)
+    sync_unknown = SimpleNamespace(
+        _connection_in_transaction_async=_open_false, _connection_in_transaction=_not_implemented
     )
-    assert (
-        await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
-            cast("Any", SimpleNamespace(_connection_in_transaction=_open_false, _has_implicit_transaction=_open_true))
-        )
-        is True
-    )
-    assert (
-        await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
-            cast(
-                "Any",
-                SimpleNamespace(
-                    _connection_in_transaction_async=_not_impl,
-                    _connection_in_transaction=_attr_err,
-                    _has_implicit_transaction="not-callable",
-                ),
-            )
-        )
-        is False
-    )
+    closed = SimpleNamespace(_connection_in_transaction_async=_open_false, _connection_in_transaction=lambda: False)
+    assert await _driver_in_transaction_async(awaited_open) is True
+    assert await _driver_in_transaction_async(sync_open) is True
+    assert await _driver_in_transaction_async(sync_unknown) is False
+    assert await _driver_in_transaction_async(closed) is False
 
     events: list[str] = []
 

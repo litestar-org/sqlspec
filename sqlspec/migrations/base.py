@@ -2,7 +2,6 @@
 
 import hashlib
 import importlib
-import inspect
 import logging
 import os
 from abc import abstractmethod
@@ -1462,76 +1461,12 @@ out-of-order migrations gracefully.
         return resolved_use_logger, resolved_echo, resolved_summary_only
 
 
-def _driver_has_explicit_hook(driver: Any, name: str) -> bool:
-    """Return True when ``driver`` defines ``name`` on its class, dict, or configured mock child."""
-    driver_dict = getattr(driver, "__dict__", None)
-    if isinstance(driver_dict, Mapping):
-        if name in driver_dict:
-            return True
-        mock_children = driver_dict.get("_mock_children")
-        if isinstance(mock_children, Mapping) and name in mock_children:
-            return True
-    return hasattr(type(driver), name)
-
-
-def _driver_in_transaction_sync(driver: Any) -> bool:
-    """Return True when ``driver`` reports an explicit or implicit active transaction."""
-    if _driver_has_explicit_hook(driver, "_connection_in_transaction"):
-        conn_checker = getattr(driver, "_connection_in_transaction", None)
-        if callable(conn_checker):
-            result = conn_checker()
-            if inspect.isawaitable(result):
-                if inspect.iscoroutine(result):
-                    result.close()
-                return False
-            if result:
-                return True
-    if _driver_has_explicit_hook(driver, "_has_implicit_transaction"):
-        implicit_checker = getattr(driver, "_has_implicit_transaction", None)
-        if callable(implicit_checker):
-            implicit_res = implicit_checker()
-            if inspect.isawaitable(implicit_res):
-                if inspect.iscoroutine(implicit_res):
-                    implicit_res.close()
-                return False
-            return bool(implicit_res)
-    return False
-
-
-async def _driver_in_transaction_async(driver: Any) -> bool:
-    """Return True when ``driver`` reports an active transaction via async, sync, or implicit hooks."""
-    if _driver_has_explicit_hook(driver, "_connection_in_transaction_async"):
-        connection_in_transaction = getattr(driver, "_connection_in_transaction_async", None)
-        if callable(connection_in_transaction):
-            return bool(await cast("Awaitable[Any]", connection_in_transaction()))
-    if _driver_has_explicit_hook(driver, "_connection_in_transaction"):
-        conn_checker = getattr(driver, "_connection_in_transaction", None)
-        if callable(conn_checker):
-            result = conn_checker()
-            if inspect.isawaitable(result):
-                if await result:
-                    return True
-            elif result:
-                return True
-    if _driver_has_explicit_hook(driver, "_has_implicit_transaction"):
-        implicit_checker = getattr(driver, "_has_implicit_transaction", None)
-        if callable(implicit_checker):
-            implicit_res = implicit_checker()
-            if inspect.isawaitable(implicit_res):
-                return bool(await implicit_res)
-            return bool(implicit_res)
-    return False
-
-
 def _is_cockroach_driver(driver: Any) -> bool:
     """Return True when ``driver`` targets a CockroachDB adapter or resolved dialect."""
     if type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
         return True
-    if _driver_has_explicit_hook(driver, "_dialect_name"):
-        resolved_hint = getattr(driver, "_dialect_name", None)
-        if isinstance(resolved_hint, str) and "cockroach" in resolved_hint.lower():
-            return True
-    return False
+    resolved_hint = getattr(driver, "_dialect_name", None)
+    return isinstance(resolved_hint, str) and "cockroach" in resolved_hint.lower()
 
 
 def _supports_postgres_row_security(driver: Any) -> bool:

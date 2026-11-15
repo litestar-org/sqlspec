@@ -34,7 +34,6 @@ from sqlspec.data_dictionary import (
 from sqlspec.data_dictionary._index_ddl import SyncWithoutIndexesContext
 from sqlspec.driver._common import (
     _CLOSED_CONNECTION,
-    _CLOSED_CONNECTION_MESSAGE,
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
     DataDictionaryMixin,
@@ -52,7 +51,7 @@ from sqlspec.driver._common import (
 from sqlspec.driver._exception_handler import _run_with_sync_exception_handler
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._stream import SyncRowStream, _LazyEagerSyncRowSource
+from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, SyncRowStream, _LazyEagerSyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.observability._common import redact_sql_literals
@@ -2017,6 +2016,16 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
+
+    def _has_implicit_transaction(self) -> bool:
+        """Return whether the connection holds an uncommitted implicit transaction.
+
+        Adapters whose DBAPI connections open transactions implicitly override this method.
+
+        Returns:
+            False for adapters without implicit transaction tracking.
+        """
+        return False
 
     def _ensure_transaction_for_cached_sql(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"

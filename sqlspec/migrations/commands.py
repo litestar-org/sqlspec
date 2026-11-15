@@ -28,13 +28,17 @@ from sqlspec.exceptions import MigrationError, SQLBuilderError, SQLSpecError, Sq
 from sqlspec.migrations.base import (
     BaseMigrationCommands,
     BaseMigrationTracker,
-    _driver_in_transaction_async,
     _ensure_schema_extraction_safe_async,
     _ensure_schema_extraction_safe_sync,
 )
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
-from sqlspec.migrations.runner import AsyncMigrationRunner, BaseMigrationRunner, SyncMigrationRunner
+from sqlspec.migrations.runner import (
+    AsyncMigrationRunner,
+    BaseMigrationRunner,
+    SyncMigrationRunner,
+    _driver_in_transaction_async,
+)
 from sqlspec.migrations.squash import MigrationSquasher, schema_ddl_statements
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file
