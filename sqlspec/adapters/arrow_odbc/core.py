@@ -358,14 +358,14 @@ def build_connection_config(params: dict[str, Any], *, dialect: str | None = Non
         value = config.get(key)
         if value is None:
             continue
-        parts.append(f"{option_name}={_format_odbc_connection_value(option_name, value)}")
+        parts.append(f"{option_name}={_format_connection_value(option_name, value)}")
         standalone_consumed.add(key)
 
     for remaining_key, remaining_value in config.items():
         if remaining_key in standalone_consumed or remaining_value is None:
             continue
         canonical_remaining = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
-        parts.append(f"{canonical_remaining}={_format_odbc_connection_value(canonical_remaining, remaining_value)}")
+        parts.append(f"{canonical_remaining}={_format_connection_value(canonical_remaining, remaining_value)}")
 
     if not parts:
         msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
@@ -587,17 +587,17 @@ def _merge_connection_string(
     port = config.pop("port", None)
     if resolved_dialect == "mssql":
         if server is not None:
-            options["server"] = ("Server", _format_odbc_connection_value("Server", _append_port(str(server), port)))
+            options["server"] = ("Server", _format_connection_value("Server", _append_port(str(server), port)))
         elif port is not None and "server" in options:
             disp, val = options["server"]
-            options["server"] = (disp, _format_odbc_connection_value(disp, _append_port(val, port)))
+            options["server"] = (disp, _format_connection_value(disp, _append_port(val, port)))
         elif port is not None:
-            options["port"] = ("Port", _format_odbc_connection_value("Port", port))
+            options["port"] = ("Port", _format_connection_value("Port", port))
     else:
         if server is not None:
-            options["server"] = ("Server", _format_odbc_connection_value("Server", server))
+            options["server"] = ("Server", _format_connection_value("Server", server))
         if port is not None:
-            options["port"] = ("Port", _format_odbc_connection_value("Port", port))
+            options["port"] = ("Port", _format_connection_value("Port", port))
 
     consumed: set[str] = {"port"}
     for key, option_name in _CONNECTION_STRING_KEYS:
@@ -606,14 +606,14 @@ def _merge_connection_string(
         value = config.get(key)
         if value is not None:
             canonical_name = _CANONICAL_KEY_LOOKUP.get(option_name.lower(), option_name)
-            options[canonical_name.lower()] = (canonical_name, _format_odbc_connection_value(canonical_name, value))
+            options[canonical_name.lower()] = (canonical_name, _format_connection_value(canonical_name, value))
         consumed.add(key)
 
     for remaining_key, remaining_value in config.items():
         if remaining_key in consumed or remaining_value is None:
             continue
         canonical_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
-        options[canonical_key.lower()] = (canonical_key, _format_odbc_connection_value(canonical_key, remaining_value))
+        options[canonical_key.lower()] = (canonical_key, _format_connection_value(canonical_key, remaining_value))
 
     merged_parts = [f"{name}={val}" for name, val in options.values()]
     return ";".join(merged_parts) + ";"
@@ -678,7 +678,7 @@ def _build_db2_connection_string(
         if value is None:
             continue
         name = _DB2_CANONICAL_KEY_LOOKUP.get(key.lower(), key)
-        options[name.lower()] = (name, _format_odbc_connection_value(name, value))
+        options[name.lower()] = (name, _format_connection_value(name, value))
     if "hostname" in options and "protocol" not in options:
         options["protocol"] = ("Protocol", "TCPIP")
     if not options:
@@ -762,7 +762,7 @@ def _strip_inline_credentials(connection_string: str, *, strip_uid: bool, strip_
     return ";".join(f"{key}={val}" for key, val in filtered) + ";"
 
 
-def _format_odbc_connection_value(key: str, value: Any) -> str:
+def _format_connection_value(key: str, value: Any) -> str:
     """Validate an ODBC keyword and format its value using MS-ODBCSTR brace escaping."""
     if "\x00" in key or "\r" in key or "\n" in key or _ODBC_KEY_PATTERN.fullmatch(key) is None:
         msg = f"Invalid ODBC connection parameter key: {key!r}."

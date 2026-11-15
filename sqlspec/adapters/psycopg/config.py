@@ -276,13 +276,13 @@ def build_connection_config(connection_config: "PsycopgPoolParams | Mapping[str,
     that libpq rejects.
     """
     config = normalize_connection_config(connection_config)
-    conninfo = _pop_first_alias(config, ("conninfo", "dsn", "url", "connection_string"))
+    conninfo = _pop_alias(config, ("conninfo", "dsn", "url", "connection_string"))
     if conninfo is not None:
         config["conninfo"] = conninfo
-    dbname = _pop_first_alias(config, ("dbname", "database", "db"))
+    dbname = _pop_alias(config, ("dbname", "database", "db"))
     if dbname is not None:
         config["dbname"] = dbname
-    user = _pop_first_alias(config, ("user", "username"))
+    user = _pop_alias(config, ("user", "username"))
     if user is not None:
         config["user"] = user
     return config
@@ -507,10 +507,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if isinstance(direct_dsn, Mapping):
             normalized_direct = build_connection_config(direct_dsn)
             if "conninfo" in normalized_direct:
-                _strip_psycopg_endpoint_identity(conn_cfg)
+                _strip_endpoint_identity(conn_cfg)
             conn_cfg.update(normalized_direct)
         else:
-            _strip_psycopg_endpoint_identity(conn_cfg)
+            _strip_endpoint_identity(conn_cfg)
             conn_cfg["conninfo"] = str(direct_dsn)
         is_pooled = self.driver_features.get("pooler_mode") in {"transaction", "statement"}
         if is_pooled and conn_cfg.get("prepare_threshold") is None:
@@ -654,11 +654,11 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     ) -> dict[str, Any]:
         if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
             config.pop("prepare_threshold", None)
-        return _prepare_psycopg_derived_config(config, overrides)
+        return _normalize_derived_connection_config(config, overrides)
 
     def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(spec_input, str):
-            return _build_psycopg_replica_string_overrides(spec_input)
+            return _parse_replica_shorthand(spec_input)
         return super()._build_replica_spec_overrides(spec_input)
 
     def _validate_alloydb_config(self) -> None:
@@ -1060,10 +1060,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if isinstance(direct_dsn, Mapping):
             normalized_direct = build_connection_config(direct_dsn)
             if "conninfo" in normalized_direct:
-                _strip_psycopg_endpoint_identity(conn_cfg)
+                _strip_endpoint_identity(conn_cfg)
             conn_cfg.update(normalized_direct)
         else:
-            _strip_psycopg_endpoint_identity(conn_cfg)
+            _strip_endpoint_identity(conn_cfg)
             conn_cfg["conninfo"] = str(direct_dsn)
         is_pooled = self.driver_features.get("pooler_mode") in {"transaction", "statement"}
         if is_pooled and conn_cfg.get("prepare_threshold") is None:
@@ -1210,11 +1210,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     ) -> dict[str, Any]:
         if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
             config.pop("prepare_threshold", None)
-        return _prepare_psycopg_derived_config(config, overrides)
+        return _normalize_derived_connection_config(config, overrides)
 
     def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(spec_input, str):
-            return _build_psycopg_replica_string_overrides(spec_input)
+            return _parse_replica_shorthand(spec_input)
         return super()._build_replica_spec_overrides(spec_input)
 
     async def _create_pool(self) -> "AsyncConnectionPool":
@@ -1462,7 +1462,7 @@ def _make_token_provider_async_connection_class(
     return _TokenProviderPsycopgAsyncConnection
 
 
-def _pop_first_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
+def _pop_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
     """Pop every alias key from config and return the first non-None value."""
     found = None
     for alias in aliases:
@@ -1472,7 +1472,7 @@ def _pop_first_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> An
     return found
 
 
-def _strip_psycopg_endpoint_identity(config: "dict[str, Any]") -> None:
+def _strip_endpoint_identity(config: "dict[str, Any]") -> None:
     """Remove inherited endpoint identity fields from config and nested kwargs."""
     for key in _PSYCOPG_ENDPOINT_IDENTITY_KEYS:
         config.pop(key, None)
@@ -1487,12 +1487,12 @@ def _strip_psycopg_endpoint_identity(config: "dict[str, Any]") -> None:
             config.pop("kwargs", None)
 
 
-def _prepare_psycopg_derived_config(config: "dict[str, Any]", overrides: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_derived_connection_config(config: "dict[str, Any]", overrides: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize derived connection overrides and prevent stale endpoint leakage."""
     aliases = ("conninfo", "dsn", "url", "connection_string")
     explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
     if any(key in overrides for key in aliases):
-        _strip_psycopg_endpoint_identity(config)
+        _strip_endpoint_identity(config)
         for key, value in overrides.items():
             if key in _PSYCOPG_ENDPOINT_IDENTITY_KEYS and key not in aliases:
                 config[key] = value
@@ -1508,7 +1508,7 @@ def _prepare_psycopg_derived_config(config: "dict[str, Any]", overrides: Mapping
     return config
 
 
-def _build_psycopg_replica_string_overrides(spec_input: str) -> dict[str, Any]:
+def _parse_replica_shorthand(spec_input: str) -> dict[str, Any]:
     """Map string replica shorthand to conninfo or host overrides."""
     endpoint = spec_input.strip()
     if not endpoint:

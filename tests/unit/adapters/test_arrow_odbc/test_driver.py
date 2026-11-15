@@ -19,7 +19,7 @@ from sqlspec.adapters.arrow_odbc import (
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcError
-from sqlspec.adapters.arrow_odbc.core import _ODBC_KEY_PATTERN, _format_odbc_connection_value
+from sqlspec.adapters.arrow_odbc.core import _ODBC_KEY_PATTERN, _format_connection_value
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
 from sqlspec.adapters.arrow_odbc.driver import (
     _DB2_PLAIN_IDENTIFIER,
@@ -1329,4 +1329,4 @@ def test_arrow_odbc_identifier_patterns_reject_trailing_newlines() -> None:
     assert _DB2_PLAIN_IDENTIFIER.match("orders\n") is None
     assert _db2_table_reference('"orders\n"') == '"orders\n"'
     with pytest.raises(ImproperConfigurationError, match="Invalid ODBC connection parameter key"):
-        _format_odbc_connection_value("DSN\n", "sample")
+        _format_connection_value("DSN\n", "sample")

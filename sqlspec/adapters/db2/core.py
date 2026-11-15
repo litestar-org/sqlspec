@@ -795,7 +795,7 @@ def _merge_extra(dsn_extra: Mapping[str, Any], explicit_extra: Mapping[str, Any]
     return dict(merged.values())
 
 
-def _format_odbc_connection_value(key: str, value: Any) -> str:
+def _format_connection_value(key: str, value: Any) -> str:
     """Validate a Db2 CLI keyword and format its value using MS-ODBCSTR brace escaping."""
     if "\x00" in key or "\r" in key or "\n" in key or _ODBC_KEY_PATTERN.fullmatch(key) is None:
         msg = f"Invalid Db2 connection keyword: {key!r}"
@@ -822,7 +822,7 @@ def _format_cli_value(keyword: str, value: Any) -> str:
         raise ImproperConfigurationError(msg)
     if isinstance(value, bool):
         return f"{keyword}={'1' if value else '0'}"
-    return f"{keyword}={_format_odbc_connection_value(keyword, value)}"
+    return f"{keyword}={_format_connection_value(keyword, value)}"
 
 
 def _split_db2_raw_parts(name: str) -> list[str]:

@@ -195,13 +195,13 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         Dictionary with connection parameters.
     """
     config = {key: value for key, value in connection_config.items() if value is not None}
-    dsn = _pop_first_alias(config, ("dsn", "conninfo", "url", "connection_string"))
+    dsn = _pop_alias(config, ("dsn", "conninfo", "url", "connection_string"))
     if dsn is not None:
         config["dsn"] = dsn
-    db_name = _pop_first_alias(config, ("db_name", "database", "dbname", "db"))
+    db_name = _pop_alias(config, ("db_name", "database", "dbname", "db"))
     if db_name is not None:
         config["db_name"] = db_name
-    username = _pop_first_alias(config, ("username", "user"))
+    username = _pop_alias(config, ("username", "user"))
     if username is not None:
         config["username"] = username
     enum_fields = (
@@ -899,7 +899,7 @@ def _decode_arrow_json_column_value(value: Any, *, deserializer: "Callable[[str]
     return decoded if isinstance(decoded, (dict, list, tuple)) else value
 
 
-def _pop_first_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
+def _pop_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
     """Pop every alias key from config and return the first non-None value."""
     found = None
     for alias in aliases:

@@ -474,7 +474,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
     connection_string = config.pop("connection_string", None)
     if connection_string is not None:
-        return _merge_mssql_connection_string(str(connection_string), config), connect_kwargs
+        return _merge_connection_string(str(connection_string), config), connect_kwargs
 
     server = _pop_alias(config, _SERVER_ALIASES, "server")
     if not server:
@@ -487,7 +487,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
         value = _pop_alias(config, keys, option_name, strict=strict)
         if value is None:
             continue
-        parts.append(f"{option_name}={_format_odbc_connection_value(option_name, value)}")
+        parts.append(f"{option_name}={_format_connection_value(option_name, value)}")
 
     extra = config.pop("extra", None)
     if isinstance(extra, dict):
@@ -495,13 +495,13 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
             if extra_value is not None:
                 extra_key_str = str(extra_key)
                 canonical_extra_key = _CANONICAL_KEY_LOOKUP.get(extra_key_str.lower(), extra_key_str)
-                parts.append(f"{canonical_extra_key}={_format_odbc_connection_value(canonical_extra_key, extra_value)}")
+                parts.append(f"{canonical_extra_key}={_format_connection_value(canonical_extra_key, extra_value)}")
 
     for remaining_key, remaining_value in list(config.items()):
         if remaining_value is not None:
             canonical_remaining_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
             parts.append(
-                f"{canonical_remaining_key}={_format_odbc_connection_value(canonical_remaining_key, remaining_value)}"
+                f"{canonical_remaining_key}={_format_connection_value(canonical_remaining_key, remaining_value)}"
             )
         config.pop(remaining_key, None)
 
@@ -626,7 +626,7 @@ def _identity(value: Any) -> Any:
     return value
 
 
-def _merge_mssql_connection_string(raw_conn_str: str, config: dict[str, Any]) -> str:
+def _merge_connection_string(raw_conn_str: str, config: dict[str, Any]) -> str:
     if "\x00" in raw_conn_str or "\r" in raw_conn_str or "\n" in raw_conn_str:
         msg = "ODBC connection_string contains disallowed control characters."
         raise ImproperConfigurationError(msg)
@@ -641,17 +641,17 @@ def _merge_mssql_connection_string(raw_conn_str: str, config: dict[str, Any]) ->
     server = _pop_alias(config, _SERVER_ALIASES, "server")
     port = config.pop("port", None)
     if server is not None:
-        options["server"] = ("Server", _format_odbc_connection_value("Server", _append_port(str(server), port)))
+        options["server"] = ("Server", _format_connection_value("Server", _append_port(str(server), port)))
     elif port is not None and "server" in options:
         disp, val = options["server"]
-        options["server"] = (disp, _format_odbc_connection_value(disp, _append_port(val, port)))
+        options["server"] = (disp, _format_connection_value(disp, _append_port(val, port)))
 
     for keys, option_name, strict in _CONNECTION_STRING_KEYS:
         if option_name == "Server":
             continue
         value = _pop_alias(config, keys, option_name, strict=strict)
         if value is not None:
-            options[option_name.lower()] = (option_name, _format_odbc_connection_value(option_name, value))
+            options[option_name.lower()] = (option_name, _format_connection_value(option_name, value))
 
     extra = config.pop("extra", None)
     if isinstance(extra, dict):
@@ -661,7 +661,7 @@ def _merge_mssql_connection_string(raw_conn_str: str, config: dict[str, Any]) ->
                 canonical_extra_key = _CANONICAL_KEY_LOOKUP.get(extra_key_str.lower(), extra_key_str)
                 options[canonical_extra_key.lower()] = (
                     canonical_extra_key,
-                    _format_odbc_connection_value(canonical_extra_key, extra_value),
+                    _format_connection_value(canonical_extra_key, extra_value),
                 )
 
     for remaining_key, remaining_value in list(config.items()):
@@ -669,14 +669,14 @@ def _merge_mssql_connection_string(raw_conn_str: str, config: dict[str, Any]) ->
             canonical_remaining_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
             options[canonical_remaining_key.lower()] = (
                 canonical_remaining_key,
-                _format_odbc_connection_value(canonical_remaining_key, remaining_value),
+                _format_connection_value(canonical_remaining_key, remaining_value),
             )
         config.pop(remaining_key, None)
 
     return ";".join(f"{name}={val}" for name, val in options.values()) + ";"
 
 
-def _format_odbc_connection_value(key: str, value: Any) -> str:
+def _format_connection_value(key: str, value: Any) -> str:
     """Validate an ODBC keyword and format its value using MS-ODBCSTR brace escaping."""
     if "\x00" in key or "\r" in key or "\n" in key or _ODBC_KEY_PATTERN.fullmatch(key) is None:
         msg = f"Invalid ODBC connection parameter key: {key!r}."

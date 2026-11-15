@@ -279,9 +279,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     """
     normalized = _normalize_raw_connection_config(connection_config)
     return {
-        str(key): _format_sqlanywhere_connection_value(str(key), value)
-        for key, value in normalized.items()
-        if value is not None
+        str(key): _format_connection_value(str(key), value) for key, value in normalized.items() if value is not None
     }
 
 
@@ -456,7 +454,7 @@ def _normalize_raw_connection_config(connection_config: "Mapping[str, Any]") -> 
     return normalized
 
 
-def _format_sqlanywhere_connection_value(key: str, value: Any) -> Any:
+def _format_connection_value(key: str, value: Any) -> Any:
     """Validate a SQL Anywhere connection key and single-quote delimiter-bearing strings."""
     if "\x00" in key or "\r" in key or "\n" in key or _SQLANY_KEY_PATTERN.fullmatch(key) is None:
         msg = f"Invalid SQL Anywhere connection parameter key: {key!r}."
