@@ -729,6 +729,8 @@ async def test_tracker_acquire_lock_dialect_statements_and_release_on_error(
         executed.append((sql_text, params))
         if sql_text == "BEGIN IMMEDIATE":
             tx_state["active"] = True
+        if "current_schema()" in sql_text:
+            return SQLResult(data=[{"schema_name": "public"}])
         if "pg_try_advisory_lock" in sql_text:
             return SQLResult(data=[{"acquired": True}])
         if "sp_getapplock" in sql_text:
@@ -919,6 +921,8 @@ async def test_postgres_acquire_lock_rolls_back_before_unlock_and_preserves_prim
 
     def _exec_sync(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
         sql_text = str(stmt)
+        if "current_schema()" in sql_text:
+            return SQLResult(data=[{"schema_name": "public"}])
         if "pg_try_advisory_lock" in sql_text:
             tx_state["active"] = True
             events.append("lock")
@@ -1426,6 +1430,8 @@ async def test_async_acquire_lock_uses_transaction_open_and_unlocks_on_cancellat
         async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
             sql_text = str(stmt)
             events.append(f"exec:{sql_text}")
+            if "current_schema()" in sql_text:
+                return SQLResult(data=[{"schema_name": "public"}])
             if "pg_try_advisory_lock" in sql_text:
                 open_tx["active"] = True
                 return SQLResult(data=[{"acquired": True}])
@@ -1567,6 +1573,8 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
             async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
                 sql_text = str(stmt)
                 executed.append(sql_text)
+                if "current_schema()" in sql_text:
+                    return SQLResult(data=[{"schema_name": "public"}])
                 if "pg_try_advisory_lock" in sql_text:
                     return SQLResult(data=[{"acquired": True}])
                 return SQLResult()
@@ -1598,6 +1606,8 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
         def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
             sql_text = str(stmt)
             executed.append(sql_text)
+            if "current_schema()" in sql_text:
+                return SQLResult(data=[{"schema_name": "public"}])
             if "pg_try_advisory_lock" in sql_text:
                 return SQLResult(data=[{"acquired": True}])
             return SQLResult()
@@ -1778,6 +1788,8 @@ def test_bridge_driver_migration_advisory_lock_classification_and_sqlite_exclusi
     def _capture_execute(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
         sql_text = str(stmt)
         executed.append(sql_text)
+        if "current_schema()" in sql_text:
+            return SQLResult(data=[{"schema_name": "public"}])
         if "pg_try_advisory_lock" in sql_text:
             return SQLResult(data=[{"acquired": True}])
         if "GET_LOCK" in sql_text:
@@ -1814,6 +1826,8 @@ def test_adbc_postgres_lock_error_unwind_rolls_back_implicit_transaction(monkeyp
     def _capture_execute(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
         sql_text = str(stmt)
         events.append(f"execute:{sql_text}")
+        if "current_schema()" in sql_text:
+            return SQLResult(data=[{"schema_name": "public"}])
         if "pg_try_advisory_lock" in sql_text:
             return SQLResult(data=[{"acquired": True}])
         return SQLResult()
@@ -1885,6 +1899,8 @@ async def test_postgres_ensure_tracking_table_validates_relation_kind_and_trigge
         )
 
         async def _exec_async(stmt: Any, _params: Any = None) -> SQLResult:
+            if "current_schema()" in str(stmt):
+                return SQLResult(data=[{"schema_name": "public"}])
             if "pg_catalog.pg_class" in str(stmt):
                 return SQLResult(data=probe_rows)
             return SQLResult()
@@ -1908,6 +1924,8 @@ async def test_postgres_ensure_tracking_table_validates_relation_kind_and_trigge
     ]
 
     def _exec_sync(stmt: Any, _params: Any = None) -> SQLResult:
+        if "current_schema()" in str(stmt):
+            return SQLResult(data=[{"schema_name": "public"}])
         if "pg_catalog.pg_class" in str(stmt):
             return SQLResult(data=probe_rows)
         return SQLResult()
@@ -1930,6 +1948,8 @@ async def test_postgres_acquire_lock_retries_until_acquired(is_async: bool, monk
 
     def _next_result(sql_text: str) -> SQLResult:
         executed.append(sql_text)
+        if "current_schema()" in sql_text:
+            return SQLResult(data=[{"schema_name": "public"}])
         if "pg_try_advisory_lock" in sql_text:
             return SQLResult(data=[{"acquired": next(outcomes)}])
         return SQLResult()

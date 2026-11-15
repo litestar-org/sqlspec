@@ -56,14 +56,29 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        if _is_postgres_non_cockroach_driver(driver):
-            relation_result = driver.execute(_PG_RELATION_GUARD_SQL, {"version_table": self.version_table})
-            _validate_pg_relation_rows(_extract_catalog_rows(relation_result), self.version_table)
+        self._recheck_tracking_relation_sync(driver)
 
         driver.execute(self._tracking_table_ddl())
         self._safe_commit(driver)
 
         self._migrate_schema_if_needed(driver)
+
+    def _recheck_tracking_relation_sync(self, driver: "SyncDriverAdapterBase") -> None:
+        """Pin the tracking schema and validate the PostgreSQL tracking relation.
+
+        Args:
+            driver: The database driver to use.
+
+        Raises:
+            MigrationError: If the schema cannot be resolved or the relation is unsafe.
+        """
+        if not _is_postgres_non_cockroach_driver(driver):
+            return
+        if self.version_table_schema is None:
+            schema_result = driver.execute("SELECT current_schema() AS schema_name")
+            self._pin_version_table_schema(_resolve_current_schema(schema_result))
+        relation_result = driver.execute(_PG_RELATION_GUARD_SQL, self._pg_relation_guard_parameters())
+        _validate_pg_relation_rows(_extract_catalog_rows(relation_result), self.version_table)
 
     def get_current_version(self, driver: "SyncDriverAdapterBase") -> str | None:
         """Get the latest applied migration version.
@@ -389,14 +404,29 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        if _is_postgres_non_cockroach_driver(driver):
-            relation_result = await driver.execute(_PG_RELATION_GUARD_SQL, {"version_table": self.version_table})
-            _validate_pg_relation_rows(_extract_catalog_rows(relation_result), self.version_table)
+        await self._recheck_tracking_relation_async(driver)
 
         await driver.execute(self._tracking_table_ddl())
         await self._safe_commit(driver)
 
         await self._migrate_schema_if_needed(driver)
+
+    async def _recheck_tracking_relation_async(self, driver: "AsyncDriverAdapterBase") -> None:
+        """Pin the tracking schema and validate the PostgreSQL tracking relation.
+
+        Args:
+            driver: The database driver to use.
+
+        Raises:
+            MigrationError: If the schema cannot be resolved or the relation is unsafe.
+        """
+        if not _is_postgres_non_cockroach_driver(driver):
+            return
+        if self.version_table_schema is None:
+            schema_result = await driver.execute("SELECT current_schema() AS schema_name")
+            self._pin_version_table_schema(_resolve_current_schema(schema_result))
+        relation_result = await driver.execute(_PG_RELATION_GUARD_SQL, self._pg_relation_guard_parameters())
+        _validate_pg_relation_rows(_extract_catalog_rows(relation_result), self.version_table)
 
     async def get_current_version(self, driver: "AsyncDriverAdapterBase") -> str | None:
         """Get the latest applied migration version.
@@ -943,14 +973,34 @@ def _log_commit_skipped(driver: Any, exc: Exception) -> None:
     )
 
 
+def _resolve_current_schema(result: Any) -> str:
+    """Return the schema name from a ``SELECT current_schema()`` result.
+
+    Raises:
+        MigrationError: If the session has no current schema.
+    """
+    rows = _extract_catalog_rows(result)
+    schema_name = rows[0].get("schema_name") if rows else None
+    if not isinstance(schema_name, str) or not schema_name:
+        msg = "Cannot resolve the migration tracking schema: current_schema() is NULL; set version_table_schema"
+        raise MigrationError(msg)
+    return schema_name
+
+
 def _validate_pg_relation_rows(rows: "Sequence[Mapping[str, Any]]", version_table: str) -> None:
-    """Validate pre-existing PostgreSQL tracking relation kind and trigger state."""
+    """Validate pre-existing PostgreSQL tracking relation kind, owner, and trigger state."""
     for row in rows:
         relkind = row.get("relkind")
         if isinstance(relkind, str) and relkind.strip() not in {"r", "p"}:
             msg = (
                 f"Migration tracking table '{version_table}' must be an ordinary or partitioned table "
                 f"(found relkind={relkind.strip()!r})"
+            )
+            raise MigrationError(msg)
+        if row.get("owned_by_current_role") is False:
+            msg = (
+                f"Migration tracking table '{version_table}' must be owned by the current role, "
+                "a role it belongs to, or a superuser"
             )
             raise MigrationError(msg)
         has_triggers = row.get("has_user_triggers")
@@ -1036,6 +1086,11 @@ class _SyncMigrationLockContext:
                     "SELECT pg_try_advisory_lock(:lock_id) AS acquired", {"lock_id": self._lock_id}
                 )
                 if _is_postgres_lock_acquired(lock_result):
+                    try:
+                        self._tracker._recheck_tracking_relation_sync(self._driver)
+                    except MigrationError:
+                        self._exit_postgres(True)
+                        raise
                     return
                 remaining = deadline - _monotonic()
                 if remaining <= 0:
@@ -1159,6 +1214,11 @@ class _AsyncMigrationLockContext:
                     "SELECT pg_try_advisory_lock(:lock_id) AS acquired", {"lock_id": self._lock_id}
                 )
                 if _is_postgres_lock_acquired(lock_result):
+                    try:
+                        await self._tracker._recheck_tracking_relation_async(self._driver)
+                    except MigrationError:
+                        await self._exit_postgres(True)
+                        raise
                     return
                 remaining = deadline - _monotonic()
                 if remaining <= 0:

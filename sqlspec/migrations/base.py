@@ -60,11 +60,15 @@ _BRIDGE_DRIVER_CLASS_NAMES: Final[frozenset[str]] = frozenset({"AdbcDriver", "Ar
 _PG_RELATION_GUARD_SQL: Final[str] = (
     "SELECT "
     "c.relkind::text AS relkind, "
-    "(COUNT(t.tgrelid) > 0) AS has_user_triggers "
+    "(COUNT(t.tgrelid) > 0) AS has_user_triggers, "
+    "(pg_catalog.pg_has_role(c.relowner, 'USAGE') "
+    "OR COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = current_user), false)) "
+    "AS owned_by_current_role "
     "FROM pg_catalog.pg_class c "
+    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
     "LEFT JOIN pg_catalog.pg_trigger t ON t.tgrelid = c.oid AND NOT t.tgisinternal "
-    "WHERE c.oid = pg_catalog.to_regclass(:version_table) "
-    "GROUP BY c.oid, c.relkind"
+    "WHERE n.nspname = :schema_name AND c.relname = :table_name "
+    "GROUP BY c.oid, c.relkind, c.relowner"
 )
 _PG_RLS_SCHEMA_CHECK_SQL: Final[str] = (
     "SELECT n.nspname::text AS schema_name, c.relname::text AS table_name "
@@ -216,6 +220,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             resolved_schema_identifier = embedded_schema_identifier
 
         self.version_table_name = table_identifier.name
+        self._version_table_sql = table_identifier.sql(copy=False)
         self.version_table_schema = resolved_schema_identifier.name if resolved_schema_identifier is not None else None
         self.version_table = self._qualify_version_table(
             table_identifier.sql(copy=False),
@@ -223,6 +228,20 @@ class BaseMigrationTracker(Generic[DriverT]):
         )
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
         self._sqlite_lock_owners: set[int] = set()
+
+    def _pin_version_table_schema(self, schema_name: str) -> None:
+        """Bind the tracking table to an explicit schema.
+
+        Args:
+            schema_name: Schema that stores the tracking table.
+        """
+        schema_identifier = exp.to_identifier(schema_name, quoted=True if schema_name != schema_name.lower() else None)
+        self.version_table_schema = schema_name
+        self.version_table = self._qualify_version_table(self._version_table_sql, schema_identifier.sql(copy=False))
+
+    def _pg_relation_guard_parameters(self) -> "dict[str, str]":
+        """Return the bind parameters of the PostgreSQL tracking relation guard."""
+        return {"schema_name": self.version_table_schema or "", "table_name": self.version_table_name}
 
     def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
         """Set output policy for tracker console/logging behavior."""
@@ -1349,13 +1368,26 @@ def _is_postgres_non_cockroach_driver(driver: Any) -> bool:
 
 
 def _extract_catalog_rows(result: Any) -> "list[Mapping[str, Any]]":
-    """Extract mapping rows from a driver result while ignoring unset mock return values."""
+    """Extract mapping rows from a driver result, pairing positional rows with column names.
+
+    Unset mock return values yield no rows.
+    """
     if result is None:
         return []
     data = getattr(result, "data", result)
     if not isinstance(data, Sequence) or isinstance(data, (str, bytes)):
         return []
-    return [row for row in data if isinstance(row, Mapping)]
+    column_names = getattr(result, "column_names", None)
+    names = list(column_names) if isinstance(column_names, (list, tuple)) else []
+    rows: list[Mapping[str, Any]] = []
+    for row in data:
+        if isinstance(row, Mapping):
+            rows.append(row)
+        elif names and isinstance(row, (list, tuple)) and len(row) == len(names):
+            rows.append(dict(zip(names, row, strict=True)))
+        elif callable(getattr(row, "keys", None)) and hasattr(row, "__getitem__"):
+            rows.append(dict(row))
+    return rows
 
 
 def _validate_postgres_rls_rows(
