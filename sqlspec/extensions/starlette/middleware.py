@@ -56,9 +56,8 @@ if TYPE_CHECKING:
 __all__ = (
     "CorrelationMiddleware",
     "SQLCommenterMiddleware",
-    "SQLSpecAutocommitMiddleware",
-    "SQLSpecManualMiddleware",
     "SQLSpecTenantRequestMiddleware",
+    "SQLSpecTransactionMiddleware",
     "acquire_pending_connection_async",
     "acquire_pending_connection_sync",
     "deferred_request_session",
@@ -68,8 +67,8 @@ __all__ = (
 )
 
 
-class SQLSpecRequestLeaseMiddleware:
-    """Own every database lease through ASGI streaming and background completion."""
+class SQLSpecTransactionMiddleware:
+    """Own each request's database connection and transaction through response streaming and background tasks."""
 
     __slots__ = ("_routing_states", "app", "config_states")
 
@@ -220,125 +219,6 @@ class SQLSpecRequestLeaseMiddleware:
                         except BaseException:
                             if primary_error is None:
                                 raise
-
-
-class SQLSpecManualMiddleware(SQLSpecRequestLeaseMiddleware):
-    """Middleware for manual transaction mode.
-
-    Acquires connection from pool, stores in request.state, rolls back uncommitted
-    work when the handler finishes, and releases the connection after the request.
-    """
-
-    __slots__ = ("config_state",)
-
-    def __init__(self, app: Any, config_state: "SQLSpecConfigState") -> None:
-        """Initialize middleware.
-
-        Args:
-            app: Starlette application instance.
-            config_state: Configuration state for this database.
-        """
-        super().__init__(app, [config_state])
-        self.config_state = config_state
-
-    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
-        """Own the connection until response streaming and background work finish."""
-        await super().__call__(scope, receive, send)
-
-    async def dispatch(self, request: "Request", call_next: Any) -> Any:
-        """Process request with manual transaction mode.
-
-        Args:
-            request: Incoming HTTP request.
-            call_next: Next middleware or route handler.
-
-        Returns:
-            HTTP response.
-        """
-        if get_state_value(request.state, _response_owner_key(self.config_state.connection_key), False):
-            return await call_next(request)
-        async with self._connection_cm(request):
-            try:
-                response = await call_next(request)
-            except BaseException:
-                await self._finalize(request, self.config_state, False)
-                raise
-            await self._finalize(request, self.config_state, False)
-            return response
-
-    @asynccontextmanager
-    async def _connection_cm(self, request: "Request") -> "AsyncGenerator[Any]":
-        """Yield a request-scoped connection for manual transaction mode."""
-        async with _request_connection_cm(self.config_state, request) as connection:
-            yield connection
-
-
-class SQLSpecAutocommitMiddleware(SQLSpecRequestLeaseMiddleware):
-    """Middleware for autocommit transaction mode.
-
-    Acquires connection, commits on success status codes, rollbacks on error status codes.
-    """
-
-    __slots__ = ("config_state",)
-
-    def __init__(self, app: Any, config_state: "SQLSpecConfigState") -> None:
-        """Initialize middleware.
-
-        Args:
-            app: Starlette application instance.
-            config_state: Configuration state for this database.
-        """
-        super().__init__(app, [config_state])
-        self.config_state = config_state
-
-    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
-        """Own the connection until response streaming and background work finish."""
-        await super().__call__(scope, receive, send)
-
-    async def dispatch(self, request: "Request", call_next: Any) -> Any:
-        """Process request with autocommit transaction mode.
-
-        Args:
-            request: Incoming HTTP request.
-            call_next: Next middleware or route handler.
-
-        Returns:
-            HTTP response.
-        """
-        if get_state_value(request.state, _response_owner_key(self.config_state.connection_key), False):
-            return await call_next(request)
-        async with self._connection_cm(request):
-            try:
-                response = await call_next(request)
-                active_connection = get_state_value(request.state, self.config_state.connection_key, None)
-                if active_connection is not None:
-                    await _finalize_request_transaction(
-                        request, self.config_state, active_connection, commit=self._should_commit(response.status_code)
-                    )
-            except BaseException:
-                active_connection = get_state_value(request.state, self.config_state.connection_key, None)
-                if active_connection is not None:
-                    await _finalize_request_transaction(request, self.config_state, active_connection, commit=False)
-                raise
-            else:
-                return response
-
-    @asynccontextmanager
-    async def _connection_cm(self, request: "Request") -> "AsyncGenerator[Any]":
-        """Yield a request-scoped connection for autocommit transaction mode."""
-        async with _request_connection_cm(self.config_state, request) as connection:
-            yield connection
-
-    def _should_commit(self, status_code: int) -> bool:
-        """Determine if response status code should trigger commit.
-
-        Args:
-            status_code: HTTP status code.
-
-        Returns:
-            True if should commit, False if should rollback.
-        """
-        return self.config_state.should_commit(status_code)
 
 
 class CorrelationMiddleware:
@@ -829,27 +709,6 @@ async def _open_config_connection(config_state: "SQLSpecConfigState", request: "
             yield connection
     finally:
         await ensure_async_(connection.close)()
-
-
-@asynccontextmanager
-async def _request_connection_cm(config_state: "SQLSpecConfigState", request: "Request") -> "AsyncGenerator[Any]":
-    """Own a deferred request connection through verified cleanup.
-
-    No connection is checked out until the request first asks for a session or connection, so
-    routes that never touch the database open none; a tenant lease resolves the request tenant
-    at that point.
-
-    Yields:
-        None; the connection is published on request state once it is checked out.
-    """
-    async with AsyncExitStack() as stack:
-        pending_key = _pending_connection_key(config_state.connection_key)
-        set_state_value(request.state, pending_key, _PendingConnection(stack, request, config_state))
-        try:
-            yield None
-        finally:
-            pop_state_value(request.state, pending_key)
-            await _clear_deferred_session(request, deferred_session_key(config_state))
 
 
 async def _finalize_request_transaction(

@@ -2,10 +2,9 @@
 
 ```python
 from sqlspec.extensions.starlette import (
-    SQLSpecAutocommitMiddleware,
     SQLSpecConfigState,
-    SQLSpecManualMiddleware,
     SQLSpecPlugin,
+    SQLSpecTransactionMiddleware,
     get_connection_from_request,
     get_or_create_session,
     set_request_tenant,
@@ -25,13 +24,9 @@ Starlette lifespan management, autocommit and manual transaction ASGI middleware
     options:
       heading_level: 3
 
-## ASGI Transaction Middlewares
+## ASGI Transaction Middleware
 
-::: sqlspec.extensions.starlette.middleware.SQLSpecAutocommitMiddleware
-    options:
-      heading_level: 3
-
-::: sqlspec.extensions.starlette.middleware.SQLSpecManualMiddleware
+::: sqlspec.extensions.starlette.middleware.SQLSpecTransactionMiddleware
     options:
       heading_level: 3
 

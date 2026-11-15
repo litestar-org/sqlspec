@@ -20,7 +20,7 @@ from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.driver._routing import SyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette import SQLSpecPlugin
-from sqlspec.extensions.starlette.middleware import SQLSpecRequestLeaseMiddleware
+from sqlspec.extensions.starlette.middleware import SQLSpecTransactionMiddleware
 from sqlspec.utils.deferred_session import DeferredAsyncSession
 from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from tests.unit.driver.test_sync_routing_session import seed_routing_databases
@@ -70,7 +70,7 @@ def test_read_and_routing_accessors_select_and_pin(tmp_path: Path, async_config:
     plugin = SQLSpecPlugin(config, app)
     assert (
         sum(
-            isinstance(middleware.cls, type) and issubclass(middleware.cls, SQLSpecRequestLeaseMiddleware)
+            isinstance(middleware.cls, type) and issubclass(middleware.cls, SQLSpecTransactionMiddleware)
             for middleware in app.user_middleware
         )
         == 1
@@ -125,7 +125,7 @@ def test_multi_config_lease_layer_and_cross_key_collision() -> None:
     SQLSpecPlugin(configs, app)
     assert (
         sum(
-            isinstance(middleware.cls, type) and issubclass(middleware.cls, SQLSpecRequestLeaseMiddleware)
+            isinstance(middleware.cls, type) and issubclass(middleware.cls, SQLSpecTransactionMiddleware)
             for middleware in app.user_middleware
         )
         == 1

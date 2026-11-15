@@ -20,8 +20,8 @@ from sqlspec.extensions.starlette._utils import (
 from sqlspec.extensions.starlette.middleware import (
     CorrelationMiddleware,
     SQLCommenterMiddleware,
-    SQLSpecRequestLeaseMiddleware,
     SQLSpecTenantRequestMiddleware,
+    SQLSpecTransactionMiddleware,
     acquire_pending_connection_async,
     acquire_pending_connection_sync,
     get_request_resource,
@@ -177,7 +177,7 @@ class SQLSpecPlugin:
 
         active_states = [state for state in self._config_states if not state.disable_di]
         if active_states:
-            app.add_middleware(SQLSpecRequestLeaseMiddleware, config_states=active_states)
+            app.add_middleware(SQLSpecTransactionMiddleware, config_states=active_states)
         if any(has_tenant_strategy(state.config) for state in self._config_states):
             app.user_middleware.append(Middleware(SQLSpecTenantRequestMiddleware, config_states=self._config_states))
 
