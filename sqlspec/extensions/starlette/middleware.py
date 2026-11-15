@@ -22,7 +22,6 @@ from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.starlette._utils import (
     deferred_session_key,
     get_or_create_driver_session,
@@ -34,6 +33,7 @@ from sqlspec.extensions.starlette._utils import (
     set_state_value,
 )
 from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.utils.routing import (
     RoutingContext,
     RoutingContextPayload,

@@ -47,7 +47,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("core_routing", "sqlspec.core.routing", "ReplicaSpec", True),
     SmokeImport("routing_context", "sqlspec.utils.routing", "RoutingContext"),
     SmokeImport("driver_routing", "sqlspec.driver._routing", "SyncRoutingSession"),
-    SmokeImport("deferred_session", "sqlspec.extensions._deferred_session", "DeferredAsyncSession"),
+    SmokeImport("deferred_session", "sqlspec.utils.deferred_session", "DeferredAsyncSession"),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
     SmokeImport("env_utils", "sqlspec.utils.env", "get_env", True),
@@ -2114,7 +2114,7 @@ def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[s
             for module_name in (
                 "sqlspec.utils.routing",
                 "sqlspec.driver._routing",
-                "sqlspec.extensions._deferred_session",
+                "sqlspec.utils.deferred_session",
                 "sqlspec.service._base",
             ):
                 assert not is_compiled_module(importlib.import_module(module_name)), module_name

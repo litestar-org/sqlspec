@@ -14,9 +14,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LitestarConfig
 from sqlspec.driver._routing import SyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._deferred_session import DeferredAsyncSession
 from sqlspec.extensions.litestar import SQLSpecPlugin
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.utils.deferred_session import DeferredAsyncSession
 from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from tests.unit.driver.test_sync_routing_session import seed_routing_databases
 

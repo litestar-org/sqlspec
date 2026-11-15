@@ -15,8 +15,8 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
-from sqlspec.extensions._deferred_session import DeferredAsyncSession
 from sqlspec.extensions.sanic import SQLSpecPlugin
+from sqlspec.utils.deferred_session import DeferredAsyncSession
 from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from tests.unit.driver.test_sync_routing_session import seed_routing_databases
 

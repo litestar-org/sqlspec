@@ -34,7 +34,6 @@ from sqlspec.core import CorrelationExtractor, OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError, IntegrityError, NotFoundError
-from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
     get_sqlspec_scope_state,
@@ -73,6 +72,7 @@ from sqlspec.extensions.litestar.tenant import (
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.routing import (
     RoutingContext,

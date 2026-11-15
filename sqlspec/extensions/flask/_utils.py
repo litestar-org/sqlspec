@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
-from sqlspec.extensions._deferred_session import PortalSession, call_portal_with_context
+from sqlspec.extensions.flask._portal import PortalSession, call_portal_with_context
 from sqlspec.extensions.flask._state import tenant_receipt_key
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.tenant import TenantContextPayload

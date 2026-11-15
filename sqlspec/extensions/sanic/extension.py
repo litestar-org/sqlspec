@@ -13,7 +13,6 @@ from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
@@ -26,6 +25,7 @@ from sqlspec.extensions.sanic._utils import (
     set_request_tenant,
 )
 from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, apply_request_routing_hints
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_

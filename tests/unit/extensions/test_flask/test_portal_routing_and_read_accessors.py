@@ -14,8 +14,8 @@ from sqlspec import sign_write_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._deferred_session import call_portal_with_context
 from sqlspec.extensions.flask import SQLSpecPlugin
+from sqlspec.extensions.flask._portal import call_portal_with_context
 from sqlspec.utils.portal import Portal, PortalProvider
 from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from sqlspec.utils.tenant import TenantContext

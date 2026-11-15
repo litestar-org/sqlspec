@@ -11,7 +11,7 @@ from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions._deferred_session import PortalSession, call_portal_with_context
+from sqlspec.extensions.flask._portal import PortalSession, call_portal_with_context
 from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask._utils import (
     get_context_value,

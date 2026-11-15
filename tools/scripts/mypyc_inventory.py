@@ -39,7 +39,7 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "keep_interpreted",
         "reason": "Pure ASGI middleware and request routing contexts preserve Python callable boundaries.",
     },
-    "sqlspec/extensions/_deferred_session.py": {
+    "sqlspec/utils/deferred_session.py": {
         "classification": "keep_interpreted",
         "reason": "Deferred session proxies preserve dynamic __getattr__ forwarding across sync and async drivers.",
     },
