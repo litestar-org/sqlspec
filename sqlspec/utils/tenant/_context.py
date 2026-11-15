@@ -252,11 +252,15 @@ class TenantContext:
         return value
 
     @classmethod
-    async def aget(cls) -> TenantContextPayload | None:
-        """Return the current payload, awaiting asynchronous request resolution."""
+    async def aget(cls, key: Any = None) -> TenantContextPayload | None:
+        """Return the current payload, awaiting asynchronous request resolution.
+
+        Args:
+            key: Database configuration whose request tenant to resolve; the default key when omitted.
+        """
         value = tenant_context_var.get()
         if isinstance(value, TenantRequestBinding):
-            return await value.aresolve()
+            return await value.aresolve(key)
         return value
 
     @classmethod

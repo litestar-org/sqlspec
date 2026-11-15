@@ -591,6 +591,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             correlation_headers=len(self._correlation_headers),
         )
 
+    def _tenant_configs(self) -> "tuple[Any, ...]":
+        """Return the tenant-enabled configurations in registration order."""
+        return tuple(state.config for state in self._plugin_configs if has_tenant_strategy(state.config))
+
     @property
     def cursor_secret(self) -> str | bytes | None:
         """Return resolved application-wide cursor secret."""

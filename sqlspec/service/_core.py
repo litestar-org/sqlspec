@@ -12,7 +12,7 @@ from typing_extensions import TypeVar
 from sqlspec.core import SQL, CursorFilter, CursorPagination, LimitOffsetFilter, OffsetPagination, OrderByFilter
 from sqlspec.core.filters import find_filter
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
+from sqlspec.exceptions import DataError, ImproperConfigurationError, InvalidCursorError, NotFoundError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.routing import RoutingContext
 
@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import Statement
     from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
     from sqlspec.typing import SchemaT, StatementParameters
+
+_INVALID_CURSOR_VALUE_MESSAGE = "Invalid pagination cursor: value does not match the ordering column"
 
 __all__ = (
     "_AsyncBeginTransactionContext",
@@ -149,7 +151,12 @@ async def _async_paginate_cursor(
     """Execute cursor pagination inside the supplied service session context."""
     async with context as driver:
         cursor_filter = cast("CursorFilter", parameters[-1])
-        items = await driver.select(statement, *parameters, **kwargs)
+        try:
+            items = await driver.select(statement, *parameters, **kwargs)
+        except DataError as exc:
+            if cursor_filter.values is None:
+                raise
+            raise InvalidCursorError(_INVALID_CURSOR_VALUE_MESSAGE) from exc
         page = cursor_filter.build_page(items)
         if schema_type is None:
             return page
@@ -250,7 +257,12 @@ def _sync_paginate_cursor(
     """Execute cursor pagination inside the supplied service session context."""
     with context as driver:
         cursor_filter = cast("CursorFilter", parameters[-1])
-        items = driver.select(statement, *parameters, **kwargs)
+        try:
+            items = driver.select(statement, *parameters, **kwargs)
+        except DataError as exc:
+            if cursor_filter.values is None:
+                raise
+            raise InvalidCursorError(_INVALID_CURSOR_VALUE_MESSAGE) from exc
         page = cursor_filter.build_page(items)
         if schema_type is None:
             return page

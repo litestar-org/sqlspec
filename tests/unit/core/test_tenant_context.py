@@ -461,3 +461,23 @@ def test_tenant_bypass_marks_route_handlers_and_wrapped_functions() -> None:
     assert is_tenant_bypass_route(SimpleNamespace(fn=public))
     assert not is_tenant_bypass_route(private)
     assert not is_tenant_bypass_route(None)
+
+
+@pytest.mark.anyio
+async def test_aget_forwards_key_to_request_binding() -> None:
+    from sqlspec.utils.tenant import TenantRequestBinding
+
+    first = object()
+    second = object()
+
+    async def resolve(key: object) -> str:
+        return "first-tenant" if key is first else "second-tenant"
+
+    binding = TenantRequestBinding(resolve, keys=(first, second))
+    token = TenantContext.bind_request(binding)
+    try:
+        assert await TenantContext.aget(second) == TenantContextPayload("second-tenant")
+        assert await TenantContext.aget(first) == TenantContextPayload("first-tenant")
+        assert await TenantContext.aget() == TenantContextPayload("first-tenant")
+    finally:
+        TenantContext.reset(token)

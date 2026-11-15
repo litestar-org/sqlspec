@@ -41,6 +41,7 @@ from sqlspec.core import (
     normalize_cursor_keys,
 )
 from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
+from sqlspec.utils.tenant import TenantContext
 from sqlspec.utils.text import camelize
 
 __all__ = (
@@ -171,6 +172,8 @@ class FilterConfig(TypedDict):
     """Largest page size a client may request. Defaults to ``1000``."""
     search: NotRequired[str | set[str] | list[str]]
     """SQL-facing field or fields to search. Strings may be comma-separated."""
+    search_escape_wildcards: NotRequired[bool]
+    """Escape %, _, and the escape character in search input so they match literally. Defaults to True."""
     search_ignore_case: NotRequired[bool]
     """Whether search filtering is case-insensitive. Defaults to ``False``."""
     created_at: NotRequired[bool]
@@ -328,7 +331,9 @@ def _configured_filter_aggregator(
             params,
             annotations,
             dep_defaults.SEARCH_FILTER_DEPENDENCY_KEY,
-            _SearchFilterProvider(search_fields, config.get("search_ignore_case", False)),
+            _SearchFilterProvider(
+                search_fields, config.get("search_ignore_case", False), config.get("search_escape_wildcards", True)
+            ),
         )
 
     if (sort_field := config.get("sort_field")) and config.get("pagination_type") != "cursor":
@@ -454,6 +459,39 @@ def _resolve_context_identity(request: Any) -> str:
     url = getattr(request, "url", None)
     path = getattr(url, "path", None)
     return str(path or "fastapi:standalone")
+
+
+_CURSOR_KEY_REQUIRED_MESSAGE = (
+    "Cursor pagination requires a cursor secret; set cursor_secret or the SQLSPEC_CURSOR_SECRET environment variable"
+)
+
+
+def _tenant_identity_of(payload: Any) -> str:
+    if payload is None or payload.is_bypass:
+        return ""
+    return str(payload.tenant_id)
+
+
+async def _resolve_cursor_tenant_identity(plugin: Any) -> str:
+    """Return the cursor key suffix naming the request tenant of every tenant-enabled configuration.
+
+    Args:
+        plugin: The SQLSpec plugin bound to the application, or ``None``.
+
+    Returns:
+        An empty string without tenant-enabled configurations, otherwise a suffix carrying each tenant.
+    """
+    tenant_configs = getattr(plugin, "_tenant_configs", None)
+    configs: tuple[Any, ...] = tenant_configs() if callable(tenant_configs) else ()
+    if not configs:
+        return ""
+    if len(configs) == 1:
+        return f"|tenant:{_tenant_identity_of(await TenantContext.aget(configs[0]))}"
+    parts: list[str] = []
+    for index, config in enumerate(configs):
+        label = getattr(config, "bind_key", None) or str(index)
+        parts.append(f"{label}={_tenant_identity_of(await TenantContext.aget(config))}")
+    return "|tenants:" + ",".join(parts)
 
 
 @lru_cache(maxsize=256)
@@ -704,7 +742,7 @@ class _CursorFilterProvider:
         )
         self.__signature__ = inspect.Signature(parameters=parameters, return_annotation=CursorFilter)
 
-    def __call__(
+    async def __call__(
         self,
         cursor: str | None = None,
         page_size: int | None = None,
@@ -733,10 +771,10 @@ class _CursorFilterProvider:
             self.encrypt if self.encrypt is not None else (plugin_encrypt if plugin_encrypt is not None else False)
         )
 
-        derived_secret = (
-            _derive_cursor_secret(resolved_secret, _resolve_context_identity(request))
-            if resolved_secret is not None
-            else None
+        if resolved_secret is None:
+            raise ImproperConfigurationError(_CURSOR_KEY_REQUIRED_MESSAGE)
+        derived_secret = _derive_cursor_secret(
+            resolved_secret, _resolve_context_identity(request) + await _resolve_cursor_tenant_identity(plugin)
         )
         try:
             return CursorFilter(
@@ -785,9 +823,15 @@ def _effective_cursor_keys(
 
 
 class _SearchFilterProvider:
-    def __init__(self, search_fields: str | set[str] | list[str], ignore_case_default: bool) -> None:
+    def __init__(
+        self,
+        search_fields: str | set[str] | list[str],
+        ignore_case_default: bool,
+        escape_wildcards_default: bool = True,
+    ) -> None:
         self.search_fields = search_fields
         self.ignore_case_default = ignore_case_default
+        self.escape_wildcards_default = escape_wildcards_default
         self.return_annotation = SearchFilter | None
         self.__signature__ = inspect.Signature(
             parameters=[
@@ -819,12 +863,17 @@ class _SearchFilterProvider:
                 field_name=field_names,
                 value=search_string,
                 ignore_case=self.ignore_case_default if ignore_case is None else ignore_case,
+                escape_wildcards=self.escape_wildcards_default,
             )
         return None
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "_SearchFilterProvider":
         return _memoize_deepcopy(
-            self, _SearchFilterProvider(copy.deepcopy(self.search_fields, memo), self.ignore_case_default), memo
+            self,
+            _SearchFilterProvider(
+                copy.deepcopy(self.search_fields, memo), self.ignore_case_default, self.escape_wildcards_default
+            ),
+            memo,
         )
 
 

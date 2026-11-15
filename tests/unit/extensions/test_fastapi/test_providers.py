@@ -1,5 +1,6 @@
 """Unit tests for FastAPI filter providers."""
 
+import asyncio
 import datetime as dt
 import inspect
 from typing import Annotated, Any, Literal, cast, get_args
@@ -33,6 +34,10 @@ def _clear_dependency_cache() -> Any:
     dep_cache.dependencies.clear()
     yield
     dep_cache.dependencies.clear()
+
+
+def _run(awaitable: Any) -> Any:
+    return asyncio.run(awaitable)
 
 
 def _get_order_by_dependency(provider: Any) -> Any:
@@ -629,7 +634,7 @@ def test_cursor_key_shorthand_supports_sorting_and_signed_continuation(keys: Any
     config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret="secret", sort_field="name")
     provider = _get_dependency(provide_filters(config), "cursor_filter")
     expected = (CursorKey("name", "desc"), CursorKey("id"))
-    page_filter = provider(field_name="name", sort_order="desc")
+    page_filter = _run(provider(field_name="name", sort_order="desc"))
     assert page_filter.keys == expected
     token = page_filter.encode({"name": "sample", "id": 7}, backward=False)
     canonical = _get_dependency(
@@ -640,8 +645,11 @@ def test_cursor_key_shorthand_supports_sorting_and_signed_continuation(keys: Any
         ),
         "cursor_filter",
     )
-    assert canonical(field_name="name", sort_order="desc").encode({"name": "sample", "id": 7}, backward=False) == token
-    resumed = copy.deepcopy(provider)(cursor=token, field_name="name", sort_order="desc")
+    assert (
+        _run(canonical(field_name="name", sort_order="desc")).encode({"name": "sample", "id": 7}, backward=False)
+        == token
+    )
+    resumed = _run(copy.deepcopy(provider)(cursor=token, field_name="name", sort_order="desc"))
     assert resumed.keys == expected
     assert resumed.encode({"name": "sample", "id": 7}, backward=False) == token
 
@@ -657,17 +665,21 @@ def test_cursor_provider_builds_filter_and_preserves_key_order() -> None:
     from sqlspec.core import CursorFilter, CursorKey
 
     config = FilterConfig(
-        pagination_type="cursor", cursor_keys=[CursorKey("name"), CursorKey("id")], pagination_size=2, search="name"
+        pagination_type="cursor",
+        cursor_keys=[CursorKey("name"), CursorKey("id")],
+        cursor_secret="secret",
+        pagination_size=2,
+        search="name",
     )
     provider = _get_dependency(provide_filters(config), "cursor_filter")
-    result = provider()
+    result = _run(provider())
     assert isinstance(result, CursorFilter)
     assert result.keys == tuple(config["cursor_keys"])
     assert result.limit == 2
-    assert provider(page_size=5).limit == 5
+    assert _run(provider(page_size=5)).limit == 5
     config["cursor_keys"] = list(reversed(config["cursor_keys"]))
     reverse_provider = _get_dependency(provide_filters(config), "cursor_filter")
-    assert reverse_provider().keys == tuple(config["cursor_keys"])
+    assert _run(reverse_provider()).keys == tuple(config["cursor_keys"])
     assert reverse_provider is not provider
     assert list(inspect.signature(provide_filters(config)).parameters) == ["search_filter", "cursor_filter"]
 
@@ -679,11 +691,12 @@ def test_cursor_provider_composes_order_by(field_name: str | None, order: Litera
     config = FilterConfig(
         pagination_type="cursor",
         cursor_keys=[CursorKey("id", nulls="last", result_name="identifier")],
+        cursor_secret="secret",
         sort_field=["name", "id"],
         sort_field_aliases={"identifier": "id"},
     )
     provider = _get_dependency(provide_filters(config), "cursor_filter")
-    keys = provider(field_name=field_name, sort_order=order).keys
+    keys = _run(provider(field_name=field_name, sort_order=order)).keys
     if field_name == "identifier":
         assert keys == (CursorKey("id", "desc", nulls="last", result_name="identifier"),)
     else:
@@ -693,20 +706,22 @@ def test_cursor_provider_composes_order_by(field_name: str | None, order: Litera
 def test_cursor_provider_rejects_unknown_order_by() -> None:
     from sqlspec.core import CursorKey
 
-    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], sort_field="name")
+    config = FilterConfig(
+        pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret", sort_field="name"
+    )
     provider = _get_dependency(provide_filters(config), "cursor_filter")
     with pytest.raises(RequestValidationError, match="Invalid orderBy"):
-        provider(field_name="unknown")
+        _run(provider(field_name="unknown"))
 
 
 @pytest.mark.parametrize("token", ["garbage", ""])
 def test_cursor_provider_invalid_cursor(token: str) -> None:
     from sqlspec.core import CursorKey
 
-    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")])
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret")
     provider = _get_dependency(provide_filters(config), "cursor_filter")
     with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
-        provider(cursor=token)
+        _run(provider(cursor=token))
 
 
 def test_cursor_secret_signs_tokens_and_rejects_tampering() -> None:
@@ -717,30 +732,31 @@ def test_cursor_secret_signs_tokens_and_rejects_tampering() -> None:
 
     config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret")
     provider = _get_dependency(provide_filters(config), "cursor_filter")
-    token = provider().encode({"id": 1}, backward=False)
-    assert provider(cursor=token).limit == 20
-    unsigned_config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")])
-    config = unsigned_config
-    unsigned_provider = _get_dependency(provide_filters(config), "cursor_filter")
+    token = _run(provider()).encode({"id": 1}, backward=False)
+    assert _run(provider(cursor=token)).limit == 20
+    other_config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="other")
+    other_provider = _get_dependency(provide_filters(other_config), "cursor_filter")
     with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
-        unsigned_provider(cursor=token)
+        _run(other_provider(cursor=token))
     payload, signature = token.split(".")
     decoded = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     decoded["k"][0][0] = "s"
     tampered = base64.urlsafe_b64encode(json.dumps(decoded).encode()).rstrip(b"=").decode() + "." + signature
     with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
-        provider(cursor=tampered)
+        _run(provider(cursor=tampered))
 
 
 def test_cursor_sort_field_order_changes_cached_default() -> None:
     from sqlspec.core import CursorKey
 
-    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], sort_field=["name", "id"])
+    config = FilterConfig(
+        pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret", sort_field=["name", "id"]
+    )
     first = _get_dependency(provide_filters(config), "cursor_filter")
     config["sort_field"] = ["id", "name"]
     second = _get_dependency(provide_filters(config), "cursor_filter")
-    assert first().keys[0].field_name == "name"
-    assert second().keys[0].field_name == "id"
+    assert _run(first()).keys[0].field_name == "name"
+    assert _run(second()).keys[0].field_name == "id"
 
 
 @pytest.mark.parametrize("secrets", [(b"secret", "b'secret'"), ("b'secret'", b"secret")])
@@ -753,10 +769,10 @@ def test_cursor_secret_cache_preserves_type(secrets: tuple[str | bytes, str | by
         config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret=secret)
         providers.append(_get_dependency(provide_filters(config), "cursor_filter"))
     for index, _secret in enumerate(secrets):
-        token = providers[index]().encode({"id": 1}, backward=False)
-        assert providers[index](cursor=token).limit == 20
+        token = _run(providers[index]()).encode({"id": 1}, backward=False)
+        assert _run(providers[index](cursor=token)).limit == 20
         with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
-            providers[1 - index](cursor=token)
+            _run(providers[1 - index](cursor=token))
 
 
 def test_fastapi_plugin_cursor_config_starlette_fallback_and_endpoint_keys(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -889,8 +905,8 @@ def test_fastapi_standalone_cursor_env_fallback_precedence(monkeypatch: pytest.M
     )
     monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "changed-too-late")
 
-    dep_fallback()
-    dep_primary()
+    _run(dep_fallback())
+    _run(dep_primary())
     assert captured[0]["secret"] == hmac.new(b"secret-key-fallback", b"fastapi:standalone", hashlib.sha256).digest()
     assert captured[1]["secret"] == hmac.new(b"primary-env-key", b"fastapi:standalone", hashlib.sha256).digest()
 
@@ -908,8 +924,8 @@ def test_fastapi_standalone_cursor_env_fallback_precedence(monkeypatch: pytest.M
         ),
         "cursor_filter",
     )
-    dep_none_one()
-    dep_none_two()
+    _run(dep_none_one())
+    _run(dep_none_two())
     assert captured[2]["secret"] == hmac.new(b"env-none-one", b"fastapi:standalone", hashlib.sha256).digest()
     assert captured[3]["secret"] == hmac.new(b"env-none-two", b"fastapi:standalone", hashlib.sha256).digest()
 
@@ -925,5 +941,118 @@ def test_fastapi_standalone_cursor_env_fallback_precedence(monkeypatch: pytest.M
         ),
         "cursor_filter",
     )
-    dep_plugin_inherited()
+    _run(dep_plugin_inherited())
     assert captured[4]["secret"] == hmac.new(b"plugin-none-secret", b"fastapi:standalone", hashlib.sha256).digest()
+
+
+def _cursor_request(plugin: Any = None) -> Any:
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(sqlspec_plugin=plugin) if plugin is not None else SimpleNamespace()
+    return SimpleNamespace(app=SimpleNamespace(state=state), scope={"path": "/items", "root_path": ""})
+
+
+def _tenant_plugin(*configs: Any, cursor_secret: str | None = "plugin-secret") -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(cursor_secret=cursor_secret, _tenant_configs=lambda: tuple(configs))
+
+
+def _cursor_provider(secret: str | None = None) -> Any:
+    config = FilterConfig(pagination_type="cursor", cursor_keys=["id"])
+    if secret is not None:
+        config["cursor_secret"] = secret
+    return _get_dependency(provide_filters(config), "cursor_filter")
+
+
+async def _issue_and_resume(
+    provider: Any, plugin: Any, issue_tenants: dict[Any, str], resume_tenants: dict[Any, str]
+) -> Any:
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding
+
+    async def with_tenants(tenants: dict[Any, str], cursor: str | None) -> Any:
+        async def resolve(key: Any) -> Any:
+            return TenantContextPayload(tenants[key])
+
+        binding = TenantRequestBinding(resolve, keys=tuple(tenants))
+        token = TenantContext.bind_request(binding)
+        try:
+            return await provider(cursor=cursor, request=_cursor_request(plugin))
+        finally:
+            TenantContext.reset(token)
+
+    issued = await with_tenants(issue_tenants, None)
+    return await with_tenants(resume_tenants, issued.encode({"id": 1}, backward=False))
+
+
+def test_cursor_provider_requires_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    provider = _cursor_provider()
+    with pytest.raises(ImproperConfigurationError, match="requires a cursor secret"):
+        _run(provider(request=_cursor_request()))
+
+
+def test_cursor_provider_uses_plugin_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    provider = _cursor_provider()
+    request = _cursor_request(_tenant_plugin())
+    token = _run(provider(request=request)).encode({"id": 1}, backward=False)
+    assert _run(provider(cursor=token, request=request)).limit == 20
+
+
+def test_cursor_token_single_tenant_config_async_resolver() -> None:
+    config = object()
+    plugin = _tenant_plugin(config)
+    provider = _cursor_provider()
+    resumed = _run(_issue_and_resume(provider, plugin, {config: "a"}, {config: "a"}))
+    assert resumed.limit == 20
+    with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
+        _run(_issue_and_resume(provider, plugin, {config: "a"}, {config: "b"}))
+
+
+def test_cursor_token_bound_to_two_tenant_configs() -> None:
+    first, second = object(), object()
+    plugin = _tenant_plugin(first, second)
+    provider = _cursor_provider()
+    assert _run(_issue_and_resume(provider, plugin, {first: "a", second: "x"}, {first: "a", second: "x"})).limit == 20
+    for changed in ({first: "b", second: "x"}, {first: "a", second: "y"}):
+        with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
+            _run(_issue_and_resume(provider, plugin, {first: "a", second: "x"}, changed))
+
+
+def test_cursor_token_without_tenant_configs_unchanged() -> None:
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    provider = _cursor_provider("secret")
+    request = _cursor_request(_tenant_plugin())
+    plain = _run(provider(request=request)).encode({"id": 1}, backward=False)
+    with TenantContext.scope(TenantContextPayload("ambient")):
+        bound = _run(provider(request=request)).encode({"id": 1}, backward=False)
+    assert plain == bound
+    assert _run(provider(cursor=plain, request=request)).limit == 20
+
+
+def _search_compiled(provider: Any, search_string: str) -> "tuple[str, Any]":
+    from sqlspec import SQL
+
+    return provider(search_string=search_string).append_to_statement(SQL("SELECT * FROM t")).compile()
+
+
+def test_search_provider_escapes_wildcards_by_default() -> None:
+    provider = _get_dependency(provide_filters(FilterConfig(search="name")), "search_filter")
+    compiled_sql, params = _search_compiled(provider, "50%_off")
+    assert "ESCAPE '/'" in compiled_sql
+    assert list(params) == ["%50/%/_off%"]
+
+
+def test_search_provider_escape_opt_out() -> None:
+    provider = _get_dependency(
+        provide_filters(FilterConfig(search="name", search_escape_wildcards=False)), "search_filter"
+    )
+    compiled_sql, params = _search_compiled(provider, "50%_off")
+    assert "ESCAPE" not in compiled_sql
+    assert list(params) == ["%50%_off%"]
