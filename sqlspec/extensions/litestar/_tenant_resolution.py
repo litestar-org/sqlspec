@@ -289,7 +289,7 @@ def _requested_tenant(
         if name in path:
             return True, _identity(path[name])
     if settings.session_key is not None:
-        session_found, session_value = _read_session_selector(scope, auth, settings.session_key)
+        session_found, session_value = _replica_session_selector(scope, auth, settings.session_key)
         if session_found:
             return True, session_value
     if settings.header is not None:
@@ -300,7 +300,7 @@ def _requested_tenant(
     return False, None
 
 
-def _read_session_selector(scope: Mapping[str, Any], auth: Any, session_key: str) -> tuple[bool, str | None]:
+def _replica_session_selector(scope: Mapping[str, Any], auth: Any, session_key: str) -> tuple[bool, str | None]:
     session = _present_scope_entry(scope, "session")
     if isinstance(session, Mapping) and session_key in session:
         return True, _identity(session[session_key])

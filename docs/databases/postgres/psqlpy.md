@@ -157,7 +157,7 @@ Pass `PsqlpyDriverFeatures` keys inside `driver_features={...}` on `PsqlpyConfig
 
 Pass reader endpoints or explicit overrides through `PsqlpyConfig(replicas=...)`. Derived pools keep driver hooks and tenant leases. The adapter converts string `target_session_attrs` and `load_balance_hosts` values to the SDK's `TargetSessionAttrs` and `LoadBalanceHosts` enums before pool startup. A new DSN replaces inherited host fields.
 
-Use `provide_read_session()` for a reader. Native read-only errors map to `ReadOnlyTransactionError`. Use WAL-position helpers or `RoutingContext.primary()` when a read must include a recent write. See [Replica Operations](../../learn/recipes/read-replicas-operations.md).
+Use `provide_replica_session()` for a reader. Native read-only errors map to `ReadOnlyTransactionError`. Use WAL-position helpers or `RoutingContext.primary()` when a read must include a recent write. See [Replica Operations](../../learn/recipes/read-replicas-operations.md).
 
 ## See Also
 

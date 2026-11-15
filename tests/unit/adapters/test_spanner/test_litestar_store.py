@@ -143,12 +143,12 @@ def test_get_uses_snapshot_session() -> None:
 
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_read_session.return_value = cm
+    config.provide_replica_session.return_value = cm
 
     store = SpannerSyncStore(config)
     result = store._get("s1")  # pyright: ignore
 
-    config.provide_read_session.assert_called_once_with()
+    config.provide_replica_session.assert_called_once_with()
     assert result is None
 
 
@@ -160,12 +160,12 @@ def test_exists_uses_snapshot_session() -> None:
 
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_read_session.return_value = cm
+    config.provide_replica_session.return_value = cm
 
     store = SpannerSyncStore(config)
     result = store._exists("s1")  # pyright: ignore
 
-    config.provide_read_session.assert_called_once_with()
+    config.provide_replica_session.assert_called_once_with()
     assert result is True
 
 
@@ -234,7 +234,7 @@ async def test_async_store_set_delete_delete_all_delete_expired() -> None:
 
 
 async def test_async_store_get_exists_expires_in() -> None:
-    """Verify SpannerAsyncStore read operations use async provide_read_session and optional renewal."""
+    """Verify SpannerAsyncStore read operations use async provide_replica_session and optional renewal."""
     db = _mock_async_database()
     future_time = datetime.now(UTC) + timedelta(seconds=120)
     driver = MagicMock()
@@ -243,7 +243,7 @@ async def test_async_store_get_exists_expires_in() -> None:
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess", "shard_count": 4}}
     config.get_database = AsyncMock(return_value=db)
-    config.provide_read_session.side_effect = lambda: _async_context_manager_yielding(driver)
+    config.provide_replica_session.side_effect = lambda: _async_context_manager_yielding(driver)
 
     store = SpannerAsyncStore(config)
     val = await store.get("s1", renew_for=60)
@@ -440,7 +440,7 @@ async def test_spanner_litestar_get_renews_only_for_positive_duration(
         sync_cfg = MagicMock()
         sync_cfg.extension_config = {"litestar": {"session_table": "sess"}}
         sync_cfg.get_database.return_value = sync_db
-        sync_cfg.provide_read_session.side_effect = lambda: _context_manager_yielding(sync_driver)
+        sync_cfg.provide_replica_session.side_effect = lambda: _context_manager_yielding(sync_driver)
         sync_store = SpannerSyncStore(sync_cfg)
         assert sync_store._should_renew(renew_for) is (expected_txn_calls == 1)  # pyright: ignore[reportPrivateUsage]
         result = sync_store._get("s1", renew_for=renew_for)  # pyright: ignore[reportPrivateUsage]
@@ -453,7 +453,7 @@ async def test_spanner_litestar_get_renews_only_for_positive_duration(
         async_cfg = MagicMock()
         async_cfg.extension_config = {"litestar": {"session_table": "sess"}}
         async_cfg.get_database = AsyncMock(return_value=async_db)
-        async_cfg.provide_read_session.side_effect = lambda: _async_context_manager_yielding(async_driver)
+        async_cfg.provide_replica_session.side_effect = lambda: _async_context_manager_yielding(async_driver)
         async_store = SpannerAsyncStore(async_cfg)
         assert async_store._should_renew(renew_for) is (expected_txn_calls == 1)  # pyright: ignore[reportPrivateUsage]
         result = await async_store.get("s1", renew_for=renew_for)

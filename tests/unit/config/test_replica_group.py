@@ -252,10 +252,10 @@ async def test_primary_may_refuse_checkout_fallback_without_losing_original_erro
     primary = primary_type(connection_config={"dsn": "primary"}, replicas=[failed])
     with pytest.raises(OSError, match="endpoint unavailable"):
         if primary.is_async:
-            async with primary.provide_read_session():
+            async with primary.provide_replica_session():
                 pytest.fail("failed checkout must not yield")
         else:
-            with primary.provide_read_session():
+            with primary.provide_replica_session():
                 pytest.fail("failed checkout must not yield")
     assert primary.events == []
 
@@ -514,22 +514,22 @@ async def test_unreachable_replica_during_primary_create_pool_is_isolated_and_re
     if asynchronous:
         async with primary.provide_session() as session_val:
             assert session_val == "primary"
-        async with primary.provide_read_session() as read_val:
+        async with primary.provide_replica_session() as read_val:
             assert read_val == "primary"
     else:
         with primary.provide_session() as session_val:
             assert session_val == "primary"
-        with primary.provide_read_session() as read_val:
+        with primary.provide_replica_session() as read_val:
             assert read_val == "primary"
 
     unreachable.fail_exc = None
     now[0] = 6.0
 
     if asynchronous:
-        async with primary.provide_read_session() as recovered_val:
+        async with primary.provide_replica_session() as recovered_val:
             assert recovered_val == "replica-a"
     else:
-        with primary.provide_read_session() as recovered_val:
+        with primary.provide_replica_session() as recovered_val:
             assert recovered_val == "replica-a"
 
     assert unreachable.connection_instance is not None

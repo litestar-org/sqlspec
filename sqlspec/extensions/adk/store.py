@@ -189,7 +189,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
         """Return the extension-downgrade drops for the session store tables in FK-safe order."""
         return [DropStatement(statement) for statement in self._drop_tables_sql()]
 
-    def _provide_read_connection(
+    def _provide_replica_connection(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
         return _adk_read_provider(
@@ -202,7 +202,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
             kwargs,
         )
 
-    def _provide_read_session(
+    def _provide_replica_session(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
         return _adk_read_provider(
@@ -822,11 +822,11 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """Return the drops that remove configured and legacy ADK session tables."""
         return self._reset_drop_statements()
 
-    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
-        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+    def _provide_replica_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_replica_connection(primary=primary, **kwargs))
 
-    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
-        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
+    def _provide_replica_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_replica_session(primary=primary, **kwargs))
 
 
 class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
@@ -1109,11 +1109,11 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """Return the drops that remove configured and legacy ADK session tables."""
         return self._reset_drop_statements()
 
-    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
-        return cast("AbstractContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+    def _provide_replica_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_replica_connection(primary=primary, **kwargs))
 
-    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
-        return cast("AbstractContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
+    def _provide_replica_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_replica_session(primary=primary, **kwargs))
 
 
 def normalize_session_list_options(
@@ -1230,8 +1230,10 @@ def _adk_read_provider(
     )
     if effective_group is not None:
         return (
-            config.provide_read_session(replica_group=effective_group, **call_kwargs)
+            config.provide_replica_session(replica_group=effective_group, **call_kwargs)
             if session
-            else config.provide_read_connection(replica_group=effective_group, **call_kwargs)
+            else config.provide_replica_connection(replica_group=effective_group, **call_kwargs)
         )
-    return config.provide_read_session(**call_kwargs) if session else config.provide_read_connection(**call_kwargs)
+    return (
+        config.provide_replica_session(**call_kwargs) if session else config.provide_replica_connection(**call_kwargs)
+    )

@@ -363,7 +363,7 @@ def test_replica_native_checkout_errors_are_mapped(monkeypatch: pytest.MonkeyPat
         config.close_pool()
 
 
-@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize("method", ["provide_replica_connection", "provide_replica_session"])
 @pytest.mark.parametrize(
     ("driver_exc_factory", "expected_mapped"),
     [
@@ -388,7 +388,7 @@ def test_pymssql_read_replica_failover_maps_connection_errors(
     config = PymssqlConfig(connection_config={"server": "writer", "database": "app"}, replicas=["r1", "r2"])
     try:
         with getattr(config, method)() as acquired:
-            conn = acquired if method == "provide_read_connection" else acquired.connection
+            conn = acquired if method == "provide_replica_connection" else acquired.connection
             assert conn is healthy_conn
 
         failing_only = PymssqlConfig(connection_config={"server": "r1", "database": "app"})
@@ -405,7 +405,7 @@ def test_pymssql_read_replica_failover_maps_connection_errors(
 
 
 def test_pymssql_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """User hook RuntimeError propagates through provide_read_session without failover."""
+    """User hook RuntimeError propagates through provide_replica_session without failover."""
     hook_conn = FakeConnection()
     monkeypatch.setattr(_pymssql_pool.pymssql, "connect", lambda **_kwargs: hook_conn)
 
@@ -418,7 +418,7 @@ def test_pymssql_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatc
         replicas=["r1", "r2"],
     )
     try:
-        with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
+        with pytest.raises(RuntimeError, match="hook boom"), config.provide_replica_session():
             pass
         assert hook_conn.closed is True
     finally:

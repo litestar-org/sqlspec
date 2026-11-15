@@ -299,8 +299,8 @@ class SQLSpecPlugin:
                     state.session_key,
                     state.connection_key,
                     state.pool_key,
-                    state.read_session_key,
-                    state.read_connection_key,
+                    state.replica_session_key,
+                    state.replica_connection_key,
                     state.read_pool_key,
                     state.routing_session_key,
                 }:
@@ -391,37 +391,37 @@ class SQLSpecPlugin:
             return await acquire_pending_connection_async(request, config_state)
         return get_state_value(request.state, config_state.connection_key)
 
-    def get_read_session(self, request: "Request", key: Any = None) -> Any:
+    def get_replica_session(self, request: "Request", key: Any = None) -> Any:
         """Return a request-owned read session."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
-        resource_key = selected.read_session_key
+        resource_key = selected.replica_session_key
         if resource_key is None:
             msg = "routing_session_key must be configured to use routing sessions"
             raise ImproperConfigurationError(msg)
         return get_request_resource(request, selected, resource_key, "session")
 
-    async def get_read_session_async(self, request: "Request", key: Any = None) -> Any:
+    async def get_replica_session_async(self, request: "Request", key: Any = None) -> Any:
         """Open and return a request-owned read session."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
-        resource_key = selected.read_session_key
+        resource_key = selected.replica_session_key
         if resource_key is None:
             msg = "routing_session_key must be configured to use routing sessions"
             raise ImproperConfigurationError(msg)
         return await get_request_resource_async(request, selected, resource_key, "session")
 
-    def get_read_connection(self, request: "Request", key: Any = None) -> Any:
+    def get_replica_connection(self, request: "Request", key: Any = None) -> Any:
         """Return a request-owned read connection."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
-        resource_key = selected.read_connection_key
+        resource_key = selected.replica_connection_key
         if resource_key is None:
             msg = "routing_session_key must be configured to use routing sessions"
             raise ImproperConfigurationError(msg)
         return get_request_resource(request, selected, resource_key, "connection")
 
-    async def get_read_connection_async(self, request: "Request", key: Any = None) -> Any:
+    async def get_replica_connection_async(self, request: "Request", key: Any = None) -> Any:
         """Open and return a request-owned read connection."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
-        resource_key = selected.read_connection_key
+        resource_key = selected.replica_connection_key
         if resource_key is None:
             msg = "routing_session_key must be configured to use routing sessions"
             raise ImproperConfigurationError(msg)
@@ -465,15 +465,16 @@ class SQLSpecPlugin:
             "connection_key": framework_config.get("connection_key", DEFAULT_CONNECTION_KEY),
             "pool_key": pool_key,
             "session_key": session_key,
-            "read_connection_key": framework_config.get(
-                "read_connection_key",
-                "read_connection" if connection_key == DEFAULT_CONNECTION_KEY else f"{connection_key}_read",
+            "replica_connection_key": framework_config.get(
+                "replica_connection_key",
+                "db_replica_connection" if connection_key == DEFAULT_CONNECTION_KEY else f"{connection_key}_replica",
             ),
             "read_pool_key": framework_config.get(
                 "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
             ),
-            "read_session_key": framework_config.get(
-                "read_session_key", "read_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_read"
+            "replica_session_key": framework_config.get(
+                "replica_session_key",
+                "db_replica_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_replica",
             ),
             "routing_session_key": framework_config.get("routing_session_key"),
             "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
@@ -529,19 +530,21 @@ class SQLSpecPlugin:
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             sqlcommenter_framework=settings["sqlcommenter_framework"],
             tenant_extractor=settings.get("tenant_extractor"),
-            read_connection_key=settings.get(
-                "read_connection_key",
-                "read_connection"
+            replica_connection_key=settings.get(
+                "replica_connection_key",
+                "db_replica_connection"
                 if settings["connection_key"] == DEFAULT_CONNECTION_KEY
-                else f"{settings['connection_key']}_read",
+                else f"{settings['connection_key']}_replica",
             ),
             read_pool_key=settings.get(
                 "read_pool_key",
                 "read_pool" if settings["pool_key"] == DEFAULT_POOL_KEY else f"{settings['pool_key']}_read",
             ),
-            read_session_key=settings.get(
-                "read_session_key",
-                "read_session" if settings["session_key"] == DEFAULT_SESSION_KEY else f"{settings['session_key']}_read",
+            replica_session_key=settings.get(
+                "replica_session_key",
+                "db_replica_session"
+                if settings["session_key"] == DEFAULT_SESSION_KEY
+                else f"{settings['session_key']}_replica",
             ),
             routing_session_key=settings.get("routing_session_key"),
             default_routing_mode=settings.get("default_routing_mode", "auto"),
@@ -565,9 +568,9 @@ class SQLSpecPlugin:
                     state.connection_key,
                     state.pool_key,
                     state.session_key,
-                    state.read_connection_key,
+                    state.replica_connection_key,
                     state.read_pool_key,
-                    state.read_session_key,
+                    state.replica_session_key,
                     state.routing_session_key,
                 )
                 if key is not None
@@ -650,8 +653,8 @@ class SQLSpecPlugin:
                 if key in {
                     state.connection_key,
                     state.pool_key,
-                    state.read_session_key,
-                    state.read_connection_key,
+                    state.replica_session_key,
+                    state.replica_connection_key,
                     state.read_pool_key,
                     state.routing_session_key,
                     getattr(state.config, "bind_key", None),

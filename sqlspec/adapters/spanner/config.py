@@ -56,6 +56,7 @@ from sqlspec.driver import (
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
@@ -96,7 +97,7 @@ _DEFAULT_SESSION_TRANSACTION: bool = True
 """Default ``transaction`` flag for ``provide_session`` / ``provide_connection``.
 
 ``True`` yields a write-capable ``Transaction`` context; read-only
-``Snapshot`` contexts are available through ``provide_read_session``."""
+``Snapshot`` contexts are available through ``provide_replica_session``."""
 
 _CLIENT_CONFIG_FIELDS = frozenset({
     "project",
@@ -517,7 +518,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
             bind_key=self.bind_key,
         )
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -616,7 +617,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         """Provide a Spanner driver session context manager.
 
         Returns a write-capable Transaction session by default. Pass
-        ``transaction=False`` or use :meth:`provide_read_session` to obtain a
+        ``transaction=False`` or use :meth:`provide_replica_session` to obtain a
         read-only Snapshot session.
 
         Args:
@@ -699,7 +700,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
             **kwargs,
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -755,6 +756,14 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         )
 
         return _ReadSyncContext(self._primary_read_sync(context, receipt), receipt)
+
+    @deprecated("0.72.0", removal_in="0.74.0", alternative="provide_replica_session", kind="method")
+    def provide_read_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[SpannerSyncDriver]":
+        """Provide a read-only Snapshot Spanner session.
+
+        Deprecated alias of :meth:`provide_replica_session`.
+        """
+        return self.provide_replica_session(*args, **kwargs)
 
     def run_in_transaction(self, fn: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
         """Execute a callable inside Spanner's retryable transaction runner.
@@ -1091,7 +1100,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             bind_key=self.bind_key,
         )
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -1190,7 +1199,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         """Provide an async Spanner driver session context manager.
 
         Returns a write-capable Transaction session by default. Pass
-        ``transaction=False`` or use :meth:`provide_read_session` to obtain a
+        ``transaction=False`` or use :meth:`provide_replica_session` to obtain a
         read-only Snapshot session.
 
         Args:
@@ -1273,7 +1282,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             **kwargs,
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -1329,6 +1338,14 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         )
 
         return _ReadAsyncContext(self._primary_read_async(context, receipt), receipt)
+
+    @deprecated("0.72.0", removal_in="0.74.0", alternative="provide_replica_session", kind="method")
+    def provide_read_session(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[SpannerAsyncDriver]":
+        """Provide a read-only Snapshot Spanner session.
+
+        Deprecated alias of :meth:`provide_replica_session`.
+        """
+        return self.provide_replica_session(*args, **kwargs)
 
     async def run_in_transaction(self, fn: "Callable[..., Awaitable[Any]]", *args: Any, **kwargs: Any) -> Any:
         """Execute a coroutine function inside Spanner's async retryable transaction runner.

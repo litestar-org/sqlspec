@@ -29,7 +29,7 @@ def _watch(config: SqliteConfig | AiosqliteConfig, events: list[tuple[str, str]]
         runtime.register_lifecycle_hook(f"on_{event}", record)
 
 
-def test_read_session_uses_selected_runtime_and_distinct_replica_metrics() -> None:
+def test_replica_session_uses_selected_runtime_and_distinct_replica_metrics() -> None:
     replica = SqliteConfig()
     analytics = SqliteConfig()
     primary = SqliteConfig(bind_key="orders", replicas={"default": [replica], "analytics": [analytics]})
@@ -40,9 +40,9 @@ def test_read_session_uses_selected_runtime_and_distinct_replica_metrics() -> No
     _watch(primary, events, "primary")
     _watch(replica, events, "replica")
     try:
-        with spec.provide_read_session(primary) as session:
+        with spec.provide_replica_session(primary) as session:
             assert session.select_value("SELECT 1") == 1
-        with spec.provide_read_session(primary, replica_group="analytics") as session:
+        with spec.provide_replica_session(primary, replica_group="analytics") as session:
             assert session.select_value("SELECT 2") == 2
         assert events == [
             ("replica", "connection_create"),
@@ -62,7 +62,7 @@ def test_read_session_uses_selected_runtime_and_distinct_replica_metrics() -> No
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_read_connection_emits_balanced_selected_events(fail: bool) -> None:
+def test_replica_connection_emits_balanced_selected_events(fail: bool) -> None:
     replica = SqliteConfig()
     primary = SqliteConfig(replicas=[replica])
     spec = SQLSpec()
@@ -72,7 +72,7 @@ def test_read_connection_emits_balanced_selected_events(fail: bool) -> None:
     _watch(replica, events, "replica")
     try:
         try:
-            with spec.provide_read_connection(primary) as connection:
+            with spec.provide_replica_connection(primary) as connection:
                 assert connection.execute("SELECT 3").fetchone()[0] == 3
                 if fail:
                     raise ValueError("caller failed")
@@ -85,7 +85,7 @@ def test_read_connection_emits_balanced_selected_events(fail: bool) -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("outcome", ["normal", "error", "cancel"])
-async def test_async_read_session_emits_balanced_selected_events(outcome: str) -> None:
+async def test_async_replica_session_emits_balanced_selected_events(outcome: str) -> None:
     replica = AiosqliteConfig()
     primary = AiosqliteConfig(replicas=[replica])
     spec = SQLSpec()
@@ -95,7 +95,7 @@ async def test_async_read_session_emits_balanced_selected_events(outcome: str) -
     _watch(replica, events, "replica")
     try:
         try:
-            async with spec.provide_read_session(primary) as session:
+            async with spec.provide_replica_session(primary) as session:
                 assert await session.select_value("SELECT 4") == 4
                 if outcome == "error":
                     raise ValueError("caller failed")
@@ -118,9 +118,9 @@ def test_read_provider_without_replicas_preserves_primary_identity() -> None:
     first = SqliteConfig()
     second = SqliteConfig()
     try:
-        with spec.provide_read_session(first) as session:
+        with spec.provide_replica_session(first) as session:
             session.execute("CREATE TABLE only_first (id INTEGER)")
-        with spec.provide_read_session(second) as session:
+        with spec.provide_replica_session(second) as session:
             assert session.select_value("SELECT COUNT(*) FROM sqlite_master WHERE name = 'only_first'") == 0
         assert spec.configs[id(first)] is first
         assert spec.configs[id(second)] is second
@@ -137,7 +137,7 @@ def test_forced_primary_read_retains_primary_runtime() -> None:
     _watch(primary, events, "primary")
     _watch(replica, events, "replica")
     try:
-        with RoutingContext.primary("orders"), spec.provide_read_session(primary) as session:
+        with RoutingContext.primary("orders"), spec.provide_replica_session(primary) as session:
             assert session.select_value("SELECT 5") == 5
         assert events == [
             ("primary", "connection_create"),

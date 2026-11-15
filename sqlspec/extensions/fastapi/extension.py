@@ -199,27 +199,27 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         return dependency
 
-    def provide_read_session(self, key: Any = None) -> "Callable[..., Any]":
+    def provide_replica_session(self, key: Any = None) -> "Callable[..., Any]":
         """Build a mode-aware read session dependency for a registered configuration."""
         return self._read_routing_dependency(key, "session")
 
-    def provide_async_read_session(self, key: Any = None) -> "Callable[..., Any]":
+    def provide_async_replica_session(self, key: Any = None) -> "Callable[..., Any]":
         """Build a read session dependency requiring an asynchronous configuration."""
         return self._read_routing_dependency(key, "session", require_async=True)
 
-    def provide_sync_read_session(self, key: Any = None) -> "Callable[..., Any]":
+    def provide_sync_replica_session(self, key: Any = None) -> "Callable[..., Any]":
         """Build a read session dependency requiring a synchronous configuration."""
         return self._read_routing_dependency(key, "session", require_async=False)
 
-    def provide_read_connection(self, key: Any = None) -> "Callable[..., Any]":
+    def provide_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
         """Build a mode-aware raw read connection dependency."""
         return self._read_routing_dependency(key, "connection")
 
-    def provide_async_read_connection(self, key: Any = None) -> "Callable[..., Any]":
+    def provide_async_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
         """Build a raw read connection dependency requiring an async configuration."""
         return self._read_routing_dependency(key, "connection", require_async=True)
 
-    def provide_sync_read_connection(self, key: Any = None) -> "Callable[..., Any]":
+    def provide_sync_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
         """Build a raw read connection dependency requiring a sync configuration."""
         return self._read_routing_dependency(key, "connection", require_async=False)
 
@@ -270,18 +270,18 @@ class SQLSpecPlugin(_StarlettePlugin):
 
             async def async_dependency(request: Request) -> Any:
                 if kind == "session":
-                    return await self.get_read_session_async(request, state.config)
+                    return await self.get_replica_session_async(request, state.config)
                 if kind == "connection":
-                    return await self.get_read_connection_async(request, state.config)
+                    return await self.get_replica_connection_async(request, state.config)
                 return await self.get_routing_session_async(request, state.config)
 
             return async_dependency
 
         def sync_dependency(request: Request) -> Any:
             if kind == "session":
-                return self.get_read_session(request, state.config)
+                return self.get_replica_session(request, state.config)
             if kind == "connection":
-                return self.get_read_connection(request, state.config)
+                return self.get_replica_connection(request, state.config)
             return self.get_routing_session(request, state.config)
 
         return sync_dependency
@@ -321,17 +321,17 @@ class SQLSpecPlugin(_StarlettePlugin):
             "connection_key": framework_config.get("connection_key", "db_connection"),
             "pool_key": pool_key,
             "session_key": framework_config.get("session_key", "db_session"),
-            "read_session_key": framework_config.get(
-                "read_session_key",
-                "read_session"
+            "replica_session_key": framework_config.get(
+                "replica_session_key",
+                "db_replica_session"
                 if framework_config.get("session_key", "db_session") == "db_session"
-                else f"{framework_config['session_key']}_read",
+                else f"{framework_config['session_key']}_replica",
             ),
-            "read_connection_key": framework_config.get(
-                "read_connection_key",
-                "read_connection"
+            "replica_connection_key": framework_config.get(
+                "replica_connection_key",
+                "db_replica_connection"
                 if framework_config.get("connection_key", "db_connection") == "db_connection"
-                else f"{framework_config['connection_key']}_read",
+                else f"{framework_config['connection_key']}_replica",
             ),
             "read_pool_key": framework_config.get(
                 "read_pool_key", "read_pool" if pool_key == "db_pool" else f"{pool_key}_read"

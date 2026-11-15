@@ -144,7 +144,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             A context yielding the driver and releasing only an acquired session.
         """
         if read_only:
-            return self.provide_read_session(session)
+            return self.provide_replica_session(session)
         if session is not None:
             return nullcontext(session)
         if self._session is not None:
@@ -157,7 +157,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         msg = "No session or config is available to provide a session."
         raise ImproperConfigurationError(msg)
 
-    def provide_read_session(
+    def provide_replica_session(
         self, session: AsyncDriverT | None = None, *, replica_group: str | None = None
     ) -> AbstractAsyncContextManager[AsyncDriverT]:
         """Borrow an active writer transaction or acquire a reader session."""
@@ -185,7 +185,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         if target is not None:
             if self._read_config is not None and not target.supports_read_routing and group is None:
                 return target.provide_session()
-            return target.provide_read_session(replica_group=group)
+            return target.provide_replica_session(replica_group=group)
         if self._session is not None:
             return nullcontext(self._session)
         msg = "No session or config is available to provide a read session"
@@ -649,7 +649,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             A context yielding the driver and releasing only an acquired session.
         """
         if read_only:
-            return self.provide_read_session(session)
+            return self.provide_replica_session(session)
         if session is not None:
             return nullcontext(session)
         if self._session is not None:
@@ -662,7 +662,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         msg = "No session or config is available to provide a session."
         raise ImproperConfigurationError(msg)
 
-    def provide_read_session(
+    def provide_replica_session(
         self, session: SyncDriverT | None = None, *, replica_group: str | None = None
     ) -> AbstractContextManager[SyncDriverT]:
         """Borrow an active writer transaction or acquire a reader session."""
@@ -690,7 +690,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         if target is not None:
             if self._read_config is not None and not target.supports_read_routing and group is None:
                 return target.provide_session()
-            return target.provide_read_session(replica_group=group)
+            return target.provide_replica_session(replica_group=group)
         if self._session is not None:
             return nullcontext(self._session)
         msg = "No session or config is available to provide a read session"

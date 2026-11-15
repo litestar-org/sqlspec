@@ -17,13 +17,13 @@ from sqlspec.utils.routing import RoutingContext
 
 
 class _ReadProbe(Protocol):
-    def _provide_read_session(
+    def _provide_replica_session(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]: ...
 
 
 def _read_label(self: _ReadProbe, *, primary: bool = False) -> str:
-    with cast("AbstractContextManager[SqliteDriver]", self._provide_read_session(primary=primary)) as session:
+    with cast("AbstractContextManager[SqliteDriver]", self._provide_replica_session(primary=primary)) as session:
         return str(session.select_value("SELECT origin FROM sources"))
 
 
@@ -94,7 +94,7 @@ async def test_adk_primary_scope_isolated_between_concurrent_tasks(tmp_path: Pat
     store = _ADKStoreCommon(writer, read_config=reader)
 
     async def read_label() -> str:
-        async with cast("AbstractAsyncContextManager[AiosqliteDriver]", store._provide_read_session()) as session:
+        async with cast("AbstractAsyncContextManager[AiosqliteDriver]", store._provide_replica_session()) as session:
             return str(await session.select_value("SELECT origin FROM sources"))
 
     async def primary_task() -> str:

@@ -52,13 +52,13 @@ from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
     build_request_session,
     connection_provider_maker,
+    db_replica_connection_provider_maker,
+    db_replica_session_provider_maker,
     has_tenant_strategy,
     lifespan_handler_maker,
     manual_handler_maker,
     pool_provider_maker,
-    read_connection_provider_maker,
     read_pool_provider_maker,
-    read_session_provider_maker,
     record_request_exception,
     routing_session_provider_maker,
     session_provider_maker,
@@ -495,9 +495,9 @@ class PluginConfigState:
     disable_di: bool
     manage_lifespan: bool
     tenant_settings: TenantResolutionSettings = field(default_factory=TenantResolutionSettings)
-    read_connection_key: str = "read_connection"
+    replica_connection_key: str = "db_replica_connection"
     read_pool_key: str = "read_pool"
-    read_session_key: str = "read_session"
+    replica_session_key: str = "db_replica_session"
     routing_session_key: str | None = None
     default_routing_mode: str = "auto"
     enable_routing_middleware: bool = True
@@ -678,21 +678,21 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     state.connection_key: Provide(state.connection_provider),
                     state.pool_key: Provide(state.pool_provider),
                     state.session_key: Provide(state.session_provider),
-                    state.read_connection_key: Provide(
-                        read_connection_provider_maker(
-                            state.config, state.pool_key, state.read_pool_key, state.read_connection_key
+                    state.replica_connection_key: Provide(
+                        db_replica_connection_provider_maker(
+                            state.config, state.pool_key, state.read_pool_key, state.replica_connection_key
                         )
                     ),
                     state.read_pool_key: Provide(
                         read_pool_provider_maker(state.config, state.pool_key, state.read_pool_key)
                     ),
-                    state.read_session_key: Provide(
-                        read_session_provider_maker(
+                    state.replica_session_key: Provide(
+                        db_replica_session_provider_maker(
                             state.config,
                             state.pool_key,
                             state.read_pool_key,
-                            state.read_connection_key,
-                            state.read_session_key,
+                            state.replica_connection_key,
+                            state.replica_session_key,
                         )
                     ),
                 })
@@ -941,49 +941,49 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             return self._plugin_configs[0].tenant_settings
         return TenantResolutionSettings()
 
-    def get_read_session(self, request: Any, key: Any = None) -> Any:
+    def get_db_replica_session(self, request: Any, key: Any = None) -> Any:
         """Return the request's lazy read session view."""
         selected, state, scope = self._read_request_parts(request, key)
         return self._request_resource(selected.config, state, scope, "session")
 
-    def provide_request_read_session(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+    def provide_db_replica_session(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
         """Return the request-owned read session without eager async checkout."""
         return self._request_resource(key, state, scope, "session")
 
-    def provide_request_read_session_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+    def provide_db_replica_session_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
         """Return the synchronous request read session view."""
         return self._request_resource(key, state, scope, "session")
 
-    async def provide_request_read_session_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+    async def provide_db_replica_session_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
         """Open and return the request-owned read session."""
         selected = self._plugin_configs[0] if key is None else self._registry_state(key)
         if selected is None:
             selected = self._get_plugin_state(cast("Any", key))
-        resource_key = selected.read_session_key
+        resource_key = selected.replica_session_key
         if resource_key is None or scope is None:
             msg = "A request scope and configured resource key are required"
             raise ImproperConfigurationError(msg)
         return await _open_request_resource_async(selected.config, scope, resource_key, "session")
 
-    def get_read_connection(self, request: Any, key: Any = None) -> Any:
+    def get_db_replica_connection(self, request: Any, key: Any = None) -> Any:
         """Return the request's lazy read connection view."""
         selected, state, scope = self._read_request_parts(request, key)
         return self._request_resource(selected.config, state, scope, "connection")
 
-    def provide_request_read_connection(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+    def provide_db_replica_connection(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
         """Return the request-owned read connection without eager async checkout."""
         return self._request_resource(key, state, scope, "connection")
 
-    def provide_request_read_connection_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+    def provide_db_replica_connection_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
         """Return the synchronous request read connection view."""
         return self._request_resource(key, state, scope, "connection")
 
-    async def provide_request_read_connection_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+    async def provide_db_replica_connection_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
         """Open and return the request-owned read connection."""
         selected = self._plugin_configs[0] if key is None else self._registry_state(key)
         if selected is None:
             selected = self._get_plugin_state(cast("Any", key))
-        resource_key = selected.read_connection_key
+        resource_key = selected.replica_connection_key
         if resource_key is None or scope is None:
             msg = "A request scope and configured resource key are required"
             raise ImproperConfigurationError(msg)
@@ -1312,9 +1312,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             msg = "A request scope is required"
             raise ImproperConfigurationError(msg)
         resource_key = (
-            selected.read_session_key
+            selected.replica_session_key
             if kind == "session"
-            else selected.read_connection_key
+            else selected.replica_connection_key
             if kind == "connection"
             else selected.routing_session_key
         )
@@ -1326,14 +1326,14 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             return current
         if selected.config.is_async:
             if kind == "connection":
-                raise_async_connection_required("await plugin.provide_request_read_connection_async(key, state, scope)")
+                raise_async_connection_required("await plugin.provide_db_replica_connection_async(key, state, scope)")
             deferred_key = f"{resource_key}_deferred"
             deferred = get_sqlspec_scope_state(scope, deferred_key)
             if deferred is None:
                 accessor = (
                     "await plugin.provide_request_routing_session_async(key, state, scope)"
                     if kind == "routing"
-                    else "await plugin.provide_request_read_session_async(key, state, scope)"
+                    else "await plugin.provide_db_replica_session_async(key, state, scope)"
                 )
                 deferred = DeferredAsyncSession(
                     selected.config,
@@ -1376,15 +1376,16 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "connection_key": connection_key,
             "pool_key": pool_key,
             "session_key": session_key,
-            "read_connection_key": litestar_config.get(
-                "read_connection_key",
-                "read_connection" if connection_key == DEFAULT_CONNECTION_KEY else f"{connection_key}_read",
+            "replica_connection_key": litestar_config.get(
+                "replica_connection_key",
+                "db_replica_connection" if connection_key == DEFAULT_CONNECTION_KEY else f"{connection_key}_replica",
             ),
             "read_pool_key": litestar_config.get(
                 "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
             ),
-            "read_session_key": litestar_config.get(
-                "read_session_key", "read_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_read"
+            "replica_session_key": litestar_config.get(
+                "replica_session_key",
+                "db_replica_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_replica",
             ),
             "routing_session_key": litestar_config.get("routing_session_key"),
             "default_routing_mode": litestar_config.get("default_routing_mode", "auto"),
@@ -1424,9 +1425,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             disable_di=settings["disable_di"],
             manage_lifespan=settings["manage_lifespan"],
             tenant_settings=settings["tenant_settings"],
-            read_connection_key=settings["read_connection_key"],
+            replica_connection_key=settings["replica_connection_key"],
             read_pool_key=settings["read_pool_key"],
-            read_session_key=settings["read_session_key"],
+            replica_session_key=settings["replica_session_key"],
             routing_session_key=settings["routing_session_key"],
             default_routing_mode=settings["default_routing_mode"],
             enable_routing_middleware=settings["enable_routing_middleware"],
@@ -1615,9 +1616,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 state.connection_key,
                 state.pool_key,
                 state.session_key,
-                state.read_connection_key,
+                state.replica_connection_key,
                 state.read_pool_key,
-                state.read_session_key,
+                state.replica_session_key,
                 state.routing_session_key,
             }
             for state in self._plugin_configs
@@ -1639,9 +1640,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     state.connection_key,
                     state.pool_key,
                     state.session_key,
-                    state.read_connection_key,
+                    state.replica_connection_key,
                     state.read_pool_key,
-                    state.read_session_key,
+                    state.replica_session_key,
                     state.routing_session_key,
                 }:
                     return state
@@ -1673,9 +1674,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 state.connection_key,
                 state.pool_key,
                 state.session_key,
-                state.read_connection_key,
+                state.replica_connection_key,
                 state.read_pool_key,
-                state.read_session_key,
+                state.replica_session_key,
                 state.routing_session_key,
             ):
                 if key is None:
@@ -1837,8 +1838,8 @@ class _NumpySignatureNamespace:
 
 def _resource_cleanup_modes(state: PluginConfigState) -> tuple[tuple[str | None, CommitMode], ...]:
     return (
-        (state.read_connection_key, "manual"),
-        (state.read_session_key, "manual"),
+        (state.replica_connection_key, "manual"),
+        (state.replica_session_key, "manual"),
         (state.routing_session_key, state.commit_mode),
     )
 

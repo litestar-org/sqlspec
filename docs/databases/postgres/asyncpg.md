@@ -144,7 +144,7 @@ Pass `AsyncpgDriverFeatures` keys inside `driver_features={...}` on `AsyncpgConf
 
 ## Read Replicas and WAL Positions
 
-Pass a reader DSN or sequence through `replicas=`. A reader override can also use `host: Sequence[str]` with matching `port` values and `target_session_attrs="prefer-standby"`. Derivation keeps hooks, tenant setup, and explicit connection overrides. Open the reader with `provide_read_session()`; use ordinary `provide_session()` for writes.
+Pass a reader DSN or sequence through `replicas=`. A reader override can also use `host: Sequence[str]` with matching `port` values and `target_session_attrs="prefer-standby"`. Derivation keeps hooks, tenant setup, and explicit connection overrides. Open the reader with `provide_replica_session()`; use ordinary `provide_session()` for writes.
 
 `current_wal_lsn()` captures a writer position. `has_replayed_wal_lsn(lsn)` checks whether a reader has reached it; `wait_for_wal_lsn(lsn, timeout=...)` bounds the wait. Capture after commit when the next read must include that write. Empty or malformed positions fail rather than being inserted into SQL text. Native read-only failures map to `ReadOnlyTransactionError` (`25006`). See [Replica Operations](../../learn/recipes/read-replicas-operations.md).
 

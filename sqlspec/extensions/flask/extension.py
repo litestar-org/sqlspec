@@ -227,8 +227,8 @@ class SQLSpecPlugin:
                 if name in {
                     state.session_key,
                     state.connection_key,
-                    state.read_session_key,
-                    state.read_connection_key,
+                    state.replica_session_key,
+                    state.replica_connection_key,
                     state.routing_session_key,
                 }:
                     return state.config
@@ -292,11 +292,11 @@ class SQLSpecPlugin:
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         return self._ensure_request_connection(config_state)
 
-    def get_read_session(self, key: Any = None) -> Any:
+    def get_replica_session(self, key: Any = None) -> Any:
         """Return the request's read session, bridging async drivers through the portal."""
         return self._get_read_routing_resource(key, "session")
 
-    def get_read_connection(self, key: Any = None) -> Any:
+    def get_replica_connection(self, key: Any = None) -> Any:
         """Return the request-owned raw read connection."""
         return self._get_read_routing_resource(key, "connection")
 
@@ -362,9 +362,9 @@ class SQLSpecPlugin:
 
         state = self._config_states[0] if key is None else self._config_state_by_key(key)
         resource_key = (
-            state.read_session_key
+            state.replica_session_key
             if kind == "session"
-            else state.read_connection_key
+            else state.replica_connection_key
             if kind == "connection"
             else state.routing_session_key
         )
@@ -382,9 +382,9 @@ class SQLSpecPlugin:
             if kind == "routing":
                 context = state.config.provide_routing_session()
             elif kind == "session":
-                context = state.config.provide_read_session()
+                context = state.config.provide_replica_session()
             else:
-                context = state.config.provide_read_connection()
+                context = state.config.provide_replica_connection()
             if state.is_async:
                 assert self._portal is not None
                 current = self._call_portal(state, context.__aenter__, tenant_override=captured_payload)
@@ -446,14 +446,15 @@ class SQLSpecPlugin:
             correlation_headers=correlation_headers,
             auto_trace_headers=auto_trace_headers,
             enable_sqlcommenter_middleware=enable_sqlcommenter,
-            read_session_key=flask_config.get(
-                "read_session_key", "read_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_read"
+            replica_session_key=flask_config.get(
+                "replica_session_key",
+                "db_replica_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_replica",
             ),
-            read_connection_key=flask_config.get(
-                "read_connection_key",
-                "read_connection"
+            replica_connection_key=flask_config.get(
+                "replica_connection_key",
+                "db_replica_connection"
                 if connection_key == f"sqlspec_connection_{DEFAULT_SESSION_KEY}"
-                else f"{connection_key}_read",
+                else f"{connection_key}_replica",
             ),
             routing_session_key=flask_config.get("routing_session_key"),
             default_routing_mode=flask_config.get("default_routing_mode", "auto"),
@@ -476,8 +477,8 @@ class SQLSpecPlugin:
                 for key in (
                     state.connection_key,
                     state.session_key,
-                    state.read_connection_key,
-                    state.read_session_key,
+                    state.replica_connection_key,
+                    state.replica_session_key,
                     state.routing_session_key,
                 )
                 if key is not None
@@ -919,8 +920,8 @@ class SQLSpecPlugin:
             for state in self._config_states:
                 if key in {
                     state.connection_key,
-                    state.read_session_key,
-                    state.read_connection_key,
+                    state.replica_session_key,
+                    state.replica_connection_key,
                     state.routing_session_key,
                     getattr(state.config, "bind_key", None),
                 }:

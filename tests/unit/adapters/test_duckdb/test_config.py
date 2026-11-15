@@ -283,7 +283,7 @@ def test_duckdb_snapshot_reader_enforces_native_read_only(tmp_path) -> None:
         session.execute("INSERT INTO entries VALUES (1)")
     snapshot.close_pool()
     primary = DuckDBConfig(connection_config={"database": str(tmp_path / "writer.duckdb")}, replicas=snapshot_path)
-    with primary.provide_read_session() as reader:
+    with primary.provide_replica_session() as reader:
         assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
         with pytest.raises(ReadOnlyTransactionError):
             reader.execute("INSERT INTO entries VALUES (2)")

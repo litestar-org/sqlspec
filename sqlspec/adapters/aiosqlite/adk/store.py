@@ -206,7 +206,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
 
         try:
-            async with self._provide_read_connection(primary=renew_for is not None) as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 await self._ensure_pragmas(conn)
                 if self._should_renew(renew_for):
                     update_sql = f"""
@@ -296,7 +296,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         )
 
         try:
-            async with self._provide_read_connection() as conn:
+            async with self._provide_replica_connection() as conn:
                 await self._ensure_pragmas(conn)
                 cursor = await conn.execute(sql, params)
                 try:
@@ -548,7 +548,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
 
         try:
-            async with self._provide_read_connection() as conn:
+            async with self._provide_replica_connection() as conn:
                 await self._ensure_pragmas(conn)
                 cursor = await conn.execute(sql, params)
                 try:
@@ -1126,7 +1126,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         rows: list[Any] | None = None
         columns: list[str] = []
 
-        async with self._provide_read_connection() as conn:
+        async with self._provide_replica_connection() as conn:
             await self._ensure_foreign_keys(conn)
             if has_query and self._use_fts:
                 where_scope, scope_params = _build_sqlite_scope_clause("m.", app_name, user_id, scope_filter)

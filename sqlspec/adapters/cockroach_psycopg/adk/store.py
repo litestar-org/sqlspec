@@ -300,7 +300,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
         try:
             async with (
-                self._provide_read_connection(primary=renew_for is not None) as conn,
+                self._provide_replica_connection(primary=renew_for is not None) as conn,
                 conn.cursor(row_factory=dict_row) as cur,
             ):
                 await cur.execute(query, (app_name, user_id, session_id))
@@ -352,7 +352,10 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         )
 
         try:
-            async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with (
+                self._provide_replica_connection(primary=False) as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
                 await cur.execute(query, params)
                 rows = await cur.fetchall()
         except errors.UndefinedTable:
@@ -533,7 +536,10 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         )
 
         try:
-            async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with (
+                self._provide_replica_connection(primary=False) as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
                 await cur.execute(query, tuple(params))
                 rows = await cur.fetchall()
         except errors.UndefinedTable:
@@ -924,7 +930,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
         try:
             with (
-                self._provide_read_connection(primary=renew_for is not None) as conn,
+                self._provide_replica_connection(primary=renew_for is not None) as conn,
                 conn.cursor(row_factory=dict_row) as cur,
             ):
                 cur.execute(query, (app_name, user_id, session_id))
@@ -978,7 +984,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         )
 
         try:
-            with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, params)
                 rows = cur.fetchall()
 
@@ -1119,7 +1125,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         )
 
         try:
-            with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, tuple(params))
                 rows = cur.fetchall()
 
@@ -1604,7 +1610,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             params = (*scope_params, search_param, effective_limit)
 
         try:
-            async with self._provide_read_connection(primary=False) as conn, conn.cursor() as cur:
+            async with self._provide_replica_connection(primary=False) as conn, conn.cursor() as cur:
                 await cur.execute(sql_query, params)
                 rows = await cur.fetchall()
                 columns = [col[0] for col in cur.description or []]
@@ -1846,7 +1852,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             params = (*scope_params, search_param, effective_limit)
 
         try:
-            with self._provide_read_connection(primary=False) as conn, conn.cursor() as cur:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor() as cur:
                 cur.execute(sql_query, params)
                 rows = cur.fetchall()
                 columns = [col[0] for col in cur.description or []]

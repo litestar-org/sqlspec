@@ -463,8 +463,8 @@ def test_chunk_mutation_rows_respects_mutation_limit() -> None:
     assert [len(c) for c in chunks] == [8000, 1]
 
 
-def test_litestar_store_uses_read_session_and_maps_transaction_errors() -> None:
-    """Verify SpannerSyncStore uses provide_read_session, sharded exists, and maps write errors."""
+def test_litestar_store_uses_replica_session_and_maps_transaction_errors() -> None:
+    """Verify SpannerSyncStore uses provide_replica_session, sharded exists, and maps write errors."""
     read_calls = 0
     now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     encoded_val = base64.b64encode(b"val").decode("ascii")
@@ -476,12 +476,12 @@ def test_litestar_store_uses_read_session_and_maps_transaction_errors() -> None:
     config = MagicMock()
     config.extension_config = {"litestar": {"shard_count": 4}}
 
-    def provide_read_session() -> Any:
+    def provide_replica_session() -> Any:
         nonlocal read_calls
         read_calls += 1
         return nullcontext(_ReadDriver())
 
-    config.provide_read_session = provide_read_session
+    config.provide_replica_session = provide_replica_session
     database = MagicMock()
     database.run_in_transaction.side_effect = cast("Any", api_exceptions.PermissionDenied)("denied")
     config.get_database.return_value = database
@@ -611,7 +611,7 @@ def test_spanner_config_rejects_min_sessions_and_closes_client_on_close_pool() -
     )
     config._client = cast("Any", fake_client)
     config.connection_instance = cast("Any", SimpleNamespace(clear=lambda: closed.append("pool")))
-    assert callable(config.provide_read_session)
+    assert callable(config.provide_replica_session)
     assert callable(config.provide_write_session)
     config.close_pool()
 

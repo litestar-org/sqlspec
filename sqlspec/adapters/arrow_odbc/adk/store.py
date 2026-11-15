@@ -178,7 +178,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         """Return a scoped session or ``None`` if absent."""
         should_renew = self._should_renew(renew_for)
         try:
-            with self._provide_read_session(primary=renew_for is not None) as driver:
+            with self._provide_replica_session(primary=renew_for is not None) as driver:
                 if should_renew:
                     driver.execute(
                         f"""
@@ -563,7 +563,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
     def _execute_fetchall(
         self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False
     ) -> "list[dict[str, Any]]":
-        with self._provide_read_session(primary=not read) as driver:
+        with self._provide_replica_session(primary=not read) as driver:
             return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
@@ -775,7 +775,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
     def _execute_fetchall(
         self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False
     ) -> "list[dict[str, Any]]":
-        with self._provide_read_session(primary=not read) as driver:
+        with self._provide_replica_session(primary=not read) as driver:
             return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:

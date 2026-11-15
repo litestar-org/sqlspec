@@ -451,7 +451,7 @@ class CockroachAsyncpgConfig(
             prepare_driver=self._prepare_driver,
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -463,7 +463,7 @@ class CockroachAsyncpgConfig(
     ) -> "AbstractAsyncContextManager[CockroachAsyncpgDriver]":
         """Provide read-only follower or strongly consistent sessions."""
         if self.has_replicas or replica_group is not None:
-            return super().provide_read_session(
+            return super().provide_replica_session(
                 *args,
                 replica_group=replica_group,
                 statement_config=statement_config,
@@ -487,12 +487,12 @@ class CockroachAsyncpgConfig(
         )
         return _ReadAsyncContext(self._primary_read_async(context, receipt), receipt)
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[Any]":
         """Provide a native connection inside a read-only transaction."""
-        context = self.provide_read_session(*args, replica_group=replica_group, **kwargs)
-        return _ReadAsyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
+        context = self.provide_replica_session(*args, replica_group=replica_group, **kwargs)
+        return _ReadAsyncContext(self._replica_connection(context), cast("Any", context)._selection_receipt)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "CockroachAsyncpgPool":
         if not self.connection_instance:
@@ -554,7 +554,7 @@ class CockroachAsyncpgConfig(
         return super()._build_replica_spec_overrides(spec_input)
 
     @asynccontextmanager
-    async def _read_connection(
+    async def _replica_connection(
         self, context: "AbstractAsyncContextManager[CockroachAsyncpgDriver]"
     ) -> "AsyncIterator[Any]":
         async with context as session:

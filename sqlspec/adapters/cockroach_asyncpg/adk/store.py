@@ -189,7 +189,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             params = (app_name, user_id, session_id)
 
         try:
-            async with self._provide_read_connection(primary=renew_for is not None) as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 row = await _fetch_one(conn, sql, *params)
                 if row is None:
                     return None
@@ -251,7 +251,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         params: tuple[Any, ...] = tuple(values)
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []
@@ -406,7 +406,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         """
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []
@@ -857,7 +857,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             params = (*scope_params, f"%{query}%", effective_limit)
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []

@@ -185,7 +185,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             params = [app_name, user_id, session_id]
 
         try:
-            async with self._provide_read_connection(primary=renew_for is not None) as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 row = await conn.fetchrow(sql, *params)
 
                 if row is None:
@@ -253,7 +253,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
 
                 return [
@@ -398,7 +398,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
 
                 if limit is not None:
@@ -919,7 +919,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             """
             params = (*scope_params, f"%{query}%", limit_value)
 
-        async with self._provide_read_connection(primary=False) as conn:
+        async with self._provide_replica_connection(primary=False) as conn:
             if embedding is not None and self._enable_bm25 and query:
                 self._config._ensure_pg_textsearch_available()
             rows = await conn.fetch(sql, *params)

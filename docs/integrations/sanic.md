@@ -111,8 +111,8 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 | `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
 | `enable_sqlcommenter_middleware` | `bool` | `True` | Control automatic SQLCommenter middleware registration. Default: True. When the driver's :class:`~sqlspec.core.statement.StatementConfig` has `enable_sqlcommenter=True`, the middleware is registered automatically. Set to `False` to explicitly disable middleware registration. |
 | `sqlcommenter_framework` | `str` | `'sanic'` | Framework name for SQLCommenter attributes. Default: 'sanic'. |
-| `read_session_key` | `str` | - | Request key for a read session. |
-| `read_connection_key` | `str` | - | Request key for a read connection. |
+| `replica_session_key` | `str` | - | Request key for a read session. |
+| `replica_connection_key` | `str` | - | Request key for a read connection. |
 | `routing_session_key` | `str` | - | Request key for a routing session. |
 | `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
 | `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
@@ -124,7 +124,7 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 
 ## Read Replica and Routing Sessions
 
-Use `get_read_session(request, key=...)` for a lazy reader, or await `get_read_session_async(request, key=...)` to acquire it now. Raw connections use `get_read_connection` and `get_read_connection_async`. Opt-in routing facades use `get_routing_session` and `get_routing_session_async`. The first awaited call on a deferred async reader performs checkout.
+Use `get_replica_session(request, key=...)` for a lazy reader, or await `get_replica_session_async(request, key=...)` to acquire it now. Raw connections use `get_replica_connection` and `get_replica_connection_async`. Opt-in routing facades use `get_routing_session` and `get_routing_session_async`. The first awaited call on a deferred async reader performs checkout.
 
 Startup and shutdown listeners manage the primary and its reader pools together. Request cleanup closes every acquired session on success, errors, and cancellation. Tenant receipt checks apply to readers too. Use `SQLSpecRoutingMiddleware` for a request-local routing scope and stateless hints; see [Read Replicas](../learn/recipes/read-replicas.md).
 

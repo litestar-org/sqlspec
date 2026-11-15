@@ -262,7 +262,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         """Get session by scoped identifiers."""
         try:
             async with (
-                self._provide_read_connection(primary=renew_for is not None) as conn,
+                self._provide_replica_connection(primary=renew_for is not None) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 if self._should_renew(renew_for):
@@ -327,7 +327,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
         try:
             async with (
-                self._provide_read_connection(primary=False) as conn,
+                self._provide_replica_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -539,7 +539,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
         try:
             async with (
-                self._provide_read_connection(primary=False) as conn,
+                self._provide_replica_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -903,7 +903,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
 
         try:
             async with (
-                self._provide_read_connection(primary=False) as conn,
+                self._provide_replica_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)

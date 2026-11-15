@@ -289,7 +289,7 @@ class SQLSpec:
         return _RuntimeSyncContext[DriverT](sync_session, runtime, config)
 
     @overload
-    def provide_read_connection(
+    def provide_replica_connection(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
@@ -297,14 +297,14 @@ class SQLSpec:
         **kwargs: Any,
     ) -> "AbstractContextManager[ConnectionT]": ...
     @overload
-    def provide_read_connection(
+    def provide_replica_connection(
         self,
         config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
         replica_group: str | None = None,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[ConnectionT]": ...
-    def provide_read_connection(
+    def provide_replica_connection(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
@@ -323,13 +323,13 @@ class SQLSpec:
             A context manager yielding the selected connection.
         """
         self._ensure_registered(config)
-        context = config.provide_read_connection(*args, replica_group=replica_group, **kwargs)
+        context = config.provide_replica_connection(*args, replica_group=replica_group, **kwargs)
         if _is_async_context_manager(context):
             return _RuntimeReadAsyncContext[ConnectionT](context, session=False)
         return _RuntimeReadSyncContext[ConnectionT](cast("AbstractContextManager[ConnectionT]", context), session=False)
 
     @overload
-    def provide_read_session(
+    def provide_replica_session(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
@@ -340,7 +340,7 @@ class SQLSpec:
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]": ...
     @overload
-    def provide_read_session(
+    def provide_replica_session(
         self,
         config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
@@ -350,7 +350,7 @@ class SQLSpec:
         bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]": ...
-    def provide_read_session(
+    def provide_replica_session(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
@@ -375,7 +375,7 @@ class SQLSpec:
             A context manager yielding the selected session.
         """
         self._ensure_registered(config)
-        context = config.provide_read_session(
+        context = config.provide_replica_session(
             *args,
             replica_group=replica_group,
             statement_config=statement_config,

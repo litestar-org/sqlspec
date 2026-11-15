@@ -352,7 +352,7 @@ async def test_aiosqlite_wal_read_replica_rejects_writes(tmp_path) -> None:
         await session.execute("CREATE TABLE entries (id INTEGER)")
         await session.execute("INSERT INTO entries VALUES (1)")
         await session.commit()
-    async with config.provide_read_session() as reader:
+    async with config.provide_replica_session() as reader:
         assert await reader.select_value("SELECT COUNT(*) FROM entries") == 1
         assert await reader.select_value("PRAGMA query_only") == 1
         async with reader.transaction():
@@ -443,11 +443,11 @@ async def test_aiosqlite_read_replica_failover_on_timeout_and_cantopen(tmp_path:
         async with config.provide_session() as writer:
             await writer.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
             await writer.commit()
-        async with config.provide_read_connection() as conn:
+        async with config.provide_replica_connection() as conn:
             cursor = await conn.execute("SELECT COUNT(*) FROM probe")
             assert await cursor.fetchone() == (0,)
             await cursor.close()
-        async with config.provide_read_session() as reader:
+        async with config.provide_replica_session() as reader:
             assert await reader.select_value("SELECT COUNT(*) FROM probe") == 0
     finally:
         await config.close_pool()

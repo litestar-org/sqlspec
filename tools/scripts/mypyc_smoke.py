@@ -2131,7 +2131,7 @@ def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[s
                     writer.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY)")
                     writer.execute("INSERT INTO entries VALUES (1)")
                     writer.commit()
-                with registry.provide_read_session(config) as reader:
+                with registry.provide_replica_session(config) as reader:
                     assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
                     try:
                         reader.execute("INSERT INTO entries VALUES (2)")

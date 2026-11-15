@@ -38,17 +38,17 @@ def test_read_and_routing_accessors_select_and_pin(tmp_path: Path, async_config:
 
     async def read(request: Request) -> JSONResponse:
         if async_config:
-            session = plugin.get_read_session(request)
+            session = plugin.get_replica_session(request)
             assert isinstance(session, DeferredAsyncSession)
             with pytest.raises(ImproperConfigurationError):
-                plugin.get_read_connection(request)
+                plugin.get_replica_connection(request)
             one, two = await asyncio.gather(
-                plugin.get_read_session_async(request), plugin.get_read_session_async(request)
+                plugin.get_replica_session_async(request), plugin.get_replica_session_async(request)
             )
             assert one is two
             origin = await session.select_value("SELECT origin FROM notes WHERE id=1")
         else:
-            origin = plugin.get_read_session(request).select_value("SELECT origin FROM notes WHERE id=1")
+            origin = plugin.get_replica_session(request).select_value("SELECT origin FROM notes WHERE id=1")
         return JSONResponse({"origin": origin})
 
     async def route(request: Request) -> JSONResponse:
@@ -89,13 +89,13 @@ def test_streaming_and_background_can_use_read_lease(tmp_path: Path) -> None:
 
     async def endpoint(request: Request) -> StreamingResponse:
         async def body() -> AsyncIterator[str]:
-            session = await plugin.get_read_session_async(request)
+            session = await plugin.get_replica_session_async(request)
             yield await session.select_value("SELECT origin FROM notes WHERE id=1")
             await asyncio.sleep(0)
             yield await session.select_value("SELECT origin FROM notes WHERE id=2")
 
         async def background() -> None:
-            session = await plugin.get_read_session_async(request)
+            session = await plugin.get_replica_session_async(request)
             events.append(await session.select_value("SELECT origin FROM notes WHERE id=3"))
 
         return StreamingResponse(body(), background=BackgroundTask(background))
@@ -130,7 +130,7 @@ def test_multi_config_lease_layer_and_cross_key_collision() -> None:
         )
         == 1
     )
-    invalid = SqliteConfig(extension_config={"starlette": {"read_session_key": "db_session"}})
+    invalid = SqliteConfig(extension_config={"starlette": {"replica_session_key": "db_session"}})
     with pytest.raises(ImproperConfigurationError, match="Duplicate"):
         SQLSpecPlugin(invalid, Starlette())
 
@@ -197,8 +197,8 @@ def test_starlette_commit_failure_rolls_back_and_finalizes_remaining_configs(
                 "session_key": "a_session",
                 "connection_key": "a_conn",
                 "pool_key": "a_pool",
-                "read_session_key": "a_read_session",
-                "read_connection_key": "a_read_conn",
+                "replica_session_key": "a_replica_session",
+                "replica_connection_key": "a_read_conn",
                 "read_pool_key": "a_read_pool",
                 "routing_session_key": "a_router",
                 "commit_mode": "autocommit",
@@ -214,8 +214,8 @@ def test_starlette_commit_failure_rolls_back_and_finalizes_remaining_configs(
                 "session_key": "b_session",
                 "connection_key": "b_conn",
                 "pool_key": "b_pool",
-                "read_session_key": "b_read_session",
-                "read_connection_key": "b_read_conn",
+                "replica_session_key": "b_replica_session",
+                "replica_connection_key": "b_read_conn",
                 "read_pool_key": "b_read_pool",
                 "routing_session_key": "b_router",
                 "commit_mode": "autocommit",
@@ -269,7 +269,7 @@ async def test_starlette_unawaited_deferred_sessions_are_detached_after_response
 
     async def leaked_route(request: Request) -> JSONResponse:
         primary_deferred = plugin.get_session(request)
-        read_deferred = plugin.get_read_session(request)
+        read_deferred = plugin.get_replica_session(request)
         routing_deferred = plugin.get_routing_session(request)
         assert isinstance(primary_deferred, DeferredAsyncSession)
         assert isinstance(read_deferred, DeferredAsyncSession)

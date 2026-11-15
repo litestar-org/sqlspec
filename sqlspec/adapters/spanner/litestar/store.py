@@ -305,7 +305,7 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = self._build_select_session_sql()
-        with self._config.provide_read_session() as driver:
+        with self._config.provide_replica_session() as driver:
             result = driver.select_one_or_none(sql, {"session_id": key})
 
         if result is None:
@@ -343,13 +343,13 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
 
     def _exists(self, key: str) -> bool:
         sql = self._build_exists_sql()
-        with self._config.provide_read_session() as driver:
+        with self._config.provide_replica_session() as driver:
             row = driver.select_one_or_none(sql, {"session_id": key})
             return row is not None
 
     def _expires_in(self, key: str) -> "int | None":
         sql = self._build_expires_in_sql()
-        with self._config.provide_read_session() as driver:
+        with self._config.provide_replica_session() as driver:
             row = driver.select_one_or_none(sql, {"session_id": key})
             if row is None:
                 return None
@@ -392,7 +392,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = self._build_select_session_sql()
-        async with self._config.provide_read_session() as driver:
+        async with self._config.provide_replica_session() as driver:
             result = await driver.select_one_or_none(sql, {"session_id": key})
 
         if result is None:
@@ -430,13 +430,13 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
 
     async def exists(self, key: str) -> bool:
         sql = self._build_exists_sql()
-        async with self._config.provide_read_session() as driver:
+        async with self._config.provide_replica_session() as driver:
             row = await driver.select_one_or_none(sql, {"session_id": key})
             return row is not None
 
     async def expires_in(self, key: str) -> "int | None":
         sql = self._build_expires_in_sql()
-        async with self._config.provide_read_session() as driver:
+        async with self._config.provide_replica_session() as driver:
             row = await driver.select_one_or_none(sql, {"session_id": key})
             if row is None:
                 return None

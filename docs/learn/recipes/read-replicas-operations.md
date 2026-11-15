@@ -21,7 +21,9 @@ application = SQLSpecRoutingMiddleware(
     primary_pin_cookie="recent_write",
     primary_pin_secret=app_secret,
 )
-cookie_value = sign_primary_pin(app_secret, ttl_seconds=5.0, causal_token="0/16B3748")
+cookie_value = sign_primary_pin(
+    app_secret, ttl_seconds=5.0, causal_token="0/16B3748"
+)
 ```
 
 Here `app` is the existing ASGI application. In the built-in Litestar, Starlette, FastAPI, Flask, and Sanic extensions, `enable_routing_middleware` defaults to `True` with `routing_header=None` and `primary_pin_cookie=None`, isolating each request's `RoutingContext` without trusting external client headers or cookies by default. For browser or public-client read-your-own-writes, configure `primary_pin_cookie` alongside `primary_pin_secret` and issue short-lived `HttpOnly` cookies via `sign_primary_pin()`, which binds the expiration timestamp, `bind_key`, and optional `causal_token` under HMAC-SHA256. Enable `routing_header` only behind an ingress proxy or gateway that strips that header from untrusted external requests. Treat client hints as read intent, never as permission to access a tenant. Use `strict_headers=True` if invalid header values should fail rather than be ignored.

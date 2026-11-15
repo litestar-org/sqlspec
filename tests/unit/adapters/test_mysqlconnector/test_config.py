@@ -845,7 +845,7 @@ def _make_mysqlconnector_async_mock_conn() -> MagicMock:
     )
 
 
-@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize("method", ["provide_replica_connection", "provide_replica_session"])
 @pytest.mark.parametrize(
     ("driver_exc", "expected_mapped"),
     [
@@ -877,7 +877,7 @@ def test_mysqlconnector_sync_read_replica_failover_maps_driver_errors(
         connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"]
     )
     with getattr(config, method)() as acquired:
-        conn = acquired if method == "provide_read_connection" else acquired.connection
+        conn = acquired if method == "provide_replica_connection" else acquired.connection
         assert conn is healthy_conn
 
     failing_only = MysqlConnectorSyncConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
@@ -886,7 +886,7 @@ def test_mysqlconnector_sync_read_replica_failover_maps_driver_errors(
     assert exc_info.value.__cause__ is driver_exc
 
 
-@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize("method", ["provide_replica_connection", "provide_replica_session"])
 @pytest.mark.parametrize(
     ("driver_exc", "expected_mapped"),
     [
@@ -911,7 +911,7 @@ async def test_mysqlconnector_async_read_replica_failover_maps_driver_errors(
         connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"]
     )
     async with getattr(config, method)() as acquired:
-        conn = acquired if method == "provide_read_connection" else acquired.connection
+        conn = acquired if method == "provide_replica_connection" else acquired.connection
         assert conn is healthy_conn
 
     failing_only = MysqlConnectorAsyncConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
@@ -922,7 +922,7 @@ async def test_mysqlconnector_async_read_replica_failover_maps_driver_errors(
 
 
 def test_mysqlconnector_sync_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """User hook RuntimeError propagates through sync provide_read_session without failover."""
+    """User hook RuntimeError propagates through sync provide_replica_session without failover."""
     hook_conn = MagicMock(
         autocommit=True,
         in_transaction=False,
@@ -944,7 +944,7 @@ def test_mysqlconnector_sync_hook_runtime_error_not_swallowed(monkeypatch: pytes
         driver_features={"on_connection_create": failing_hook},
         replicas=["r1", "r2"],
     )
-    with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
+    with pytest.raises(RuntimeError, match="hook boom"), config.provide_replica_session():
         pass
     hook_conn.close.assert_called_once()
 
@@ -979,9 +979,9 @@ def test_mysqlconnector_sync_replica_session_read_only_across_checkouts(
     replica = config.replica_groups["default"].configs[0]
     assert replica.connection_config["init_command"] == "SET @probe = 1"
 
-    with config.provide_read_session():
+    with config.provide_replica_session():
         pass
-    with config.provide_read_session():
+    with config.provide_replica_session():
         pass
 
     assert events == ["sql:SET SESSION TRANSACTION READ ONLY", "hook"] * expected_calls
@@ -1020,9 +1020,9 @@ async def test_mysqlconnector_async_replica_session_read_only_across_checkouts(
     replica = config.replica_groups["default"].configs[0]
     assert replica.connection_config["init_command"] == "SET @probe = 1"
 
-    async with config.provide_read_session():
+    async with config.provide_replica_session():
         pass
-    async with config.provide_read_session():
+    async with config.provide_replica_session():
         pass
 
     assert events == ["sql:SET SESSION TRANSACTION READ ONLY", "hook"] * expected_calls

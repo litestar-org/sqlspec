@@ -883,9 +883,9 @@ async def test_psqlpy_read_replica_failover_maps_driver_errors(
         driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False},
         replicas=["postgresql://bad", "postgresql://good"],
     )
-    async with config.provide_read_connection() as conn:
+    async with config.provide_replica_connection() as conn:
         assert conn is cast("Any", good_conn)
-    async with config.provide_read_session() as reader:
+    async with config.provide_replica_session() as reader:
         assert reader.connection is good_conn
 
 

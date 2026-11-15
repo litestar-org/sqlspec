@@ -343,27 +343,27 @@ async def test_native_unopenable_reader_maps_checkout_failure(tmp_path: Path, as
     try:
         if fallback:
             if async_mode:
-                async with primary.provide_read_session() as session:
+                async with primary.provide_replica_session() as session:
                     assert await session.select_value("SELECT 42") == 42
             else:
-                with primary.provide_read_session() as session:
+                with primary.provide_replica_session() as session:
                     assert session.select_value("SELECT 42") == 42
             caller_error = sqlite3.OperationalError("caller body failed")
             with pytest.raises(sqlite3.OperationalError) as caller_failure:
                 if async_mode:
-                    async with primary.provide_read_session():
+                    async with primary.provide_replica_session():
                         raise caller_error
                 else:
-                    with primary.provide_read_session():
+                    with primary.provide_replica_session():
                         raise caller_error
             assert caller_failure.value is caller_error
         else:
             with pytest.raises(ReplicaUnavailableError) as failure:
                 if async_mode:
-                    async with primary.provide_read_session():
+                    async with primary.provide_replica_session():
                         pytest.fail("unavailable reader must not yield")
                 else:
-                    with primary.provide_read_session():
+                    with primary.provide_replica_session():
                         pytest.fail("unavailable reader must not yield")
             mapped = failure.value.__cause__
             assert isinstance(mapped, DatabaseConnectionError)
@@ -400,7 +400,7 @@ async def test_strict_replica_provider_never_falls_back_to_primary(
         connection_config={"database": str(tmp_path / "writer.db")},
         replicas=[{"database": str(tmp_path / "missing" / "reader.db")}] if replicas else None,
     )
-    provider = primary.provide_read_connection if raw else primary.provide_read_session
+    provider = primary.provide_replica_connection if raw else primary.provide_replica_session
     try:
         with RoutingContext.replica(), pytest.raises(ReplicaUnavailableError):
             if async_mode:
@@ -683,14 +683,14 @@ async def test_routing_failed_replica_checkout_does_not_leak_stack_or_clobber_pr
         async def __aexit__(self, *args: Any) -> None:
             return None
 
-    orig_provide_read_session = config_type.provide_read_session
+    orig_provide_replica_session = config_type.provide_replica_session
 
     def boom_for_target(cfg: Any, *args: Any, **kwargs: Any) -> Any:
         if cfg is primary_no_fallback:
             return _BoomContext()
-        return orig_provide_read_session(cfg, *args, **kwargs)
+        return orig_provide_replica_session(cfg, *args, **kwargs)
 
-    monkeypatch.setattr(config_type, "provide_read_session", boom_for_target)
+    monkeypatch.setattr(config_type, "provide_replica_session", boom_for_target)
 
     try:
         if async_mode:

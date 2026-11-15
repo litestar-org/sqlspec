@@ -261,7 +261,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         """Get session by scoped identifiers."""
         try:
             async with (
-                self._provide_read_connection(primary=renew_for is not None) as conn,
+                self._provide_replica_connection(primary=renew_for is not None) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
                 if self._should_renew(renew_for):
@@ -326,7 +326,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         try:
             async with (
-                self._provide_read_connection(primary=False) as conn,
+                self._provide_replica_connection(primary=False) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -538,7 +538,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         try:
             async with (
-                self._provide_read_connection(primary=False) as conn,
+                self._provide_replica_connection(primary=False) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -903,7 +903,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
 
         try:
             async with (
-                self._provide_read_connection(primary=False) as conn,
+                self._provide_replica_connection(primary=False) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)

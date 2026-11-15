@@ -1945,10 +1945,10 @@ async def test_oracle_standby_retry_is_pre_checkout_and_explicit(async_mode: boo
 
     async def exercise() -> None:
         if async_mode:
-            async with primary.provide_read_session(acquire_options=options) as session:
+            async with primary.provide_replica_session(acquire_options=options) as session:
                 assert session.connection is connection
         else:
-            with primary.provide_read_session(acquire_options=options) as session:
+            with primary.provide_replica_session(acquire_options=options) as session:
                 assert session.connection is connection
 
     if retry and code != 16000:
@@ -1984,10 +1984,10 @@ async def test_oracle_query_time_standby_error_never_replays_on_primary(async_mo
     native = oracledb.DatabaseError("ORA-03172: query-time lag")
     with pytest.raises(oracledb.DatabaseError) as caught:
         if async_mode:
-            async with primary.provide_read_session():
+            async with primary.provide_replica_session():
                 raise native
         else:
-            with primary.provide_read_session():
+            with primary.provide_replica_session():
                 raise native
     assert caught.value is native
     reader_pool.release.assert_called_once_with(connection)

@@ -198,7 +198,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             """
 
         try:
-            async with self._provide_read_connection(primary=renew_for is not None) as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 result = await conn.fetch(sql, [app_name, user_id, session_id])
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -264,7 +264,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -433,7 +433,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -1139,7 +1139,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY rrf_score DESC, m.timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._provide_read_connection(primary=not read) as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             self._config._ensure_pg_textsearch_available()
             result = await conn.fetch(sql, [*scope_params, candidate_limit, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
@@ -1175,7 +1175,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY embedding <=> $1::float8[]::vector ASC, timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._provide_read_connection(primary=not read) as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
@@ -1213,7 +1213,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY rank DESC, timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._provide_read_connection(primary=not read) as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
@@ -1254,7 +1254,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._provide_read_connection(primary=not read) as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)

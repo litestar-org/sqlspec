@@ -243,7 +243,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         """Return a scoped session or None if absent."""
         should_renew = self._should_renew(renew_for)
         try:
-            with self._provide_read_session(primary=renew_for is not None) as driver:
+            with self._provide_replica_session(primary=renew_for is not None) as driver:
                 if should_renew:
                     driver.execute(_touch_session_sql(self._session_table), (utc_now(), app_name, user_id, session_id))
                 row = driver.select_one_or_none(
@@ -552,7 +552,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             return driver.select_one_or_none(sql, params)
 
     def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False) -> list[dict[str, Any]]:
-        with self._provide_read_session(primary=not read) as driver:
+        with self._provide_replica_session(primary=not read) as driver:
             return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
@@ -669,7 +669,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         """Return a scoped session or None if absent."""
         should_renew = self._should_renew(renew_for)
         try:
-            async with self._provide_read_session(primary=renew_for is not None) as driver:
+            async with self._provide_replica_session(primary=renew_for is not None) as driver:
                 if should_renew:
                     await driver.execute(
                         _touch_session_sql(self._session_table), (utc_now(), app_name, user_id, session_id)
@@ -979,7 +979,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
     async def _execute_fetchall(
         self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False
     ) -> list[dict[str, Any]]:
-        async with self._provide_read_session(primary=not read) as driver:
+        async with self._provide_replica_session(primary=not read) as driver:
             return cast("list[dict[str, Any]]", await driver.select(sql, params))
 
     async def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
@@ -1137,7 +1137,7 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
         return [_db2_schema_target(self._memory_table, self._memory_table_ddl())]
 
     def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False) -> list[dict[str, Any]]:
-        with self._provide_read_session(primary=not read) as driver:
+        with self._provide_replica_session(primary=not read) as driver:
             return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
@@ -1276,7 +1276,7 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
     async def _execute_fetchall(
         self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False
     ) -> list[dict[str, Any]]:
-        async with self._provide_read_session(primary=not read) as driver:
+        async with self._provide_replica_session(primary=not read) as driver:
             return cast("list[dict[str, Any]]", await driver.select(sql, params))
 
     async def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:

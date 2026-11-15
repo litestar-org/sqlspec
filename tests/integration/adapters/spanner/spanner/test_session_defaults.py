@@ -5,9 +5,9 @@ Locks in two behaviours:
 1. ``SpannerSyncConfig.provide_session()`` returns a write-capable Transaction
    by default. DML succeeds without the caller knowing about
    ``provide_write_session()``.
-2. ``SpannerSyncConfig.provide_read_session()`` opens a read-only Snapshot,
+2. ``SpannerSyncConfig.provide_replica_session()`` opens a read-only Snapshot,
    and DML through it raises ``ReadOnlyTransactionError`` whose message names
-   ``provide_read_session`` explicitly so the next reader can self-serve.
+   ``provide_replica_session`` explicitly so the next reader can self-serve.
 
 Spanner DDL is processed via the ``UpdateDatabaseDdl`` admin API rather
 than session.execute(), so this test exercises only DML against a
@@ -40,10 +40,10 @@ def test_default_provide_session_runs_dml(spanner_config: "SpannerSyncConfig", t
         assert row["name"] == "Alice"
 
 
-def test_provide_read_session_blocks_writes(spanner_config: "SpannerSyncConfig", test_users_table: str) -> None:
-    """provide_read_session() yields a Snapshot; DML raises and names the entrypoint."""
-    with spanner_config.provide_read_session() as driver:
-        with pytest.raises(ReadOnlyTransactionError, match="provide_read_session"):
+def test_provide_replica_session_blocks_writes(spanner_config: "SpannerSyncConfig", test_users_table: str) -> None:
+    """provide_replica_session() yields a Snapshot; DML raises and names the entrypoint."""
+    with spanner_config.provide_replica_session() as driver:
+        with pytest.raises(ReadOnlyTransactionError, match="provide_replica_session"):
             driver.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
                 id="u2",

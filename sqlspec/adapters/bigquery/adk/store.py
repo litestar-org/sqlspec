@@ -270,7 +270,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
     def _run_query(
         self, sql: str, parameters: "Iterable[Any] | None" = None, *, read: bool = False
     ) -> "list[dict[str, Any]]":
-        with self._provide_read_connection(primary=not read) as client:
+        with self._provide_replica_connection(primary=not read) as client:
             job_config = bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
             retry_deadline = self._config.driver_features.get("job_retry_deadline")
             result_kwargs: dict[str, Any] = {}

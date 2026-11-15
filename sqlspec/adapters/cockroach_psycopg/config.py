@@ -531,7 +531,7 @@ class CockroachPsycopgSyncConfig(
             prepare_driver=self._prepare_driver,
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -543,7 +543,7 @@ class CockroachPsycopgSyncConfig(
     ) -> "AbstractContextManager[CockroachPsycopgSyncDriver]":
         """Provide read-only follower or strongly consistent sessions."""
         if self.has_replicas or replica_group is not None:
-            return super().provide_read_session(
+            return super().provide_replica_session(
                 *args,
                 replica_group=replica_group,
                 statement_config=statement_config,
@@ -567,12 +567,12 @@ class CockroachPsycopgSyncConfig(
         )
         return _ReadSyncContext(self._primary_read_sync(context, receipt), receipt)
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[Any]":
         """Provide a native connection inside a read-only transaction."""
-        context = self.provide_read_session(*args, replica_group=replica_group, **kwargs)
-        return _ReadSyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
+        context = self.provide_replica_session(*args, replica_group=replica_group, **kwargs)
+        return _ReadSyncContext(self._replica_connection(context), cast("Any", context)._selection_receipt)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         if not self.connection_instance:
@@ -610,7 +610,7 @@ class CockroachPsycopgSyncConfig(
         return super()._build_replica_spec_overrides(spec_input)
 
     @contextmanager
-    def _read_connection(self, context: "AbstractContextManager[CockroachPsycopgSyncDriver]") -> "Iterator[Any]":
+    def _replica_connection(self, context: "AbstractContextManager[CockroachPsycopgSyncDriver]") -> "Iterator[Any]":
         with context as session:
             session.begin()
             failed = False
@@ -951,7 +951,7 @@ class CockroachPsycopgAsyncConfig(
             prepare_driver=self._prepare_driver,
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -963,7 +963,7 @@ class CockroachPsycopgAsyncConfig(
     ) -> "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]":
         """Provide read-only follower or strongly consistent sessions."""
         if self.has_replicas or replica_group is not None:
-            return super().provide_read_session(
+            return super().provide_replica_session(
                 *args,
                 replica_group=replica_group,
                 statement_config=statement_config,
@@ -987,12 +987,12 @@ class CockroachPsycopgAsyncConfig(
         )
         return _ReadAsyncContext(self._primary_read_async(context, receipt), receipt)
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[Any]":
         """Provide a native connection inside a read-only transaction."""
-        context = self.provide_read_session(*args, replica_group=replica_group, **kwargs)
-        return _ReadAsyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
+        context = self.provide_replica_session(*args, replica_group=replica_group, **kwargs)
+        return _ReadAsyncContext(self._replica_connection(context), cast("Any", context)._selection_receipt)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         if not self.connection_instance:
@@ -1030,7 +1030,7 @@ class CockroachPsycopgAsyncConfig(
         return super()._build_replica_spec_overrides(spec_input)
 
     @asynccontextmanager
-    async def _read_connection(
+    async def _replica_connection(
         self, context: "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]"
     ) -> "AsyncIterator[Any]":
         async with context as session:

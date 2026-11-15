@@ -618,7 +618,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
     def _execute_fetchone(
         self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False
     ) -> "Any | None":
-        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 row = cursor.fetchone()
@@ -632,7 +632,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             return row
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
-        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 return list(cursor.fetchall())
@@ -640,7 +640,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 raise create_mapped_exception(exc) from exc
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
-        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 rowcount = resolve_rowcount(cursor)
@@ -825,7 +825,7 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         return [f"IF OBJECT_ID('{ref}') IS NOT NULL EXECUTE('DROP TABLE {ref}')"]
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
-        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 return list(cursor.fetchall())

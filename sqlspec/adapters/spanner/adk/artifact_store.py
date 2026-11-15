@@ -471,7 +471,7 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         read: bool = False,
     ) -> "list[Any]":
         try:
-            with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
+            with self._provide_replica_connection(transaction=False, primary=not read) as snapshot:
                 reader = cast("_SpannerReadProtocol", snapshot)
                 return list(reader.execute_sql(sql, params=params, param_types=types))
         except SpannerGoogleAPICallError as exc:
@@ -634,7 +634,7 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         read: bool = False,
     ) -> "list[Any]":
         try:
-            async with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
+            async with self._provide_replica_connection(transaction=False, primary=not read) as snapshot:
                 result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
                 return [row async for row in result_set]
         except SpannerGoogleAPICallError as exc:

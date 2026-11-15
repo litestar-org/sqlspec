@@ -45,7 +45,7 @@ async def test_wal_readers_keep_committed_view_during_primary_write(tmp_path: Pa
             await _resolve(writer.execute("INSERT INTO entries VALUES (2)"))
 
             async def count() -> int:
-                async with _enter(config.provide_read_session(), asynchronous=asynchronous) as reader:
+                async with _enter(config.provide_replica_session(), asynchronous=asynchronous) as reader:
                     assert await _resolve(reader.select_value("PRAGMA query_only")) == 1
                     with pytest.raises(ReadOnlyTransactionError):
                         await _resolve(reader.execute("INSERT INTO entries VALUES (3)"))

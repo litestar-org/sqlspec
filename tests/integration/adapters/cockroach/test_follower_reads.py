@@ -26,7 +26,7 @@ async def test_async_follower_snapshots_strong_pins_and_write_refusal(
             await session.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
             await session.commit()
         await asyncio.sleep(5)
-        async with config.provide_read_session() as session:
+        async with config.provide_replica_session() as session:
             await session.begin()
             assert await session.select_value(f"SELECT count(*) FROM {table}") == 1
             assert await session.select_value(f"SELECT max(id) FROM {table}") == 1
@@ -34,17 +34,17 @@ async def test_async_follower_snapshots_strong_pins_and_write_refusal(
                 await session.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 2})
             await session.rollback()
         with RoutingContext.primary():
-            async with config.provide_read_session(staleness="'-10s'") as session:
+            async with config.provide_replica_session(staleness="'-10s'") as session:
                 assert await session.select_value(f"SELECT count(*) FROM {table}") == 1
         async with RoutingContext.scope():
             RoutingContext.mark_write()
-            async with config.provide_read_session(staleness="'-10s'") as session:
+            async with config.provide_replica_session(staleness="'-10s'") as session:
                 assert await session.select_value(f"SELECT count(*) FROM {table}") == 1
         async with config.provide_session() as session:
             await session.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 2})
             await session.commit()
         await asyncio.sleep(0.15)
-        async with config.provide_read_session(staleness="'-100ms'") as session:
+        async with config.provide_replica_session(staleness="'-100ms'") as session:
             await session.begin()
             assert await session.select_value(f"SELECT count(*) FROM {table}") == 2
             assert await session.select_value(f"SELECT max(id) FROM {table}") == 2
@@ -64,14 +64,14 @@ def test_sync_follower_snapshot_and_strong_primary_override(cockroach_psycopg_sy
             session.execute(f"CREATE TABLE {table} (id integer)")
             session.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
             session.commit()
-        with config.provide_read_session() as session:
+        with config.provide_replica_session() as session:
             session.begin()
             assert session.select_value("SELECT 1") == 1
             assert session.select_value("SELECT 2") == 2
             with pytest.raises(ReadOnlyTransactionError):
                 session.execute("CREATE TABLE forbidden_cockroach_readonly (id integer)")
             session.rollback()
-        with RoutingContext.primary(), config.provide_read_session(staleness="'-10s'") as session:
+        with RoutingContext.primary(), config.provide_replica_session(staleness="'-10s'") as session:
             assert session.select_value(f"SELECT count(*) FROM {table}") == 1
     finally:
         with config.provide_session() as session:

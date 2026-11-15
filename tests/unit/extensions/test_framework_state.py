@@ -93,8 +93,8 @@ def test_starlette_config_state_field_order() -> None:
         "sqlcommenter_framework",
         "tenant_extractor",
         "tenant_receipt_keys",
-        "read_session_key",
-        "read_connection_key",
+        "replica_session_key",
+        "replica_connection_key",
         "read_pool_key",
         "routing_session_key",
         "default_routing_mode",
@@ -114,8 +114,8 @@ def test_sanic_config_state_field_order() -> None:
         "tenant_receipt_keys",
         *_COMMON_FIELDS[8:],
         "sqlcommenter_framework",
-        "read_session_key",
-        "read_connection_key",
+        "replica_session_key",
+        "replica_connection_key",
         "read_pool_key",
         "routing_session_key",
         "default_routing_mode",
@@ -145,8 +145,8 @@ def test_flask_config_state_field_order() -> None:
         "correlation_headers",
         "auto_trace_headers",
         "enable_sqlcommenter_middleware",
-        "read_session_key",
-        "read_connection_key",
+        "replica_session_key",
+        "replica_connection_key",
         "routing_session_key",
         "default_routing_mode",
         "enable_routing_middleware",
@@ -255,8 +255,8 @@ def test_should_rollback_respects_extra_statuses() -> None:
 @pytest.mark.parametrize("state_type", _STATE_TYPES)
 def test_read_and_routing_key_defaults(state_type: Any) -> None:
     defaults = {item.name: item.default for item in fields(state_type)}
-    assert defaults["read_session_key"] == "read_session"
-    assert defaults["read_connection_key"] == "read_connection"
+    assert defaults["replica_session_key"] == "db_replica_session"
+    assert defaults["replica_connection_key"] == "db_replica_connection"
     assert defaults["routing_session_key"] is None
     assert defaults["default_routing_mode"] == "auto"
 

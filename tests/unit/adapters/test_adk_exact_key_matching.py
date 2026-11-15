@@ -69,7 +69,7 @@ def _recording_config(config_cls: type) -> "tuple[Any, Any]":
     cursor.fetchall.return_value = []
     cursor.rowcount = 0
     config.provide_connection.side_effect = lambda *a, **k: nullcontext(connection)
-    config.provide_read_connection = config.provide_connection
+    config.provide_replica_connection = config.provide_connection
     return config, cursor
 
 

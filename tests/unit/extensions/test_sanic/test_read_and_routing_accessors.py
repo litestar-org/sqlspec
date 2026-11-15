@@ -37,13 +37,13 @@ def test_sanic_read_routing_and_request_scope_reset(tmp_path: Path, async_config
     @app.get("/read")
     async def read(request: Any) -> Any:
         before = RoutingContext.get_entry("shop")
-        session = plugin.get_read_session(request)
+        session = plugin.get_replica_session(request)
         if async_config:
             assert isinstance(session, DeferredAsyncSession)
             with pytest.raises(ImproperConfigurationError):
-                plugin.get_read_connection(request)
+                plugin.get_replica_connection(request)
             one, two = await asyncio.gather(
-                plugin.get_read_session_async(request), plugin.get_read_session_async(request)
+                plugin.get_replica_session_async(request), plugin.get_replica_session_async(request)
             )
             assert one is two
             origin = await session.select_value("SELECT origin FROM notes WHERE id=1")
@@ -150,7 +150,7 @@ async def test_sanic_unawaited_deferred_sessions_are_detached(tmp_path: Path, ab
     @app.get("/leaked")
     async def leaked_route(request: Any) -> Any:
         primary_deferred = plugin.get_session(request)
-        read_deferred = plugin.get_read_session(request)
+        read_deferred = plugin.get_replica_session(request)
         routing_deferred = plugin.get_routing_session(request)
         assert isinstance(primary_deferred, DeferredAsyncSession)
         assert isinstance(read_deferred, DeferredAsyncSession)

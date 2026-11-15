@@ -79,8 +79,8 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `manage_schema` | `bool` | `True` | Apply additive session-table reconciliation. Default: True. |
 | `create_schema` | `bool` | `True` | Create a missing session table during managed reconciliation. Default: True. |
 | `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
-| `read_session_key` | `str` | - | Request key for a read session. |
-| `read_connection_key` | `str` | - | Request key for a read connection. |
+| `replica_session_key` | `str` | - | Request key for a read session. |
+| `replica_connection_key` | `str` | - | Request key for a read connection. |
 | `routing_session_key` | `str` | - | Request key for a routing session. |
 | `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
 | `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
@@ -115,9 +115,9 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, inject
 
 #### Reader and routing dependencies
 
-A config with replicas exposes `read_session`, `read_connection`, and `read_pool`. Rename them with `read_session_key`, `read_connection_key`, and `read_pool_key`. Set `routing_session_key` to opt into a routing session. A reader opens on first use. It does not open a primary session first.
+A config with replicas exposes `db_replica_session`, `db_replica_connection`, and `read_pool`. Rename them with `replica_session_key`, `replica_connection_key`, and `read_pool_key`. Set `routing_session_key` to opt into a routing session. A reader opens on first use. It does not open a primary session first.
 
-For direct access, use `get_read_session(request)` or `provide_request_read_session` and its `_sync`/`_async` forms. The `provide_request_routing_session*` helpers return routing sessions. Read connection helpers use the same names with `connection` in place of `session`. Pass a config or bind key to choose the database.
+For direct access, use `get_db_replica_session(request)` or `provide_db_replica_session` and its `_sync`/`_async` forms. The `provide_request_routing_session*` helpers return routing sessions. Read connection helpers use the same names with `connection` in place of `session`. Pass a config or bind key to choose the database.
 
 Tenant middleware binds the captured `TenantContextPayload` around each physical checkout, including readers. `SQLSpecRoutingMiddleware` scopes primary pins and reads stateless hints. Check tenant access in the normal request path. See [Read Replicas](../learn/recipes/read-replicas.md) for fallback and freshness choices.
 

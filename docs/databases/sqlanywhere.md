@@ -132,7 +132,7 @@ Pass `SqlanywhereDriverFeatures` keys inside `driver_features={...}` on `Sqlanyw
 
 `SqlanywhereConfig(replicas=True)` sets `NodeType=READONLY` for a mirror or read-scale node. Pass explicit `replicas=` overrides to choose a different connection string. Derived configs keep native aliases and user hooks.
 
-SQLCODE `-757` maps to `ReadOnlyTransactionError`. The server must supply the read-only node; this option does not create one. Use `provide_read_session()` for a reader and ordinary sessions for primary work. See [Read Replicas](../learn/recipes/read-replicas.md).
+SQLCODE `-757` maps to `ReadOnlyTransactionError`. The server must supply the read-only node; this option does not create one. Use `provide_replica_session()` for a reader and ordinary sessions for primary work. See [Read Replicas](../learn/recipes/read-replicas.md).
 
 ## See Also
 

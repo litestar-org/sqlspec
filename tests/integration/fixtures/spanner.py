@@ -21,7 +21,7 @@ __all__ = (
     "spanner_async_config",
     "spanner_config",
     "spanner_database",
-    "spanner_read_session",
+    "spanner_replica_session",
     "spanner_session",
     "spanner_write_session",
 )
@@ -72,9 +72,9 @@ def spanner_write_session(spanner_config: SpannerSyncConfig) -> Generator[Spanne
 
 
 @pytest.fixture
-def spanner_read_session(spanner_config: SpannerSyncConfig) -> Generator[SpannerSyncDriver, None, None]:
+def spanner_replica_session(spanner_config: SpannerSyncConfig) -> Generator[SpannerSyncDriver, None, None]:
     """Provide a read-only Spanner session."""
-    with spanner_config.provide_read_session() as session:
+    with spanner_config.provide_replica_session() as session:
         yield session
 
 

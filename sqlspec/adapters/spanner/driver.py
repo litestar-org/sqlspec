@@ -90,13 +90,13 @@ _pending_spanner_options: contextvars.ContextVar[SpannerExecuteOptions | None] =
 _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
     "Cannot execute DML in a read-only Snapshot context. "
     "SpannerSyncConfig.provide_session() opens a write-capable Transaction by default; "
-    "the current session must have been opened via SpannerSyncConfig.provide_read_session()."
+    "the current session must have been opened via SpannerSyncConfig.provide_replica_session()."
 )
 
 _READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE = (
     "Cannot execute DML in a read-only Snapshot context. "
     "SpannerAsyncConfig.provide_session() opens a write-capable Transaction by default; "
-    "the current session must have been opened via SpannerAsyncConfig.provide_read_session()."
+    "the current session must have been opened via SpannerAsyncConfig.provide_replica_session()."
 )
 
 _READ_ONLY_SNAPSHOT_DDL_ERROR_MESSAGE = (

@@ -47,18 +47,18 @@ async def test_async_native_replica_balance_readonly_and_causal_helpers(
     try:
         selected = []
         for _ in range(6):
-            async with config.provide_read_session() as session:
+            async with config.provide_replica_session() as session:
                 assert await session.select_value("SHOW transaction_read_only") == "on"
                 selected.append(await session.select_value("SHOW application_name"))
         assert selected.count("reader1") == 4
         assert selected.count("reader2") == 2
-        async with config.provide_read_session() as session:
+        async with config.provide_replica_session() as session:
             with pytest.raises(ReadOnlyTransactionError):
                 await session.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
         if adapter != "psqlpy":
             async with base.provide_session() as session:
                 lsn = await session.current_wal_lsn()
-            async with config.provide_read_session() as session:
+            async with config.provide_replica_session() as session:
                 assert await session.has_replayed_wal_lsn(lsn)
     finally:
         await config.close_pool()
@@ -74,7 +74,7 @@ def test_sync_native_replica_readonly_and_wal_helpers(psycopg_sync_config: Any) 
     try:
         with config.provide_session() as session:
             lsn = session.current_wal_lsn()
-        with primary.provide_read_session() as session:
+        with primary.provide_replica_session() as session:
             assert session.select_value("SHOW transaction_read_only") == "on"
             assert session.has_replayed_wal_lsn(lsn)
             with pytest.raises(ReadOnlyTransactionError):

@@ -247,7 +247,9 @@ async def test_native_snapshot_bounds_and_selected_config_receipt(
             {"max_staleness": timedelta(seconds=8)} if mode in {"primary", "pinned", "bounded"} else {}
         )
         context = (
-            registry.provide_read_session(config, **explicit) if managed else config.provide_read_session(**explicit)
+            registry.provide_replica_session(config, **explicit)
+            if managed
+            else config.provide_replica_session(**explicit)
         )
         error_type = asyncio.CancelledError if is_async else RuntimeError
         expectation = pytest.raises(error_type) if mode == "cancelled" else nullcontext()
@@ -277,9 +279,9 @@ async def test_native_snapshot_bounds_and_selected_config_receipt(
         if not managed:
             assert cast("Any", context)._selection_receipt.config is config
         raw = (
-            registry.provide_read_connection(config, **explicit)
+            registry.provide_replica_connection(config, **explicit)
             if managed
-            else config.provide_read_connection(**explicit)
+            else config.provide_replica_connection(**explicit)
         )
         if is_async:
             async with raw as connection:

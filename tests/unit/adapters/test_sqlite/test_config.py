@@ -321,7 +321,7 @@ def test_sqlite_wal_read_replica_rejects_writes(tmp_path) -> None:
     with config.provide_session() as session:
         session.execute("CREATE TABLE entries (id INTEGER)")
         session.execute("INSERT INTO entries VALUES (1)")
-    with config.provide_read_session() as reader:
+    with config.provide_replica_session() as reader:
         assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
         assert reader.select_value("PRAGMA query_only") == 1
         with pytest.raises(ReadOnlyTransactionError):
@@ -396,7 +396,7 @@ def test_sqlite_read_replica_enforces_deferred_transaction_mode(tmp_path: Path) 
             writer.execute("INSERT INTO items (id) VALUES (1)")
             writer.commit()
 
-        with primary.provide_read_session() as reader, reader.transaction():
+        with primary.provide_replica_session() as reader, reader.transaction():
             assert reader.driver_features["default_transaction_mode"] == "DEFERRED"
             row = reader.select_one("SELECT id FROM items")
             assert row["id"] == 1
@@ -431,9 +431,9 @@ def test_sqlite_create_mapped_exception_maps_notadb_and_replica_failover(tmp_pat
         with config.provide_session() as writer:
             writer.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
             writer.commit()
-        with config.provide_read_connection() as conn:
+        with config.provide_replica_connection() as conn:
             assert conn.execute("SELECT COUNT(*) FROM probe").fetchone() == (0,)
-        with config.provide_read_session() as reader:
+        with config.provide_replica_session() as reader:
             assert reader.select_value("SELECT COUNT(*) FROM probe") == 0
     finally:
         config.close_pool()

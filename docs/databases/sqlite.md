@@ -210,7 +210,7 @@ Set `driver_features["reset_session_on_release"] = True` to also drop temp objec
 
 For a file-backed database, `SqliteConfig(replicas=True)` and `AiosqliteConfig(replicas=True)` derive a read-only URI for the same file. The writer owns WAL setup. Readers use `mode=ro` and `PRAGMA query_only=1`, skip write pragmas such as `journal_mode=WAL` and `synchronous=NORMAL`, and retain connection hooks. Memory-only databases cannot provide this file-reader shortcut.
 
-Async readers use `BEGIN DEFERRED`; writers retain their configured transaction mode and serialized writer leases. This avoids taking a write reservation for a read. Native `SQLITE_READONLY` errors map to `ReadOnlyTransactionError`. Open and initialize the writer first, then use `provide_read_session()` for reads. See the [local reader example](../learn/recipes/read-replicas.md#try-a-local-wal-reader).
+Async readers use `BEGIN DEFERRED`; writers retain their configured transaction mode and serialized writer leases. This avoids taking a write reservation for a read. Native `SQLITE_READONLY` errors map to `ReadOnlyTransactionError`. Open and initialize the writer first, then use `provide_replica_session()` for reads. See the [local reader example](../learn/recipes/read-replicas.md#try-a-local-wal-reader).
 
 ## See Also
 

@@ -593,7 +593,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         params: list[Any] = [app_name, user_id, session_id]
 
         try:
-            with self._provide_read_connection(primary=not read) as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 if self._should_renew(renew_for):
                     renew_sql = f"""
                     UPDATE {self._session_table}
@@ -681,7 +681,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         )
 
         try:
-            with self._provide_read_connection(primary=not read) as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -953,7 +953,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """
 
         try:
-            with self._provide_read_connection(primary=not read) as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
                 if limit is not None:
@@ -1445,7 +1445,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         rows: list[Any] | None = None
         columns: list[str] = []
 
-        with self._provide_read_connection(primary=not read) as conn:
+        with self._provide_replica_connection(primary=not read) as conn:
             if use_fts and not self._ensure_fts_extension(conn):
                 use_fts = False
 

@@ -515,32 +515,32 @@ def read_pool_provider_maker(
     return provide_read_pool
 
 
-def read_connection_provider_maker(
-    config: Any, pool_key: str, read_pool_key: str, read_connection_key: str, *, tenant_settings: Any = None
+def db_replica_connection_provider_maker(
+    config: Any, pool_key: str, read_pool_key: str, replica_connection_key: str, *, tenant_settings: Any = None
 ) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
     """Build a request-owned read connection provider with manual finalization."""
 
-    async def provide_read_connection(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
-        yield await _open_request_resource_async(config, scope, read_connection_key, "connection")
+    async def provide_replica_connection(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
+        yield await _open_request_resource_async(config, scope, replica_connection_key, "connection")
 
-    return provide_read_connection
+    return provide_replica_connection
 
 
-def read_session_provider_maker(
+def db_replica_session_provider_maker(
     config: Any,
     pool_key: str,
     read_pool_key: str,
-    read_connection_key: str,
-    read_session_key: str,
+    replica_connection_key: str,
+    replica_session_key: str,
     *,
     tenant_settings: Any = None,
 ) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
     """Build a request-owned read session provider using the adapter's read seam."""
 
-    async def provide_read_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
-        yield await _open_request_resource_async(config, scope, read_session_key, "session")
+    async def provide_replica_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
+        yield await _open_request_resource_async(config, scope, replica_session_key, "session")
 
-    return provide_read_session
+    return provide_replica_session
 
 
 def routing_session_provider_maker(
@@ -718,9 +718,9 @@ def _open_request_resource_sync(config: Any, scope: "Scope", resource_key: str, 
         if kind == "routing":
             context = config.provide_routing_session()
         elif kind == "session":
-            context = config.provide_read_session()
+            context = config.provide_replica_session()
         else:
-            context = config.provide_read_connection()
+            context = config.provide_replica_connection()
         value = context.__enter__()
     set_sqlspec_scope_state(scope, f"{resource_key}_ctx", context)
     set_sqlspec_scope_state(scope, resource_key, value)
@@ -745,9 +745,9 @@ async def _open_request_resource_async(config: Any, scope: "Scope", resource_key
             if kind == "routing":
                 context = config.provide_routing_session()
             elif kind == "session":
-                context = config.provide_read_session()
+                context = config.provide_replica_session()
             else:
-                context = config.provide_read_connection()
+                context = config.provide_replica_connection()
             if isinstance(context, AbstractAsyncContextManager):
                 value = await context.__aenter__()
             else:

@@ -64,18 +64,18 @@ async def check_async_routing_scopes() -> None:
 def check_sync_generics(primary: SqliteConfig, replica: SqliteConfig) -> None:
     group = ReplicaGroup([replica])
     assert_type(group, ReplicaGroup[SqliteConfig])
-    with primary.provide_read_session() as read_driver:
+    with primary.provide_replica_session() as read_driver:
         assert_type(read_driver, SqliteDriver)
     with primary.provide_routing_session() as routing_session:
         assert_type(routing_session, SyncRoutingSession[SqliteDriver])
     service = SQLSpecSyncService(config=primary, read_config=replica)
     assert_type(service, SQLSpecSyncService[SqliteDriver])
     assert_type(service.provide_session(read_only=True), AbstractContextManager[SqliteDriver])
-    assert_type(service.provide_read_session(), AbstractContextManager[SqliteDriver])
+    assert_type(service.provide_replica_session(), AbstractContextManager[SqliteDriver])
     adk_store = SqliteADKStore(primary, read_config=replica)
     assert_type(adk_store.read_config, SqliteConfig | None)
     registry = SQLSpec()
-    with registry.provide_read_session(primary) as registry_driver:
+    with registry.provide_replica_session(primary) as registry_driver:
         assert_type(registry_driver, SqliteDriver)
     with registry.provide_routing_session(primary) as registry_routing:
         assert_type(registry_routing, SyncRoutingSession[SqliteDriver])
@@ -84,16 +84,16 @@ def check_sync_generics(primary: SqliteConfig, replica: SqliteConfig) -> None:
 async def check_async_generics(primary: AiosqliteConfig, replica: AiosqliteConfig) -> None:
     group = ReplicaGroup([replica])
     assert_type(group, ReplicaGroup[AiosqliteConfig])
-    async with primary.provide_read_session() as read_driver:
+    async with primary.provide_replica_session() as read_driver:
         assert_type(read_driver, AiosqliteDriver)
     async with primary.provide_routing_session() as routing_session:
         assert_type(routing_session, AsyncRoutingSession[AiosqliteDriver])
     service = SQLSpecAsyncService(config=primary, read_config=replica)
     assert_type(service, SQLSpecAsyncService[AiosqliteDriver])
     assert_type(service.provide_session(read_only=True), AbstractAsyncContextManager[AiosqliteDriver])
-    assert_type(service.provide_read_session(), AbstractAsyncContextManager[AiosqliteDriver])
+    assert_type(service.provide_replica_session(), AbstractAsyncContextManager[AiosqliteDriver])
     registry = SQLSpec()
-    async with registry.provide_read_session(primary) as registry_driver:
+    async with registry.provide_replica_session(primary) as registry_driver:
         assert_type(registry_driver, AiosqliteDriver)
     async with registry.provide_routing_session(primary) as registry_routing:
         assert_type(registry_routing, AsyncRoutingSession[AiosqliteDriver])

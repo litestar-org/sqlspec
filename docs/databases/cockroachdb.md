@@ -250,7 +250,7 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
 
 ## Follower Reads and Read-Only Sessions
 
-`CockroachAsyncpgConfig`, `CockroachPsycopgSyncConfig`, and `CockroachPsycopgAsyncConfig` can serve follower reads from one shared pool. `provide_read_session()` defaults to `staleness="follower_read_timestamp()"` and applies a native `AS OF SYSTEM TIME` read. A supported bounded-staleness interval can choose an older timestamp explicitly.
+`CockroachAsyncpgConfig`, `CockroachPsycopgSyncConfig`, and `CockroachPsycopgAsyncConfig` can serve follower reads from one shared pool. `provide_replica_session()` defaults to `staleness="follower_read_timestamp()"` and applies a native `AS OF SYSTEM TIME` read. A supported bounded-staleness interval can choose an older timestamp explicitly.
 
 Follower reads can be stale; they are not read-after-write primary reads. Their driver rejects writes with `ReadOnlyTransactionError`. A primary routing scope bypasses the follower path. Use separate endpoint pools only when your topology needs them. See [Replica Operations](../learn/recipes/read-replicas-operations.md).
 

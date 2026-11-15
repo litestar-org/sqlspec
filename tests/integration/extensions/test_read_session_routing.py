@@ -116,16 +116,16 @@ async def test_asgi_lazy_read_di_isolates_native_rls_and_checkout_ownership(
     if framework == "litestar":
 
         @get("/")
-        async def read(read_session: NamedDependency[AsyncpgDriver]) -> dict[str, Any]:
-            return await _read_rows(read_session, table)
+        async def read(replica_session: NamedDependency[AsyncpgDriver]) -> dict[str, Any]:
+            return await _read_rows(replica_session, table)
 
         @post("/", status_code=200)
         async def write(db_session: NamedDependency[AsyncpgDriver]) -> dict[str, bool]:
             return await _write_row(db_session, table)
 
         @get("/blocked")
-        async def blocked(read_session: NamedDependency[AsyncpgDriver]) -> dict[str, bool]:
-            return await _refuse_write(read_session, table)
+        async def blocked(replica_session: NamedDependency[AsyncpgDriver]) -> dict[str, bool]:
+            return await _refuse_write(replica_session, table)
 
         app = Litestar([read, write, blocked], plugins=[LitestarPlugin(config)])
         async with AsyncTestClient(app=app) as client:
@@ -139,32 +139,32 @@ async def test_asgi_lazy_read_di_isolates_native_rls_and_checkout_ownership(
 
         fastapi = FastAPI()
         plugin = FastAPIPlugin(config, fastapi)
-        read_dependency = plugin.provide_async_read_session()
+        read_dependency = plugin.provide_async_replica_session()
         write_dependency = plugin.provide_async_session()
 
         @fastapi.get("/")
-        async def fastapi_read(read_session: Annotated[Any, Depends(read_dependency)]) -> dict[str, Any]:
-            return await _read_rows(read_session, table)
+        async def fastapi_read(replica_session: Annotated[Any, Depends(read_dependency)]) -> dict[str, Any]:
+            return await _read_rows(replica_session, table)
 
         @fastapi.post("/")
         async def fastapi_write(db_session: Annotated[Any, Depends(write_dependency)]) -> dict[str, bool]:
             return await _write_row(db_session, table)
 
         @fastapi.get("/blocked")
-        async def fastapi_blocked(read_session: Annotated[Any, Depends(read_dependency)]) -> dict[str, bool]:
-            return await _refuse_write(read_session, table)
+        async def fastapi_blocked(replica_session: Annotated[Any, Depends(read_dependency)]) -> dict[str, bool]:
+            return await _refuse_write(replica_session, table)
 
         application: Any = fastapi
     else:
 
         async def starlette_read(request: Request) -> JSONResponse:
-            return JSONResponse(await _read_rows(plugin.get_read_session(request), table))
+            return JSONResponse(await _read_rows(plugin.get_replica_session(request), table))
 
         async def starlette_write(request: Request) -> JSONResponse:
             return JSONResponse(await _write_row(plugin.get_session(request), table))
 
         async def starlette_blocked(request: Request) -> JSONResponse:
-            return JSONResponse(await _refuse_write(plugin.get_read_session(request), table))
+            return JSONResponse(await _refuse_write(plugin.get_replica_session(request), table))
 
         application = Starlette(
             routes=[
@@ -179,7 +179,7 @@ async def test_asgi_lazy_read_di_isolates_native_rls_and_checkout_ownership(
             await _assert_http_routing(client, checkouts)
 
 
-def test_flask_portal_read_sessions_keep_rls_and_physical_checkout_ownership(
+def test_flask_portal_replica_sessions_keep_rls_and_physical_checkout_ownership(
     tenant_policy_database: tuple[dict[str, Any], str],
 ) -> None:
     from flask import Flask
@@ -194,7 +194,7 @@ def test_flask_portal_read_sessions_keep_rls_and_physical_checkout_ownership(
 
     @app.get("/")
     def read() -> dict[str, Any]:
-        session = plugin.get_read_session()
+        session = plugin.get_replica_session()
         rows = session.select("SELECT value FROM " + table + " ORDER BY value")
         return {
             "values": [row["value"] for row in rows],
@@ -209,7 +209,7 @@ def test_flask_portal_read_sessions_keep_rls_and_physical_checkout_ownership(
     @app.get("/blocked")
     def blocked() -> dict[str, bool]:
         with pytest.raises(ReadOnlyTransactionError):
-            plugin.get_read_session().execute(
+            plugin.get_replica_session().execute(
                 "INSERT INTO " + table + " VALUES (:tenant, :value)", {"tenant": "a", "value": 99}
             )
         return {"refused": True}
@@ -231,7 +231,7 @@ def test_flask_portal_read_sessions_keep_rls_and_physical_checkout_ownership(
         plugin.shutdown()
 
 
-def test_sanic_lazy_read_sessions_keep_rls_and_checkout_ownership(
+def test_sanic_lazy_replica_sessions_keep_rls_and_checkout_ownership(
     tenant_policy_database: tuple[dict[str, Any], str],
 ) -> None:
     from sanic import Sanic, response
@@ -248,7 +248,7 @@ def test_sanic_lazy_read_sessions_keep_rls_and_checkout_ownership(
 
     @app.get("/")
     async def read(request: Any) -> Any:
-        return response.json(await _read_rows(plugin.get_read_session(request), table))
+        return response.json(await _read_rows(plugin.get_replica_session(request), table))
 
     @app.post("/")
     async def write(request: Any) -> Any:
@@ -256,7 +256,7 @@ def test_sanic_lazy_read_sessions_keep_rls_and_checkout_ownership(
 
     @app.get("/blocked")
     async def blocked(request: Any) -> Any:
-        return response.json(await _refuse_write(plugin.get_read_session(request), table))
+        return response.json(await _refuse_write(plugin.get_replica_session(request), table))
 
     try:
         with reusable_client(app) as client:

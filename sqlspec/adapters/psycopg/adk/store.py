@@ -324,7 +324,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
         try:
             async with (
-                self._provide_read_connection(primary=renew_for is not None) as conn,
+                self._provide_replica_connection(primary=renew_for is not None) as conn,
                 conn.cursor(row_factory=dict_row) as cur,
             ):
                 await cur.execute(query, params)
@@ -376,7 +376,10 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with (
+                self._provide_replica_connection(primary=False) as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
                 await cur.execute(query, params)
                 rows = await cur.fetchall()
 
@@ -577,7 +580,10 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with (
+                self._provide_replica_connection(primary=False) as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
                 await cur.execute(query, tuple(params))
                 rows = await cur.fetchall()
 
@@ -1043,7 +1049,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
 
         try:
             with (
-                self._provide_read_connection(primary=renew_for is not None) as conn,
+                self._provide_replica_connection(primary=renew_for is not None) as conn,
                 conn.cursor(row_factory=dict_row) as cur,
             ):
                 cur.execute(query, params)
@@ -1097,7 +1103,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, params)
                 rows = cur.fetchall()
 
@@ -1259,7 +1265,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, tuple(params))
                 rows = cur.fetchall()
 
@@ -1920,7 +1926,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         ).format(table=_build_table_identifier(self._memory_table), where_scope=where_scope)
         embedding_param = [float(v) for v in embedding]
         params = (embedding_param, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
-        async with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
+        async with self._provide_replica_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             self._config._ensure_pg_textsearch_available()
             await cur.execute(sql, params)
             rows = await cur.fetchall()
@@ -1947,7 +1953,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         ).format(table=_build_table_identifier(self._memory_table), where_scope=where_scope)
         embedding_param = [float(v) for v in embedding]
         params = (*scope_params, embedding_param, limit)
-        async with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
+        async with self._provide_replica_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
@@ -1976,7 +1982,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             """
         ).format(table=_build_table_identifier(self._memory_table), where_scope=where_scope)
         params = (query, *scope_params, query, limit)
-        async with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
+        async with self._provide_replica_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
@@ -2005,7 +2011,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         ).format(table=_build_table_identifier(self._memory_table), where_scope=where_scope)
         pattern = f"%{query}%"
         params = (*scope_params, pattern, limit)
-        async with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
+        async with self._provide_replica_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
@@ -2282,7 +2288,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         ).format(table=_build_table_identifier(self._memory_table), where_scope=where_scope)
         embedding_param = [float(v) for v in embedding]
         params = (embedding_param, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
-        with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             self._config._ensure_pg_textsearch_available()
             cur.execute(sql, params)
             rows = cur.fetchall()
@@ -2309,7 +2315,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         ).format(table=_build_table_identifier(self._memory_table), where_scope=where_scope)
         embedding_param = [float(v) for v in embedding]
         params = (*scope_params, embedding_param, limit)
-        with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
@@ -2338,7 +2344,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             """
         ).format(table=_build_table_identifier(self._memory_table), where_scope=where_scope)
         params = (query, *scope_params, query, limit)
-        with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
@@ -2367,7 +2373,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         ).format(table=_build_table_identifier(self._memory_table), where_scope=where_scope)
         pattern = f"%{query}%"
         params = (*scope_params, pattern, limit)
-        with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)

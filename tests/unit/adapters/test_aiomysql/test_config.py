@@ -483,7 +483,7 @@ def _make_aiomysql_mock_conn() -> MagicMock:
     )
 
 
-@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize("method", ["provide_replica_connection", "provide_replica_session"])
 @pytest.mark.parametrize(
     ("driver_exc", "expected_mapped"),
     [
@@ -510,7 +510,7 @@ async def test_aiomysql_read_replica_failover_maps_driver_errors(
         connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"]
     )
     async with getattr(config, method)() as acquired:
-        conn = acquired if method == "provide_read_connection" else acquired.connection
+        conn = acquired if method == "provide_replica_connection" else acquired.connection
         assert conn is healthy_conn
 
     failing_only = AiomysqlConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
@@ -538,7 +538,7 @@ async def test_aiomysql_on_connection_create_runtime_error_not_swallowed(monkeyp
         replicas=["r1", "r2"],
     )
     with pytest.raises(RuntimeError, match="hook boom"):
-        async with config.provide_read_session():
+        async with config.provide_replica_session():
             pass
     assert attempted == ["called"]
 
@@ -571,9 +571,9 @@ async def test_aiomysql_replica_applies_session_read_only_without_mutating_init_
     replica = config.replica_groups["default"].configs[0]
     assert replica.connection_config["init_command"] == "SET @probe = 1"
 
-    async with config.provide_read_session():
+    async with config.provide_replica_session():
         pass
-    async with config.provide_read_session():
+    async with config.provide_replica_session():
         pass
 
     expected = ["sql:SET SESSION TRANSACTION READ ONLY", "hook"] if read_only else ["hook"]

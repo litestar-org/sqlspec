@@ -81,7 +81,7 @@ def test_session_service_commit_pins_only_its_writer_bind() -> None:
             assert entry is not None
             assert entry.pinned_by_write is True
             assert RoutingContext.get_entry("analytics") is None
-            with service.provide_read_session() as selected:
+            with service.provide_replica_session() as selected:
                 assert selected is session
     config.close_pool()
 
@@ -99,6 +99,6 @@ async def test_async_session_service_commit_pins_only_its_writer_bind() -> None:
             assert entry is not None
             assert entry.pinned_by_write is True
             assert RoutingContext.get_entry("analytics") is None
-            async with service.provide_read_session() as selected:
+            async with service.provide_replica_session() as selected:
                 assert selected is session
     await config.close_pool()

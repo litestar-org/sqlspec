@@ -578,7 +578,7 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
     def _execute_fetchone(
         self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False
     ) -> "Any | None":
-        with self._provide_read_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql, params)
             row = cursor.fetchone()
             if commit:
@@ -586,12 +586,12 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
             return row
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
-        with self._provide_read_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
-        with self._provide_read_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
             if commit:
@@ -787,7 +787,7 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
         return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
-        with self._provide_read_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 

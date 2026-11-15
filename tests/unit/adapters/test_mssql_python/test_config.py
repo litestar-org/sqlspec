@@ -1083,7 +1083,7 @@ def test_ag_replica_mixed_case_intent_replaces_inherited_parent_options() -> Non
     assert "MultiSubnetFailover=no" in text
 
 
-@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize("method", ["provide_replica_connection", "provide_replica_session"])
 @pytest.mark.parametrize(
     ("driver_exc_factory", "expected_mapped"),
     [
@@ -1118,7 +1118,7 @@ def test_mssql_python_read_replica_failover_maps_driver_errors(
     )
     try:
         with getattr(config, method)() as acquired:
-            conn = acquired if method == "provide_read_connection" else acquired.connection
+            conn = acquired if method == "provide_replica_connection" else acquired.connection
             assert conn is healthy_conn
 
         failing_only = MssqlPythonConfig(connection_config={"server": "r1", "database": "app"})
@@ -1159,7 +1159,7 @@ def test_mssql_python_maps_978_and_preserves_hook_runtime_error(monkeypatch: pyt
         replicas=[{"host": "r1"}, {"host": "r2"}],
     )
     try:
-        with pytest.raises(RuntimeError, match="hook boom"), hook_cfg.provide_read_session():
+        with pytest.raises(RuntimeError, match="hook boom"), hook_cfg.provide_replica_session():
             pass
         assert hook_conn.closed is True
     finally:

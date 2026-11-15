@@ -570,7 +570,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         try:
-            async with self._provide_read_connection(primary=renew_for is not None) as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 with conn.cursor() as cursor:
                     if self._should_renew(renew_for):
                         await cursor.execute(
@@ -676,7 +676,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         )
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, params)
                     rows = await cursor.fetchall()
@@ -911,7 +911,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, params)
                     rows = await cursor.fetchall()
@@ -1720,7 +1720,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         should_renew = self._should_renew(renew_for)
         try:
-            with self._provide_read_connection(primary=renew_for is not None) as conn, conn.cursor() as cursor:
+            with self._provide_replica_connection(primary=renew_for is not None) as conn, conn.cursor() as cursor:
                 if should_renew:
                     cursor.execute(
                         f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
@@ -1817,7 +1817,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         )
 
         try:
-            with self._provide_read_connection(primary=False) as conn, conn.cursor() as cursor:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -2039,7 +2039,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
         try:
-            with self._provide_read_connection(primary=False) as conn, conn.cursor() as cursor:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
                 if limit is not None:
@@ -3029,7 +3029,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         WHERE ROWNUM <= :limit
         """
         params = {**scope_params, "query": sanitized_query, "limit": limit}
-        async with self._provide_read_connection(primary=not read) as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
@@ -3102,7 +3102,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 "top_k": limit,
                 "rrf_k": rrf_k,
             }
-        async with self._provide_read_connection(primary=not read) as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
@@ -3137,7 +3137,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         """
         pattern = f"%{query.lower()}%"
         params = {**scope_params, "pattern": pattern, "limit": limit}
-        async with self._provide_read_connection(primary=not read) as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
@@ -3553,7 +3553,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         WHERE ROWNUM <= :limit
         """
         params = {**scope_params, "query": sanitized_query, "limit": limit}
-        with self._provide_read_connection(primary=not read) as conn, conn.cursor() as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)
@@ -3625,7 +3625,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 "top_k": limit,
                 "rrf_k": rrf_k,
             }
-        with self._provide_read_connection(primary=not read) as conn, conn.cursor() as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)
@@ -3657,7 +3657,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         """
         pattern = f"%{query.lower()}%"
         params = {**scope_params, "pattern": pattern, "limit": limit}
-        with self._provide_read_connection(primary=not read) as conn, conn.cursor() as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)

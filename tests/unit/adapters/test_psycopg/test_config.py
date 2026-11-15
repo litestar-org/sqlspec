@@ -1315,9 +1315,9 @@ def test_psycopg_sync_read_replica_failover_maps_driver_errors(
     config = PsycopgSyncConfig(
         connection_config={"conninfo": "postgresql://primary"}, replicas=["postgresql://bad", "postgresql://good"]
     )
-    with config.provide_read_connection() as conn:
+    with config.provide_replica_connection() as conn:
         assert conn is cast("Any", good_conn)
-    with config.provide_read_session() as reader:
+    with config.provide_replica_session() as reader:
         assert reader.connection is good_conn
 
 
@@ -1352,9 +1352,9 @@ async def test_psycopg_async_read_replica_failover_maps_driver_errors(
     config = PsycopgAsyncConfig(
         connection_config={"conninfo": "postgresql://primary"}, replicas=["postgresql://bad", "postgresql://good"]
     )
-    async with config.provide_read_connection() as conn:
+    async with config.provide_replica_connection() as conn:
         assert conn is cast("Any", good_conn)
-    async with config.provide_read_session() as reader:
+    async with config.provide_replica_session() as reader:
         assert reader.connection is good_conn
 
 

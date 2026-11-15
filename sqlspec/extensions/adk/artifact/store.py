@@ -77,7 +77,7 @@ class _ADKArtifactStoreCommon(Generic[ConfigT]):
         """Return the artifact versions table name."""
         return self._artifact_table
 
-    def _provide_read_connection(
+    def _provide_replica_connection(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
         return _adk_read_provider(
@@ -90,7 +90,7 @@ class _ADKArtifactStoreCommon(Generic[ConfigT]):
             kwargs,
         )
 
-    def _provide_read_session(
+    def _provide_replica_session(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
         return _adk_read_provider(
@@ -280,11 +280,11 @@ class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
             artifact_table=self._artifact_table,
         )
 
-    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
-        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+    def _provide_replica_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_replica_connection(primary=primary, **kwargs))
 
-    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
-        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
+    def _provide_replica_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_replica_session(primary=primary, **kwargs))
 
 
 class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
@@ -437,8 +437,8 @@ class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
             artifact_table=self._artifact_table,
         )
 
-    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
-        return cast("AbstractContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+    def _provide_replica_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_replica_connection(primary=primary, **kwargs))
 
-    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
-        return cast("AbstractContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
+    def _provide_replica_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_replica_session(primary=primary, **kwargs))

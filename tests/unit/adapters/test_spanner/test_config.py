@@ -946,7 +946,7 @@ async def test_async_config_initialization_and_get_database(monkeypatch: pytest.
 
 
 async def test_async_config_provide_connection_and_sessions() -> None:
-    """Verify SpannerAsyncConfig provide_connection, provide_session, provide_write_session, and provide_read_session."""
+    """Verify SpannerAsyncConfig provide_connection, provide_session, provide_write_session, and provide_replica_session."""
     snap_obj = object()
 
     class _AsyncSnapshotCheckout:
@@ -1029,7 +1029,7 @@ async def test_async_config_provide_connection_and_sessions() -> None:
     assert database.sessions_manager.checked_out == 1
     assert database.sessions_manager.returned == 1
 
-    async with config.provide_read_session() as read_driver:
+    async with config.provide_replica_session() as read_driver:
         assert read_driver.connection is snap_obj
     assert read_driver.connection is _CLOSED_CONNECTION
     assert database.snapshot_checkout.exited is True
@@ -1398,7 +1398,7 @@ async def test_strict_replica_scope_preserves_native_spanner_snapshot(
 
     checkout = _hook_checkout(is_async, Mock(return_value=None), replicas=replicas)
     config = checkout.config
-    provider = config.provide_read_connection if raw else config.provide_read_session
+    provider = config.provide_replica_connection if raw else config.provide_replica_session
     with RoutingContext.replica():
         if is_async:
             async with provider(exact_staleness=timedelta(seconds=3)) as value:

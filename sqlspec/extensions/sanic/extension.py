@@ -194,8 +194,8 @@ class SQLSpecPlugin:
                     state.session_key,
                     state.connection_key,
                     state.pool_key,
-                    state.read_session_key,
-                    state.read_connection_key,
+                    state.replica_session_key,
+                    state.replica_connection_key,
                     state.read_pool_key,
                     state.routing_session_key,
                 }:
@@ -300,19 +300,19 @@ class SQLSpecPlugin:
                         pop_context_value(request.ctx, self._deferred_key(config_state))
         return get_context_value(request.ctx, config_state.connection_key)
 
-    def get_read_session(self, request: Any, key: Any = None) -> Any:
+    def get_replica_session(self, request: Any, key: Any = None) -> Any:
         """Return the request's lazy read session."""
         return self._read_routing_resource(request, key, "session")
 
-    async def get_read_session_async(self, request: Any, key: Any = None) -> Any:
+    async def get_replica_session_async(self, request: Any, key: Any = None) -> Any:
         """Open and return the request's lazy read session."""
         return await self._read_routing_resource_async(request, key, "session")
 
-    def get_read_connection(self, request: Any, key: Any = None) -> Any:
+    def get_replica_connection(self, request: Any, key: Any = None) -> Any:
         """Return the request's lazy read connection."""
         return self._read_routing_resource(request, key, "connection")
 
-    async def get_read_connection_async(self, request: Any, key: Any = None) -> Any:
+    async def get_replica_connection_async(self, request: Any, key: Any = None) -> Any:
         """Open and return the request's lazy read connection."""
         return await self._read_routing_resource_async(request, key, "connection")
 
@@ -341,9 +341,9 @@ class SQLSpecPlugin:
 
     def _resource_key(self, state: SanicConfigState, kind: str) -> str:
         key = (
-            state.read_session_key
+            state.replica_session_key
             if kind == "session"
-            else state.read_connection_key
+            else state.replica_connection_key
             if kind == "connection"
             else state.routing_session_key
         )
@@ -360,14 +360,14 @@ class SQLSpecPlugin:
             return current
         if state.config.is_async:
             if kind == "connection":
-                raise_async_connection_required("await plugin.get_read_connection_async(request)")
+                raise_async_connection_required("await plugin.get_replica_connection_async(request)")
             deferred_key = f"{resource_key}_deferred"
             current = get_context_value(request.ctx, deferred_key, None)
             if current is None:
                 accessor = (
                     "await plugin.get_routing_session_async(request)"
                     if kind == "routing"
-                    else "await plugin.get_read_session_async(request)"
+                    else "await plugin.get_replica_session_async(request)"
                 )
                 current = DeferredAsyncSession(
                     state.config,
@@ -389,8 +389,8 @@ class SQLSpecPlugin:
         if kind == "routing":
             return state.config.provide_routing_session()
         if kind == "session":
-            return state.config.provide_read_session()
-        return state.config.provide_read_connection()
+            return state.config.provide_replica_session()
+        return state.config.provide_replica_connection()
 
     def _publish_read_routing_resource(
         self,
@@ -462,7 +462,7 @@ class SQLSpecPlugin:
                     _detach_deferred_session(pop_context_value(request.ctx, f"{key}_deferred"))
                     pop_context_value(request.ctx, f"{key}_lock")
         for state in self._config_states:
-            for resource_key in (state.read_connection_key, state.read_session_key, state.routing_session_key):
+            for resource_key in (state.replica_connection_key, state.replica_session_key, state.routing_session_key):
                 if resource_key is not None:
                     _detach_deferred_session(pop_context_value(request.ctx, f"{resource_key}_deferred"))
                     pop_context_value(request.ctx, f"{resource_key}_lock")
@@ -487,17 +487,17 @@ class SQLSpecPlugin:
             "connection_key": framework_config.get("connection_key", DEFAULT_CONNECTION_KEY),
             "pool_key": pool_key,
             "session_key": framework_config.get("session_key", DEFAULT_SESSION_KEY),
-            "read_session_key": framework_config.get(
-                "read_session_key",
-                "read_session"
+            "replica_session_key": framework_config.get(
+                "replica_session_key",
+                "db_replica_session"
                 if framework_config.get("session_key", DEFAULT_SESSION_KEY) == DEFAULT_SESSION_KEY
-                else f"{framework_config['session_key']}_read",
+                else f"{framework_config['session_key']}_replica",
             ),
-            "read_connection_key": framework_config.get(
-                "read_connection_key",
-                "read_connection"
+            "replica_connection_key": framework_config.get(
+                "replica_connection_key",
+                "db_replica_connection"
                 if framework_config.get("connection_key", DEFAULT_CONNECTION_KEY) == DEFAULT_CONNECTION_KEY
-                else f"{framework_config['connection_key']}_read",
+                else f"{framework_config['connection_key']}_replica",
             ),
             "read_pool_key": framework_config.get(
                 "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
@@ -553,8 +553,8 @@ class SQLSpecPlugin:
             auto_trace_headers=settings["auto_trace_headers"],
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             sqlcommenter_framework=settings["sqlcommenter_framework"],
-            read_session_key=settings["read_session_key"],
-            read_connection_key=settings["read_connection_key"],
+            replica_session_key=settings["replica_session_key"],
+            replica_connection_key=settings["replica_connection_key"],
             read_pool_key=settings["read_pool_key"],
             routing_session_key=settings["routing_session_key"],
             default_routing_mode=settings["default_routing_mode"],
@@ -1346,8 +1346,8 @@ class SQLSpecPlugin:
                     state.connection_key,
                     state.pool_key,
                     state.session_key,
-                    state.read_session_key,
-                    state.read_connection_key,
+                    state.replica_session_key,
+                    state.replica_connection_key,
                     state.read_pool_key,
                     state.routing_session_key,
                 )
@@ -1379,8 +1379,8 @@ class SQLSpecPlugin:
                 if key in {
                     state.connection_key,
                     state.pool_key,
-                    state.read_session_key,
-                    state.read_connection_key,
+                    state.replica_session_key,
+                    state.replica_connection_key,
                     state.read_pool_key,
                     state.routing_session_key,
                     getattr(state.config, "bind_key", None),

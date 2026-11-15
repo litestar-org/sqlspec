@@ -952,7 +952,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             or max_staleness != self._replica_max_staleness
             or strict_replica != self._replica_strict
         ):
-            context = self._config.provide_read_session(
+            context = self._config.provide_replica_session(
                 replica_group=replica_group,
                 statement_config=self._statement_config,
                 tenant=self._tenant,
@@ -1679,7 +1679,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             or max_staleness != self._replica_max_staleness
             or strict_replica != self._replica_strict
         ):
-            context = self._config.provide_read_session(
+            context = self._config.provide_replica_session(
                 replica_group=replica_group,
                 statement_config=self._statement_config,
                 tenant=self._tenant,

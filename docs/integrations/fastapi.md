@@ -73,8 +73,8 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `S
 | `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
 | `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
 | `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
-| `read_session_key` | `str` | - | Request key for a read session. |
-| `read_connection_key` | `str` | - | Request key for a read connection. |
+| `replica_session_key` | `str` | - | Request key for a read session. |
+| `replica_connection_key` | `str` | - | Request key for a read connection. |
 | `routing_session_key` | `str` | - | Request key for a routing session. |
 | `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
 | `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
@@ -132,7 +132,7 @@ def register_user_routes(app: FastAPI, db_ext: SQLSpecPlugin) -> None:
 
 ## Read Replica and Routing Dependencies
 
-Use `Depends(db_ext.provide_read_session())` for a reader dependency. The typed factories are `provide_async_read_session` and `provide_sync_read_session`. Raw connections use `provide_read_connection`, `provide_async_read_connection`, or `provide_sync_read_connection`. `key=` selects a registered bind or config. `provide_routing_session()` supplies the lazy routing facade when a handler needs reads and writes.
+Use `Depends(db_ext.provide_replica_session())` for a reader dependency. The typed factories are `provide_async_replica_session` and `provide_sync_replica_session`. Raw connections use `provide_replica_connection`, `provide_async_replica_connection`, or `provide_sync_replica_connection`. `key=` selects a registered bind or config. `provide_routing_session()` supplies the lazy routing facade when a handler needs reads and writes.
 
 Add `app.add_middleware(SQLSpecRoutingMiddleware)` for request routing scopes and header/cookie hints. The middleware is exported from `sqlspec.utils.routing`. Read sessions keep the same tenant checks and lazy physical checkout as ordinary sessions. See [Read Replicas](../learn/recipes/read-replicas.md) for topology setup.
 

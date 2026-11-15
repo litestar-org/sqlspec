@@ -134,8 +134,8 @@ class SQLSpecTransactionMiddleware:
                         _PendingConnection(stack, request, state),
                     )
                     for resource_key, kind in (
-                        (state.read_connection_key, "connection"),
-                        (state.read_session_key, "session"),
+                        (state.replica_connection_key, "connection"),
+                        (state.replica_session_key, "session"),
                         (state.routing_session_key, "routing"),
                     ):
                         if resource_key is not None:
@@ -175,8 +175,8 @@ class SQLSpecTransactionMiddleware:
                         pop_state_value(request.state, _pending_connection_key(state.connection_key))
                         await _clear_deferred_session(request, deferred_session_key(state))
                         for resource_key in (
-                            state.read_connection_key,
-                            state.read_session_key,
+                            state.replica_connection_key,
+                            state.replica_session_key,
                             state.routing_session_key,
                         ):
                             if resource_key is not None:
@@ -552,14 +552,14 @@ def get_request_resource(request: "Request", config_state: "SQLSpecConfigState",
         raise ImproperConfigurationError(msg)
     if config_state.config.is_async:
         if kind == "connection":
-            raise_async_connection_required("await plugin.get_read_connection_async(request)")
+            raise_async_connection_required("await plugin.get_replica_connection_async(request)")
         deferred_key = f"{key}_deferred"
         current = get_state_value(request.state, deferred_key, None)
         if current is None:
             accessor = (
                 "await plugin.get_routing_session_async(request)"
                 if kind == "routing"
-                else "await plugin.get_read_session_async(request)"
+                else "await plugin.get_replica_session_async(request)"
             )
             current = DeferredAsyncSession(
                 config_state.config,
@@ -754,8 +754,8 @@ def _resource_context(slot: _RequestResourceSlot) -> Any:
     if slot.kind == "routing":
         return config.provide_routing_session()
     if slot.kind == "session":
-        return config.provide_read_session()
-    return config.provide_read_connection()
+        return config.provide_replica_session()
+    return config.provide_replica_connection()
 
 
 @contextmanager

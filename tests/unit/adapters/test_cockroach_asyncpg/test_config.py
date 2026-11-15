@@ -1022,7 +1022,7 @@ def test_cockroach_asyncpg_derive_pool_overrides_dsn_and_aliases() -> None:
 
 
 @pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
-async def test_cockroach_asyncpg_read_connection_rollback_error_handling(body_raises: bool) -> None:
+async def test_cockroach_asyncpg_replica_connection_rollback_error_handling(body_raises: bool) -> None:
     """Caller exceptions are preserved if cleanup rollback fails; clean exits propagate rollback failure."""
     connection = object()
     session = AsyncMock()
@@ -1040,7 +1040,7 @@ async def test_cockroach_asyncpg_read_connection_rollback_error_handling(body_ra
     config = CockroachAsyncpgConfig(connection_config={"dsn": "postgresql://localhost:26257/db"})
     expected_exc = ValueError if body_raises else RuntimeError
     with pytest.raises(expected_exc, match="body boom" if body_raises else "rollback boom"):
-        async with config._read_connection(_FakeSessionCtx()) as conn:  # pyright: ignore[reportPrivateUsage]
+        async with config._replica_connection(_FakeSessionCtx()) as conn:  # pyright: ignore[reportPrivateUsage]
             assert conn is connection
             if body_raises:
                 raise ValueError("body boom")
@@ -1098,9 +1098,9 @@ async def test_cockroach_asyncpg_read_replica_failover_maps_driver_errors(
         connection_config={"dsn": "postgresql://primary:26257/db"},
         replicas=["postgresql://bad:26257/db", "postgresql://good:26257/db"],
     )
-    async with config.provide_read_connection() as conn:
+    async with config.provide_replica_connection() as conn:
         assert conn is good_conn
-    async with config.provide_read_session() as reader:
+    async with config.provide_replica_session() as reader:
         assert reader.connection is good_conn
 
 

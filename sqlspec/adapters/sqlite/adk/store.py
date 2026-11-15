@@ -221,7 +221,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         try:
-            with self._provide_read_connection(primary=renew_for is not None) as conn:
+            with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 self._ensure_pragmas(conn)
                 if update_sql:
                     _close_cursor(conn.execute(update_sql, update_params))
@@ -304,7 +304,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         )
 
         try:
-            with self._provide_read_connection() as conn:
+            with self._provide_replica_connection() as conn:
                 self._ensure_pragmas(conn)
                 cursor = conn.execute(sql, params)
                 try:
@@ -556,7 +556,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         try:
-            with self._provide_read_connection() as conn:
+            with self._provide_replica_connection() as conn:
                 self._ensure_pragmas(conn)
                 cursor = conn.execute(sql, params)
                 try:
@@ -1437,7 +1437,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         return self._fetch_records(sql, params)
 
     def _fetch_records(self, sql: str, params: "tuple[Any, ...]") -> "list[StoredMemory]":
-        with self._provide_read_connection() as conn:
+        with self._provide_replica_connection() as conn:
             self._ensure_foreign_keys(conn)
             cursor = conn.execute(sql, params)
             try:

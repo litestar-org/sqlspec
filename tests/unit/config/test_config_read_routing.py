@@ -49,7 +49,7 @@ async def test_read_routing_honors_pins_explicit_groups_and_zero_replica_fallbac
     default = config_type()
     analytics = config_type()
     primary = config_type(bind_key="app", replicas={"default": [default], "analytics": [analytics]})
-    context = primary.provide_read_session()
+    context = primary.provide_replica_session()
     if primary.is_async:
         async with context as session:
             assert await session.select_value("SELECT 1") == 1
@@ -60,8 +60,8 @@ async def test_read_routing_honors_pins_explicit_groups_and_zero_replica_fallbac
             assert context._selection_receipt.config is default
     with RoutingContext.scope():
         RoutingContext.mark_write("app")
-        pinned = primary.provide_read_session()
-        explicit = primary.provide_read_session(replica_group="analytics")
+        pinned = primary.provide_replica_session()
+        explicit = primary.provide_replica_session(replica_group="analytics")
         if primary.is_async:
             async with pinned as session:
                 assert await session.select_value("SELECT 2") == 2
@@ -77,9 +77,9 @@ async def test_read_routing_honors_pins_explicit_groups_and_zero_replica_fallbac
                 assert session.select_value("SELECT 3") == 3
                 assert explicit._selection_receipt.config is analytics
     with pytest.raises(RoutingContextError, match="missing"):
-        primary.provide_read_session(replica_group="missing")
+        primary.provide_replica_session(replica_group="missing")
     plain = config_type()
-    fallback = plain.provide_read_session()
+    fallback = plain.provide_replica_session()
     if plain.is_async:
         async with fallback as session:
             assert await session.select_value("SELECT 4") == 4
@@ -111,8 +111,8 @@ def test_replica_topology_rejects_mixed_nested_and_unsupported_modes() -> None:
 
 def test_extension_routing_options_are_documented_optional_fields() -> None:
     fields = {
-        "read_session_key",
-        "read_connection_key",
+        "replica_session_key",
+        "replica_connection_key",
         "routing_session_key",
         "default_routing_mode",
         "enable_routing_middleware",
@@ -146,13 +146,13 @@ async def test_async_request_tenant_resolution_is_lazy_and_shared_with_replicas(
     binding = TenantRequestBinding(resolve, keys=(primary,))
     token = TenantContext.bind_request(binding)
     try:
-        context = primary.provide_read_session()
+        context = primary.provide_replica_session()
         assert seen == []
         async with context as payload:
             assert payload.tenant_id == "acme"
         await binding.afreeze()
         with RoutingContext.primary("app"):
-            async with primary.provide_read_session() as payload:
+            async with primary.provide_replica_session() as payload:
                 assert payload.tenant_id == "acme"
         assert seen == [primary]
     finally:

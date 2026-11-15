@@ -126,8 +126,8 @@ def test_flask_read_and_routing_sessions_with_autocommit(tmp_path: Path, async_c
     @app.get("/read")
     def read() -> dict[str, Any]:
         before = RoutingContext.get_entry("shop")
-        session = plugin.get_read_session()
-        assert plugin.get_read_session() is session
+        session = plugin.get_replica_session()
+        assert plugin.get_replica_session() is session
         return {
             "origin": session.select_value("SELECT origin FROM notes WHERE id=1"),
             "was_pinned": bool(before and before.pinned_by_write),
@@ -139,7 +139,7 @@ def test_flask_read_and_routing_sessions_with_autocommit(tmp_path: Path, async_c
         before = router.select_value("SELECT origin FROM notes WHERE id=1")
         router.execute("INSERT INTO notes VALUES (4,'new')")
         assert cast(RoutingEntry, RoutingContext.get_entry("shop")).pinned_by_write
-        after = plugin.get_read_session().select_value("SELECT origin FROM notes WHERE id=1")
+        after = plugin.get_replica_session().select_value("SELECT origin FROM notes WHERE id=1")
         return {"before": before, "after": after}
 
     try:
@@ -209,8 +209,8 @@ def test_flask_signed_cookie_and_redirect_commit_policy_on_routing_session(tmp_p
         config.close_pool()
 
 
-def test_flask_custom_connection_key_derives_read_connection_key(tmp_path: Path) -> None:
-    """Customizing connection_key without overriding session_key avoids read_connection_key collisions."""
+def test_flask_custom_connection_key_derives_replica_connection_key(tmp_path: Path) -> None:
+    """Customizing connection_key without overriding session_key avoids replica_connection_key collisions."""
     app = Flask(__name__)
     config_a = SqliteConfig(
         connection_config={"database": str(tmp_path / "a.db")}, extension_config={"flask": {"connection_key": "conn_a"}}
@@ -221,8 +221,8 @@ def test_flask_custom_connection_key_derives_read_connection_key(tmp_path: Path)
     )
     plugin = SQLSpecPlugin([config_a, config_b], app)
     try:
-        assert plugin._config_states[0].read_connection_key == "conn_a_read"
-        assert plugin._config_states[1].read_connection_key == "conn_b_read"
+        assert plugin._config_states[0].replica_connection_key == "conn_a_replica"
+        assert plugin._config_states[1].replica_connection_key == "conn_b_replica"
     finally:
         plugin.shutdown()
         config_a.close_pool()

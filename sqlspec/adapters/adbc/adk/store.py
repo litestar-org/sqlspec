@@ -1389,7 +1389,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             select_after_update = False
 
         try:
-            with self._provide_read_connection(primary=not read) as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(cursor, sql, params)
@@ -1510,7 +1510,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         sql, params = self._session_list_query(app_name, user_id, column, direction, page_limit, page_offset)
 
         try:
-            with self._provide_read_connection(primary=not read) as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(cursor, sql, params)
@@ -2119,7 +2119,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
 
         try:
-            with self._provide_read_connection(primary=not read) as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(cursor, sql, params)
@@ -3300,7 +3300,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         """
 
         try:
-            with self._provide_read_connection(primary=not read) as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(
@@ -3343,7 +3343,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         ORDER BY m.timestamp DESC
         LIMIT ?
         """
-        with self._provide_read_connection(primary=not read) as conn:
+        with self._provide_replica_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, sql, (*scope_params, query, limit))
@@ -3374,7 +3374,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         LIMIT ?
         """
         params = (*scope_params, vector_literal, limit)
-        with self._provide_read_connection(primary=not read) as conn:
+        with self._provide_replica_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, sql, params)
@@ -3422,7 +3422,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         LIMIT ?
         """
         params = (vector_literal, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
-        with self._provide_read_connection(primary=not read) as conn:
+        with self._provide_replica_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, sql, params)

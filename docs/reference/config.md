@@ -36,8 +36,8 @@ Base configuration protocols, pooled and non-pooled database config classes, lif
         - create_connection
         - provide_connection
         - provide_session
-        - provide_read_connection
-        - provide_read_session
+        - provide_replica_connection
+        - provide_replica_session
         - provide_routing_session
         - derive_pool
         - create_pool

@@ -108,7 +108,7 @@ def test_pymysql_replica_preserves_init_command_and_creation_hook(mysql_service:
         with config.provide_session() as writer:
             assert writer.select_value("SELECT 1") == 1
         for _ in range(2):
-            with config.provide_read_session() as reader:
+            with config.provide_replica_session() as reader:
                 assert reader.select_value("SELECT @@session.transaction_read_only") == int(read_only)
         connection = replica.create_connection()
         try:

@@ -54,7 +54,7 @@ async def _resolve(value: Any) -> Any:
 
 @asynccontextmanager
 async def _session(config: Any, *, read_only: bool = False) -> AsyncGenerator[Any]:
-    context = config.provide_read_session() if read_only else config.provide_session()
+    context = config.provide_replica_session() if read_only else config.provide_session()
     if config.is_async:
         async with context as session:
             yield session

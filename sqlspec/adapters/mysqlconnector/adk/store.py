@@ -370,7 +370,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     ) -> "StoredSession | None":
 
         try:
-            async with self._provide_read_connection(primary=renew_for is not None) as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 cursor = await conn.cursor()
                 try:
                     if self._should_renew(renew_for):
@@ -435,7 +435,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         )
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, params)
@@ -652,7 +652,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         """
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, params)
@@ -961,7 +961,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         """Get session by ID."""
 
         try:
-            with self._provide_read_connection(primary=renew_for is not None) as conn:
+            with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 cursor = conn.cursor()
                 try:
                     if self._should_renew(renew_for):
@@ -1027,7 +1027,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         )
 
         try:
-            with self._provide_read_connection(primary=False) as conn:
+            with self._provide_replica_connection(primary=False) as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, params)
@@ -1250,7 +1250,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         """
 
         try:
-            with self._provide_read_connection(primary=False) as conn:
+            with self._provide_replica_connection(primary=False) as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, tuple(params))
@@ -1520,7 +1520,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             params = (*scope_params, f"%{query}%", limit_value)
 
         try:
-            async with self._provide_read_connection(primary=False) as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, params)
@@ -1782,7 +1782,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             params = (*scope_params, f"%{query}%", limit_value)
 
         try:
-            with self._provide_read_connection(primary=False) as conn:
+            with self._provide_replica_connection(primary=False) as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, params)

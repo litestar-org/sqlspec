@@ -24,7 +24,7 @@ from tests.unit.driver.test_sync_routing_session import seed_routing_databases
 def test_store_accepts_tenant_read_and_routing_settings() -> None:
     config = AiosqliteConfig(
         extension_config={
-            "litestar": {"tenant_header": "x-tenant", "read_session_key": "reader", "routing_session_key": "router"}
+            "litestar": {"tenant_header": "x-tenant", "replica_session_key": "reader", "routing_session_key": "router"}
         }
     )
     assert BaseSQLSpecStore.extension_config_options == frozenset(
@@ -36,9 +36,9 @@ def test_store_accepts_tenant_read_and_routing_settings() -> None:
 @pytest.mark.parametrize(
     "settings",
     [
-        {"session_key": "same", "read_session_key": "same"},
+        {"session_key": "same", "replica_session_key": "same"},
         {"connection_key": "db_session"},
-        {"read_pool_key": "read_connection"},
+        {"read_pool_key": "db_replica_connection"},
     ],
 )
 def test_litestar_rejects_cross_field_dependency_collisions(settings: Any) -> None:
@@ -59,8 +59,8 @@ def test_sync_read_and_routing_di_use_separate_databases(tmp_path: Any) -> None:
     plugin = SQLSpecPlugin(config)
 
     @get("/read", sync_to_thread=False)
-    def read(read_session: NamedDependency[Any]) -> dict[str, str]:
-        return {"origin": read_session.select_value("SELECT origin FROM notes WHERE id=1")}
+    def read(db_replica_session: NamedDependency[Any]) -> dict[str, str]:
+        return {"origin": db_replica_session.select_value("SELECT origin FROM notes WHERE id=1")}
 
     @post("/route", sync_to_thread=False)
     def route(router: NamedDependency[Any]) -> dict[str, str]:
@@ -89,10 +89,10 @@ def test_async_imperative_deferred_read_and_context_isolation(tmp_path: Any) -> 
 
     @get("/read")
     async def read(request: Request) -> dict[str, Any]:
-        session = plugin.get_read_session(request)
+        session = plugin.get_db_replica_session(request)
         assert isinstance(session, DeferredAsyncSession)
         with pytest.raises(ImproperConfigurationError, match="asynchronous"):
-            plugin.get_read_connection(request)
+            plugin.get_db_replica_connection(request)
         before = RoutingContext.get_entry()
         value = await session.select_value("SELECT origin FROM notes WHERE id=1")
         RoutingContext.mark_write()
@@ -256,7 +256,7 @@ async def test_litestar_unawaited_deferred_sessions_are_detached_after_response(
     @get("/leaked")
     async def leaked_route(request: Request) -> dict[str, bool]:
         primary_deferred = plugin.provide_request_session("db_session", request.app.state, request.scope)
-        read_deferred = plugin.get_read_session(request)
+        read_deferred = plugin.get_db_replica_session(request)
         routing_deferred = plugin.get_routing_session(request, "router")
         assert isinstance(primary_deferred, DeferredAsyncSession)
         assert isinstance(read_deferred, DeferredAsyncSession)
@@ -276,10 +276,10 @@ async def test_litestar_unawaited_deferred_sessions_are_detached_after_response(
 @pytest.mark.parametrize(
     ("first_ext", "second_ext"),
     [
-        ({"read_session_key": "shared_key"}, {"routing_session_key": "shared_key"}),
+        ({"replica_session_key": "shared_key"}, {"routing_session_key": "shared_key"}),
         (
             {"connection_key": "shared_conn", "pool_key": "pool_a", "session_key": "sess_a"},
-            {"read_connection_key": "shared_conn"},
+            {"replica_connection_key": "shared_conn"},
         ),
     ],
 )

@@ -344,7 +344,7 @@ With spans enabled, SQLSpec checks the socket's `supports_opentelemetry_tracing`
 
 ## Standby and Read-Service Pools
 
-Use `replicas={"service_name": "app_ro"}` for an Active Data Guard reader service or a supported True Cache read service. A reader override inherits credentials, tenant setup, and checkout hygiene. Direct reads use `provide_read_session()`; writes use the primary pool.
+Use `replicas={"service_name": "app_ro"}` for an Active Data Guard reader service or a supported True Cache read service. A reader override inherits credentials, tenant setup, and checkout hygiene. Direct reads use `provide_replica_session()`; writes use the primary pool.
 
 `OracleTopologyConfig(address_lists=..., connect_timeout=...)` can describe several site address lists, and `with_service_name()` changes the service without losing that topology. `OracleSessionContextConfig` supports `standby_max_data_delay`, `sync_with_primary`, and `adg_redirect_dml`. These controls need the corresponding Oracle server features and privileges. They do not turn an ordinary database into a standby or enable True Cache.
 

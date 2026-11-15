@@ -405,9 +405,9 @@ class FlaskConfig(TypedDict):
     auto_trace_headers: NotRequired[bool]
     """Read standard trace context headers as correlation ID fallbacks. Default: True."""
 
-    read_session_key: NotRequired[str]
+    replica_session_key: NotRequired[str]
     """Request key for a read session."""
-    read_connection_key: NotRequired[str]
+    replica_connection_key: NotRequired[str]
     """Request key for a read connection."""
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
@@ -536,9 +536,9 @@ class LitestarConfig(TypedDict):
     migration_mode: NotRequired[ExtensionMigrationMode]
     """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
-    read_session_key: NotRequired[str]
+    replica_session_key: NotRequired[str]
     """Request key for a read session."""
-    read_connection_key: NotRequired[str]
+    replica_connection_key: NotRequired[str]
     """Request key for a read connection."""
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
@@ -625,9 +625,9 @@ class StarletteConfig(TypedDict):
     auto_trace_headers: NotRequired[bool]
     """Read standard trace context headers as correlation ID fallbacks. Default: True."""
 
-    read_session_key: NotRequired[str]
+    replica_session_key: NotRequired[str]
     """Request key for a read session."""
-    read_connection_key: NotRequired[str]
+    replica_connection_key: NotRequired[str]
     """Request key for a read connection."""
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
@@ -720,9 +720,9 @@ class SanicConfig(TypedDict):
     sqlcommenter_framework: NotRequired[str]
     """Framework name for SQLCommenter attributes. Default: 'sanic'."""
 
-    read_session_key: NotRequired[str]
+    replica_session_key: NotRequired[str]
     """Request key for a read session."""
-    read_connection_key: NotRequired[str]
+    replica_connection_key: NotRequired[str]
     """Request key for a read connection."""
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
@@ -1079,12 +1079,12 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     @property
     def supports_read_routing(self) -> bool:
         """Whether replica pools or an adapter-specific read provider are available."""
-        return self.has_replicas or type(self).provide_read_session not in {
-            DatabaseConfigProtocol.provide_read_session,
-            NoPoolSyncConfig.provide_read_session,
-            NoPoolAsyncConfig.provide_read_session,
-            SyncDatabaseConfig.provide_read_session,
-            AsyncDatabaseConfig.provide_read_session,
+        return self.has_replicas or type(self).provide_replica_session not in {
+            DatabaseConfigProtocol.provide_replica_session,
+            NoPoolSyncConfig.provide_replica_session,
+            NoPoolAsyncConfig.provide_replica_session,
+            SyncDatabaseConfig.provide_replica_session,
+            AsyncDatabaseConfig.provide_replica_session,
         }
 
     @property
@@ -1212,7 +1212,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             bypass_tenant=bypass_tenant,
         )
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
         """Provide a replica connection, honoring scoped primary pins."""
@@ -1221,7 +1221,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             self._provide_read(False, args, kwargs, replica_group),
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -2350,16 +2350,16 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         """Provide a database connection context manager."""
         raise NotImplementedError
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT]":
         """Provide a read connection with this config's execution mode."""
         return cast(
             "AbstractContextManager[ConnectionT]",
-            super().provide_read_connection(*args, replica_group=replica_group, **kwargs),
+            super().provide_replica_connection(*args, replica_group=replica_group, **kwargs),
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -2371,7 +2371,7 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         """Provide a read session with this config's execution mode."""
         return cast(
             "AbstractContextManager[DriverT]",
-            super().provide_read_session(
+            super().provide_replica_session(
                 *args,
                 replica_group=replica_group,
                 statement_config=statement_config,
@@ -2471,16 +2471,16 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         """Provide a database connection context manager."""
         raise NotImplementedError
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a read connection with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[ConnectionT]",
-            super().provide_read_connection(*args, replica_group=replica_group, **kwargs),
+            super().provide_replica_connection(*args, replica_group=replica_group, **kwargs),
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -2492,7 +2492,7 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         """Provide a read session with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[DriverT]",
-            super().provide_read_session(
+            super().provide_replica_session(
                 *args,
                 replica_group=replica_group,
                 statement_config=statement_config,
@@ -2632,16 +2632,16 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         """Provide a database connection context manager."""
         return cast("AbstractContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT]":
         """Provide a read connection with this config's execution mode."""
         return cast(
             "AbstractContextManager[ConnectionT]",
-            super().provide_read_connection(*args, replica_group=replica_group, **kwargs),
+            super().provide_replica_connection(*args, replica_group=replica_group, **kwargs),
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -2653,7 +2653,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         """Provide a read session with this config's execution mode."""
         return cast(
             "AbstractContextManager[DriverT]",
-            super().provide_read_session(
+            super().provide_replica_session(
                 *args,
                 replica_group=replica_group,
                 statement_config=statement_config,
@@ -2816,16 +2816,16 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         """Provide a database connection context manager."""
         return cast("AbstractAsyncContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
-    def provide_read_connection(
+    def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a read connection with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[ConnectionT]",
-            super().provide_read_connection(*args, replica_group=replica_group, **kwargs),
+            super().provide_replica_connection(*args, replica_group=replica_group, **kwargs),
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
         replica_group: str | None = None,
@@ -2837,7 +2837,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         """Provide a read session with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[DriverT]",
-            super().provide_read_session(
+            super().provide_replica_session(
                 *args,
                 replica_group=replica_group,
                 statement_config=statement_config,

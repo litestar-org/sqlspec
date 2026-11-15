@@ -28,8 +28,10 @@ def test_read_and_routing_depends_support_keys_and_openapi(tmp_path: Path, async
     )
     app = FastAPI()
     plugin = SQLSpecPlugin(config, app)
-    key = {"none": None, "instance": config, "type": config_type, "bind": "shop", "read_key": "read_session"}[key_kind]
-    read_dependency = plugin.provide_read_session(key)
+    key = {"none": None, "instance": config, "type": config_type, "bind": "shop", "read_key": "db_replica_session"}[
+        key_kind
+    ]
+    read_dependency = plugin.provide_replica_session(key)
     routing_dependency = plugin.provide_routing_session(key)
     assert inspect.iscoroutinefunction(read_dependency) is async_config
     assert inspect.signature(read_dependency).return_annotation is Any
@@ -61,13 +63,13 @@ def test_read_and_routing_depends_support_keys_and_openapi(tmp_path: Path, async
 def test_narrowed_read_dependencies_validate_modes_and_unknown_keys() -> None:
     sync = SQLSpecPlugin(SqliteConfig())
     asynchronous = SQLSpecPlugin(AiosqliteConfig())
-    assert not inspect.iscoroutinefunction(sync.provide_sync_read_session())
-    assert not inspect.iscoroutinefunction(sync.provide_sync_read_connection())
-    assert inspect.iscoroutinefunction(asynchronous.provide_async_read_session())
-    assert inspect.iscoroutinefunction(asynchronous.provide_async_read_connection())
+    assert not inspect.iscoroutinefunction(sync.provide_sync_replica_session())
+    assert not inspect.iscoroutinefunction(sync.provide_sync_replica_connection())
+    assert inspect.iscoroutinefunction(asynchronous.provide_async_replica_session())
+    assert inspect.iscoroutinefunction(asynchronous.provide_async_replica_connection())
     with pytest.raises(ImproperConfigurationError, match="mode"):
-        sync.provide_async_read_session()
+        sync.provide_async_replica_session()
     with pytest.raises(ImproperConfigurationError, match="mode"):
-        asynchronous.provide_sync_read_connection()
+        asynchronous.provide_sync_replica_connection()
     with pytest.raises(ImproperConfigurationError, match="resolve"):
-        sync.provide_read_session("missing")
+        sync.provide_replica_session("missing")

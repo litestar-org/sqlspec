@@ -48,8 +48,8 @@ class SanicConfigState:
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
     sqlcommenter_framework: str = "sanic"
-    read_session_key: str = "read_session"
-    read_connection_key: str = "read_connection"
+    replica_session_key: str = "db_replica_session"
+    replica_connection_key: str = "db_replica_connection"
     read_pool_key: str = "read_pool"
     routing_session_key: str | None = None
     default_routing_mode: str = "auto"

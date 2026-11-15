@@ -539,7 +539,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             params = (*scope_params, f"%{query}%", limit_value)
 
         try:
-            with self._provide_read_connection(primary=not read) as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, params)
@@ -777,7 +777,7 @@ def _select_session(
     read: bool = False,
 ) -> "StoredSession | None":
     try:
-        with store._provide_read_connection(primary=not read) as conn:
+        with store._provide_replica_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 if store._should_renew(renew_for):
@@ -846,7 +846,7 @@ def _list_sessions(
     )
 
     try:
-        with store._provide_read_connection(primary=not read) as conn:
+        with store._provide_replica_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, params)
@@ -1058,7 +1058,7 @@ def _select_events(
     """
 
     try:
-        with store._provide_read_connection(primary=not read) as conn:
+        with store._provide_replica_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, tuple(params))

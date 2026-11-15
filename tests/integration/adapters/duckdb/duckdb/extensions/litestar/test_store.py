@@ -61,10 +61,10 @@ async def test_sync_to_thread_concurrency(duckdb_store: DuckDBStore) -> None:
     for i in range(10):
         await duckdb_store.set(f"session_{i}", f"data_{i}".encode())
 
-    async def read_session(session_id: int) -> "bytes | None":
+    async def replica_session(session_id: int) -> "bytes | None":
         return await duckdb_store.get(f"session_{session_id}")
 
-    results = await asyncio.gather(*[read_session(i) for i in range(10)])
+    results = await asyncio.gather(*[replica_session(i) for i in range(10)])
 
     for i, result in enumerate(results):
         assert result == f"data_{i}".encode()

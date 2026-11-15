@@ -15,7 +15,7 @@ config = AsyncpgConfig(
 )
 ```
 
-Use `async with config.provide_read_session() as session:` for reads and `config.provide_session()` for writes. The read provider yields the same concrete driver type as the ordinary provider. `SQLSpec.provide_read_session(config)` provides the same choice through a registry. Without a reader group, the generic provider uses the primary.
+Use `async with config.provide_replica_session() as session:` for reads and `config.provide_session()` for writes. The read provider yields the same concrete driver type as the ordinary provider. `SQLSpec.provide_replica_session(config)` provides the same choice through a registry. Without a reader group, the generic provider uses the primary.
 
 ## Try a Local WAL Reader
 
@@ -36,7 +36,7 @@ with TemporaryDirectory() as directory:
         with config.provide_session() as writer:
             writer.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY)")
             writer.execute("INSERT INTO orders (id) VALUES (:id)", {"id": 1})
-        with config.provide_read_session() as reader:
+        with config.provide_replica_session() as reader:
             assert reader.select_value("SELECT count(*) FROM orders") == 1
     finally:
         config.close_pool()
@@ -83,7 +83,7 @@ Owned replica pools share the primary's startup, shutdown, and observability set
 
 | Interface | Use it for |
 | --- | --- |
-| `provide_read_session()` | A query whose read intent is explicit at the call site |
+| `provide_replica_session()` | A query whose read intent is explicit at the call site |
 | `SQLSpecSyncService` or `SQLSpecAsyncService` | Shared read helpers, lists, pagination, and primary write blocks |
 | Framework read dependency/accessor | A route that only needs a reader |
 | `provide_routing_session()` | An opt-in session that chooses a physical driver lazily for each eligible operation |
@@ -108,4 +108,4 @@ An explicit `RoutingContext.replica()` choice requires a reader. It never falls 
 
 Each scope works with `with` or `async with` and restores its caller's state. `primary`, `replica`, and `auto` can target a `bind_key`. A write pins only the active logical bind in the active request scope. An explicit conflicting replica choice during a primary transaction fails rather than splitting that transaction across sockets.
 
-Frameworks expose `read_session`, `get_read_session`, or FastAPI's `provide_read_session` dependency factory. The [integration guides](../../integrations/index.md) show each form. For lag, failures, tenant policies, and request headers, continue with [replica operations](read-replicas-operations.md).
+Frameworks expose `db_replica_session`, `get_replica_session`, or FastAPI's `provide_replica_session` dependency factory. The [integration guides](../../integrations/index.md) show each form. For lag, failures, tenant policies, and request headers, continue with [replica operations](read-replicas-operations.md).
