@@ -388,11 +388,18 @@ class DuckDBConnectionPool:
     def release(self, connection: DuckDBConnection) -> None:
         """Release a connection; thread-local connections stay open unless a session reset fails.
 
+        The session reset runs only when no ``get_connection()`` checkout of the same connection is still
+        open on this thread or task, so an inner release leaves the outer checkout's session state intact.
+
         Args:
             connection: The connection to release
         """
-        if self._reset_session_on_release:
-            self._reset_connection_or_retire(connection)
+        if not self._reset_session_on_release:
+            return
+        state = self._get_connection_holder()
+        if state is not None and state.get("connection") is connection and int(state.get("depth", 0)) > 0:
+            return
+        self._reset_connection_or_retire(connection)
 
     def _reset_connection(self, connection: DuckDBConnection) -> None:
         if not self._reset_session_on_release:

@@ -778,3 +778,21 @@ def test_duckdb_database_name_redacts_motherduck_and_uri_credentials(raw_databas
     """_database_name strips userinfo, query tokens, and fragments from DuckDB URIs."""
     pool = DuckDBConnectionPool(connection_config={"database": raw_database})
     assert pool._database_name == expected_name
+
+
+def test_inner_release_keeps_outer_checkout_session_state(tmp_path: Path) -> None:
+    pool = DuckDBConnectionPool(
+        connection_config={"database": str(tmp_path / "nested.duckdb")}, reset_session_on_release=True
+    )
+    try:
+        with pool.get_connection() as outer:
+            outer.execute("CREATE TEMP TABLE scratch (id INTEGER)")
+            inner = pool.acquire()
+            assert inner is outer
+            pool.release(inner)
+            assert outer.execute("SELECT count(*) FROM scratch").fetchone() == (0,)
+        with pool.get_connection() as after:
+            temporary = after.execute("SELECT table_name FROM duckdb_tables() WHERE temporary").fetchall()
+            assert temporary == []
+    finally:
+        pool.close()
