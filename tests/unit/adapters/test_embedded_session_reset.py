@@ -152,24 +152,21 @@ async def test_reset_failure_retires_connection(kind: str, tmp_path: Path, monke
     original = pool_module._reset_session_state
     failures = {"remaining": 1}
 
-    if inspect.iscoroutinefunction(original):
+    async def failing_async(*args: Any, **kwargs: Any) -> None:
+        if failures["remaining"]:
+            failures["remaining"] -= 1
+            msg = "reset failed"
+            raise RuntimeError(msg)
+        await original(*args, **kwargs)
 
-        async def failing(*args: Any, **kwargs: Any) -> None:
-            if failures["remaining"]:
-                failures["remaining"] -= 1
-                msg = "reset failed"
-                raise RuntimeError(msg)
-            await original(*args, **kwargs)
+    def failing_sync(*args: Any, **kwargs: Any) -> None:
+        if failures["remaining"]:
+            failures["remaining"] -= 1
+            msg = "reset failed"
+            raise RuntimeError(msg)
+        original(*args, **kwargs)
 
-    else:
-
-        def failing(*args: Any, **kwargs: Any) -> None:
-            if failures["remaining"]:
-                failures["remaining"] -= 1
-                msg = "reset failed"
-                raise RuntimeError(msg)
-            original(*args, **kwargs)
-
+    failing = failing_async if inspect.iscoroutinefunction(original) else failing_sync
     monkeypatch.setattr(pool_module, "_reset_session_state", failing)
     try:
         async with session_scope(config) as session:

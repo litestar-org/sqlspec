@@ -450,7 +450,7 @@ async def test_asyncpg_store_write_after_failed_release_runs_in_rolled_back_tran
             yield connection
 
         @asynccontextmanager
-        async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
             yield AsyncpgDriver(cast("Any", connection))
 
     config = FakeAsyncpgConfig(extension_config={"litestar": {"session_table": TABLE}})

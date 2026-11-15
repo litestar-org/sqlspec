@@ -916,10 +916,10 @@ class _ScriptedQueue:
 
 class _AsyncScriptedQueue(_ScriptedQueue):
     async def ack(self, event_id: str) -> bool:
-        return super().ack(event_id)
+        return bool(super().ack(event_id))
 
     async def nack(self, event_id: str) -> bool:
-        return super().nack(event_id)
+        return bool(super().nack(event_id))
 
 
 @pytest.mark.parametrize("operation", ["ack", "nack"])

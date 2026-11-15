@@ -2,7 +2,7 @@
 
 import importlib
 import inspect
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import pytest
 
@@ -219,7 +219,7 @@ class FakeMysqlConnection:
 def make_pymysql_pool(
     connections: "list[FakeMysqlConnection]", hook_calls: "list[Any]", **fake_options: Any
 ) -> PyMysqlConnectionPool:
-    def factory() -> FakeMysqlConnection:
+    def factory() -> Any:
         connection = FakeMysqlConnection(**fake_options)
         connections.append(connection)
         return connection
@@ -237,7 +237,7 @@ def test_pymysql_reset_then_reinitializes() -> None:
     connections: list[FakeMysqlConnection] = []
     hook_calls: list[Any] = []
     pool = make_pymysql_pool(connections, hook_calls)
-    connection = pool.acquire()
+    connection = cast("Any", pool.acquire())
     pool.release(connection)
     read_only = "SET SESSION TRANSACTION READ ONLY"
     assert connection.events == [read_only, "command:31", "ok", read_only]
@@ -250,7 +250,7 @@ def test_pymysql_reset_then_reinitializes() -> None:
 def test_pymysql_reset_falls_back_to_reconnect() -> None:
     connections: list[FakeMysqlConnection] = []
     pool = make_pymysql_pool(connections, [], command_path=False)
-    first = pool.acquire()
+    first = cast("Any", pool.acquire())
     pool.release(first)
     assert first.closed
     second = pool.acquire()
@@ -262,7 +262,7 @@ def test_pymysql_reset_falls_back_to_reconnect() -> None:
 def test_pymysql_reset_failure_retires_connection() -> None:
     connections: list[FakeMysqlConnection] = []
     pool = make_pymysql_pool(connections, [], fail_reset=True)
-    first = pool.acquire()
+    first = cast("Any", pool.acquire())
     pool.release(first)
     assert first.closed
     assert pool.acquire() is not first

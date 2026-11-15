@@ -1,6 +1,6 @@
 """PostgreSQL tracking-table guard: schema pinning, ownership, and the recheck under the advisory lock."""
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -226,7 +226,7 @@ async def _locked_key(tracker: Any, harness: _Harness, is_async: bool) -> int:
         with tracker.acquire_lock(harness.driver):
             pass
     lock_calls = [params for text, params in harness.executed if "pg_try_advisory_lock" in text]
-    return lock_calls[0]["lock_id"]
+    return cast("int", lock_calls[0]["lock_id"])
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])

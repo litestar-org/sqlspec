@@ -1069,7 +1069,8 @@ def test_cursor_token_without_tenant_configs_unchanged() -> None:
 def _search_compiled(provider: Any, search_string: str) -> "tuple[str, Any]":
     from sqlspec import SQL
 
-    return provider(search_string=search_string).append_to_statement(SQL("SELECT * FROM t")).compile()
+    statement = provider(search_string=search_string).append_to_statement(SQL("SELECT * FROM t"))
+    return cast("tuple[str, Any]", statement.compile())
 
 
 def test_search_provider_escapes_wildcards_by_default() -> None:

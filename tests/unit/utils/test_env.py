@@ -223,7 +223,7 @@ def test_env_parse_error_has_no_cause_or_value(
     monkeypatch.setenv("SQLSPEC_TEST_SECRET", value)
 
     with pytest.raises(ValueError, match="SQLSPEC_TEST_SECRET") as exc_info:
-        get_env("SQLSPEC_TEST_SECRET", annotation_default)()
+        cast("Callable[[], Any]", get_env("SQLSPEC_TEST_SECRET", annotation_default))()
 
     assert exc_info.value.__cause__ is None
     assert exc_info.value.__context__ is None or exc_info.value.__suppress_context__

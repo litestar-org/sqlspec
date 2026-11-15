@@ -487,7 +487,9 @@ async def test_tenant_connection_middleware_non_http_passthrough(scope_type: str
     state = _make_state(config, cast("CommitMode", commit_mode))
     state.tenant_extractor = lambda scope: pytest.fail("non-http extractor invoked")
     with TenantContext.scope("outer"):
-        await SQLSpecTransactionMiddleware(app=app, config_states=[state])({"type": scope_type}, None, None)
+        await SQLSpecTransactionMiddleware(app=app, config_states=[state])(
+            {"type": scope_type}, cast("Any", None), cast("Any", None)
+        )
         assert TenantContext.get_tenant_id() == "outer"
     assert events == [(scope_type, "outer")]
     assert config.created is False

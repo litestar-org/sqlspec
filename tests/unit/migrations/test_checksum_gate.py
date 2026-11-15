@@ -51,7 +51,7 @@ async def make_commands(tmp_path: Path) -> "AsyncIterator[CommandsFactory]":
     configs: list[AiosqliteConfig] = []
 
     def factory(mode: str, **migration_config: Any) -> Any:
-        config_kwargs = {
+        config_kwargs: dict[str, Any] = {
             "connection_config": {"database": str(tmp_path / f"{mode}.db")},
             "migration_config": {"script_location": str(tmp_path / "migrations"), "enabled": True, **migration_config},
         }

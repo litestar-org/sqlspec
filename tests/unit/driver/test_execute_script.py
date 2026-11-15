@@ -3,7 +3,7 @@
 import inspect
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -306,7 +306,7 @@ async def script_driver(request: pytest.FixtureRequest, sqlite_sync_driver: Any,
 
 async def _rows(driver: Any, sql: str, *parameters: Any) -> "list[Any]":
     result = await _run(driver.execute(sql, *parameters))
-    return result.get_data()
+    return cast("list[Any]", result.get_data())
 
 
 @requires_interpreted

@@ -947,11 +947,7 @@ def test_duckdb_memory_deduplicates_by_app_user_and_event_id(
     [pytest.param("app_a", "user_1", 1, ["m2", "m3"], id="app-and-user-scoped")],
 )
 def test_duckdb_delete_entries_by_session_scoping(
-    tmp_path: Path,
-    filter_app: str | None,
-    filter_user: str | None,
-    expected_deleted: int,
-    expected_remaining_ids: list[str],
+    tmp_path: Path, filter_app: str, filter_user: str, expected_deleted: int, expected_remaining_ids: list[str]
 ) -> None:
     """delete_entries_by_session supports optional app_name and user_id scoping."""
     config = DuckDBConfig(

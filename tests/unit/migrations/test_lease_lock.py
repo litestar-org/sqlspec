@@ -5,7 +5,7 @@ import sqlite3
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import duckdb
@@ -305,9 +305,17 @@ def test_lease_renewed_before_each_reconciler(tmp_path: Path) -> None:
     events: list[str] = []
     first, second = MagicMock(), MagicMock()
     first.name, second.name = "first", "second"
-    commands.tracker.renew_lock = lambda driver: events.append("renew")  # type: ignore[method-assign]
-    commands.runner.execute_reconciliation = lambda driver, descriptor: events.append(descriptor.name) or 1  # type: ignore[method-assign]
-    commands.extension_reconcilers = [first, second]
+
+    def renew_lock(driver: Any) -> None:
+        events.append("renew")
+
+    def execute_reconciliation(driver: Any, descriptor: Any) -> int:
+        events.append(descriptor.name)
+        return 1
+
+    commands.tracker.renew_lock = renew_lock  # type: ignore[method-assign]
+    commands.runner.execute_reconciliation = execute_reconciliation  # type: ignore[method-assign]
+    commands.extension_reconcilers = cast("Any", (first, second))
     try:
         commands._run_reconcilers(MagicMock(), [], use_logger=False, echo=False, summary_only=True)  # pyright: ignore[reportPrivateUsage]
     finally:

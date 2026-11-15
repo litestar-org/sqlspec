@@ -52,6 +52,7 @@ def _memory(session_id: str, user_id: str, event_id: str, text: str) -> StoredMe
         content_text=text,
         metadata_json=None,
         inserted_at=now,
+        embedding=None,
     )
 
 

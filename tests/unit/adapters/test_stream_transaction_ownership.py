@@ -310,7 +310,8 @@ async def test_cockroach_owned_close_finalizes_follower_read(calls: "list[str]",
     CockroachPsycopgSyncStreamSource(sync_driver, StubUnderlying(), True).close(error=error)  # type: ignore[arg-type]
     assert calls == [expected]
 
-    for source_type in (CockroachPsycopgAsyncStreamSource, CockroachAsyncpgStreamSource):
+    async_source_types: tuple[Any, ...] = (CockroachPsycopgAsyncStreamSource, CockroachAsyncpgStreamSource)
+    for source_type in async_source_types:
         calls.clear()
         driver = FakeDriver(FakeConnection("A", calls), calls)
         source = source_type(driver, "select 1", AsyncStubUnderlying())

@@ -12,7 +12,7 @@ import sqlglot
 
 from sqlspec import SQL
 from sqlspec.adapters.sqlite.driver import SqliteDriver
-from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig, get_default_config
+from sqlspec.core import OffsetPagination, ParameterStyle, ParameterStyleConfig, StatementConfig, get_default_config
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.conftest import requires_interpreted
@@ -1517,6 +1517,7 @@ def test_duckdb_paginate_total_counts_own_tenant(label: int) -> None:
         page = SQLSpecSyncService(session).paginate(
             SQL("select :label as label, id, title from docs where tenant_id = :tenant_id", label=label, tenant_id=1)
         )
+    assert isinstance(page, OffsetPagination)
     assert page.total == 2
     assert sorted(item["id"] for item in page.items) == [1, 2]
 

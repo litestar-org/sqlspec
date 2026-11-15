@@ -1183,6 +1183,8 @@ def _delete_layout(root: Path) -> None:
 
 
 def test_fsspec_file_root_refused_even_recursive(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
     _delete_layout(tmp_path)
     backend = FSSpecBackend(f"file://{tmp_path}")
 
@@ -1193,6 +1195,8 @@ def test_fsspec_file_root_refused_even_recursive(tmp_path: Path) -> None:
 
 
 def test_fsspec_local_protocol_root_refused_even_recursive(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
     _delete_layout(tmp_path)
     backend = FSSpecBackend(f"local://{tmp_path}")
 
@@ -1206,6 +1210,8 @@ def test_fsspec_local_protocol_root_refused_even_recursive(tmp_path: Path) -> No
 
 
 def test_fsspec_file_directory_requires_recursive(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
     _delete_layout(tmp_path)
     backend = FSSpecBackend(f"file://{tmp_path}")
 

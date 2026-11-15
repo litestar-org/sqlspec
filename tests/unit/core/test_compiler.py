@@ -18,7 +18,7 @@ import logging
 import threading
 from collections import OrderedDict
 from datetime import datetime
-from typing import Any, get_args
+from typing import Any, cast, get_args
 from unittest.mock import Mock, patch
 
 import pytest
@@ -1434,7 +1434,9 @@ def test_compiler_accepts_identifier_and_anonymous_placeholders() -> None:
 def test_compiler_accepts_unicode_placeholder_names(name: str) -> None:
     expression = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this=name)))
 
-    compiled_sql, _ = SQL(expression, **{name: 1}, statement_config=get_default_config()).compile()
+    compiled_sql, _ = SQL(
+        expression, statement_config=get_default_config(), **cast("dict[str, Any]", {name: 1})
+    ).compile()
 
     assert compiled_sql.startswith("SELECT * FROM t WHERE a = ")
 
