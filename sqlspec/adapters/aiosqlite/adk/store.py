@@ -161,12 +161,12 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 resolved_app = (
                     await self._apply_app_state_delta(conn, app_name, app_state_delta, now_julian)
                     if app_state_delta
-                    else await self._select_app_state_on_conn(conn, app_name)
+                    else await self._select_app_state(conn, app_name)
                 )
                 resolved_user = (
                     await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta, now_julian)
                     if user_state_delta
-                    else await self._select_user_state_on_conn(conn, app_name, user_id)
+                    else await self._select_user_state(conn, app_name, user_id)
                 )
             except Exception:
                 await end_transaction(conn, commit=False)
@@ -758,21 +758,19 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         for statement in self._companion_index_statements():
             await driver.execute(statement)
 
-    async def _select_app_state_on_conn(self, conn: Any, app_name: str) -> "dict[str, Any] | None":
+    async def _select_app_state(self, conn: Any, app_name: str) -> "dict[str, Any] | None":
         """Read app-scoped state within an active connection transaction."""
-        return await self._select_scoped_state_on_conn(
+        return await self._select_state(
             conn, f"SELECT state FROM {self._app_state_table} WHERE app_name = ?", (app_name,)
         )
 
-    async def _select_user_state_on_conn(self, conn: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+    async def _select_user_state(self, conn: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Read user-scoped state within an active connection transaction."""
-        return await self._select_scoped_state_on_conn(
+        return await self._select_state(
             conn, f"SELECT state FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?", (app_name, user_id)
         )
 
-    async def _select_scoped_state_on_conn(
-        self, conn: Any, sql: str, params: "tuple[Any, ...]"
-    ) -> "dict[str, Any] | None":
+    async def _select_state(self, conn: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
         cursor = await conn.execute(sql, params)
         try:
             raw_row = await cursor.fetchone()
@@ -818,9 +816,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         now_julian: float,
     ) -> "dict[str, Any]":
         where_clause = " AND ".join(f"{col} = ?" for col in key_columns)
-        existing = await self._select_scoped_state_on_conn(
-            conn, f"SELECT state FROM {table} WHERE {where_clause}", key_values
-        )
+        existing = await self._select_state(conn, f"SELECT state FROM {table} WHERE {where_clause}", key_values)
         merged = dict(existing) if existing else {}
         merged.update(delta)
         cols = ", ".join((*key_columns, "state", "update_time"))

@@ -258,12 +258,12 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             resolved_app = (
                 await self._apply_app_state_delta(cur, app_name, app_state_delta)
                 if app_state_delta
-                else await self._select_app_state_on_cur(cur, app_name)
+                else await self._select_app_state(cur, app_name)
             )
             resolved_user = (
                 await self._apply_user_state_delta(cur, app_name, user_id, user_state_delta)
                 if user_state_delta
-                else await self._select_user_state_on_cur(cur, app_name, user_id)
+                else await self._select_user_state(cur, app_name, user_id)
             )
 
             persisted_state = _decode_json_state(row["state"])
@@ -684,17 +684,17 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             await cur.execute(query, (key, value))
             await conn.commit()
 
-    async def _select_app_state_on_cur(self, cur: Any, app_name: str) -> "dict[str, Any] | None":
-        return await self._select_scoped_state_on_cur(
+    async def _select_app_state(self, cur: Any, app_name: str) -> "dict[str, Any] | None":
+        return await self._select_state(
             cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
         )
 
-    async def _select_user_state_on_cur(self, cur: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        return await self._select_scoped_state_on_cur(
+    async def _select_user_state(self, cur: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return await self._select_state(
             cur, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
         )
 
-    async def _select_scoped_state_on_cur(
+    async def _select_state(
         self, cur: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
     ) -> "dict[str, Any] | None":
         select_query, _, _, _ = _cockroach_scoped_state_queries(table, key_columns)
@@ -881,12 +881,12 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             resolved_app = (
                 self._apply_app_state_delta(cur, app_name, app_state_delta)
                 if app_state_delta
-                else self._select_app_state_on_cur(cur, app_name)
+                else self._select_app_state(cur, app_name)
             )
             resolved_user = (
                 self._apply_user_state_delta(cur, app_name, user_id, user_state_delta)
                 if user_state_delta
-                else self._select_user_state_on_cur(cur, app_name, user_id)
+                else self._select_user_state(cur, app_name, user_id)
             )
 
             persisted_state = _decode_json_state(row["state"])
@@ -1279,17 +1279,15 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             cur.execute(query, (key, value))
             conn.commit()
 
-    def _select_app_state_on_cur(self, cur: Any, app_name: str) -> "dict[str, Any] | None":
-        return self._select_scoped_state_on_cur(
-            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
-        )
+    def _select_app_state(self, cur: Any, app_name: str) -> "dict[str, Any] | None":
+        return self._select_state(cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,))
 
-    def _select_user_state_on_cur(self, cur: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        return self._select_scoped_state_on_cur(
+    def _select_user_state(self, cur: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return self._select_state(
             cur, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
         )
 
-    def _select_scoped_state_on_cur(
+    def _select_state(
         self, cur: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
     ) -> "dict[str, Any] | None":
         select_query, _, _, _ = _cockroach_scoped_state_queries(table, key_columns)

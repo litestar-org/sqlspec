@@ -159,7 +159,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                             delta=app_state_delta,
                         )
                         if app_state_delta
-                        else self._read_scoped_state_tx(
+                        else self._select_state(
                             cursor,
                             f"SELECT TOP 1 state FROM {format_table_ref(self._app_state_table)} WHERE {_APP_KEY_WHERE}",
                             _exact_params(app_name),
@@ -179,7 +179,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                             delta=user_state_delta,
                         )
                         if user_state_delta
-                        else self._read_scoped_state_tx(
+                        else self._select_state(
                             cursor,
                             f"""
                             SELECT TOP 1 state
@@ -586,7 +586,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             self._events_table, self._session_table, app_name, user_id, session_id, after_timestamp, limit
         )
 
-    def _read_scoped_state_tx(self, cursor: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
+    def _select_state(self, cursor: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
         try:
             cursor.execute(sql, params)
             row = cursor.fetchone()

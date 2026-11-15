@@ -199,9 +199,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                             app_state_delta,
                         )
                         if app_state_delta
-                        else self._read_state_on_driver(
-                            driver, _app_state_select_sql(self._app_state_table), (app_name,)
-                        )
+                        else self._select_state(driver, _app_state_select_sql(self._app_state_table), (app_name,))
                     )
                     current_user_state = (
                         self._apply_state_delta(
@@ -213,7 +211,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                             user_state_delta,
                         )
                         if user_state_delta
-                        else self._read_state_on_driver(
+                        else self._select_state(
                             driver, _user_state_select_sql(self._user_state_table), (app_name, user_id)
                         )
                     )
@@ -510,9 +508,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                 return None
             raise
 
-    def _read_state_on_driver(
-        self, driver: "Db2SyncDriver", sql: str, params: tuple[Any, ...]
-    ) -> dict[str, Any] | None:
+    def _select_state(self, driver: "Db2SyncDriver", sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         try:
             row = driver.select_one_or_none(sql, params)
         except SQLSpecError as exc:
@@ -629,9 +625,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                             app_state_delta,
                         )
                         if app_state_delta
-                        else await self._read_state_on_driver(
-                            driver, _app_state_select_sql(self._app_state_table), (app_name,)
-                        )
+                        else await self._select_state(driver, _app_state_select_sql(self._app_state_table), (app_name,))
                     )
                     current_user_state = (
                         await self._apply_state_delta(
@@ -643,7 +637,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                             user_state_delta,
                         )
                         if user_state_delta
-                        else await self._read_state_on_driver(
+                        else await self._select_state(
                             driver, _user_state_select_sql(self._user_state_table), (app_name, user_id)
                         )
                     )
@@ -943,9 +937,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                 return None
             raise
 
-    async def _read_state_on_driver(
-        self, driver: "Db2AsyncDriver", sql: str, params: tuple[Any, ...]
-    ) -> dict[str, Any] | None:
+    async def _select_state(self, driver: "Db2AsyncDriver", sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         try:
             row = await driver.select_one_or_none(sql, params)
         except SQLSpecError as exc:

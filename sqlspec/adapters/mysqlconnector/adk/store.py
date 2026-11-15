@@ -683,10 +683,10 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         return await _async_delete_before(self, self._user_state_table, "update_time", updated_before, app_name)
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        return await _async_state(self, self._app_state_table, "app_name = %s", (app_name,))
+        return await _get_state_async(self, self._app_state_table, "app_name = %s", (app_name,))
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        return await _async_user_state(self, app_name, user_id)
+        return await _get_user_state_async(self, app_name, user_id)
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         await _async_execute_commit(
@@ -1287,11 +1287,11 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        return _sync_state(self, self._app_state_table, "app_name = %s", (app_name,))
+        return _get_state_sync(self, self._app_state_table, "app_name = %s", (app_name,))
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        return _sync_user_state(self, app_name, user_id)
+        return _get_user_state_sync(self, app_name, user_id)
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
@@ -2059,7 +2059,7 @@ async def _async_delete_before(
         return rowcount if rowcount and rowcount > 0 else 0
 
 
-async def _async_state(
+async def _get_state_async(
     store: MysqlConnectorAsyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
 
@@ -2079,7 +2079,9 @@ async def _async_state(
         raise
 
 
-async def _async_user_state(store: MysqlConnectorAsyncADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
+async def _get_user_state_async(
+    store: MysqlConnectorAsyncADKStore, app_name: str, user_id: str
+) -> "dict[str, Any] | None":
     sql = (
         f"SELECT app_name, user_id, state FROM {_mysql_table_ref(store._user_state_table)} "
         "WHERE app_name = %s AND user_id = %s LIMIT 1"
@@ -2139,7 +2141,7 @@ def _sync_delete_before(
         return rowcount if rowcount and rowcount > 0 else 0
 
 
-def _sync_state(
+def _get_state_sync(
     store: MysqlConnectorSyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
 
@@ -2159,7 +2161,7 @@ def _sync_state(
         raise
 
 
-def _sync_user_state(store: MysqlConnectorSyncADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
+def _get_user_state_sync(store: MysqlConnectorSyncADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
     sql = (
         f"SELECT app_name, user_id, state FROM {_mysql_table_ref(store._user_state_table)} "
         "WHERE app_name = %s AND user_id = %s LIMIT 1"

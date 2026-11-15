@@ -159,12 +159,12 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 resolved_app = (
                     await self._apply_app_state_delta(conn, app_name, app_state_delta)
                     if app_state_delta
-                    else await self._select_app_state_on_conn(conn, app_name)
+                    else await self._select_app_state(conn, app_name)
                 )
                 resolved_user = (
                     await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
                     if user_state_delta
-                    else await self._select_user_state_on_conn(conn, app_name, user_id)
+                    else await self._select_user_state(conn, app_name, user_id)
                 )
             except Exception:
                 await conn.execute("ROLLBACK")
@@ -610,17 +610,17 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         async with self._config.provide_connection() as conn:
             await conn.execute(sql, [key, value])
 
-    async def _select_app_state_on_conn(self, conn: Any, app_name: str) -> "dict[str, Any] | None":
-        return await self._select_scoped_state_on_conn(
+    async def _select_app_state(self, conn: Any, app_name: str) -> "dict[str, Any] | None":
+        return await self._select_state(
             conn, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
         )
 
-    async def _select_user_state_on_conn(self, conn: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        return await self._select_scoped_state_on_conn(
+    async def _select_user_state(self, conn: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return await self._select_state(
             conn, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
         )
 
-    async def _select_scoped_state_on_conn(
+    async def _select_state(
         self, conn: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
     ) -> "dict[str, Any] | None":
         where_clause = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))

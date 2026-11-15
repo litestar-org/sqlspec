@@ -522,7 +522,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     current_app_state = (
                         await self._apply_app_state_delta_async(conn, cursor, app_name, app_state_delta)
                         if app_state_delta
-                        else await self._read_scoped_state_async(
+                        else await self._select_state_async(
                             cursor,
                             f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name",
                             {"app_name": app_name},
@@ -531,7 +531,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     current_user_state = (
                         await self._apply_user_state_delta_async(conn, cursor, app_name, user_id, user_state_delta)
                         if user_state_delta
-                        else await self._read_scoped_state_async(
+                        else await self._select_state_async(
                             cursor,
                             f"SELECT state FROM {self._user_state_table} WHERE app_name = :app_name AND user_id = :user_id",
                             {"app_name": app_name, "user_id": user_id},
@@ -1120,9 +1120,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         for statement in _oracle_missing_index_statements(specs, rows):
             await driver.execute(statement)
 
-    async def _read_scoped_state_async(
-        self, cursor: Any, sql: str, params: "dict[str, Any]"
-    ) -> "dict[str, Any] | None":
+    async def _select_state_async(self, cursor: Any, sql: str, params: "dict[str, Any]") -> "dict[str, Any] | None":
         try:
             await cursor.execute(sql, params)
             row = await cursor.fetchone()
@@ -1667,7 +1665,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     current_app_state = (
                         self._apply_app_state_delta_sync(conn, cursor, app_name, app_state_delta)
                         if app_state_delta
-                        else self._read_scoped_state_sync(
+                        else self._select_state_sync(
                             cursor,
                             f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name",
                             {"app_name": app_name},
@@ -1676,7 +1674,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     current_user_state = (
                         self._apply_user_state_delta_sync(conn, cursor, app_name, user_id, user_state_delta)
                         if user_state_delta
-                        else self._read_scoped_state_sync(
+                        else self._select_state_sync(
                             cursor,
                             f"SELECT state FROM {self._user_state_table} WHERE app_name = :app_name AND user_id = :user_id",
                             {"app_name": app_name, "user_id": user_id},
@@ -2241,7 +2239,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         for statement in _oracle_missing_index_statements(specs, rows):
             driver.execute(statement)
 
-    def _read_scoped_state_sync(self, cursor: Any, sql: str, params: "dict[str, Any]") -> "dict[str, Any] | None":
+    def _select_state_sync(self, cursor: Any, sql: str, params: "dict[str, Any]") -> "dict[str, Any] | None":
         try:
             cursor.execute(sql, params)
             row = cursor.fetchone()

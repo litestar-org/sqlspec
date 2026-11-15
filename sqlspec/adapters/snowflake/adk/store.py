@@ -74,12 +74,12 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
             current_app_state = (
                 self._apply_state_delta(driver, self._app_state_table, app_name, app_state_delta)
                 if app_state_delta
-                else self._read_state(self._app_state_table, app_name, driver=driver)
+                else self._select_state(self._app_state_table, app_name, driver=driver)
             )
             current_user_state = (
                 self._apply_state_delta(driver, self._user_state_table, app_name, user_state_delta, user_id=user_id)
                 if user_state_delta
-                else self._read_state(self._user_state_table, app_name, user_id, driver=driver)
+                else self._select_state(self._user_state_table, app_name, user_id, driver=driver)
             )
         return StoredSession(
             id=session_id,
@@ -329,11 +329,11 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
 
     def get_app_state(self, app_name: str) -> dict[str, Any] | None:
         """Read application-scoped state."""
-        return self._read_state(self._app_state_table, app_name)
+        return self._select_state(self._app_state_table, app_name)
 
     def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
         """Read user-scoped state."""
-        return self._read_state(self._user_state_table, app_name, user_id)
+        return self._select_state(self._user_state_table, app_name, user_id)
 
     def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
         """Insert or replace application-scoped state."""
@@ -400,7 +400,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 return 0
             raise
 
-    def _read_state(
+    def _select_state(
         self, table: str, app_name: str, user_id: str | None = None, *, driver: Any | None = None
     ) -> dict[str, Any] | None:
         sql = f"SELECT state FROM {table} WHERE app_name = ?"

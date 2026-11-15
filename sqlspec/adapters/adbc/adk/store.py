@@ -1304,7 +1304,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         max_attempts = self._max_state_merge_attempts()
         for attempt in range(max_attempts):
             try:
-                with _adbc_state_transaction(self._config, self._dialect) as conn:
+                with _provide_state_transaction(self._config, self._dialect) as conn:
                     cursor = conn.cursor()
                     try:
                         now_dt = datetime.now(UTC)
@@ -1711,7 +1711,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         max_attempts = self._max_state_merge_attempts()
         for attempt in range(max_attempts):
             try:
-                with _adbc_state_transaction(self._config, self._dialect) as conn:
+                with _provide_state_transaction(self._config, self._dialect) as conn:
                     cursor = conn.cursor()
                     try:
                         now_dt = datetime.now(UTC)
@@ -1798,10 +1798,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     ) -> "dict[str, Any]":
         """Read scoped state when delta is empty, otherwise merge delta using dialect strategy."""
         if not delta:
-            return self._read_scoped_state_in_cursor(cursor, table, key_columns, key_values)
+            return self._select_state(cursor, table, key_columns, key_values)
         return self._apply_state_delta(cursor, table, key_columns, key_values, delta, now_dt)
 
-    def _read_scoped_state_in_cursor(
+    def _select_state(
         self, cursor: Any, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
     ) -> "dict[str, Any]":
         """Read current scoped state dictionary within an active cursor."""
@@ -4032,7 +4032,7 @@ def _is_error_matching(exc: Exception, patterns: "tuple[str, ...]") -> bool:
 
 
 @contextlib.contextmanager
-def _adbc_state_transaction(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
+def _provide_state_transaction(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
     """Open a transaction for scoped-state merges with SQLite immediate write locking.
 
     Yields:

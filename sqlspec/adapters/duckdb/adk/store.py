@@ -536,14 +536,14 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
                     current_app_state = (
                         self._apply_app_state_delta(conn, app_name, app_state_delta)
                         if app_state_delta
-                        else self._read_state_tx(
+                        else self._select_state(
                             conn, f"SELECT state FROM {self._app_state_table} WHERE app_name = ?", (app_name,)
                         )
                     )
                     current_user_state = (
                         self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
                         if user_state_delta
-                        else self._read_state_tx(
+                        else self._select_state(
                             conn,
                             f"SELECT state FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?",
                             (app_name, user_id),
@@ -847,7 +847,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} attempts."
         raise SerializationConflictError(msg)
 
-    def _read_state_tx(self, conn: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
+    def _select_state(self, conn: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
         try:
             row = conn.execute(sql, params).fetchone()
         except Exception as exc:

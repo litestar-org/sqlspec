@@ -238,11 +238,11 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        return _app_state(self, app_name)
+        return _get_app_state(self, app_name)
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        return _user_state(self, app_name, user_id)
+        return _get_user_state(self, app_name, user_id)
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
@@ -1119,11 +1119,11 @@ def _delete_before(
         raise
 
 
-def _app_state(store: PyMysqlADKStore, app_name: str) -> "dict[str, Any] | None":
-    return _state(store, store._app_state_table, "app_name = %s", (app_name,))
+def _get_app_state(store: PyMysqlADKStore, app_name: str) -> "dict[str, Any] | None":
+    return _get_state(store, store._app_state_table, "app_name = %s", (app_name,))
 
 
-def _user_state(store: PyMysqlADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
+def _get_user_state(store: PyMysqlADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
     sql = (
         f"SELECT app_name, user_id, state FROM {_mysql_table_ref(store._user_state_table)} "
         "WHERE app_name = %s AND user_id = %s"
@@ -1143,7 +1143,7 @@ def _user_state(store: PyMysqlADKStore, app_name: str, user_id: str) -> "dict[st
         raise
 
 
-def _state(
+def _get_state(
     store: PyMysqlADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
     sql = f"SELECT state FROM {_mysql_table_ref(table_name)} WHERE {where_clause}"

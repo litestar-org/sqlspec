@@ -145,7 +145,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                             driver, self._app_state_table, ("app_name",), (app_name,), app_state_delta
                         )
                         if app_state_delta
-                        else self._read_state_on_driver(
+                        else self._select_state(
                             driver, sql_dialect.app_state_select_sql(self._app_state_table), (app_name,)
                         )
                     )
@@ -158,7 +158,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                             user_state_delta,
                         )
                         if user_state_delta
-                        else self._read_state_on_driver(
+                        else self._select_state(
                             driver, sql_dialect.user_state_select_sql(self._user_state_table), (app_name, user_id)
                         )
                     )
@@ -511,7 +511,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
     def _upsert_user_state_sql(self) -> str:
         return self._sql.upsert_state_sql(self._user_state_table, ("app_name", "user_id"))
 
-    def _read_state_on_driver(self, driver: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
+    def _select_state(self, driver: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
         try:
             row = driver.select_one_or_none(sql, params)
         except SQLSpecError as exc:
