@@ -157,6 +157,14 @@ Both unhandled exceptions and exceptions mapped to HTTP responses by Litestar `e
 
 In `"manual"` mode, uncommitted handler writes roll back consistently before releasing the connection back to the pool (only adapters without session-level multi-statement transactions—such as `bigquery` outside explicit session transactions and non-transactional `spanner` snapshots—are outside DB-API session rollback).
 
+In short, the request connection's lifetime depends on the response type:
+
+- **Normal responses**: The request connection is committed or rolled back when the response starts and released after the final body frame.
+- **Streaming responses**: The connection stays held until the stream finishes or the client disconnects, so the request session works inside a `Stream` body.
+- **Background work**: A background task runs after the connection is released. Open a new session with `config.provide_session()` inside the task.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
+
 ## Declarative Query Filter Providers
 
 Use `create_filter_dependencies` with `FilterConfig` to generate OpenAPI-documented Litestar dependencies that parse query parameters directly into `StatementFilter` lists (`LimitOffsetFilter`, `OrderByFilter`, `SearchFilter`, `BeforeAfterFilter`, `CursorFilter`, and `InCollectionFilter`):
@@ -348,14 +356,6 @@ def create_app() -> Litestar:
 ```
 
 Create the `AsyncpgConfig` once and pass that same instance to both `SQLSpecPlugin(config)` and `DatabaseProvider(config)` so Dishka sessions draw from the pool managed by Litestar's lifespan.
-
-## Connection Lifetime
-
-- **Normal responses**: The request connection is committed or rolled back when the response starts and released after the final body frame.
-- **Streaming responses**: The connection stays held until the stream finishes or the client disconnects, so the request session works inside a `Stream` body.
-- **Background work**: A background task runs after the connection is released. Open a new session with `config.provide_session()` inside the task.
-
-A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
 
 ## Recap
 
