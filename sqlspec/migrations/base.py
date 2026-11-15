@@ -20,6 +20,7 @@ from sqlspec.builder._insert import Insert
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
 from sqlspec.exceptions import MigrationError, SQLSpecError, SquashValidationError
+from sqlspec.migrations.runner import BaseMigrationRunner, extract_replaces_versions
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import (
@@ -35,6 +36,7 @@ from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
+    from collections.abc import Set as AbstractSet
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.observability import ObservabilityRuntime
@@ -444,6 +446,18 @@ class BaseMigrationTracker(Generic[DriverT]):
             .set("version_type", new_version_type)
             .where(Column("version_num") == old_version)
         )
+
+    def _update_checksum_statement(self, version: str, checksum: str) -> "Update":
+        """Get SQL builder for replacing the recorded checksum of one version.
+
+        Args:
+            version: Version whose checksum is replaced.
+            checksum: New checksum hex string.
+
+        Returns:
+            SQL builder object for update.
+        """
+        return Update(self.version_table).set("checksum", checksum).where(Column("version_num") == version)
 
     def _delete_versions_statement(self, versions: "list[str]") -> "Delete":
         """Get SQL builder for deleting multiple version records.
@@ -1010,6 +1024,50 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
             if parsed.extension in reconcile_names:
                 retained.add(version_num)
         return retained
+
+    def _applied_checksum_audit(
+        self,
+        applied_migrations: "Sequence[AppliedMigrationRecord]",
+        migration_files: "Sequence[tuple[str, Path]]",
+        *,
+        versions: "AbstractSet[str] | None" = None,
+    ) -> "tuple[list[str], dict[str, str]]":
+        """Compare applied records against the migration files on disk.
+
+        Retained reconcile versions, versions without a file, and squashed files that still await
+        reconciliation of their own version are skipped.
+
+        Args:
+            applied_migrations: Applied migration records from the tracking table.
+            migration_files: Migration files on disk as ``(version, path)`` pairs.
+            versions: Optional subset of applied versions to audit. All applied versions when None.
+
+        Returns:
+            Tuple of the versions whose file no longer matches the recorded checksum and a map of
+            ``version -> marker digest`` for records that only match the legacy checksum form.
+        """
+        files_by_version = dict(migration_files)
+        retained = self._retained_reconcile_versions(applied_migrations)
+        mismatched: list[str] = []
+        rerecord: dict[str, str] = {}
+        for record in applied_migrations:
+            version = record["version_num"]
+            if version in retained or (versions is not None and version not in versions):
+                continue
+            file_path = files_by_version.get(version)
+            if file_path is None:
+                continue
+            content = file_path.read_text(encoding="utf-8")
+            if not record.get("replaces") and version in extract_replaces_versions(content, file_path.suffix):
+                continue
+            match = BaseMigrationRunner.match_migration_checksum(content, str(record.get("checksum") or ""))
+            if match is None:
+                mismatched.append(version)
+            elif match == "legacy":
+                rerecord[version] = hashlib.sha256(
+                    BaseMigrationRunner._canonicalize_migration_content(content).encode("utf-8")  # pyright: ignore[reportPrivateUsage]
+                ).hexdigest()
+        return mismatched, rerecord
 
     def _discover_extension_migrations(self) -> "dict[str, Path]":
         """Discover migration paths for configured versioned extensions.

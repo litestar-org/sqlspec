@@ -92,12 +92,20 @@ When PostgreSQL adapters (`AsyncpgConfig`, `PsycopgSyncConfig`, `PsycopgAsyncCon
 | Apply pending revisions | `uv run sqlspec upgrade` | Runs unapplied migrations in lexical order and records each version in `version_table_name`. |
 | Target a specific revision | `uv run sqlspec upgrade 0003` | Applies pending revisions up to and including `0003`. |
 | Roll back revisions | `uv run sqlspec downgrade -1` | Executes the `down` section of the most recently applied revision (`downgrade base` reverts all). |
-| Verify checksums & drift | `uv run sqlspec verify --strict` | Read-only audit of applied checksums, orphaned tracker rows, pending files, and partial squashes. |
+| Verify checksums & drift | `uv run sqlspec verify --strict` | Audits applied checksums, orphaned tracker rows, pending files, and partial squashes. Writes only to upgrade legacy checksum rows (see below). |
 | Export live schema DDL | `uv run sqlspec dump-schema -o migrations/schema.sql` | Writes topologically ordered schema DDL to `--output` or directly to stdout. |
 | Bootstrap from live schema | `uv run sqlspec create-migration -m "baseline" --from-schema` | Populates a new `.sql` or `.py` revision with `CREATE` DDL in `up` and reverse `DROP` DDL in `down`. |
 | Bootstrap from data | `uv run sqlspec create-migration -m "events" --from-data events.jsonl` | Infers a typed `CREATE TABLE` revision from a JSON/JSONL/Parquet/Arrow file or staging table. |
 | Baseline an existing DB | `uv run sqlspec stamp head` | Records the target revision in `version_table_name` without executing DDL statements. |
 | Consolidate history | `uv run sqlspec squash 1:10 -m "baseline" --strategy ddl --yes` | Collapses a revision range (or all revisions when omitted) into one file with `-- Squashed from:` metadata. |
+
+### Checksum Verification
+
+`upgrade` and `downgrade` (including `--dry-run`) compare every applied migration file with the checksum recorded when it was applied, before running any migration. A changed file raises `MigrationError` naming the versions, so an edited `up` or `down` section cannot run unreviewed. Set `migration_config["verify_checksums"] = False` to skip the check after you have reviewed a deliberate edit. `verify --strict` always fails on the drift.
+
+The digest ignores the version number in each single-line `-- name: migrate-<version>-up|down` header and in single-line `Version:` lines, so `fix` renames keep checksums stable. Each header is replaced by a version-free marker (`-- name:up` or `-- name:down`), so moving a `down` header changes the digest. Python assignments such as `version: str = "x"` are part of the digest.
+
+Rows recorded by earlier releases verify through the previous form, which dropped header lines entirely. When such a row matches, `verify`, `upgrade`, and `downgrade` re-record it as the current digest in the same transaction (a dry run only prints `Would re-record legacy checksums for [...]`). A header value that is not a single token, such as `-- Version: 1.0 beta`, does not verify against a legacy row.
 
 ## Squashing Strategies and Reconciliation
 

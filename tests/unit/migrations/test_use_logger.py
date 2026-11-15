@@ -115,17 +115,24 @@ def test_sync_upgrade_use_logger_config_default_use_logger_true(sync_config_with
         assert "No migrations found" in call_args
 
 
-def test_sync_upgrade_use_logger_already_at_latest_uses_logger(sync_config: SqliteConfig) -> None:
+def test_sync_upgrade_use_logger_already_at_latest_uses_logger(sync_config: SqliteConfig, tmp_path: Path) -> None:
     """Test 'already at latest version' message goes to logger when use_logger=True."""
     commands = SyncMigrationCommands(sync_config)
     mock_driver = MagicMock()
-    mock_migration_file = Path("/fake/migrations/0001_initial.sql")
+    mock_migration_file = tmp_path / "0001_initial.sql"
+    mock_migration_file.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    applied = [
+        {
+            "version_num": "0001",
+            "checksum": commands.runner.calculate_checksum(mock_migration_file.read_text(encoding="utf-8")),
+        }
+    ]
     with (
         patch.object(sync_config, "provide_session") as mock_session,
         patch("sqlspec.migrations.commands.console"),
         patch("sqlspec.migrations.commands.logger") as mock_logger,
         patch.object(commands.runner, "get_migration_files", return_value=[("0001", mock_migration_file)]),
-        patch.object(commands.tracker, "get_applied_migrations", return_value=[{"version_num": "0001"}]),
+        patch.object(commands.tracker, "get_applied_migrations", return_value=applied),
     ):
         mock_session.return_value.__enter__.return_value = mock_driver
         commands.upgrade(use_logger=True)

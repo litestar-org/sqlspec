@@ -1049,6 +1049,22 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             "unrecorded_replaces": unrecorded_replaces,
         }
 
+    def _ensure_applied_checksums(self, mismatched: "list[str]") -> None:
+        """Raise when applied migration files changed and checksum verification is enabled.
+
+        Args:
+            mismatched: Versions whose file no longer matches the recorded checksum.
+
+        Raises:
+            MigrationError: When ``mismatched`` is non-empty and ``verify_checksums`` is enabled.
+        """
+        if mismatched and self._get_migration_config().get("verify_checksums", True):
+            msg = (
+                f"Applied migration files changed after they were applied: {', '.join(mismatched)}. "
+                "Restore the files, or review the change and set migration_config['verify_checksums'] = False."
+            )
+            raise MigrationError(msg)
+
     @staticmethod
     def _classify_squash_state(
         target_version: str, migration: "LoadedMigrationMetadata", applied_map: "dict[str, AppliedMigrationRecord]"
@@ -1398,6 +1414,9 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     echo=echo_value,
                     summary_only=summary_value,
                 )
+                self._enforce_applied_checksums(
+                    driver, dry_run=dry_run, use_logger=ul, echo=echo_value, summary_only=summary_value
+                )
                 applied_set = set(applied_versions)
 
                 all_migrations = self.runner.get_migration_files()
@@ -1579,6 +1598,15 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     return
 
                 if to_revert:
+                    self._enforce_applied_checksums(
+                        driver,
+                        dry_run=dry_run,
+                        use_logger=ul,
+                        echo=echo_value,
+                        summary_only=summary_value,
+                        records=active_applied,
+                        versions={record["version_num"] for record in to_revert},
+                    )
                     output_info(
                         "Reverting %d migrations",
                         len(to_revert),
@@ -1873,11 +1901,11 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             applied_migrations = self._read_applied_migrations(driver)
 
         self.runner.clear_caches()
+        migration_files = self.runner.get_migration_files()
         loaded_files: dict[str, LoadedMigrationMetadata] = {
-            version: self.runner.load_migration(file_path, version)
-            for version, file_path in self.runner.get_migration_files()
+            version: self.runner.load_migration(file_path, version) for version, file_path in migration_files
         }
-        return self._verification_report(
+        report = self._verification_report(
             applied_migrations,
             loaded_files,
             strict=strict,
@@ -1886,6 +1914,14 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             echo=echo_value,
             summary_only=summary_value,
         )
+        if not report["checksum_mismatches"]:
+            _, rerecord = self._applied_checksum_audit(applied_migrations, migration_files)
+            if rerecord:
+                with self.config.provide_session() as driver, self._lock_context(driver):
+                    self._rerecord_legacy_checksums(
+                        driver, rerecord, dry_run=False, use_logger=ul, echo=echo_value, summary_only=summary_value
+                    )
+        return report
 
     def squash(
         self,
@@ -2209,6 +2245,66 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         if not driver.has_schema(default_schema):
             msg = f"Configured schema '{default_schema}' does not exist"
             raise MigrationError(msg)
+
+    def _enforce_applied_checksums(
+        self,
+        driver: Any,
+        *,
+        dry_run: bool,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+        records: "list[AppliedMigrationRecord] | None" = None,
+        versions: "AbstractSet[str] | None" = None,
+    ) -> None:
+        """Refuse changed applied migration files and re-record verified legacy checksums.
+
+        Args:
+            driver: Active database driver.
+            dry_run: Whether database writes are disabled.
+            use_logger: Whether logger output is enabled.
+            echo: Whether console output is enabled.
+            summary_only: Whether summary-only logging is enabled.
+            records: Applied records to audit. Read from the tracking table when None.
+            versions: Optional subset of applied versions to audit.
+        """
+        if records is None:
+            records = self._read_applied_migrations(driver) if dry_run else self.tracker.get_applied_migrations(driver)
+        mismatched, rerecord = self._applied_checksum_audit(
+            records, self.runner.get_migration_files(), versions=versions
+        )
+        self._ensure_applied_checksums(mismatched)
+        self._rerecord_legacy_checksums(
+            driver, rerecord, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
+        )
+
+    def _rerecord_legacy_checksums(
+        self,
+        driver: Any,
+        rerecord: "dict[str, str]",
+        *,
+        dry_run: bool,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+    ) -> None:
+        """Write marker digests for applied rows that verified through the legacy checksum form."""
+        if not rerecord:
+            return
+        versions = ", ".join(sorted(rerecord))
+        verb = "Would re-record" if dry_run else "Re-recorded"
+        if not dry_run:
+            for version in sorted(rerecord):
+                self.tracker.update_checksum(driver, version, rerecord[version])
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "%s legacy checksums for [%s]",
+            verb,
+            versions,
+            rich_message=f"[cyan]{verb} legacy checksums for [{versions}][/]",
+        )
 
     def _read_applied_migrations(self, driver: Any) -> "list[AppliedMigrationRecord]":
         """Read applied migration records without creating the tracking table.
@@ -2606,6 +2702,9 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     echo=echo_value,
                     summary_only=summary_value,
                 )
+                await self._enforce_applied_checksums(
+                    driver, dry_run=dry_run, use_logger=ul, echo=echo_value, summary_only=summary_value
+                )
                 applied_set = set(applied_versions)
 
                 all_migrations = await self.runner.get_migration_files()
@@ -2790,6 +2889,15 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     return
 
                 if to_revert:
+                    await self._enforce_applied_checksums(
+                        driver,
+                        dry_run=dry_run,
+                        use_logger=ul,
+                        echo=echo_value,
+                        summary_only=summary_value,
+                        records=active_applied,
+                        versions={record["version_num"] for record in to_revert},
+                    )
                     output_info(
                         "Reverting %d migrations",
                         len(to_revert),
@@ -3085,11 +3193,11 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             applied_migrations = await self._read_applied_migrations(driver)
 
         self.runner.clear_caches()
+        migration_files = await self.runner.get_migration_files()
         loaded_files: dict[str, LoadedMigrationMetadata] = {
-            version: await self.runner.load_migration(file_path, version)
-            for version, file_path in await self.runner.get_migration_files()
+            version: await self.runner.load_migration(file_path, version) for version, file_path in migration_files
         }
-        return self._verification_report(
+        report = self._verification_report(
             applied_migrations,
             loaded_files,
             strict=strict,
@@ -3098,6 +3206,14 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             echo=echo_value,
             summary_only=summary_value,
         )
+        if not report["checksum_mismatches"]:
+            _, rerecord = self._applied_checksum_audit(applied_migrations, migration_files)
+            if rerecord:
+                async with self.config.provide_session() as driver, self._lock_context(driver):
+                    await self._rerecord_legacy_checksums(
+                        driver, rerecord, dry_run=False, use_logger=ul, echo=echo_value, summary_only=summary_value
+                    )
+        return report
 
     async def squash(
         self,
@@ -3428,6 +3544,70 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         if not await driver.has_schema(default_schema):
             msg = f"Configured schema '{default_schema}' does not exist"
             raise MigrationError(msg)
+
+    async def _enforce_applied_checksums(
+        self,
+        driver: Any,
+        *,
+        dry_run: bool,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+        records: "list[AppliedMigrationRecord] | None" = None,
+        versions: "AbstractSet[str] | None" = None,
+    ) -> None:
+        """Refuse changed applied migration files and re-record verified legacy checksums.
+
+        Args:
+            driver: Active database driver.
+            dry_run: Whether database writes are disabled.
+            use_logger: Whether logger output is enabled.
+            echo: Whether console output is enabled.
+            summary_only: Whether summary-only logging is enabled.
+            records: Applied records to audit. Read from the tracking table when None.
+            versions: Optional subset of applied versions to audit.
+        """
+        if records is None:
+            records = (
+                await self._read_applied_migrations(driver)
+                if dry_run
+                else await self.tracker.get_applied_migrations(driver)
+            )
+        mismatched, rerecord = self._applied_checksum_audit(
+            records, await self.runner.get_migration_files(), versions=versions
+        )
+        self._ensure_applied_checksums(mismatched)
+        await self._rerecord_legacy_checksums(
+            driver, rerecord, dry_run=dry_run, use_logger=use_logger, echo=echo, summary_only=summary_only
+        )
+
+    async def _rerecord_legacy_checksums(
+        self,
+        driver: Any,
+        rerecord: "dict[str, str]",
+        *,
+        dry_run: bool,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+    ) -> None:
+        """Write marker digests for applied rows that verified through the legacy checksum form."""
+        if not rerecord:
+            return
+        versions = ", ".join(sorted(rerecord))
+        verb = "Would re-record" if dry_run else "Re-recorded"
+        if not dry_run:
+            for version in sorted(rerecord):
+                await self.tracker.update_checksum(driver, version, rerecord[version])
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "%s legacy checksums for [%s]",
+            verb,
+            versions,
+            rich_message=f"[cyan]{verb} legacy checksums for [{versions}][/]",
+        )
 
     async def _read_applied_migrations(self, driver: Any) -> "list[AppliedMigrationRecord]":
         """Read applied migration records without creating the tracking table.

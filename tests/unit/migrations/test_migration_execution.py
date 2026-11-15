@@ -1043,7 +1043,10 @@ def test_downgrade_records_reverted_metric(tmp_path: Path) -> None:
 
     commands = SyncMigrationCommands(config)
     commands.tracker.ensure_tracking_table = MagicMock()
-    commands.tracker.get_applied_migrations = MagicMock(return_value=[{"version_num": "0001", "description": "first"}])
+    checksum = commands.runner.calculate_checksum(f1.read_text(encoding="utf-8"))
+    commands.tracker.get_applied_migrations = MagicMock(
+        return_value=[{"version_num": "0001", "description": "first", "checksum": checksum}]
+    )
     commands.tracker.remove_migration = MagicMock()
     commands._record_command_metric = MagicMock()
 

@@ -246,6 +246,9 @@ class MigrationConfig(TypedDict):
     auto_sync: NotRequired[bool]
     """Enable automatic version reconciliation during upgrade. When enabled (default), SQLSpec automatically updates database tracking when migrations are renamed from timestamp to sequential format. Defaults to True."""
 
+    verify_checksums: NotRequired[bool]
+    """Refuse upgrade and downgrade when an applied migration file no longer matches its recorded checksum. Defaults to True."""
+
     strict_ordering: NotRequired[bool]
     """Enforce strict migration ordering. When enabled, prevents out-of-order migrations from being applied. Defaults to False."""
 

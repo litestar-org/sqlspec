@@ -52,6 +52,19 @@ logger = get_logger("sqlspec.migrations.runner")
 _SCHEMA_DIRECTIVE_PATTERN = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
 _SCHEMA_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _MD5_HEX_LENGTH: Final[int] = 32
+_CHECKSUM_HEADER_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^(?:(?P<name>(?i:--[ \t]*name:[ \t]*migrate-[^\n-]+-(?P<direction>up|down)))"
+    r"|(?i:--[ \t]*version:)[ \t]*[A-Za-z0-9_.]*"
+    r"|Version:[ \t]*[A-Za-z0-9_.]+)\s*$",
+    re.MULTILINE,
+)
+
+
+def _checksum_marker(match: "re.Match[str]") -> str:
+    """Return the version-free marker for a name header and an empty string for a version line."""
+    if match.group("name") is None:
+        return ""
+    return f"-- name:{match.group('direction').lower()}"
 
 
 class BaseMigrationRunner:
@@ -110,16 +123,41 @@ class BaseMigrationRunner:
         Returns:
             True when the canonicalized content digest matches ``recorded_checksum``.
         """
+        return BaseMigrationRunner.match_migration_checksum(content, recorded_checksum) is not None
+
+    @staticmethod
+    def match_migration_checksum(content: str, recorded_checksum: str) -> "Literal['marker', 'legacy'] | None":
+        """Identify which canonical form of migration content matches a recorded checksum.
+
+        The version-free marker form is compared first. Only when it fails is the legacy
+        single-line form, which drops header lines entirely, compared.
+
+        Args:
+            content: The migration file content.
+            recorded_checksum: Hex digest recorded in the migration tracking table.
+
+        Returns:
+            ``"marker"`` or ``"legacy"`` for the matching form, or None when neither matches.
+        """
         if not recorded_checksum or not recorded_checksum.isascii():
-            return False
-        canonical_bytes = BaseMigrationRunner._canonicalize_migration_content(content).encode("utf-8")
-        if len(recorded_checksum) == _MD5_HEX_LENGTH and all(
+            return None
+        recorded = recorded_checksum.lower().encode("ascii")
+        use_md5 = len(recorded_checksum) == _MD5_HEX_LENGTH and all(
             ch in "0123456789abcdefABCDEF" for ch in recorded_checksum
-        ):
-            expected = hashlib.md5(canonical_bytes, usedforsecurity=False).hexdigest()
+        )
+        marker_bytes = BaseMigrationRunner._canonicalize_migration_content(content).encode("utf-8")
+        legacy_bytes = BaseMigrationRunner._canonicalize_legacy_migration_content(content).encode("utf-8")
+        if use_md5:
+            marker_digest = hashlib.md5(marker_bytes, usedforsecurity=False).hexdigest()
+            legacy_digest = hashlib.md5(legacy_bytes, usedforsecurity=False).hexdigest()
         else:
-            expected = hashlib.sha256(canonical_bytes).hexdigest()
-        return hmac.compare_digest(expected.encode("ascii"), recorded_checksum.lower().encode("ascii"))
+            marker_digest = hashlib.sha256(marker_bytes).hexdigest()
+            legacy_digest = hashlib.sha256(legacy_bytes).hexdigest()
+        if hmac.compare_digest(marker_digest.encode("ascii"), recorded):
+            return "marker"
+        if hmac.compare_digest(legacy_digest.encode("ascii"), recorded):
+            return "legacy"
+        return None
 
     def set_summary_only(self, value: bool) -> None:
         """Set summary-only logging behavior for migration runner."""
@@ -240,13 +278,18 @@ class BaseMigrationRunner:
 
     @staticmethod
     def _canonicalize_migration_content(content: str) -> str:
-        """Strip version-dependent headers before computing or checking a digest."""
-        return re.sub(
-            r"^(?:--\s*name:\s*migrate-[^-]+-(?:up|down)|--\s*Version:\s*.*|Version:\s*.*)\s*$",
-            "",
-            content,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
+        """Replace version-dependent headers with version-free markers before hashing.
+
+        Each single-line ``-- name: migrate-<version>-up|down`` header becomes ``-- name:up`` or
+        ``-- name:down`` so up and down positions stay part of the digest, and single-line
+        ``Version:`` lines are dropped.
+        """
+        return _CHECKSUM_HEADER_PATTERN.sub(_checksum_marker, content)
+
+    @staticmethod
+    def _canonicalize_legacy_migration_content(content: str) -> str:
+        """Strip version-dependent single-line headers entirely, matching earlier recorded digests."""
+        return _CHECKSUM_HEADER_PATTERN.sub("", content)
 
     def _log_migration_event(self, level: int, event: str, **extra_fields: Any) -> None:
         """Log migration events, respecting use_logger and summary_only settings."""

@@ -550,18 +550,25 @@ async def test_async_upgrade_empty_migration_folder(async_config: AiosqliteConfi
         assert "sqlspec create-migration" in call_args
 
 
-def test_sync_upgrade_already_at_latest_version(sync_config: SqliteConfig) -> None:
+def test_sync_upgrade_already_at_latest_version(sync_config: SqliteConfig, tmp_path: Path) -> None:
     """Test that sync upgrade shows 'already at latest' when all migrations are applied."""
     from unittest.mock import MagicMock
 
     commands = SyncMigrationCommands(sync_config)
     mock_driver = MagicMock()
-    mock_migration_file = Path("/fake/migrations/0001_initial.sql")
+    mock_migration_file = tmp_path / "0001_initial.sql"
+    mock_migration_file.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    applied = [
+        {
+            "version_num": "0001",
+            "checksum": commands.runner.calculate_checksum(mock_migration_file.read_text(encoding="utf-8")),
+        }
+    ]
     with (
         patch.object(sync_config, "provide_session") as mock_session,
         patch("sqlspec.migrations.commands.console") as mock_console,
         patch.object(commands.runner, "get_migration_files", return_value=[("0001", mock_migration_file)]),
-        patch.object(commands.tracker, "get_applied_migrations", return_value=[{"version_num": "0001"}]),
+        patch.object(commands.tracker, "get_applied_migrations", return_value=applied),
     ):
         mock_session.return_value.__enter__.return_value = mock_driver
         commands.upgrade()
@@ -571,17 +578,24 @@ def test_sync_upgrade_already_at_latest_version(sync_config: SqliteConfig) -> No
         assert "No migrations found" not in call_args
 
 
-async def test_async_upgrade_already_at_latest_version(async_config: AiosqliteConfig) -> None:
+async def test_async_upgrade_already_at_latest_version(async_config: AiosqliteConfig, tmp_path: Path) -> None:
     """Test that async upgrade shows 'already at latest' when all migrations are applied."""
     commands = AsyncMigrationCommands(async_config)
     mock_driver = AsyncMock()
     mock_driver.driver_features = {}
-    mock_migration_file = Path("/fake/migrations/0001_initial.sql")
+    mock_migration_file = tmp_path / "0001_initial.sql"
+    mock_migration_file.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    applied = [
+        {
+            "version_num": "0001",
+            "checksum": commands.runner.calculate_checksum(mock_migration_file.read_text(encoding="utf-8")),
+        }
+    ]
     with (
         patch.object(async_config, "provide_session") as mock_session,
         patch("sqlspec.migrations.commands.console") as mock_console,
         patch.object(commands.runner, "get_migration_files", return_value=[("0001", mock_migration_file)]),
-        patch.object(commands.tracker, "get_applied_migrations", return_value=[{"version_num": "0001"}]),
+        patch.object(commands.tracker, "get_applied_migrations", return_value=applied),
     ):
         mock_session.return_value.__aenter__.return_value = mock_driver
         await commands.upgrade()

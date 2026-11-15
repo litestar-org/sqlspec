@@ -190,6 +190,17 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         self._safe_commit(driver)
         _log_version_updated(driver, old_version, new_version)
 
+    def update_checksum(self, driver: "SyncDriverAdapterBase", version: str, checksum: str) -> None:
+        """Replace the recorded checksum of an applied migration.
+
+        Args:
+            driver: The database driver to use.
+            version: Version whose checksum is replaced.
+            checksum: New checksum hex string.
+        """
+        driver.execute(self._update_checksum_statement(version, checksum))
+        self._safe_commit(driver)
+
     def replace_with_squash(
         self,
         driver: "SyncDriverAdapterBase",
@@ -511,6 +522,17 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
 
         await self._safe_commit(driver)
         _log_version_updated(driver, old_version, new_version)
+
+    async def update_checksum(self, driver: "AsyncDriverAdapterBase", version: str, checksum: str) -> None:
+        """Replace the recorded checksum of an applied migration.
+
+        Args:
+            driver: The database driver to use.
+            version: Version whose checksum is replaced.
+            checksum: New checksum hex string.
+        """
+        await driver.execute(self._update_checksum_statement(version, checksum))
+        await self._safe_commit(driver)
 
     async def replace_with_squash(
         self,
