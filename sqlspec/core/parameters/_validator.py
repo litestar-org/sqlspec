@@ -425,7 +425,9 @@ class ParameterValidator:
         if not _PARAM_CHARS.intersection(sql):
             return []
         regex = _scanner_regex(normalized_dialect)
-        mysql_lhs_positions = _mysql_assignment_lhs_positions(sql) if normalized_dialect == _SCANNER_MYSQL else ()
+        mysql_variable_assignment_positions = (
+            _mysql_variable_assignment_positions(sql) if normalized_dialect == _SCANNER_MYSQL else ()
+        )
         parameters: list[ParameterInfo] = []
         for match in _iter_matches(regex, sql, nested_comments=normalized_dialect == _SCANNER_NESTED):
             lastgroup = match.lastgroup
@@ -443,7 +445,7 @@ class ParameterValidator:
                 continue
             if style is ParameterStyle.POSITIONAL_COLON and _is_positional_array_slice(sql, match.start()):
                 continue
-            if style is ParameterStyle.NAMED_AT and match.start() in mysql_lhs_positions:
+            if style is ParameterStyle.NAMED_AT and match.start() in mysql_variable_assignment_positions:
                 continue
             name = match.group(name_group) if name_group is not None else None
             parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
@@ -602,7 +604,7 @@ def _is_positional_array_slice(sql: str, colon_pos: int) -> bool:
     return False
 
 
-def _mysql_assignment_lhs_positions(sql: str) -> "frozenset[int] | set[int]":
+def _mysql_variable_assignment_positions(sql: str) -> "frozenset[int] | set[int]":
     if "@" not in sql or "=" not in sql:
         return _EMPTY_INT_FROZENSET
     lhs_positions: set[int] = set()

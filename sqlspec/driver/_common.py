@@ -1946,12 +1946,12 @@ class CommonDriverAttributesMixin:
             and not cached.applied_wrap_types
             and not config.type_coercion_map
             and not cached.needs_style_remap
-            and not _is_mapping_params(params)
+            and not _is_mapping_parameters(params)
         ):
             return params
         profile = cached.parameter_profile
         rebound_input = (
-            _prepare_cached_rebind_input(
+            _normalize_cached_parameters(
                 params, profile, input_named_parameters=cached.input_named_parameters, is_many=False
             )
             if profile is not None and profile.is_positional_only
@@ -2584,7 +2584,7 @@ class CommonDriverAttributesMixin:
             cached.input_named_parameters
             or cached.applied_wrap_types
             or cached.needs_style_remap
-            or _is_mapping_params(params)
+            or _is_mapping_parameters(params)
         )
         if not needs_rebind and params:
             param_values = _cache_param_values(params)
@@ -2975,7 +2975,7 @@ class CommonDriverAttributesMixin:
 
             param_config = statement_config.parameter_config
             if param_config._supports_named_execution and not (
-                param_config._positional_default_execution and _all_keys_positional(parameters)
+                param_config._positional_default_execution and _has_only_positional_keys(parameters)
             ):
                 return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map, fallback_items)
             if (
@@ -3134,7 +3134,7 @@ class CommonDriverAttributesMixin:
                 parameter_profile = cached_result.parameter_profile
                 if parameter_profile is not None:
                     rebound_input = (
-                        _prepare_cached_rebind_input(
+                        _normalize_cached_parameters(
                             statement.parameters,
                             parameter_profile,
                             input_named_parameters=cached_result.input_named_parameters,
@@ -3791,11 +3791,11 @@ def _parameter_sort_key(item: "tuple[str, object]") -> float:
     return float("inf")
 
 
-def _is_mapping_params(params: Any) -> bool:
+def _is_mapping_parameters(params: Any) -> bool:
     return type(params) is dict or (type(params) not in (tuple, list) and isinstance(params, Mapping))
 
 
-def _is_positional_param_key(key: str) -> bool:
+def _is_positional_parameter_key(key: str) -> bool:
     if key.isdigit():
         return True
     if len(key) > 1 and key[0] in {"$", ":", "?"} and key[1:].isdigit():
@@ -3803,14 +3803,14 @@ def _is_positional_param_key(key: str) -> bool:
     return key.startswith("param_") and key[6:].isdigit()
 
 
-def _all_keys_positional(parameters: "dict[str, Any]") -> bool:
+def _has_only_positional_keys(parameters: "dict[str, Any]") -> bool:
     for key in parameters:  # noqa: SIM110
-        if not _is_positional_param_key(key):
+        if not _is_positional_parameter_key(key):
             return False
     return True
 
 
-def _lookup_mapping_value_for_param(
+def _take_mapping_value(
     param: Any, mapping: "Mapping[str, Any]", positional_keys: "list[str]", consumed: "set[str]"
 ) -> "tuple[Any, bool]":
     for candidate in (param.name, param.placeholder_text, f"param_{param.ordinal}", str(param.ordinal + 1)):
@@ -3829,14 +3829,14 @@ def _align_positional_mapping(mapping: "Mapping[str, Any]", parameter_profile: A
     consumed: set[str] = set()
     values: list[Any] = []
     for param in parameter_profile.parameters:
-        value, found = _lookup_mapping_value_for_param(param, mapping, positional_keys, consumed)
+        value, found = _take_mapping_value(param, mapping, positional_keys, consumed)
         if not found:
             return tuple(mapping.values())
         values.append(value)
     return tuple(values)
 
 
-def _remap_positional_mapping_dict(mapping: "Mapping[str, Any]", parameter_profile: Any) -> "dict[str, Any]":
+def _mapping_row_to_profile_names(mapping: "Mapping[str, Any]", parameter_profile: Any) -> "dict[str, Any]":
     positional_keys = list(mapping.keys())
     consumed: set[str] = set()
     remapped: dict[str, Any] = {}
@@ -3844,43 +3844,43 @@ def _remap_positional_mapping_dict(mapping: "Mapping[str, Any]", parameter_profi
         target_key = param.name or f"param_{param.ordinal}"
         if target_key in remapped:
             continue
-        value, found = _lookup_mapping_value_for_param(param, mapping, positional_keys, consumed)
+        value, found = _take_mapping_value(param, mapping, positional_keys, consumed)
         if found:
             remapped[target_key] = value
     return remapped
 
 
-def _prepare_single_cached_mapping(
+def _normalize_cached_mapping_row(
     mapping: "Mapping[str, Any]", parameter_profile: Any, input_named_parameters: "tuple[str, ...]"
 ) -> Any:
     if input_named_parameters:
         for name in input_named_parameters:
             if name not in mapping:
-                return _remap_positional_mapping_dict(mapping, parameter_profile)
+                return _mapping_row_to_profile_names(mapping, parameter_profile)
         return mapping
     return _align_positional_mapping(mapping, parameter_profile)
 
 
-def _prepare_cached_rebind_input(
+def _normalize_cached_parameters(
     params: Any, parameter_profile: Any, *, input_named_parameters: "tuple[str, ...]", is_many: bool
 ) -> Any:
     if params is None or parameter_profile is None or not parameter_profile.is_positional_only:
         return params
     if not is_many:
-        if _is_mapping_params(params):
-            return _prepare_single_cached_mapping(params, parameter_profile, input_named_parameters)
+        if _is_mapping_parameters(params):
+            return _normalize_cached_mapping_row(params, parameter_profile, input_named_parameters)
         return params
     if isinstance(params, (list, tuple)) and params:
         has_mapping = False
         for row in params:
-            if _is_mapping_params(row):
+            if _is_mapping_parameters(row):
                 has_mapping = True
                 break
         if not has_mapping:
             return params
         updated_rows = [
-            _prepare_single_cached_mapping(row, parameter_profile, input_named_parameters)
-            if _is_mapping_params(row)
+            _normalize_cached_mapping_row(row, parameter_profile, input_named_parameters)
+            if _is_mapping_parameters(row)
             else row
             for row in params
         ]

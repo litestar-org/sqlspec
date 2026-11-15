@@ -3930,17 +3930,17 @@ def test_parameter_style_config_precomputes_execution_flags_and_hash_sorting() -
     ) == hash(qmark_cfg)
 
 
-def test_driver_common_is_mapping_params_and_all_keys_positional() -> None:
+def test_driver_common_is_mapping_parameters_and_has_only_positional_keys() -> None:
     from types import MappingProxyType
 
-    from sqlspec.driver._common import _all_keys_positional, _is_mapping_params
+    from sqlspec.driver._common import _has_only_positional_keys, _is_mapping_parameters
 
-    assert _is_mapping_params({"a": 1}) is True
-    assert _is_mapping_params(MappingProxyType({"a": 1})) is True
-    assert _is_mapping_params((1, 2)) is False
-    assert _is_mapping_params([1, 2]) is False
-    assert _is_mapping_params("abc") is False
+    assert _is_mapping_parameters({"a": 1}) is True
+    assert _is_mapping_parameters(MappingProxyType({"a": 1})) is True
+    assert _is_mapping_parameters((1, 2)) is False
+    assert _is_mapping_parameters([1, 2]) is False
+    assert _is_mapping_parameters("abc") is False
 
-    assert _all_keys_positional({"1": "a", "$2": "b", ":3": "c", "?4": "d", "param_0": "e"}) is True
-    assert _all_keys_positional({"id": 1, "1": "a"}) is False
-    assert _all_keys_positional({"param_x": 1}) is False
+    assert _has_only_positional_keys({"1": "a", "$2": "b", ":3": "c", "?4": "d", "param_0": "e"}) is True
+    assert _has_only_positional_keys({"id": 1, "1": "a"}) is False
+    assert _has_only_positional_keys({"param_x": 1}) is False
