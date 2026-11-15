@@ -1402,7 +1402,6 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             with self.config.provide_session() as driver, self._hold_migration_lock(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
-                self._validate_migration_schema(driver)
                 applied_versions = self._synchronized_applied_versions(
                     driver,
                     auto_sync=auto_sync and bool(self._get_migration_config().get("auto_sync", True)),
@@ -1572,7 +1571,6 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             with self.config.provide_session() as driver, self._hold_migration_lock(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
-                self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
                 applied: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                 retained_reconcile = self._retained_reconcile_versions(applied)
@@ -2200,11 +2198,14 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
 
     @contextmanager
     def _hold_migration_lock(self, driver: Any, *, dry_run: bool = False) -> "Iterator[None]":
-        """Hold a tracker lock and preserve outer SQLite transactions across step commits.
+        """Validate the configured schema, then hold the tracker lock for the command.
+
+        Outer SQLite transactions are preserved across step commits.
 
         Yields:
             Control to the caller under the active migration lock context.
         """
+        self._validate_migration_schema(driver)
         if dry_run:
             yield
             return
@@ -2697,7 +2698,6 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             async with self.config.provide_session() as driver, self._hold_migration_lock(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
-                await self._validate_migration_schema(driver)
                 applied_versions = await self._synchronized_applied_versions(
                     driver,
                     auto_sync=auto_sync and bool(self._get_migration_config().get("auto_sync", True)),
@@ -2869,7 +2869,6 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             async with self.config.provide_session() as driver, self._hold_migration_lock(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
-                await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
                 applied: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
@@ -3504,11 +3503,14 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
 
     @asynccontextmanager
     async def _hold_migration_lock(self, driver: Any, *, dry_run: bool = False) -> "AsyncIterator[None]":
-        """Hold an async tracker lock and preserve outer SQLite transactions across step commits.
+        """Validate the configured schema, then hold the async tracker lock for the command.
+
+        Outer SQLite transactions are preserved across step commits.
 
         Yields:
             Control to the caller under the active async migration lock context.
         """
+        await self._validate_migration_schema(driver)
         if dry_run:
             yield
             return
