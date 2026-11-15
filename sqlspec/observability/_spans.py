@@ -24,6 +24,7 @@ class SpanManager:
         "_enabled",
         "_provider_factory",
         "_resource_attributes",
+        "_span_db_systems",
         "_span_kind",
         "_span_tokens",
         "_status_cls",
@@ -44,6 +45,7 @@ class SpanManager:
         self._span_kind: Any | None = None
         self._tracer: Any | None = None
         self._span_tokens: dict[int, Any] = {}
+        self._span_db_systems: dict[int, str] = {}
         if self._enabled:
             self._resolve_api()
 
@@ -105,6 +107,7 @@ class SpanManager:
         if span is None:
             return
         token = self._span_tokens.pop(id(span), None)
+        db_system = self._span_db_systems.pop(id(span), None)
         if token is not None and self._context_api is not None:
             try:
                 self._context_api.detach(token)
@@ -112,7 +115,7 @@ class SpanManager:
                 logger.debug("Failed to detach span context: %s", exc)
         try:
             if error and self._status_cls and self._status_code_cls:
-                sanitized_message = redact_sql_literals(str(error))
+                sanitized_message = redact_sql_literals(str(error), dialect=db_system)
                 sanitized_error, err_type_name = _sanitize_span_error(error, sanitized_message)
                 try:
                     span.record_exception(sanitized_error, attributes={"exception.type": err_type_name})
@@ -134,6 +137,9 @@ class SpanManager:
             if span_kind is None
             else tracer.start_span(name=name, attributes=attributes, kind=span_kind)
         )
+        db_system = attributes.get("db.system")
+        if span is not None and isinstance(db_system, str):
+            self._span_db_systems[id(span)] = db_system
         if span is not None and self._context_api is not None and self._trace_api is not None:
             set_span = getattr(self._trace_api, "set_span_in_context", None)
             if callable(set_span):

@@ -1027,6 +1027,29 @@ def test_span_manager_attaches_context_and_resolves_db_system(
         provider.shutdown()
 
 
+@pytest.mark.parametrize(("driver", "visible"), [("AsyncmyDriver", False), ("AsyncpgDriver", True)])
+def test_span_error_message_redacts_with_span_dialect(driver: str, visible: bool) -> None:
+    """Redact span error text with the span's database dialect."""
+    trace_sdk = pytest.importorskip("opentelemetry.sdk.trace")
+    export_sdk = pytest.importorskip("opentelemetry.sdk.trace.export")
+    in_memory_export = pytest.importorskip("opentelemetry.sdk.trace.export.in_memory_span_exporter")
+
+    exporter = in_memory_export.InMemorySpanExporter()
+    provider = trace_sdk.TracerProvider()
+    provider.add_span_processor(export_sdk.SimpleSpanProcessor(exporter))
+    manager = SpanManager(TelemetryConfig(enable_spans=True, provider_factory=lambda: provider))
+    try:
+        span = manager.start_query_span(
+            driver=driver, adapter="SQLSpecConfig", bind_key=None, sql="SELECT 1", operation="SELECT"
+        )
+        manager.end_span(span, RuntimeError('near "secret-token": syntax error'))
+
+        description = exporter.get_finished_spans()[0].status.description
+        assert ("secret-token" in description) is visible
+    finally:
+        provider.shutdown()
+
+
 class _StubAdbcCursor:
     """Minimal ADBC cursor stub for unit testing observability dispatch."""
 
