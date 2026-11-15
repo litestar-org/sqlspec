@@ -37,7 +37,7 @@ ConfigT = TypeVar("ConfigT")
 logger = get_logger("sqlspec.extensions.litestar.store")
 
 
-VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+VALID_TABLE_NAME_PATTERN: Final = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 MAX_TABLE_NAME_LENGTH: Final = 63
 _SQLGLOT_PARSE_DIALECTS: Final[dict[str, str]] = {"mariadb": "mysql", "mssql": "tsql", "postgresql": "postgres"}
 _PROCEDURAL_DDL_PATTERN: Final = re.compile(
@@ -490,7 +490,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
             raise ValueError(msg)
 
-        if not VALID_TABLE_NAME_PATTERN.match(table_name):
+        if not VALID_TABLE_NAME_PATTERN.fullmatch(table_name):
             msg = f"Invalid table name: {table_name!r}. Must start with letter/underscore and contain only alphanumeric characters and underscores"
             raise ValueError(msg)
 

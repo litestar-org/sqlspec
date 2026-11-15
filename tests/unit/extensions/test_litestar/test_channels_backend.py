@@ -87,3 +87,10 @@ def test_backend_metrics_snapshot_merges_channel() -> None:
 
     assert {key: snapshot[key] for key in channel_metrics} == channel_metrics
     assert set(snapshot) == {*channel_metrics, "channels.output_queue_depth", "channels.dropped_message_count"}
+
+
+@pytest.mark.parametrize("channel_prefix", ["litestar\n", "lite star", "1litestar", ""])
+def test_invalid_channel_prefix_rejected(channel_prefix: str) -> None:
+    """Channel prefixes must be plain identifiers, including no trailing newline."""
+    with pytest.raises(ValueError, match="channel_prefix"):
+        SQLSpecChannelsBackend(cast("AsyncEventChannel", _StubEventChannel("notify")), channel_prefix=channel_prefix)

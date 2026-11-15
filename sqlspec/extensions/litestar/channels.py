@@ -21,7 +21,7 @@ __all__ = ("SQLSpecChannelsBackend",)
 
 logger = get_logger("sqlspec.extensions.litestar.channels")
 
-_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class SQLSpecChannelsBackend(ChannelsBackend):
@@ -40,7 +40,7 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         poll_interval: float = 0.2,
         output_queue_capacity: int | None = None,
     ) -> None:
-        if not _IDENTIFIER_PATTERN.match(channel_prefix):
+        if not _IDENTIFIER_PATTERN.fullmatch(channel_prefix):
             msg = f"channel_prefix must be a valid identifier, got: {channel_prefix!r}"
             raise ValueError(msg)
         if poll_interval <= 0:
