@@ -1,11 +1,13 @@
 """SAP SQL Anywhere thread-safe connection pool."""
 
+import asyncio
 import contextlib
 import logging
 import threading
 import time
+import weakref
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -21,6 +23,7 @@ __all__ = ("SqlanywhereConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sqlanywhere"
+_MAX_IDLE_TASK_CONNECTIONS: Final[int] = 8
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -34,12 +37,14 @@ class SqlanywhereConnectionPool:
         "_connection_threads",
         "_generation",
         "_health_check_interval",
+        "_idle_task_connections",
         "_max_size",
         "_min_size",
         "_on_connection_create",
         "_pool_id",
         "_recycle_seconds",
         "_registry_lock",
+        "_task_holders",
         "_thread_local",
         "_timeout",
     )
@@ -61,6 +66,10 @@ class SqlanywhereConnectionPool:
         self._thread_local = threading.local()
         self._connection_registry: set[SqlanywhereConnection] = set()
         self._connection_threads: dict[SqlanywhereConnection, threading.Thread] = {}
+        self._task_holders: weakref.WeakKeyDictionary[asyncio.Task[Any], _TaskConnectionHolder] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._idle_task_connections: list[tuple[SqlanywhereConnection, float, float]] = []
         self._checked_out = 0
         self._generation = 0
         self._registry_lock = threading.Lock()
@@ -94,7 +103,7 @@ class SqlanywhereConnectionPool:
             yield connection
         except BaseException:
             body_failed = True
-            if getattr(self._thread_local, "depth", 1) <= 1:
+            if self._current_holder().depth <= 1:
                 with contextlib.suppress(Exception):
                     self._close_thread_connection()
             raise
@@ -112,6 +121,8 @@ class SqlanywhereConnectionPool:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
             self._connection_threads.clear()
+            self._idle_task_connections.clear()
+            self._task_holders.clear()
             self._checked_out = 0
             self._generation += 1
         for connection in orphaned:
@@ -121,15 +132,16 @@ class SqlanywhereConnectionPool:
     def acquire(self) -> SqlanywhereConnection:
         """Acquire a healthy thread-local connection."""
         connection = self._get_thread_connection()
-        self._thread_local.depth = int(getattr(self._thread_local, "depth", 0)) + 1
+        self._current_holder().depth += 1
         with self._registry_lock:
             self._checked_out += 1
         return connection
 
     def release(self, connection: SqlanywhereConnection) -> None:
         """Release a checked-out connection back to the thread-local slot."""
-        if getattr(self._thread_local, "connection", None) is connection:
-            self._thread_local.depth = max(0, int(getattr(self._thread_local, "depth", 1)) - 1)
+        if self._current_holder().connection is connection:
+            holder = self._current_holder()
+            holder.depth = max(0, holder.depth - 1)
         try:
             self._rollback_on_checkin(connection)
         finally:
@@ -190,27 +202,67 @@ class SqlanywhereConnectionPool:
                 with contextlib.suppress(Exception):
                     cursor.close()
 
+    def _current_holder(self) -> "_TaskConnectionHolder":
+        task = _current_async_task()
+        if task is None:
+            holder = getattr(self._thread_local, "holder", None)
+            if holder is None:
+                holder = _TaskConnectionHolder(self._generation)
+                self._thread_local.holder = holder
+            return cast("_TaskConnectionHolder", holder)
+        with self._registry_lock:
+            holder = self._task_holders.get(task)
+            created = holder is None
+            if holder is None:
+                holder = _TaskConnectionHolder(self._generation)
+                self._task_holders[task] = holder
+        if created:
+            task.add_done_callback(self._retire_task_holder)
+        return holder
+
+    def _retire_task_holder(self, task: "asyncio.Task[Any]") -> None:
+        with self._registry_lock:
+            holder = self._task_holders.pop(task, None)
+        if holder is None or holder.connection is None:
+            return
+        connection = holder.connection
+        holder.connection = None
+        if holder.depth == 0 and holder.generation == self._generation and not _in_transaction(connection):
+            with self._registry_lock:
+                if (
+                    holder.generation == self._generation
+                    and len(self._idle_task_connections) < _MAX_IDLE_TASK_CONNECTIONS
+                ):
+                    self._idle_task_connections.append((connection, holder.created_at, holder.last_used))
+                    return
+        self._retire_connection(connection)
+
+    def _claim_idle_connection(self, holder: "_TaskConnectionHolder") -> bool:
+        with self._registry_lock:
+            if not self._idle_task_connections:
+                return False
+            connection, created_at, last_used = self._idle_task_connections.pop()
+            self._connection_threads[connection] = threading.current_thread()
+        holder.connection = connection
+        holder.created_at = created_at
+        holder.last_used = last_used
+        return True
+
     def _get_thread_connection(self) -> SqlanywhereConnection:
         now = time.time()
-        current_gen = self._generation
-        conn = getattr(self._thread_local, "connection", None)
-        created_at = getattr(self._thread_local, "created_at", 0.0)
-        last_used = getattr(self._thread_local, "last_used", 0.0)
-        conn_gen = getattr(self._thread_local, "generation", -1)
-
-        if conn is not None and conn_gen != current_gen:
+        holder = self._current_holder()
+        if holder.connection is not None and holder.generation != self._generation:
             self._close_thread_connection()
-            conn = None
+        holder.generation = self._generation
 
-        if conn is None:
-            conn = self._create_connection()
-            self._thread_local.connection = conn
-            self._thread_local.created_at = now
-            self._thread_local.last_used = now
-            self._thread_local.generation = current_gen
-            return conn
+        if holder.connection is None and not self._claim_idle_connection(holder):
+            holder.connection = self._create_connection()
+            holder.created_at = now
+            holder.last_used = now
+            return holder.connection
 
-        if self._recycle_seconds > 0 and now - created_at >= self._recycle_seconds:
+        conn = cast("SqlanywhereConnection", holder.connection)
+        if self._recycle_seconds > 0 and now - holder.created_at >= self._recycle_seconds:
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -221,32 +273,28 @@ class SqlanywhereConnectionPool:
                 reason="exceeded_recycle_time",
             )
             self._close_thread_connection()
-            conn = self._create_connection()
-            self._thread_local.connection = conn
-            self._thread_local.created_at = now
-            self._thread_local.last_used = now
-            self._thread_local.generation = current_gen
-            return conn
+            holder.connection = self._create_connection()
+            holder.created_at = now
+            holder.last_used = now
+            return holder.connection
 
         if (
             self._health_check_interval > 0
-            and now - last_used >= self._health_check_interval
+            and now - holder.last_used >= self._health_check_interval
             and not self._is_connection_alive(conn)
         ):
             self._close_thread_connection()
-            conn = self._create_connection()
-            self._thread_local.connection = conn
-            self._thread_local.created_at = now
-            self._thread_local.generation = current_gen
+            holder.connection = self._create_connection()
+            holder.created_at = now
 
-        self._thread_local.last_used = now
-        return cast("SqlanywhereConnection", conn)
+        holder.last_used = now
+        return cast("SqlanywhereConnection", holder.connection)
 
     def _rollback_on_checkin(self, connection: SqlanywhereConnection) -> None:
         """Roll back uncommitted work on the outermost checkin and retire the connection when rollback fails."""
-        if getattr(self._thread_local, "depth", 0) > 0:
+        if self._current_holder().depth > 0:
             return
-        if getattr(self._thread_local, "connection", None) is not connection:
+        if self._current_holder().connection is not connection:
             return
         assert connection is not None
         try:
@@ -255,16 +303,44 @@ class SqlanywhereConnectionPool:
             self._close_thread_connection()
             raise
 
+    def _retire_connection(self, connection: SqlanywhereConnection) -> None:
+        """Close a pool-owned connection and drop it from the shutdown registry."""
+        with self._registry_lock:
+            self._connection_registry.discard(connection)
+            self._connection_threads.pop(connection, None)
+        with contextlib.suppress(Exception):
+            connection.close()
+
     def _close_thread_connection(self) -> None:
-        conn = getattr(self._thread_local, "connection", None)
+        holder = self._current_holder()
+        conn = holder.connection
         if conn is not None:
-            with self._registry_lock:
-                self._connection_registry.discard(conn)
-                self._connection_threads.pop(conn, None)
-            with contextlib.suppress(Exception):
-                conn.close()
-            self._thread_local.connection = None
-            self._thread_local.created_at = 0.0
-            self._thread_local.last_used = 0.0
-            self._thread_local.generation = -1
-        self._thread_local.depth = 0
+            self._retire_connection(conn)
+            holder.connection = None
+            holder.created_at = 0.0
+            holder.last_used = 0.0
+        holder.depth = 0
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _TaskConnectionHolder:
+    """Connection state owned by one asyncio task or, outside a task, one thread."""
+
+    __slots__ = ("connection", "created_at", "depth", "generation", "last_used")
+
+    def __init__(self, generation: int) -> None:
+        self.connection: SqlanywhereConnection | None = None
+        self.created_at = 0.0
+        self.depth = 0
+        self.generation = generation
+        self.last_used = 0.0
+
+
+def _current_async_task() -> "asyncio.Task[Any] | None":
+    """Return the active asyncio Task when running inside an event loop, otherwise None."""
+    loop = asyncio._get_running_loop()
+    return asyncio.current_task(loop) if loop is not None else None
+
+
+def _in_transaction(connection: SqlanywhereConnection) -> bool:
+    return bool(getattr(connection, "in_transaction", False))

@@ -9,7 +9,7 @@
 | **Adapter Config** | `SybaseConfig` (`sqlspec.adapters.sybase`) |
 | **Driver Extra** | `sqlspec[sybase]` (`pymssql >= 2.4.4` with FreeTDS TDS 5.0) |
 | **Execution Mode** | Synchronous |
-| **Pool Architecture** | `SybaseConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`) |
+| **Pool Architecture** | `SybaseConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`; inside an event loop each asyncio task holds its own connection) |
 | **Dialect & Extensions** | Custom SQLGlot `sybase` dialect, Litestar store, Events queue store, Google ADK session & memory stores |
 
 ## Installation & Quickstart

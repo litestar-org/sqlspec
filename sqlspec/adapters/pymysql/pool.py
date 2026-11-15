@@ -1,11 +1,13 @@
 """PyMySQL database configuration with thread-local connections."""
 
+import asyncio
 import contextlib
 import logging
 import threading
 import time
+import weakref
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -22,11 +24,17 @@ __all__ = ("PyMysqlConnectionPool",)
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "pymysql"
 _pymysql_connect: "PyMysqlConnect" = cast("PyMysqlConnect", PyMysqlConnect)
+_MAX_IDLE_TASK_CONNECTIONS: Final[int] = 8
+_SERVER_STATUS_IN_TRANS: Final[int] = 1
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class PyMysqlConnectionPool:
-    """Thread-local connection manager for PyMySQL."""
+    """Thread-local connection manager for PyMySQL.
+
+    Inside a running event loop each asyncio task owns its own connection, and
+    connections from finished tasks are parked for reuse.
+    """
 
     __slots__ = (
         "_checked_out",
@@ -36,11 +44,13 @@ class PyMysqlConnectionPool:
         "_connection_threads",
         "_generation",
         "_health_check_interval",
+        "_idle_task_connections",
         "_on_connection_create",
         "_pool_id",
         "_read_only",
         "_recycle_seconds",
         "_registry_lock",
+        "_task_holders",
         "_thread_local",
     )
 
@@ -69,6 +79,10 @@ class PyMysqlConnectionPool:
         self._thread_local = threading.local()
         self._connection_registry: set[PyMysqlConnection] = set()
         self._connection_threads: dict[PyMysqlConnection, threading.Thread] = {}
+        self._task_holders: weakref.WeakKeyDictionary[asyncio.Task[Any], _TaskConnectionHolder] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._idle_task_connections: list[tuple[PyMysqlConnection, float, float]] = []
         self._checked_out = 0
         self._generation = 0
         self._registry_lock = threading.Lock()
@@ -131,12 +145,14 @@ class PyMysqlConnectionPool:
                 self.release(connection)
 
     def close(self) -> None:
-        """Close every connection this pool opened, on any thread."""
+        """Close every connection this pool opened, on any thread or task."""
         self._close_thread_connection()
         with self._registry_lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
             self._connection_threads.clear()
+            self._idle_task_connections.clear()
+            self._task_holders.clear()
             self._checked_out = 0
             self._generation += 1
         for connection in orphaned:
@@ -145,17 +161,18 @@ class PyMysqlConnectionPool:
 
     def acquire(self) -> PyMysqlConnection:
         connection = self._get_thread_connection()
-        self._thread_local.depth = int(getattr(self._thread_local, "depth", 0)) + 1
+        self._current_holder().depth += 1
         with self._registry_lock:
             self._checked_out += 1
         return connection
 
     def release(self, connection: PyMysqlConnection) -> None:
         """Release connection back to the pool, sanitizing transactions."""
-        is_thread_conn = getattr(self._thread_local, "connection", None) is connection
+        holder = self._current_holder()
+        is_thread_conn = holder.connection is connection
         if is_thread_conn:
-            remaining = max(0, int(getattr(self._thread_local, "depth", 1)) - 1)
-            self._thread_local.depth = remaining
+            remaining = max(0, holder.depth - 1)
+            holder.depth = remaining
             outermost = remaining == 0
         else:
             outermost = True
@@ -230,23 +247,70 @@ class PyMysqlConnectionPool:
             return False
         return True
 
-    def _get_thread_connection(self) -> PyMysqlConnection:
-        thread_state = self._thread_local.__dict__
-        if thread_state.get("generation") != self._generation:
-            stale = thread_state.pop("connection", None)
-            if stale is not None:
-                self._retire_connection(cast("PyMysqlConnection", stale))
-            thread_state.pop("created_at", None)
-            thread_state.pop("last_used", None)
-            thread_state.pop("depth", None)
-            self._thread_local.generation = self._generation
-        if "connection" not in thread_state:
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
-            self._thread_local.last_used = time.time()
-            return cast("PyMysqlConnection", self._thread_local.connection)
+    def _current_holder(self) -> "_TaskConnectionHolder":
+        task = _current_async_task()
+        if task is None:
+            holder = getattr(self._thread_local, "holder", None)
+            if holder is None:
+                holder = _TaskConnectionHolder(self._generation)
+                self._thread_local.holder = holder
+            return cast("_TaskConnectionHolder", holder)
+        with self._registry_lock:
+            holder = self._task_holders.get(task)
+            created = holder is None
+            if holder is None:
+                holder = _TaskConnectionHolder(self._generation)
+                self._task_holders[task] = holder
+        if created:
+            task.add_done_callback(self._retire_task_holder)
+        return holder
 
-        if self._recycle_seconds > 0 and time.time() - self._thread_local.created_at > self._recycle_seconds:
+    def _retire_task_holder(self, task: "asyncio.Task[Any]") -> None:
+        with self._registry_lock:
+            holder = self._task_holders.pop(task, None)
+        if holder is None or holder.connection is None:
+            return
+        connection = holder.connection
+        holder.connection = None
+        if holder.depth == 0 and holder.generation == self._generation and not _in_transaction(connection):
+            with self._registry_lock:
+                if (
+                    holder.generation == self._generation
+                    and len(self._idle_task_connections) < _MAX_IDLE_TASK_CONNECTIONS
+                ):
+                    self._idle_task_connections.append((connection, holder.created_at, holder.last_used))
+                    return
+        self._retire_connection(connection)
+
+    def _claim_idle_connection(self, holder: "_TaskConnectionHolder") -> bool:
+        with self._registry_lock:
+            if not self._idle_task_connections:
+                return False
+            connection, created_at, last_used = self._idle_task_connections.pop()
+        with self._registry_lock:
+            self._connection_threads[connection] = threading.current_thread()
+        holder.connection = connection
+        holder.created_at = created_at
+        holder.last_used = last_used
+        return True
+
+    def _get_thread_connection(self) -> PyMysqlConnection:
+        holder = self._current_holder()
+        if holder.generation != self._generation:
+            stale = holder.connection
+            holder.connection = None
+            if stale is not None:
+                self._retire_connection(stale)
+            holder.depth = 0
+            holder.generation = self._generation
+        if holder.connection is None and not self._claim_idle_connection(holder):
+            holder.connection = self._create_connection()
+            holder.created_at = time.time()
+            holder.last_used = time.time()
+            return holder.connection
+
+        connection = cast("PyMysqlConnection", holder.connection)
+        if self._recycle_seconds > 0 and time.time() - holder.created_at > self._recycle_seconds:
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -257,14 +321,14 @@ class PyMysqlConnectionPool:
                 recycle_seconds=self._recycle_seconds,
                 reason="exceeded_recycle_time",
             )
-            self._retire_connection(cast("PyMysqlConnection", self._thread_local.connection))
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
-            self._thread_local.last_used = time.time()
-            return cast("PyMysqlConnection", self._thread_local.connection)
+            self._retire_connection(connection)
+            holder.connection = self._create_connection()
+            holder.created_at = time.time()
+            holder.last_used = time.time()
+            return holder.connection
 
-        idle_time = time.time() - thread_state.get("last_used", 0)
-        if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
+        idle_time = time.time() - holder.last_used
+        if idle_time > self._health_check_interval and not self._is_connection_alive(connection):
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -275,12 +339,12 @@ class PyMysqlConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            self._retire_connection(cast("PyMysqlConnection", self._thread_local.connection))
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
+            self._retire_connection(connection)
+            holder.connection = self._create_connection()
+            holder.created_at = time.time()
 
-        self._thread_local.last_used = time.time()
-        return cast("PyMysqlConnection", self._thread_local.connection)
+        holder.last_used = time.time()
+        return cast("PyMysqlConnection", holder.connection)
 
     def _retire_connection(self, connection: PyMysqlConnection) -> None:
         """Close a pool-owned connection and drop it from the shutdown registry."""
@@ -291,12 +355,35 @@ class PyMysqlConnectionPool:
             connection.close()
 
     def _close_thread_connection(self) -> None:
-        thread_state = self._thread_local.__dict__
-        thread_state.pop("depth", None)
-        if "connection" in thread_state:
-            self._retire_connection(cast("PyMysqlConnection", self._thread_local.connection))
-            del self._thread_local.connection
-            if "created_at" in thread_state:
-                del self._thread_local.created_at
-            if "last_used" in thread_state:
-                del self._thread_local.last_used
+        holder = self._current_holder()
+        holder.depth = 0
+        connection = holder.connection
+        if connection is not None:
+            holder.connection = None
+            self._retire_connection(connection)
+            holder.created_at = 0.0
+            holder.last_used = 0.0
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _TaskConnectionHolder:
+    """Connection state owned by one asyncio task or, outside a task, one thread."""
+
+    __slots__ = ("connection", "created_at", "depth", "generation", "last_used")
+
+    def __init__(self, generation: int) -> None:
+        self.connection: PyMysqlConnection | None = None
+        self.created_at = 0.0
+        self.depth = 0
+        self.generation = generation
+        self.last_used = 0.0
+
+
+def _current_async_task() -> "asyncio.Task[Any] | None":
+    """Return the active asyncio Task when running inside an event loop, otherwise None."""
+    loop = asyncio._get_running_loop()
+    return asyncio.current_task(loop) if loop is not None else None
+
+
+def _in_transaction(connection: PyMysqlConnection) -> bool:
+    return bool(int(getattr(connection, "server_status", 0) or 0) & _SERVER_STATUS_IN_TRANS)

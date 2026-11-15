@@ -102,7 +102,7 @@ def test_pool_recycles_exceeded_recycle_time(fake_ibm_db: FakeModules) -> None:
     conn1 = pool.acquire()
     assert cast(object, conn1) is first
 
-    pool._thread_local.created_at = time.time() - 20
+    pool._current_holder().created_at = time.time() - 20
 
     conn2 = pool.acquire()
     assert cast(object, conn2) is second

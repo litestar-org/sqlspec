@@ -8,7 +8,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
 | --- | --- | --- | --- | --- |
 | `AsyncmyConfig` | `sqlspec[asyncmy]` | Async (`asyncio`) | `asyncmy.Pool` (`minsize`, `maxsize`, `pool_recycle`) | High-throughput compiled `asyncio` services targeting MySQL 8.0+ or MariaDB 10.5+. |
 | `AiomysqlConfig` | `sqlspec[aiomysql]` | Async (`asyncio`) | `aiomysql.Pool` (`minsize`, `maxsize`, `pool_recycle`) | Pure-Python `asyncio` services built over PyMySQL for PyPy or pure-Python runtimes. |
-| `PyMysqlConfig` | `sqlspec[pymysql]` | Sync | `PyMysqlConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`) | Synchronous applications and Google Cloud SQL for MySQL (`enable_cloud_sql=True`). |
+| `PyMysqlConfig` | `sqlspec[pymysql]` | Sync | `PyMysqlConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`; inside an event loop each asyncio task holds its own connection) | Synchronous applications and Google Cloud SQL for MySQL (`enable_cloud_sql=True`). |
 | `MysqlConnectorSyncConfig` / `MysqlConnectorAsyncConfig` | `sqlspec[mysql-connector]` | Sync & Async | `MySQLConnectionPool` (`pool_name`, `pool_size`, `pool_reset_session`) / native async sessions | Official Oracle MySQL Connector/Python supporting both sync pools and native async connections. |
 
 ## Installation & Quickstart

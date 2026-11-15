@@ -6,8 +6,9 @@ import inspect
 import logging
 import threading
 import time
+import weakref
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -26,6 +27,7 @@ __all__ = ("Db2AsyncConnectionPool", "Db2AsyncPoolConnectionContext", "Db2SyncCo
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "db2"
+_MAX_IDLE_TASK_CONNECTIONS: Final[int] = 8
 _IBM_DB_DBI = ibm_db_dbi
 
 
@@ -89,11 +91,13 @@ class Db2SyncConnectionPool:
         "_dsn",
         "_generation",
         "_health_check_interval",
+        "_idle_task_connections",
         "_on_connection_create",
         "_pool_id",
         "_read_only",
         "_recycle_seconds",
         "_registry_lock",
+        "_task_holders",
         "_thread_local",
     )
 
@@ -128,6 +132,10 @@ class Db2SyncConnectionPool:
         self._read_only = bool(connection_parameters.get("read_only", False)) if read_only is None else read_only
         self._thread_local = threading.local()
         self._connection_registry: set[Any] = set()
+        self._task_holders: weakref.WeakKeyDictionary[asyncio.Task[Any], _TaskConnectionHolder] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._idle_task_connections: list[tuple[Any, float, float]] = []
         self._generation = 0
         self._registry_lock = threading.Lock()
         self._recycle_seconds = recycle_seconds
@@ -190,23 +198,24 @@ class Db2SyncConnectionPool:
         Yields:
             A thread-local Db2 database connection.
         """
-        depth = getattr(self._thread_local, "depth", 0)
+        holder = self._current_holder()
+        depth = holder.depth
         try:
             connection = self._get_thread_connection()
         except Db2Error as exc:
             raise create_mapped_exception(exc) from exc
-        self._thread_local.depth = depth + 1
+        holder.depth = depth + 1
         body_failed = False
         try:
             yield connection
         except BaseException:
             body_failed = True
-            if getattr(self._thread_local, "depth", 1) <= 1:
+            if holder.depth <= 1:
                 with contextlib.suppress(Exception):
                     self._close_thread_connection()
             raise
         finally:
-            self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
+            holder.depth = max(0, holder.depth - 1)
             if body_failed:
                 with contextlib.suppress(Exception):
                     self.release(connection)
@@ -219,6 +228,8 @@ class Db2SyncConnectionPool:
         with self._registry_lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
+            self._idle_task_connections.clear()
+            self._task_holders.clear()
             self._generation += 1
         for connection in orphaned:
             with contextlib.suppress(Exception):
@@ -242,7 +253,7 @@ class Db2SyncConnectionPool:
 
     def checked_out(self) -> int:
         """Return the number of checked out connections from the perspective of this thread."""
-        return 1 if getattr(self._thread_local, "connection", None) is not None else 0
+        return 1 if self._current_holder().connection is not None else 0
 
     def _create_connection(self) -> Any:
         """Open a new connection and register it in the shutdown registry."""
@@ -269,23 +280,68 @@ class Db2SyncConnectionPool:
             return False
         return True
 
+    def _current_holder(self) -> "_TaskConnectionHolder":
+        task = _current_async_task()
+        if task is None:
+            holder = getattr(self._thread_local, "holder", None)
+            if holder is None:
+                holder = _TaskConnectionHolder(self._generation)
+                self._thread_local.holder = holder
+            return cast("_TaskConnectionHolder", holder)
+        with self._registry_lock:
+            holder = self._task_holders.get(task)
+            created = holder is None
+            if holder is None:
+                holder = _TaskConnectionHolder(self._generation)
+                self._task_holders[task] = holder
+        if created:
+            task.add_done_callback(self._retire_task_holder)
+        return holder
+
+    def _retire_task_holder(self, task: "asyncio.Task[Any]") -> None:
+        with self._registry_lock:
+            holder = self._task_holders.pop(task, None)
+        if holder is None or holder.connection is None:
+            return
+        connection = holder.connection
+        holder.connection = None
+        if holder.depth == 0 and holder.generation == self._generation and not _in_transaction(connection):
+            with self._registry_lock:
+                if (
+                    holder.generation == self._generation
+                    and len(self._idle_task_connections) < _MAX_IDLE_TASK_CONNECTIONS
+                ):
+                    self._idle_task_connections.append((connection, holder.created_at, holder.last_used))
+                    return
+        self._retire_connection(connection)
+
+    def _claim_idle_connection(self, holder: "_TaskConnectionHolder") -> bool:
+        with self._registry_lock:
+            if not self._idle_task_connections:
+                return False
+            connection, created_at, last_used = self._idle_task_connections.pop()
+        holder.connection = connection
+        holder.created_at = created_at
+        holder.last_used = last_used
+        return True
+
     def _get_thread_connection(self) -> Any:
         """Retrieve, recycle, or validate the connection assigned to the calling thread."""
-        thread_state = self._thread_local.__dict__
-        if thread_state.get("generation") != self._generation:
-            stale = thread_state.pop("connection", None)
+        holder = self._current_holder()
+        if holder.generation != self._generation:
+            stale = holder.connection
+            holder.connection = None
             if stale is not None:
                 self._retire_connection(stale)
-            thread_state.pop("created_at", None)
-            thread_state.pop("last_used", None)
-            self._thread_local.generation = self._generation
-        if "connection" not in thread_state:
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
-            self._thread_local.last_used = time.time()
-            return self._thread_local.connection
+            holder.depth = 0
+            holder.generation = self._generation
+        if holder.connection is None and not self._claim_idle_connection(holder):
+            holder.connection = self._create_connection()
+            holder.created_at = time.time()
+            holder.last_used = time.time()
+            return holder.connection
 
-        if self._recycle_seconds > 0 and time.time() - self._thread_local.created_at > self._recycle_seconds:
+        if self._recycle_seconds > 0 and time.time() - holder.created_at > self._recycle_seconds:
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -296,14 +352,14 @@ class Db2SyncConnectionPool:
                 recycle_seconds=self._recycle_seconds,
                 reason="exceeded_recycle_time",
             )
-            self._retire_connection(self._thread_local.connection)
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
-            self._thread_local.last_used = time.time()
-            return self._thread_local.connection
+            self._retire_connection(holder.connection)
+            holder.connection = self._create_connection()
+            holder.created_at = time.time()
+            holder.last_used = time.time()
+            return holder.connection
 
-        idle_time = time.time() - thread_state.get("last_used", 0)
-        if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
+        idle_time = time.time() - holder.last_used
+        if idle_time > self._health_check_interval and not self._is_connection_alive(holder.connection):
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -314,12 +370,12 @@ class Db2SyncConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            self._retire_connection(self._thread_local.connection)
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
+            self._retire_connection(holder.connection)
+            holder.connection = self._create_connection()
+            holder.created_at = time.time()
 
-        self._thread_local.last_used = time.time()
-        return self._thread_local.connection
+        holder.last_used = time.time()
+        return holder.connection
 
     def _retire_connection(self, connection: Any) -> None:
         """Close a pool-owned connection and drop it from the shutdown registry."""
@@ -330,9 +386,9 @@ class Db2SyncConnectionPool:
 
     def _rollback_on_checkin(self, connection: Any) -> None:
         """Roll back uncommitted work on outermost checkin and retire closed or broken connections."""
-        if getattr(self._thread_local, "depth", 0) > 0:
+        if self._current_holder().depth > 0:
             return
-        if getattr(self._thread_local, "connection", None) is not connection:
+        if self._current_holder().connection is not connection:
             return
         assert connection is not None
         if getattr(connection, "conn_handler", object()) is None:
@@ -347,18 +403,40 @@ class Db2SyncConnectionPool:
             raise
 
     def _close_thread_connection(self) -> None:
-        """Close and detach the calling thread's dedicated connection."""
-        thread_state = self._thread_local.__dict__
-        if "connection" in thread_state:
-            self._retire_connection(self._thread_local.connection)
-            del self._thread_local.connection
-            if "created_at" in thread_state:
-                del self._thread_local.created_at
-            if "last_used" in thread_state:
-                del self._thread_local.last_used
+        """Close and detach the calling task's or thread's dedicated connection."""
+        holder = self._current_holder()
+        connection = holder.connection
+        if connection is not None:
+            holder.connection = None
+            self._retire_connection(connection)
+            holder.created_at = 0.0
+            holder.last_used = 0.0
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
+class _TaskConnectionHolder:
+    """Connection state owned by one asyncio task or, outside a task, one thread."""
+
+    __slots__ = ("connection", "created_at", "depth", "generation", "last_used")
+
+    def __init__(self, generation: int) -> None:
+        self.connection: Any = None
+        self.created_at = 0.0
+        self.depth = 0
+        self.generation = generation
+        self.last_used = 0.0
+
+
+def _current_async_task() -> "asyncio.Task[Any] | None":
+    """Return the active asyncio Task when running inside an event loop, otherwise None."""
+    loop = asyncio._get_running_loop()
+    return asyncio.current_task(loop) if loop is not None else None
+
+
+def _in_transaction(connection: Any) -> bool:
+    return bool(getattr(connection, "in_transaction", False))
+
+
 class _Db2PooledConnection:
     """Idle-stack record for one pooled async connection."""
 

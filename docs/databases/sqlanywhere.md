@@ -9,7 +9,7 @@
 | **Adapter Config** | `SqlanywhereConfig` (`sqlspec.adapters.sqlanywhere`) |
 | **Driver Extra** | `sqlspec[sqlanywhere]` (`sqlanydb >= 1.0.14` wrapping SAP `dbcapi`) |
 | **Execution Mode** | Synchronous |
-| **Pool Architecture** | `SqlanywhereConnectionPool` (`pool_min_size`, `pool_max_size`, `pool_timeout`, `pool_recycle_seconds`, `health_check_interval`) |
+| **Pool Architecture** | `SqlanywhereConnectionPool` (`pool_min_size`, `pool_max_size`, `pool_timeout`, `pool_recycle_seconds`, `health_check_interval`; each thread holds one connection, and inside an event loop each asyncio task holds its own) |
 | **Dialect & Extensions** | Custom SQLGlot `sqlanywhere` dialect, Litestar store, Events queue store, Google ADK session & memory stores |
 
 ## Installation & Quickstart

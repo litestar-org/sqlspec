@@ -56,7 +56,7 @@ def test_pool_recycles_failed_health_check(monkeypatch) -> None:
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=0.5)
 
     assert cast(object, pool.acquire()) is first
-    pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
+    pool._current_holder().last_used = 0.0  # pyright: ignore[reportPrivateUsage]
     assert cast(object, pool.acquire()) is second
     assert first.closed is True
     assert first.cursor_obj.closed is True
@@ -74,7 +74,7 @@ def test_pool_zero_health_check_interval_disables_health_check(monkeypatch) -> N
     pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=0)
 
     assert cast(object, pool.acquire()) is connection
-    pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
+    pool._current_holder().last_used = 0.0  # pyright: ignore[reportPrivateUsage]
     assert cast(object, pool.acquire()) is connection
     assert connection.cursor_obj.calls == []
     assert len(fake_module.connect_calls) == 1
@@ -174,7 +174,7 @@ def test_pool_registry_does_not_grow_across_replacements(monkeypatch) -> None:
     connections = []
     for _ in range(4):
         connections.append(cast("FakeConnection", pool.acquire()))
-        pool._thread_local.last_used = 0.0  # pyright: ignore[reportPrivateUsage]
+        pool._current_holder().last_used = 0.0  # pyright: ignore[reportPrivateUsage]
 
     assert pool.size() == 1
     assert [connection.closed for connection in connections] == [True, True, True, False]

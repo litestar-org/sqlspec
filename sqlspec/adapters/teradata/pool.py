@@ -1,13 +1,15 @@
 """Exclusive, bounded Teradata DB-API connection pooling."""
 
+import asyncio
 import contextlib
 import math
 import os
 import threading
 import time
+import weakref
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -43,6 +45,7 @@ class TeradataConnectionPool:
         "_generation",
         "_health_check_interval",
         "_in_use",
+        "_lease_lock",
         "_max_size",
         "_min_size",
         "_on_connection_create",
@@ -50,6 +53,7 @@ class TeradataConnectionPool:
         "_pool",
         "_recycle_seconds",
         "_session_query_band",
+        "_task_leases",
         "_thread_local",
         "_timeout",
     )
@@ -109,6 +113,8 @@ class TeradataConnectionPool:
         self._recycle_seconds = recycle_seconds
         self._session_query_band = format_query_band(session_query_band) if session_query_band is not None else None
         self._thread_local = threading.local()
+        self._lease_lock = threading.Lock()
+        self._task_leases: weakref.WeakKeyDictionary[asyncio.Task[Any], _LeaseState] = weakref.WeakKeyDictionary()
         self._timeout = timeout_seconds
 
     @property
@@ -252,27 +258,27 @@ class TeradataConnectionPool:
 
     @contextmanager
     def get_connection(self) -> Generator[Any, None, None]:
-        """Provide a reentrant thread-local lease.
+        """Provide a reentrant lease keyed by asyncio task, or by thread outside a task.
 
         Yields:
             Exclusively leased DB-API connection.
         """
         self.check_pid()
-        depth = getattr(self._thread_local, "depth", 0)
-        if depth:
-            if self._closed or getattr(self._thread_local, "generation", -1) != self._generation:
+        state = self._lease_state()
+        if state.depth:
+            if self._closed or state.generation != self._generation:
                 msg = "Teradata pool lease has been retired"
                 raise DatabaseConnectionError(msg)
-            self._thread_local.depth += 1
+            state.depth += 1
             try:
-                yield self._thread_local.connection
+                yield state.connection
             finally:
-                self._thread_local.depth -= 1
+                state.depth -= 1
             return
         connection = self.acquire()
-        self._thread_local.connection = connection
-        self._thread_local.depth = 1
-        self._thread_local.generation = self._generation
+        state.connection = connection
+        state.depth = 1
+        state.generation = self._generation
         discard = False
         try:
             yield connection
@@ -280,9 +286,24 @@ class TeradataConnectionPool:
             discard = True
             raise
         finally:
-            self._thread_local.depth = 0
-            self._thread_local.connection = None
+            state.depth = 0
+            state.connection = None
             self.release(connection, discard=discard)
+
+    def _lease_state(self) -> "_LeaseState":
+        task = _current_async_task()
+        if task is None:
+            state = getattr(self._thread_local, "state", None)
+            if state is None:
+                state = _LeaseState()
+                self._thread_local.state = state
+            return cast("_LeaseState", state)
+        with self._lease_lock:
+            state = self._task_leases.get(task)
+            if state is None:
+                state = _LeaseState()
+                self._task_leases[task] = state
+        return state
 
     def close(self) -> None:
         """Close idle handles and retire checked-out leases when returned."""
@@ -314,10 +335,8 @@ class TeradataConnectionPool:
         with self._condition:
             if conn_id not in self._in_use or conn_id in self._dirty_query_band_ids:
                 return
-            if (
-                getattr(self._thread_local, "connection", None) is connection
-                and getattr(self._thread_local, "depth", 0) > 1
-            ):
+            state = self._lease_state()
+            if state.connection is connection and state.depth > 1:
                 return
             self._clean_release_ids.add(conn_id)
 
@@ -338,3 +357,20 @@ class TeradataConnectionPool:
             cursor.close()
         if connection.autocommit is False:
             connection.commit()
+
+
+class _LeaseState:
+    """Re-entrant lease owned by one asyncio task or, outside a task, one thread."""
+
+    __slots__ = ("connection", "depth", "generation")
+
+    def __init__(self) -> None:
+        self.connection: Any = None
+        self.depth = 0
+        self.generation = -1
+
+
+def _current_async_task() -> "asyncio.Task[Any] | None":
+    """Return the active asyncio Task when running inside an event loop, otherwise None."""
+    loop = asyncio._get_running_loop()
+    return asyncio.current_task(loop) if loop is not None else None

@@ -7,7 +7,7 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
 | Adapter Config | Driver Extra | Execution | Pool Architecture | Best For |
 | --- | --- | --- | --- | --- |
 | `MssqlPythonConfig` | `sqlspec[mssql-python]` | Sync | `MssqlPythonConnectionPool` (`pool_size`, `pool_idle_timeout`, `pool_enabled`) | Official Microsoft driver with Azure Entra ID (`ActiveDirectoryDefault`) auth and native Arrow `BulkCopy` ingestion. |
-| `PymssqlConfig` | `sqlspec[pymssql]` | Sync | `PymssqlConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`) | Lightweight FreeTDS-based synchronous driver for classic SQL authentication and portable Linux containers. |
+| `PymssqlConfig` | `sqlspec[pymssql]` | Sync | `PymssqlConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`; inside an event loop each asyncio task holds its own connection) | Lightweight FreeTDS-based synchronous driver for classic SQL authentication and portable Linux containers. |
 
 ## Installation & Quickstart
 

@@ -403,3 +403,37 @@ def test_provide_session_skips_query_band_reset_unless_dirty(sdk_connections: li
         assert pool.checked_out() == 0
     finally:
         config.close_pool()
+
+
+def test_nested_get_connection_in_other_task_takes_new_lease(sdk_connections: list[Any]) -> None:
+    import asyncio
+
+    pool = TeradataConnectionPool({"host": "localhost"}, max_size=2)
+
+    async def scenario() -> tuple[Any, Any, Any]:
+        outer_open = asyncio.Event()
+        other_done = asyncio.Event()
+        seen: dict[str, Any] = {}
+
+        async def first() -> None:
+            with pool.get_connection() as outer:
+                seen["outer"] = outer
+                with pool.get_connection() as nested:
+                    seen["nested"] = nested
+                    outer_open.set()
+                    await other_done.wait()
+
+        async def second() -> None:
+            await outer_open.wait()
+            with pool.get_connection() as other:
+                seen["other"] = other
+            other_done.set()
+
+        await asyncio.gather(first(), second())
+        return seen["outer"], seen["nested"], seen["other"]
+
+    outer, nested, other = asyncio.run(scenario())
+    assert nested is outer
+    assert other is not outer
+    assert len(sdk_connections) == 2
+    pool.close()

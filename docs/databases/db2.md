@@ -7,7 +7,7 @@
 | Adapter Config | Driver Extra | Execution | Pool Architecture | Best For |
 | --- | --- | --- | --- | --- |
 | `Db2AsyncConfig` | `sqlspec[db2]` | Async (`asyncio`) | `Db2AsyncConnectionPool` (`max_size`, `acquire_timeout`, `pool_recycle_seconds`, `health_check_interval`) | Async HTTP services and ADK agents communicating with IBM Db2 over DRDA. |
-| `Db2SyncConfig` | `sqlspec[db2]` | Sync | `Db2SyncConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`) | Synchronous applications, batch jobs, and CLI migrations targeting IBM Db2 LUW. |
+| `Db2SyncConfig` | `sqlspec[db2]` | Sync | `Db2SyncConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`; inside an event loop each asyncio task holds its own connection) | Synchronous applications, batch jobs, and CLI migrations targeting IBM Db2 LUW. |
 
 > [!NOTE]
 > IBM publishes prebuilt `clidriver` wheels for Linux `x86_64`, macOS `arm64`, and Windows. On Linux `aarch64` hosts, connect to Db2 via [`adbc`](adbc.md) (`adbc-driver-db2` pure-Go DRDA wheel) or pair [`arrow_odbc`](arrow-odbc.md) (`dialect="db2"` over 64-bit `libdb2o.so`).
