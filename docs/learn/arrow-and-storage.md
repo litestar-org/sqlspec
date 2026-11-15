@@ -123,6 +123,8 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 
 You can also write an `ArrowResult` directly to any storage destination via `arrow_result.write_to_storage_sync("alias://exports/metrics.parquet", write_options={"row_group_size": 10_000}, overwrite=True)` (or `await arrow_result.write_to_storage_async(...)`). `file://` URIs and bare local paths resolve to `LocalStore` (`backend="local"`) by default unless `backend="obstore"` or `backend="fsspec"` is explicitly requested. Across all storage backends (`LocalStore`, `ObStoreBackend`, and `FSSpecBackend`), `write_bytes_sync`, `write_text_sync`, `write_bytes_async`, and `write_text_async` accept `overwrite=False` for atomic create-only writes, raising `FileExistsInStorageError` if the target object already exists.
 
+Local backends (`LocalStore`, `FSSpecBackend` on the `file` protocol, and `ObStoreBackend` on `file://`) never delete their root directory, and `delete_sync(path, recursive=True)` (or `delete_async`) is required to remove a directory; deleting a single file needs no flag. Storage logs and errors omit URI credentials, query strings, and fragments.
+
 ### Streaming RecordBatch Coercion and Schema Validation
 
 For datasets larger than available RAM, `SyncStoragePipeline` and `AsyncStoragePipeline` expose `read_arrow_batches(...)`, `write_arrow_batches(...)`, and `write_arrow_batches_async(...)`, and `sqlspec.utils.arrow_helpers` provides `coerce_arrow_batches(...)`:

@@ -22,6 +22,8 @@ from sqlspec.storage._arrow_payload import (
 )
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
+    FILE_PROTOCOL,
+    check_local_delete_target,
     ensure_path_within_root,
     is_file_destination,
     parse_file_uri_path,
@@ -294,11 +296,24 @@ class FSSpecBackend:
         )
         return exists
 
-    def delete_sync(self, path: str | Path, **kwargs: Any) -> None:
-        """Delete an object synchronously."""
+    def delete_sync(self, path: str | Path, *, recursive: bool = False, **kwargs: Any) -> None:
+        """Delete an object synchronously.
+
+        Args:
+            path: Path relative to ``base_path``.
+            recursive: Allow deleting directories and their contents. Local ``file`` protocol only
+                deletes directories when this is True; other protocols forward it to the filesystem.
+            **kwargs: Additional options forwarded to the filesystem.
+
+        Raises:
+            StorageOperationFailedError: On the ``file`` protocol, if ``path`` is the store root or a
+                directory and ``recursive`` is False.
+        """
         resolved_path = self._resolve_path(path)
+        if self.protocol == FILE_PROTOCOL:
+            check_local_delete_target(resolved_path, self.base_path, recursive=recursive)
         execute_sync_storage_operation(
-            partial(self.fs.rm, resolved_path, **kwargs),
+            partial(self.fs.rm, resolved_path, recursive=recursive, **kwargs),
             backend=self.backend_type,
             operation="delete",
             path=resolved_path,
@@ -667,9 +682,9 @@ class FSSpecBackend:
         """Check if object exists in storage asynchronously."""
         return await async_(self.exists_sync)(path, **kwargs)
 
-    async def delete_async(self, path: str | Path, **kwargs: Any) -> None:
+    async def delete_async(self, path: str | Path, *, recursive: bool = False, **kwargs: Any) -> None:
         """Delete object from storage asynchronously."""
-        await async_(self.delete_sync)(path, **kwargs)
+        await async_(self.delete_sync)(path, recursive=recursive, **kwargs)
 
     async def copy_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:
         """Copy object in storage asynchronously."""

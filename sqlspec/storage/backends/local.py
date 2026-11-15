@@ -28,6 +28,7 @@ from sqlspec.storage._arrow_payload import (
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
     FILE_SCHEME_PREFIX,
+    check_local_delete_target,
     ensure_path_within_root,
     parse_file_uri_path,
     reject_parent_traversal,
@@ -276,9 +277,19 @@ class LocalStore:
         """Check if file exists synchronously."""
         return self._resolve_path(path).exists()
 
-    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
-        """Delete file or directory synchronously."""
+    def delete_sync(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
+        """Delete a file, or a directory when ``recursive`` is True, synchronously.
+
+        Args:
+            path: Path relative to ``base_path``.
+            recursive: Allow deleting directories and their contents.
+            **kwargs: Unused backend options.
+
+        Raises:
+            StorageOperationFailedError: If ``path`` is the store root, or a directory and ``recursive`` is False.
+        """
         resolved = self._resolve_path(path)
+        check_local_delete_target(resolved, self.base_path, recursive=recursive)
 
         execute_sync_storage_operation(
             partial(_delete_local_path, resolved), backend=self.backend_type, operation="delete", path=str(resolved)
@@ -494,9 +505,9 @@ class LocalStore:
         """Check if file exists asynchronously."""
         return await async_(self.exists_sync)(path, **kwargs)
 
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
-        """Delete file asynchronously."""
-        await async_(self.delete_sync)(path, **kwargs)
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
+        """Delete a file, or a directory when ``recursive`` is True, asynchronously."""
+        await async_(self.delete_sync)(path, recursive=recursive, **kwargs)
 
     async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy file asynchronously."""

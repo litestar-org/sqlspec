@@ -17,6 +17,7 @@ from mypy_extensions import mypyc_attr
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage._paths import is_file_destination, parse_file_uri_path
+from sqlspec.storage._utils import sanitize_uri_for_log
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.storage.backends.local import LocalStore
 from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -74,7 +75,7 @@ class StorageRegistry:
             logging.DEBUG,
             "storage.alias.register",
             alias=alias,
-            uri=_sanitize_uri_for_log(uri),
+            uri=sanitize_uri_for_log(uri),
             backend_type=backend_cls.__name__,
             base_path=base_path or None,
         )
@@ -127,11 +128,11 @@ class StorageRegistry:
             path_obj = Path(path_str).expanduser().resolve()
             base_uri = _local_backend_uri(path_obj)
         else:
-            sanitized_input = _sanitize_uri_for_log(path_str)
+            sanitized_input = sanitize_uri_for_log(path_str)
             msg = f"Unknown storage alias or invalid URI: '{sanitized_input}'"
             raise ImproperConfigurationError(msg)
 
-        sanitized_log_uri = _sanitize_uri_for_log(path_str)
+        sanitized_log_uri = sanitize_uri_for_log(path_str)
         cache_key = (base_uri, self._make_hashable(cache_params)) if cache_params else base_uri
         if cache_key in self._instances:
             log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=sanitized_log_uri, cached=True)
@@ -306,24 +307,3 @@ def _local_backend_uri(path: Path) -> str:
     if root_path.drive and not uri_path.startswith("/"):
         uri_path = f"/{uri_path}"
     return urlunparse(("file", "", uri_path, "", "", ""))
-
-
-def _sanitize_uri_for_log(uri: str) -> str:
-    """Strip userinfo, query parameters, and fragments from storage URIs for log output."""
-    if "://" not in uri and "?" not in uri:
-        return uri
-    try:
-        parsed = urlparse(uri)
-    except ValueError:
-        base, _, _ = uri.partition("?")
-        scheme_part, sep, rest = base.partition("://")
-        if not sep:
-            return base
-        authority, slash, tail = rest.partition("/")
-        sanitized_authority = authority.rsplit("@", 1)[-1] if "@" in authority else authority
-        return f"{scheme_part}://{sanitized_authority}{slash}{tail}"
-    if not parsed.scheme:
-        base, _, _ = uri.partition("?")
-        return base
-    netloc = parsed.netloc.rsplit("@", 1)[-1] if "@" in parsed.netloc else parsed.netloc
-    return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, "", ""))

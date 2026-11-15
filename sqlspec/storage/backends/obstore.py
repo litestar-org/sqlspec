@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import inspect
 import os
+import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from datetime import timedelta
@@ -29,6 +30,7 @@ from sqlspec.storage._arrow_payload import (
 )
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
+    check_local_delete_target,
     ensure_path_within_root,
     extract_glob_static_prefix,
     glob_to_regex,
@@ -43,6 +45,7 @@ from sqlspec.storage._utils import (
     import_pyarrow,
     import_pyarrow_parquet,
     log_storage_event,
+    sanitize_uri_for_log,
 )
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 
@@ -191,7 +194,7 @@ class ObStoreBackend:
         except StoragePathTraversalError:
             raise
         except Exception as exc:
-            msg = f"Failed to initialize obstore backend for {uri}"
+            msg = f"Failed to initialize obstore backend for {sanitize_uri_for_log(uri)}"
             raise StorageOperationFailedError(msg) from exc
 
     @property
@@ -309,12 +312,26 @@ class ObStoreBackend:
         )
         return True
 
-    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
-        """Delete object using obstore synchronously."""
+    def delete_sync(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
+        """Delete object using obstore synchronously.
+
+        Args:
+            path: Path relative to ``base_path``.
+            recursive: Allow deleting directories of a local ``file://`` store.
+            **kwargs: Unused backend options.
+
+        Raises:
+            StorageOperationFailedError: On a local ``file://`` store, if ``path`` is the store root or a
+                directory and ``recursive`` is False.
+        """
         _ = kwargs
         resolved_path = self._resolve_path(path)
+        directory = self._local_delete_directory(resolved_path, recursive=recursive)
         execute_sync_storage_operation(
-            partial(self.store.delete, resolved_path), backend=self.backend_type, operation="delete", path=resolved_path
+            partial(shutil.rmtree, directory) if directory is not None else partial(self.store.delete, resolved_path),
+            backend=self.backend_type,
+            operation="delete",
+            path=resolved_path,
         )
         log_storage_event(
             "storage.write",
@@ -324,6 +341,14 @@ class ObStoreBackend:
             mode="sync",
             path=resolved_path,
         )
+
+    def _local_delete_directory(self, resolved_path: str, *, recursive: bool) -> "Path | None":
+        """Validate a delete on a local ``file://`` store and return the directory to remove, if any."""
+        if not self._is_local_store:
+            return None
+        target = Path(self._local_store_root) / resolved_path
+        check_local_delete_target(target, self._local_store_root, recursive=recursive)
+        return target if target.is_dir() else None
 
     def copy_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy object using obstore synchronously."""
@@ -859,16 +884,18 @@ class ObStoreBackend:
         )
         return True
 
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
         """Delete object from storage asynchronously."""
         _ = kwargs
         resolved_path = self._resolve_path(path)
-
+        directory = self._local_delete_directory(resolved_path, recursive=recursive)
+        operation = (
+            async_(partial(shutil.rmtree, directory))
+            if directory is not None
+            else partial(self.store.delete_async, resolved_path)
+        )
         await execute_async_storage_operation(
-            partial(self.store.delete_async, resolved_path),
-            backend=self.backend_type,
-            operation="delete",
-            path=resolved_path,
+            operation, backend=self.backend_type, operation="delete", path=resolved_path
         )
         log_storage_event(
             "storage.write",

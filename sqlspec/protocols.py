@@ -353,7 +353,7 @@ class AsyncWriteBytesProtocol(Protocol):
 class AsyncDeleteProtocol(Protocol):
     """Protocol for async delete support."""
 
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None: ...
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None: ...
 
 
 @runtime_checkable
@@ -605,7 +605,7 @@ class ObjectStoreProtocol(Protocol):
         """Check if an object exists synchronously."""
         return False
 
-    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
+    def delete_sync(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
         """Delete an object synchronously."""
         return
 
@@ -695,7 +695,7 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)
 
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
         """Async delete an object."""
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)

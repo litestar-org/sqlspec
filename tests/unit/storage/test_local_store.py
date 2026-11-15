@@ -8,7 +8,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
-from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError
+from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.local import LocalStore
 from sqlspec.typing import PYARROW_INSTALLED
 
@@ -965,3 +965,55 @@ async def test_local_store_write_arrow_formats_options_overwrite_and_failure_saf
         await store.write_arrow_async("e.parquet", unwritable_tbl)
     assert store.read_bytes_sync("e.parquet") == seeded_bytes
     assert _stage_names(tmp_path) == []
+
+
+def _delete_layout(root: Path) -> None:
+    (root / "a").mkdir()
+    (root / "a" / "f.txt").write_text("x")
+    (root / "keep.txt").write_text("k")
+
+
+@pytest.mark.parametrize("target", ["", ".", "a/.."])
+def test_delete_root_refused(tmp_path: Path, target: str) -> None:
+    _delete_layout(tmp_path)
+    store = LocalStore(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        store.delete_sync(target)
+    with pytest.raises(StorageOperationFailedError):
+        store.delete_sync(target, recursive=True)
+
+    assert (tmp_path / "keep.txt").exists()
+    assert (tmp_path / "a" / "f.txt").exists()
+
+
+@pytest.mark.parametrize("target", ["", ".", "a/.."])
+async def test_delete_root_refused_async(tmp_path: Path, target: str) -> None:
+    _delete_layout(tmp_path)
+    store = LocalStore(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        await store.delete_async(target)
+
+    assert (tmp_path / "keep.txt").exists()
+
+
+def test_delete_directory_requires_recursive(tmp_path: Path) -> None:
+    _delete_layout(tmp_path)
+    store = LocalStore(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        store.delete_sync("a")
+    assert (tmp_path / "a" / "f.txt").exists()
+
+    store.delete_sync("a", recursive=True)
+    assert not (tmp_path / "a").exists()
+
+
+def test_delete_file_unchanged(tmp_path: Path) -> None:
+    _delete_layout(tmp_path)
+    store = LocalStore(f"file://{tmp_path}")
+
+    store.delete_sync("keep.txt")
+
+    assert not (tmp_path / "keep.txt").exists()

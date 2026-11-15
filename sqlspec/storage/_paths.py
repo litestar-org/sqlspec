@@ -5,11 +5,12 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Final
 from urllib.parse import unquote, urlparse
 
-from sqlspec.exceptions import StoragePathTraversalError
+from sqlspec.exceptions import StorageOperationFailedError, StoragePathTraversalError
 
 __all__ = (
     "FILE_PROTOCOL",
     "FILE_SCHEME_PREFIX",
+    "check_local_delete_target",
     "ensure_path_within_root",
     "extract_glob_static_prefix",
     "glob_to_regex",
@@ -83,6 +84,27 @@ def ensure_path_within_root(path: "str | Path", root: "str | Path") -> str:
 
 
 _GLOB_MAGIC: Final = re.compile(r"[*?\[]")
+
+
+def check_local_delete_target(target: "str | Path", root: "str | Path", *, recursive: bool) -> None:
+    """Refuse deleting a local store root or a directory without ``recursive``.
+
+    Args:
+        target: Resolved filesystem path about to be deleted.
+        root: Filesystem root of the store.
+        recursive: Whether the caller asked for recursive directory deletion.
+
+    Raises:
+        StorageOperationFailedError: If ``target`` is the store root, or is a directory
+            and ``recursive`` is False.
+    """
+    target_path = Path(str(target))
+    if target_path.resolve() == Path(str(root)).resolve():
+        msg = "Refusing to delete the storage root"
+        raise StorageOperationFailedError(msg)
+    if target_path.is_dir() and not recursive:
+        msg = "Refusing to delete a directory without recursive=True"
+        raise StorageOperationFailedError(msg)
 
 
 def extract_glob_static_prefix(pattern: str) -> str:

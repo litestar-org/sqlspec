@@ -2,6 +2,7 @@
 
 import logging
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_fsspec, ensure_obstore, ensure_pyarrow
@@ -16,6 +17,7 @@ __all__ = (
     "import_pyarrow_json",
     "import_pyarrow_parquet",
     "log_storage_event",
+    "sanitize_uri_for_log",
 )
 
 logger = get_logger(__name__)
@@ -109,6 +111,34 @@ def import_pyarrow_json() -> "Any":
     return pa_json
 
 
+def sanitize_uri_for_log(uri: str) -> str:
+    """Strip userinfo, query parameters, and fragments from storage URIs for log output.
+
+    Args:
+        uri: Storage URI or local path.
+
+    Returns:
+        The value without credentials, query string, or fragment.
+    """
+    if "://" not in uri and "?" not in uri:
+        return uri
+    try:
+        parsed = urlparse(uri)
+    except ValueError:
+        base, _, _ = uri.partition("?")
+        scheme_part, sep, rest = base.partition("://")
+        if not sep:
+            return base
+        authority, slash, tail = rest.partition("/")
+        sanitized_authority = authority.rsplit("@", 1)[-1] if "@" in authority else authority
+        return f"{scheme_part}://{sanitized_authority}{slash}{tail}"
+    if not parsed.scheme:
+        base, _, _ = uri.partition("?")
+        return base
+    netloc = parsed.netloc.rsplit("@", 1)[-1] if "@" in parsed.netloc else parsed.netloc
+    return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, "", ""))
+
+
 def log_storage_event(
     event: str,
     *,
@@ -129,11 +159,11 @@ def log_storage_event(
     if mode is not None:
         fields["mode"] = mode
     if path is not None:
-        fields["path"] = path
+        fields["path"] = sanitize_uri_for_log(path)
     if source_path is not None:
-        fields["source_path"] = source_path
+        fields["source_path"] = sanitize_uri_for_log(source_path)
     if destination_path is not None:
-        fields["destination_path"] = destination_path
+        fields["destination_path"] = sanitize_uri_for_log(destination_path)
     if count is not None:
         fields["count"] = count
     if exists is not None:

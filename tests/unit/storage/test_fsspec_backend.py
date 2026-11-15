@@ -6,7 +6,7 @@ from typing import Any, Self
 
 import pytest
 
-from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError
+from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError, StorageOperationFailedError
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 
 if FSSPEC_INSTALLED:
@@ -1174,3 +1174,31 @@ async def test_fsspec_write_arrow_parity_formats_overwrite_and_failure_preservat
         await store.write_arrow_async("seeded.parquet", bad_table, format_hint="parquet")
     assert store.read_bytes_sync("seeded.parquet") == b"original-bytes"
     assert _fsspec_stage_entries(store) == []
+
+
+def _delete_layout(root: Path) -> None:
+    (root / "a").mkdir()
+    (root / "a" / "f.txt").write_text("x")
+    (root / "keep.txt").write_text("k")
+
+
+def test_fsspec_file_root_refused_even_recursive(tmp_path: Path) -> None:
+    _delete_layout(tmp_path)
+    backend = FSSpecBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync(".", recursive=True)
+
+    assert (tmp_path / "keep.txt").exists()
+
+
+def test_fsspec_file_directory_requires_recursive(tmp_path: Path) -> None:
+    _delete_layout(tmp_path)
+    backend = FSSpecBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync("a")
+    assert (tmp_path / "a" / "f.txt").exists()
+
+    backend.delete_sync("a", recursive=True)
+    assert not (tmp_path / "a").exists()
