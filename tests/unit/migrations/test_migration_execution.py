@@ -68,6 +68,10 @@ class MockMigrationTracker(BaseMigrationTracker):
         """Mock ensure tracking table."""
         pass
 
+    def renew_lock(self, driver: Any) -> None:
+        """Mock lease renewal."""
+        _ = driver
+
     def get_current_version(self, driver: Any) -> str | None:
         """Mock get current version."""
         if not self._applied_migrations:

@@ -10,11 +10,13 @@ from collections.abc import Sequence
 from contextlib import suppress
 from time import monotonic as _monotonic
 from time import sleep as _sleep
+from time import time as _time
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import MigrationError, SQLSpecError
+from sqlspec.exceptions import IntegrityError, MigrationError, SQLSpecError
 from sqlspec.migrations.base import (
     _PG_RELATION_GUARD_SQL,
     BaseMigrationTracker,
@@ -42,6 +44,7 @@ logger = get_logger("sqlspec.migrations.tracker")
 _console: "Console | None" = None
 _MILLISECONDS_PER_SECOND: Final[int] = 1000
 _POSTGRES_LOCK_POLL_INTERVAL_SECONDS: Final[float] = 0.05
+_LEASE_LOCK_POLL_INTERVAL_SECONDS: Final[float] = 0.25
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -284,6 +287,26 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         result = driver.execute(self._check_versions_query(replaced_versions))
         return _validate_squash_applied_state(result, squashed_version, replaced_versions)
 
+    def renew_lock(self, driver: "SyncDriverAdapterBase") -> None:
+        """Extend the lease this tracker holds on ``driver``.
+
+        A no-op unless a lease lock is held.
+
+        Args:
+            driver: Active session driver.
+
+        Raises:
+            MigrationError: If the lease row is gone because the lease expired.
+        """
+        held = self._lease_owners.get(id(driver))
+        if held is None:
+            return
+        expires_at = _wall_clock_ms() + self.lock_lease_seconds * _MILLISECONDS_PER_SECOND
+        result = driver.execute(self._lease_renew(held[0], held[1], expires_at))
+        if getattr(result, "rows_affected", None) == 0:
+            raise _lease_expired_error()
+        self._safe_commit(driver)
+
     def acquire_lock(
         self, driver: "SyncDriverAdapterBase", *, timeout_seconds: int = 30
     ) -> "_SyncMigrationLockContext":
@@ -292,7 +315,9 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         PostgreSQL uses session advisory locks (skipped for CockroachDB drivers), MySQL and
         MariaDB use ``GET_LOCK`` / ``RELEASE_LOCK``, SQL Server uses ``sp_getapplock`` /
         ``sp_releaseapplock``, and SQLite takes an immediate transaction lock when no
-        transaction is already open. Unsupported backends are no-ops.
+        transaction is already open. CockroachDB, Oracle, DuckDB, Spanner, Db2, Sybase, SQL Anywhere,
+        Teradata, and bridge-driver SQLite take a lease row in ``<version_table>_lock``. BigQuery and
+        Snowflake log a warning and proceed unserialized.
 
         Args:
             driver: Active session driver.
@@ -632,6 +657,26 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         result = await driver.execute(self._check_versions_query(replaced_versions))
         return _validate_squash_applied_state(result, squashed_version, replaced_versions)
 
+    async def renew_lock(self, driver: "AsyncDriverAdapterBase") -> None:
+        """Extend the lease this tracker holds on ``driver``.
+
+        A no-op unless a lease lock is held.
+
+        Args:
+            driver: Active async session driver.
+
+        Raises:
+            MigrationError: If the lease row is gone because the lease expired.
+        """
+        held = self._lease_owners.get(id(driver))
+        if held is None:
+            return
+        expires_at = _wall_clock_ms() + self.lock_lease_seconds * _MILLISECONDS_PER_SECOND
+        result = await driver.execute(self._lease_renew(held[0], held[1], expires_at))
+        if getattr(result, "rows_affected", None) == 0:
+            raise _lease_expired_error()
+        await self._safe_commit(driver)
+
     def acquire_lock(
         self, driver: "AsyncDriverAdapterBase", *, timeout_seconds: int = 30
     ) -> "_AsyncMigrationLockContext":
@@ -640,7 +685,9 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         PostgreSQL uses session advisory locks (skipped for CockroachDB drivers), MySQL and
         MariaDB use ``GET_LOCK`` / ``RELEASE_LOCK``, SQL Server uses ``sp_getapplock`` /
         ``sp_releaseapplock``, and SQLite takes an immediate transaction lock when no
-        transaction is already open. Unsupported backends are no-ops.
+        transaction is already open. CockroachDB, Oracle, DuckDB, Spanner, Db2, Sybase, SQL Anywhere,
+        Teradata, and bridge-driver SQLite take a lease row in ``<version_table>_lock``. BigQuery and
+        Snowflake log a warning and proceed unserialized.
 
         Args:
             driver: Active async session driver.
@@ -1043,6 +1090,22 @@ def _is_postgres_lock_acquired(result: Any) -> bool:
     return False
 
 
+def _wall_clock_ms() -> int:
+    """Return the client wall clock in epoch milliseconds."""
+    return int(_time() * _MILLISECONDS_PER_SECOND)
+
+
+def _lease_timeout_error(lock_name: str, timeout_seconds: int) -> MigrationError:
+    """Build a ``MigrationError`` for lease lock acquisition timeout."""
+    msg = f"Failed to acquire migration lock {lock_name!r} within {timeout_seconds}s; another migrator holds the lease"
+    return MigrationError(msg)
+
+
+def _lease_expired_error() -> MigrationError:
+    """Build a ``MigrationError`` for a renewal that found no lease row."""
+    return MigrationError("Migration lock lease expired; another migrator may have taken over")
+
+
 def _postgres_lock_timeout_error(lock_name: str, timeout_seconds: int) -> MigrationError:
     """Build a ``MigrationError`` for PostgreSQL advisory lock acquisition timeout."""
     msg = f"Failed to acquire PostgreSQL migration lock {lock_name!r} within {timeout_seconds}s"
@@ -1059,6 +1122,7 @@ class _SyncMigrationLockContext:
         "_lock_id",
         "_lock_kind",
         "_lock_name",
+        "_owner_token",
         "_sqlite_locked",
         "_timeout_seconds",
         "_tracker",
@@ -1072,12 +1136,19 @@ class _SyncMigrationLockContext:
         self._lock_name = ""
         self._lock_id = 0
         self._driver_id = id(driver)
+        self._owner_token = ""
         self._sqlite_locked = False
 
     def __enter__(self) -> None:
         if not self._lock_kind:
             return
+        if self._lock_kind == "unsupported":
+            self._tracker._warn_unsupported_lock(self._driver)
+            return
         self._lock_name, self._lock_id = self._tracker._migration_lock_key()
+        if self._lock_kind == "lease":
+            self._enter_lease()
+            return
         if self._lock_kind == "postgres":
             timeout_seconds = max(self._timeout_seconds, 0)
             deadline = _monotonic() + timeout_seconds
@@ -1123,12 +1194,65 @@ class _SyncMigrationLockContext:
             self._tracker._sqlite_lock_owners.add(self._driver_id)
             self._sqlite_locked = True
 
+    def _enter_lease(self) -> None:
+        tracker = self._tracker
+        target = tracker._lock_schema_target()
+        try:
+            ensure_schema_sync(self._driver, [target], manage_schema=True, commit=True)
+        except SQLSpecError:
+            with suppress(Exception):
+                if _driver_in_transaction_sync(self._driver):
+                    self._driver.rollback()
+            ensure_schema_sync(self._driver, [target], manage_schema=True, commit=True)
+        owner_token = uuid4().hex
+        timeout_seconds = max(self._timeout_seconds, 0)
+        deadline = _monotonic() + timeout_seconds
+        lease_ms = tracker.lock_lease_seconds * _MILLISECONDS_PER_SECOND
+        while True:
+            now_ms = _wall_clock_ms()
+            try:
+                self._driver.execute(tracker._lease_delete_expired(self._lock_name, now_ms))
+                self._driver.execute(tracker._lease_insert(self._lock_name, owner_token, now_ms + lease_ms))
+                tracker._safe_commit(self._driver)
+            except IntegrityError:
+                with suppress(Exception):
+                    if _driver_in_transaction_sync(self._driver):
+                        self._driver.rollback()
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    raise _lease_timeout_error(self._lock_name, timeout_seconds) from None
+                _sleep(min(_LEASE_LOCK_POLL_INTERVAL_SECONDS, remaining))
+                continue
+            self._owner_token = owner_token
+            tracker._lease_owners[self._driver_id] = (self._lock_name, owner_token)
+            return
+
+    def _exit_lease(self, has_error: bool) -> None:
+        self._tracker._lease_owners.pop(self._driver_id, None)
+        if has_error:
+            with suppress(Exception):
+                if _driver_in_transaction_sync(self._driver):
+                    self._driver.rollback()
+            try:
+                self._release_lease()
+            except Exception as unlock_exc:
+                _log_unlock_failed(self._driver, self._lock_name, unlock_exc)
+            return
+        self._release_lease()
+
+    def _release_lease(self) -> None:
+        self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
+        self._tracker._safe_commit(self._driver)
+
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> Literal[False]:
         if not self._lock_kind:
             return False
         has_error = exc_type is not None
+        if self._lock_kind == "lease":
+            self._exit_lease(has_error)
+            return False
         if self._lock_kind == "postgres":
             self._exit_postgres(has_error)
             return False
@@ -1187,6 +1311,7 @@ class _AsyncMigrationLockContext:
         "_lock_id",
         "_lock_kind",
         "_lock_name",
+        "_owner_token",
         "_sqlite_locked",
         "_timeout_seconds",
         "_tracker",
@@ -1200,12 +1325,19 @@ class _AsyncMigrationLockContext:
         self._lock_name = ""
         self._lock_id = 0
         self._driver_id = id(driver)
+        self._owner_token = ""
         self._sqlite_locked = False
 
     async def __aenter__(self) -> None:
         if not self._lock_kind:
             return
+        if self._lock_kind == "unsupported":
+            self._tracker._warn_unsupported_lock(self._driver)
+            return
         self._lock_name, self._lock_id = self._tracker._migration_lock_key()
+        if self._lock_kind == "lease":
+            await self._enter_lease()
+            return
         if self._lock_kind == "postgres":
             timeout_seconds = max(self._timeout_seconds, 0)
             deadline = _monotonic() + timeout_seconds
@@ -1251,12 +1383,65 @@ class _AsyncMigrationLockContext:
             self._tracker._sqlite_lock_owners.add(self._driver_id)
             self._sqlite_locked = True
 
+    async def _enter_lease(self) -> None:
+        tracker = self._tracker
+        target = tracker._lock_schema_target()
+        try:
+            await ensure_schema_async(self._driver, [target], manage_schema=True, commit=True)
+        except SQLSpecError:
+            with suppress(Exception):
+                if await _driver_in_transaction_async(self._driver):
+                    await self._driver.rollback()
+            await ensure_schema_async(self._driver, [target], manage_schema=True, commit=True)
+        owner_token = uuid4().hex
+        timeout_seconds = max(self._timeout_seconds, 0)
+        deadline = _monotonic() + timeout_seconds
+        lease_ms = tracker.lock_lease_seconds * _MILLISECONDS_PER_SECOND
+        while True:
+            now_ms = _wall_clock_ms()
+            try:
+                await self._driver.execute(tracker._lease_delete_expired(self._lock_name, now_ms))
+                await self._driver.execute(tracker._lease_insert(self._lock_name, owner_token, now_ms + lease_ms))
+                await tracker._safe_commit(self._driver)
+            except IntegrityError:
+                with suppress(Exception):
+                    if await _driver_in_transaction_async(self._driver):
+                        await self._driver.rollback()
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    raise _lease_timeout_error(self._lock_name, timeout_seconds) from None
+                await _async_sleep(min(_LEASE_LOCK_POLL_INTERVAL_SECONDS, remaining))
+                continue
+            self._owner_token = owner_token
+            tracker._lease_owners[self._driver_id] = (self._lock_name, owner_token)
+            return
+
+    async def _exit_lease(self, has_error: bool) -> None:
+        self._tracker._lease_owners.pop(self._driver_id, None)
+        if has_error:
+            with suppress(Exception):
+                if await _driver_in_transaction_async(self._driver):
+                    await self._driver.rollback()
+            try:
+                await self._release_lease()
+            except Exception as unlock_exc:
+                _log_unlock_failed(self._driver, self._lock_name, unlock_exc)
+            return
+        await self._release_lease()
+
+    async def _release_lease(self) -> None:
+        await self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
+        await self._tracker._safe_commit(self._driver)
+
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> Literal[False]:
         if not self._lock_kind:
             return False
         has_error = exc_type is not None
+        if self._lock_kind == "lease":
+            await self._exit_lease(has_error)
+            return False
         if self._lock_kind == "postgres":
             await self._exit_postgres(has_error)
             return False

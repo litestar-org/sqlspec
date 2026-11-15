@@ -249,6 +249,9 @@ class MigrationConfig(TypedDict):
     verify_checksums: NotRequired[bool]
     """Refuse upgrade and downgrade when an applied migration file no longer matches its recorded checksum. Defaults to True."""
 
+    lock_lease_seconds: NotRequired[int]
+    """Lease length in seconds for migration locks on backends without a native session lock. Renewed before each migration, so it must exceed the longest single migration. Defaults to 900."""
+
     strict_ordering: NotRequired[bool]
     """Enforce strict migration ordering. When enabled, prevents out-of-order migrations from being applied. Defaults to False."""
 

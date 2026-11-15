@@ -2404,6 +2404,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         Returns:
             Execution time in ms on success, None on failure.
         """
+        self.tracker.renew_lock(driver)
         use_txn = self.runner.should_use_transaction(migration, self.config)
         try:
 
@@ -2479,6 +2480,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         Returns:
             Execution time in ms on success, None on failure.
         """
+        self.tracker.renew_lock(driver)
         use_txn = self.runner.should_use_transaction(migration, self.config)
         reverted = False
         try:
@@ -3724,6 +3726,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         Returns:
             Execution time in ms on success, None on failure.
         """
+        await self.tracker.renew_lock(driver)
         use_txn = self.runner.should_use_transaction(migration, self.config)
         try:
 
@@ -3799,6 +3802,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         Returns:
             Execution time in ms on success, None on failure.
         """
+        await self.tracker.renew_lock(driver)
         use_txn = self.runner.should_use_transaction(migration, self.config)
         reverted = False
         try:

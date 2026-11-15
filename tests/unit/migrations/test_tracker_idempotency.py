@@ -713,7 +713,7 @@ async def test_tracker_real_sqlite_sequenced_insert_increments_execution_sequenc
         ("mysql", "GET_LOCK", "RELEASE_LOCK"),
         ("tsql", "sp_getapplock", "sp_releaseapplock"),
         ("sqlite", "BEGIN IMMEDIATE", None),
-        ("duckdb", None, None),
+        ("unknownsql", None, None),
     ],
 )
 async def test_tracker_acquire_lock_dialect_statements_and_release_on_error(
@@ -810,30 +810,9 @@ async def test_tracker_acquire_lock_dialect_statements_and_release_on_error(
 async def test_tracker_acquire_lock_skips_cockroachdb_and_raises_on_lock_timeout(
     monkeypatch: pytest.MonkeyPatch, is_async: bool
 ) -> None:
-    """CockroachDB drivers emit no advisory lock statements; MySQL and SQL Server timeouts raise MigrationError."""
-    cockroach_calls: list[str] = []
-
-    if is_async:
-
-        async def _cr_exec_async(_self: Any, stmt: Any, *_args: Any, **_kwargs: Any) -> SQLResult:
-            cockroach_calls.append(str(stmt))
-            return SQLResult()
-
-        monkeypatch.setattr(CockroachAsyncpgDriver, "execute", _cr_exec_async)
-        cr_driver_async = CockroachAsyncpgDriver(MagicMock())
-        async with AsyncMigrationTracker().acquire_lock(cr_driver_async):
-            pass
-    else:
-
-        def _cr_exec_sync(_self: Any, stmt: Any, *_args: Any, **_kwargs: Any) -> SQLResult:
-            cockroach_calls.append(str(stmt))
-            return SQLResult()
-
-        monkeypatch.setattr(CockroachPsycopgSyncDriver, "execute", _cr_exec_sync)
-        cr_driver_sync = CockroachPsycopgSyncDriver(MagicMock())
-        with SyncMigrationTracker().acquire_lock(cr_driver_sync):
-            pass
-    assert cockroach_calls == []
+    """CockroachDB drivers take a lease, not an advisory lock; MySQL and SQL Server timeouts raise MigrationError."""
+    cockroach_driver: Any = CockroachAsyncpgDriver(MagicMock()) if is_async else CockroachPsycopgSyncDriver(MagicMock())
+    assert SyncMigrationTracker()._lock_backend_kind(cockroach_driver) == "lease"  # pyright: ignore[reportPrivateUsage]
 
     async def _mysql_timeout_async(_self: Any, stmt: Any, params: Any = None) -> int:
         return 0
@@ -1754,12 +1733,12 @@ async def test_sqlite_unrecovered_savepoint_failure_rolls_back_outer_transaction
         ("adbc", "postgres", "postgres", "pg_try_advisory_lock"),
         ("adbc", "mysql", "mysql", "GET_LOCK"),
         ("adbc", "tsql", "mssql", "sp_getapplock"),
-        ("adbc", "sqlite", "", None),
-        ("adbc", "cockroachdb", "", None),
+        ("adbc", "sqlite", "lease", None),
+        ("adbc", "cockroachdb", "lease", None),
         ("arrow_odbc", "postgres", "postgres", "pg_try_advisory_lock"),
         ("arrow_odbc", "mysql", "mysql", "GET_LOCK"),
         ("arrow_odbc", "tsql", "mssql", "sp_getapplock"),
-        ("arrow_odbc", "sqlite", "", None),
+        ("arrow_odbc", "sqlite", "lease", None),
     ],
 )
 def test_bridge_driver_migration_advisory_lock_classification_and_sqlite_exclusion(
@@ -1784,6 +1763,8 @@ def test_bridge_driver_migration_advisory_lock_classification_and_sqlite_exclusi
         )
 
     assert tracker._lock_backend_kind(driver) == expected_backend  # pyright: ignore[reportPrivateUsage]
+    if expected_backend == "lease":
+        return
 
     def _capture_execute(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
         sql_text = str(stmt)

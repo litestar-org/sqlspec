@@ -3,6 +3,7 @@
 import hashlib
 import importlib
 import inspect
+import logging
 import os
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
@@ -30,7 +31,8 @@ from sqlspec.migrations.utils import (
     resolve_tracker_schema,
 )
 from sqlspec.migrations.version import parse_version
-from sqlspec.utils.logging import get_logger
+from sqlspec.observability import resolve_db_system
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -57,6 +59,20 @@ _MAX_LOCK_NAME_LENGTH: Final[int] = 64
 _LOCK_NAME_HASH_BYTES: Final[int] = 6
 _LOCK_NAME_PREFIX_LENGTH: Final[int] = _MAX_LOCK_NAME_LENGTH - 1 - (_LOCK_NAME_HASH_BYTES * 2)
 _BRIDGE_DRIVER_CLASS_NAMES: Final[frozenset[str]] = frozenset({"AdbcDriver", "ArrowOdbcDriver"})
+_LEASE_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({
+    "oracle",
+    "duckdb",
+    "spanner",
+    "db2",
+    "sybase",
+    "ase",
+    "sqlanywhere",
+    "teradata",
+    "vantage",
+})
+_UNSUPPORTED_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({"bigquery", "snowflake"})
+_DEFAULT_LOCK_LEASE_SECONDS: Final[int] = 900
+_LEASE_POLL_INTERVAL_SECONDS: Final[float] = 0.25
 _PG_RELATION_GUARD_SQL: Final[str] = (
     "SELECT "
     "c.relkind::text AS relkind, "
@@ -168,7 +184,12 @@ class BaseMigrationTracker(Generic[DriverT]):
     )
     _MSSQL_RELEASE_LOCK_SQL: "ClassVar[str]" = "EXEC sp_releaseapplock :lock_name, 'Session'"
 
-    def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
+    def __init__(
+        self,
+        version_table_name: str = "ddl_migrations",
+        version_table_schema: str | None = None,
+        lock_lease_seconds: int = _DEFAULT_LOCK_LEASE_SECONDS,
+    ) -> None:
         """Initialize the migration tracker.
 
         ``version_table_name`` may include a ``"schema.table"`` prefix for adapters
@@ -179,7 +200,15 @@ class BaseMigrationTracker(Generic[DriverT]):
         Args:
             version_table_name: Name of the table to track migrations.
             version_table_schema: Optional schema that stores the tracking table.
+            lock_lease_seconds: Lease length for backends that lock through a lease row.
+
+        Raises:
+            MigrationError: If ``lock_lease_seconds`` is below 1 or the schemas conflict.
         """
+        if lock_lease_seconds < 1:
+            msg = f"lock_lease_seconds must be at least 1, got {lock_lease_seconds}"
+            raise MigrationError(msg)
+        self.lock_lease_seconds = lock_lease_seconds
         parsed_table = _parse_ddl_table(version_table_name)
         table_identifier = (
             parsed_table.this
@@ -221,6 +250,7 @@ class BaseMigrationTracker(Generic[DriverT]):
 
         self.version_table_name = table_identifier.name
         self._version_table_sql = table_identifier.sql(copy=False)
+        self._version_table_quoted = bool(table_identifier.quoted)
         self.version_table_schema = resolved_schema_identifier.name if resolved_schema_identifier is not None else None
         self.version_table = self._qualify_version_table(
             table_identifier.sql(copy=False),
@@ -228,6 +258,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         )
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
         self._sqlite_lock_owners: set[int] = set()
+        self._lease_owners: dict[int, tuple[str, str]] = {}
+        self._unsupported_lock_warned = False
 
     def _pin_version_table_schema(self, schema_name: str) -> None:
         """Bind the tracking table to an explicit schema.
@@ -596,6 +628,80 @@ class BaseMigrationTracker(Generic[DriverT]):
         select_query = select_query.select(*projections).from_(next_seq_subquery, alias="seq_src")
         return Insert(self.version_table).columns(*columns).from_select(select_query)
 
+    @property
+    def lock_table(self) -> str:
+        """Return the qualified name of the lease lock table."""
+        lock_identifier = exp.to_identifier(
+            f"{self.version_table_name}_lock", quoted=self._version_table_quoted or None
+        )
+        schema_sql: str | None = None
+        if self.version_table_schema:
+            schema_sql = exp.to_identifier(
+                self.version_table_schema,
+                quoted=True if self.version_table_schema != self.version_table_schema.lower() else None,
+            ).sql(copy=False)
+        return self._qualify_version_table(lock_identifier.sql(copy=False), schema_sql)
+
+    def _warn_unsupported_lock(self, driver: Any) -> None:
+        """Log once per tracker that the backend cannot serialize migrations."""
+        if self._unsupported_lock_warned:
+            return
+        self._unsupported_lock_warned = True
+        log_with_context(
+            logger, logging.WARNING, "migration.lock.unsupported", db_system=resolve_db_system(type(driver).__name__)
+        )
+
+    def _lock_table_builder(self) -> "CreateTable":
+        """Return a CREATE TABLE builder for the lease lock table."""
+        return CreateTable(self.lock_table)
+
+    def _lock_schema_target(self) -> SchemaTarget:
+        """Return the schema target that creates the lease lock table.
+
+        Returns:
+            Target describing ``lock_name``, ``owner_token``, and ``expires_at`` (epoch milliseconds).
+        """
+        create_table = (
+            self
+            ._lock_table_builder()
+            .column("lock_name", "VARCHAR(64)", primary_key=True, not_null=True)
+            .column("owner_token", "VARCHAR(64)", not_null=True)
+            .column("expires_at", "BIGINT", not_null=True)
+        )
+        return SchemaTarget(self.lock_table, create_table)
+
+    def _lease_delete_expired(self, lock_name: str, now_ms: int) -> "Delete":
+        """Get SQL builder deleting an expired lease for ``lock_name``."""
+        return (
+            Delete().from_(self.lock_table).where(Column("lock_name") == lock_name).where(Column("expires_at") < now_ms)
+        )
+
+    def _lease_insert(self, lock_name: str, owner_token: str, expires_at: int) -> "Insert":
+        """Get SQL builder inserting a lease row."""
+        return (
+            Insert(self.lock_table)
+            .columns("lock_name", "owner_token", "expires_at")
+            .values(lock_name, owner_token, expires_at)
+        )
+
+    def _lease_renew(self, lock_name: str, owner_token: str, expires_at: int) -> "Update":
+        """Get SQL builder extending a held lease."""
+        return (
+            Update(self.lock_table)
+            .set("expires_at", expires_at)
+            .where(Column("lock_name") == lock_name)
+            .where(Column("owner_token") == owner_token)
+        )
+
+    def _lease_release(self, lock_name: str, owner_token: str) -> "Delete":
+        """Get SQL builder releasing a held lease."""
+        return (
+            Delete()
+            .from_(self.lock_table)
+            .where(Column("lock_name") == lock_name)
+            .where(Column("owner_token") == owner_token)
+        )
+
     def _migration_lock_key(self) -> "tuple[str, int]":
         """Derive the bounded lock name and signed 64-bit integer advisory lock ID."""
         raw_key = f"sqlspec_mig_{self.version_table}"
@@ -610,12 +716,20 @@ class BaseMigrationTracker(Generic[DriverT]):
 
     @classmethod
     def _lock_backend_kind(cls, driver: Any) -> str:
-        """Classify ``driver`` into its migration lock backend family or empty string."""
+        """Classify ``driver`` into its migration lock backend family.
+
+        Returns:
+            ``"postgres"``, ``"mysql"``, ``"mssql"``, ``"sqlite"``, ``"lease"`` for backends locking
+            through a lease row, ``"unsupported"`` for backends that cannot be serialized, or an empty
+            string for an unknown dialect.
+        """
         driver_type = type(driver)
         is_bridge_driver = any(base.__name__ in _BRIDGE_DRIVER_CLASS_NAMES for base in driver_type.__mro__)
         raw_dialect = getattr(driver, "dialect", None) if is_bridge_driver else getattr(driver_type, "dialect", None)
         dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
-        if not dialect or _is_cockroach_driver(driver):
+        if _is_cockroach_driver(driver):
+            return "lease"
+        if not dialect:
             return ""
         if dialect in cls._POSTGRES_LOCK_DIALECTS:
             return "postgres"
@@ -624,9 +738,11 @@ class BaseMigrationTracker(Generic[DriverT]):
         if dialect in cls._MSSQL_LOCK_DIALECTS:
             return "mssql"
         if dialect == "sqlite":
-            if is_bridge_driver:
-                return ""
-            return "sqlite"
+            return "lease" if is_bridge_driver else "sqlite"
+        if dialect in _LEASE_LOCK_DIALECTS:
+            return "lease"
+        if dialect in _UNSUPPORTED_LOCK_DIALECTS:
+            return "unsupported"
         return ""
 
     def _uses_sequenced_insert(self, driver: Any) -> bool:
@@ -886,9 +1002,11 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
     def _create_tracker(self) -> Any:
         """Create the configured migration tracker without breaking legacy constructors."""
         tracker_schema = self._resolve_tracker_schema()
+        lease_seconds = self._get_migration_config().get("lock_lease_seconds")
+        options: dict[str, Any] = {} if lease_seconds is None else {"lock_lease_seconds": lease_seconds}
         if tracker_schema is None:
-            return self.config.migration_tracker_type(self.version_table)
-        return self.config.migration_tracker_type(self.version_table, version_table_schema=tracker_schema)
+            return self.config.migration_tracker_type(self.version_table, **options)
+        return self.config.migration_tracker_type(self.version_table, version_table_schema=tracker_schema, **options)
 
     def _parse_extension_configs(self) -> "dict[str, dict[str, Any]]":
         """Parse extension configurations from include_extensions.

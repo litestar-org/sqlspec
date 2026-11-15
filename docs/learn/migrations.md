@@ -153,7 +153,18 @@ Place a `reconcile.py` module inside `<migrations_path>` exporting a synchronous
 - **Upgrade execution order**: Reconcilers execute in `include_extensions` order before pending numbered revisions on every `upgrade(revision)` (both `upgrade("head")` and targeted revisions), including when zero numbered migrations are pending. Co-located numbered migration files for that extension are skipped, and zero `ext_<name>_*` rows are inserted into `ddl_migrations`.
 - **Drop-at-base downgrade**: Partial downgrades (such as rolling back `0002 -> 0001`) preserve reconciled extension tables. When `downgrade` reaches `base` (`downgrade("base")` or `downgrade("-1")` leaving zero applied revisions in `ddl_migrations`), SQLSpec executes each reconciler's `downgrade(context)` callback in reverse `include_extensions` order to drop the extension schema and removes any retained `ext_<name>_*` ledger rows. `downgrade --dry-run` at base previews reconciler downgrades without executing DDL.
 - **Retained ledger & versioned extension ordering**: Any previously applied `ext_<name>_*` rows already present in `ddl_migrations` pass `sqlspec verify --strict` without orphan warnings. When an extension uses `migration_mode="versioned"`, its `ext_<name>_*` migrations sort before core migrations in `include_extensions` order and are excluded from out-of-order and auto-sync checksum warnings.
-- **Serialized upgrades**: SQLSpec adds no distributed migration lock, so run `upgrade` from one process at a time (such as a release job rather than every replica at startup). If concurrent upgrades race and one fails with a duplicate-object error, re-running `upgrade` converges idempotently.
+- **Serialized upgrades**: mutating commands (`upgrade`, `downgrade`, `stamp`, and the ledger phases of `squash` and `fix`) hold a migration lock, so concurrent migrators wait for each other and raise `MigrationError` after the lock timeout. The lock depends on the backend:
+
+  | Backend | Lock |
+  | --- | --- |
+  | PostgreSQL family | Session advisory lock |
+  | MySQL and MariaDB | `GET_LOCK` |
+  | SQL Server | `sp_getapplock` |
+  | SQLite (native adapters) | `BEGIN IMMEDIATE` transaction lock |
+  | CockroachDB, Oracle, DuckDB, Spanner, Db2, Sybase, SQL Anywhere, Teradata, and SQLite or DuckDB through ADBC or Arrow ODBC | Lease row in `<version_table_name>_lock` |
+  | BigQuery and Snowflake | None. SQLSpec logs `migration.lock.unsupported` once and continues; run one migrator at a time. |
+
+  The lease lasts `migration_config["lock_lease_seconds"]` (default 900) and is renewed before each migration, so set it longer than your longest single migration. An abandoned lease blocks other migrators until it expires. Lease times use the client clock, so migrator hosts should have roughly synchronized clocks.
 
 ### Strict Schema Safety and Built-In Adapter Coverage
 
