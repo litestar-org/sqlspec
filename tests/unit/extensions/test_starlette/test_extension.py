@@ -29,12 +29,14 @@ from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 from sqlspec.extensions.starlette.middleware import (
     SQLSpecAutocommitMiddleware,
     SQLSpecManualMiddleware,
+    SQLSpecRequestLeaseMiddleware,
     _finalize_request_transaction,
     _response_owner_key,
     _ResponseCompletion,
     acquire_pending_connection_async,
 )
 from sqlspec.observability import ObservabilityConfig
+from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.tenant import TenantContext
 from tests.unit.extensions._tenant_configs import AsyncRecordingStrategy, TenantAiosqliteConfig
 
@@ -1021,3 +1023,38 @@ def test_starlette_plugin_cursor_config_and_conflicts(monkeypatch: pytest.Monkey
             ),
             cursor_encrypt=True,
         )
+
+
+def test_starlette_middleware_skips_inactive_routing_states() -> None:
+    """Default single-database configs do not populate precomputed routing states."""
+    plain_config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "starlette": {
+                "session_key": "plain_session",
+                "connection_key": "plain_connection",
+                "pool_key": "plain_pool",
+            }
+        },
+    )
+    active_config = AiosqliteConfig(
+        bind_key="active", connection_config={"database": ":memory:"}, replicas=[{"database": ":memory:"}]
+    )
+    app = Starlette()
+    plugin = SQLSpecPlugin([plain_config, active_config], app)
+    lease = SQLSpecRequestLeaseMiddleware(app, plugin._config_states)  # pyright: ignore[reportPrivateUsage]
+    assert len(lease._routing_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert lease._routing_states[0].config is active_config  # pyright: ignore[reportPrivateUsage]
+
+    plain_app = Starlette()
+    plain_plugin = SQLSpecPlugin(plain_config, plain_app)
+    plain_lease = SQLSpecRequestLeaseMiddleware(plain_app, plain_plugin._config_states)  # pyright: ignore[reportPrivateUsage]
+    assert plain_lease._routing_states == ()  # pyright: ignore[reportPrivateUsage]
+
+    async def index(_request: Request) -> JSONResponse:
+        return JSONResponse({"has_scope": RoutingContext.current() is not None})
+
+    plain_route_app = Starlette(routes=[Route("/index", index)])
+    SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}), plain_route_app)
+    with TestClient(plain_route_app) as client:
+        assert client.get("/index").json() == {"has_scope": False}

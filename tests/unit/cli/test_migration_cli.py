@@ -705,3 +705,26 @@ def test_cli_migration_command_failures_exit_nonzero(
     res = _invoke(cfg, *cli_args)
     assert res.exit_code != 0, res.output
     cfg.close_pool()
+
+
+def test_cli_fix_target_collision_exits_nonzero_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI fix rejects colliding target filenames cleanly with non-zero exit and no traceback."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_existing.sql").write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    (migrations_dir / "20250101000000_existing.sql").write_text(
+        "-- name: migrate-20250101000000-up\nSELECT 2;\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "sqlspec.migrations.commands.generate_conversion_map", lambda _migrations: {"20250101000000": "0001"}
+    )
+
+    cfg = _sqlite_config(tmp_path / "fix_collision.db", migrations_dir)
+    try:
+        res = _invoke(cfg, "fix", "--dry-run", "--no-database", "--no-prompt")
+    finally:
+        cfg.close_pool()
+    _assert_cli_error(res, "Target file already exists")
+    assert "Traceback" not in res.output

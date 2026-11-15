@@ -171,6 +171,7 @@ exclude-newer = "7 days"
 # Override dependency metadata for every source that requests mysql-connector-python.
 # Keep the uncapped dependency on Python <3.12, and force the cap on Python >=3.12
 # so the SQLSpec mysql-connector extra resolves to an existing wheel.
+# Cap pymysql<=1.2.0 for aiomysql compatibility with internal pymysql connection/cursor APIs.
 override-dependencies = [
   "mysql-connector-python; python_version < '3.12'",
   "mysql-connector-python<9.7.0; python_version >= '3.12'",

@@ -880,7 +880,7 @@ def test_sql_literal_redaction_handles_backslash_and_dollar_quotes() -> None:
     )
     redacted_sql = observed[0]["sql"]
     assert "secret" not in redacted_sql
-    assert redacted_sql == "SELECT '***', '***', '***'"
+    assert redacted_sql == "SELECT '***'"
 
 
 def test_precomputed_sql_hash_hashes_sanitized_sql_when_mask_literals_enabled() -> None:
@@ -1392,13 +1392,23 @@ def test_w3c_trace_context_sqlcommenter_fallback() -> None:
         ("SELECT 'secret\\\\", "SELECT '***'"),
         ("SELECT * FROM t WHERE token = 'unclosed", "SELECT * FROM t WHERE token = '***'"),
         ("SELECT $tag$unclosed payload", "SELECT '***'"),
-        ("SELECT 'C:\\', 'secret'", "SELECT '***', '***'"),
-        ("SELECT 'C:\\', 'secret', 'unclosed", "SELECT '***', '***', '***'"),
-        ("SELECT 'C:\\' WHERE id = 42 AND name = 'alice'", "SELECT '***' WHERE id = *** AND name = '***'"),
+        ("SELECT 'C:\\', 'secret'", "SELECT '***'"),
+        ("SELECT 'C:\\', 'secret', 'unclosed", "SELECT '***'"),
+        ("SELECT 'C:\\' WHERE id = 42 AND name = 'alice'", "SELECT '***'"),
         ("SELECT 'C:\\\\', 'secret'", "SELECT '***', '***'"),
-        ("SELECT 'C:\\\\\\', 'secret'", "SELECT '***', '***'"),
+        ("SELECT 'C:\\\\\\', 'secret'", "SELECT '***'"),
         (r"SELECT 'foo\', bar'", "SELECT '***'"),
         (r"SELECT 'admin\'s secret'", "SELECT '***'"),
+        (r"SELECT 'it\';SECRET'", "SELECT '***'"),
+        (r"SELECT 'it\');SECRET'", "SELECT '***'"),
+        (r"SELECT 'a\', 9SECRET'", "SELECT '***'"),
+        (r"SELECT 'it\';SELECT 'secret'", "SELECT '***'"),
+        (r"SELECT 'it\');SELECT 'secret'", "SELECT '***'"),
+        (r"SELECT 'a\', 9, 'secret'", "SELECT '***'"),
+        (r"SELECT E'admin\'s secret', $$top_secret$$, $tag$tagged_secret$tag$", "SELECT '***', '***', '***'"),
+        ("SELECT N'uni', B'101', X'ff', q'[secret]', nq'[secret]'", "SELECT '***', '***', '***', '***', '***'"),
+        ("SELECT eq'secret', DO$$secret$$, v$1, v$session FROM t", "SELECT eq'***', DO'***', v$1, v$session FROM t"),
+        ("SELECT 0xDEADbeef, 0x1_A2, 1e5, ident_0x1 FROM t", "SELECT ***, ***, ***, ident_0x1 FROM t"),
         (
             "SELECT q'[secret ] quote]', NQ'!it!s!', Q'{a}', q'<b/>', q'(c)' FROM t",
             "SELECT '***', '***', '***', '***', '***' FROM t",

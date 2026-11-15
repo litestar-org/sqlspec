@@ -5,7 +5,11 @@ This module provides functionality to track applied migrations in the database.
 
 import importlib
 import logging
+from asyncio import sleep as _async_sleep
+from collections.abc import Sequence
 from contextlib import suppress
+from time import monotonic as _monotonic
+from time import sleep as _sleep
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
@@ -24,7 +28,7 @@ from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Mapping
     from types import TracebackType
 
     from rich.console import Console
@@ -37,6 +41,7 @@ __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 logger = get_logger("sqlspec.migrations.tracker")
 _console: "Console | None" = None
 _MILLISECONDS_PER_SECOND: Final[int] = 1000
+_POSTGRES_LOCK_POLL_INTERVAL_SECONDS: Final[float] = 0.05
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -944,6 +949,34 @@ def _log_unlock_failed(driver: Any, lock_name: str, exc: Exception) -> None:
     )
 
 
+def _is_postgres_lock_acquired(result: Any) -> bool:
+    """Return True when a ``pg_try_advisory_lock`` result reports ownership."""
+    if result is None:
+        return False
+    if isinstance(result, bool):
+        return result
+    rows = _extract_catalog_rows(result)
+    if rows:
+        return bool(next(iter(rows[0].values()), False))
+    data = getattr(result, "data", None)
+    if isinstance(data, Sequence) and not isinstance(data, (str, bytes)) and data:
+        first_row = data[0]
+        if isinstance(first_row, Sequence) and not isinstance(first_row, (str, bytes)) and first_row:
+            return bool(first_row[0])
+    scalar_or_none = getattr(result, "scalar_or_none", None)
+    if callable(scalar_or_none):
+        value = scalar_or_none()
+        if isinstance(value, (bool, int)):
+            return bool(value)
+    return False
+
+
+def _postgres_lock_timeout_error(lock_name: str, timeout_seconds: int) -> MigrationError:
+    """Build a ``MigrationError`` for PostgreSQL advisory lock acquisition timeout."""
+    msg = f"Failed to acquire PostgreSQL migration lock {lock_name!r} within {timeout_seconds}s"
+    return MigrationError(msg)
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _SyncMigrationLockContext:
     """Slotted synchronous migration lock context manager."""
@@ -974,8 +1007,18 @@ class _SyncMigrationLockContext:
             return
         self._lock_name, self._lock_id = self._tracker._migration_lock_key()
         if self._lock_kind == "postgres":
-            self._driver.execute("SELECT pg_advisory_lock(:lock_id)", {"lock_id": self._lock_id})
-            return
+            timeout_seconds = max(self._timeout_seconds, 0)
+            deadline = _monotonic() + timeout_seconds
+            while True:
+                lock_result = self._driver.execute(
+                    "SELECT pg_try_advisory_lock(:lock_id) AS acquired", {"lock_id": self._lock_id}
+                )
+                if _is_postgres_lock_acquired(lock_result):
+                    return
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    raise _postgres_lock_timeout_error(self._lock_name, timeout_seconds)
+                _sleep(min(_POSTGRES_LOCK_POLL_INTERVAL_SECONDS, remaining))
         if self._lock_kind == "mysql":
             lock_result = self._driver.select_value(
                 "SELECT GET_LOCK(:lock_name, :timeout)",
@@ -1087,8 +1130,18 @@ class _AsyncMigrationLockContext:
             return
         self._lock_name, self._lock_id = self._tracker._migration_lock_key()
         if self._lock_kind == "postgres":
-            await self._driver.execute("SELECT pg_advisory_lock(:lock_id)", {"lock_id": self._lock_id})
-            return
+            timeout_seconds = max(self._timeout_seconds, 0)
+            deadline = _monotonic() + timeout_seconds
+            while True:
+                lock_result = await self._driver.execute(
+                    "SELECT pg_try_advisory_lock(:lock_id) AS acquired", {"lock_id": self._lock_id}
+                )
+                if _is_postgres_lock_acquired(lock_result):
+                    return
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    raise _postgres_lock_timeout_error(self._lock_name, timeout_seconds)
+                await _async_sleep(min(_POSTGRES_LOCK_POLL_INTERVAL_SECONDS, remaining))
         if self._lock_kind == "mysql":
             lock_result = await self._driver.select_value(
                 "SELECT GET_LOCK(:lock_name, :timeout)",

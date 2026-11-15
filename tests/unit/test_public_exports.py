@@ -212,6 +212,8 @@ assert all(value is getattr(sqlspec, name) for name, value in zip(names, values)
         ("sqlspec.driver", "SyncDriverAdapterBase", "sqlspec.driver._common", "ExecutionResult"),
         ("sqlspec.observability", "ObservabilityConfig", "sqlspec.observability._common", "resolve_db_system"),
         ("sqlspec.data_dictionary", "get_dialect_config", "sqlspec.data_dictionary._registry", "get_dialect_config"),
+        ("sqlspec.utils.tenant", "TenantContext", "sqlspec.utils.tenant._context", "TenantContext"),
+        ("sqlspec.utils.serializers", "to_json", "sqlspec.utils.serializers._json", "encode_json"),
     ],
 )
 def test_concurrent_package_and_submodule_imports_preserve_identity(

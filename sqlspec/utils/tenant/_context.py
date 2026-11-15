@@ -124,23 +124,6 @@ class TenantRequestBinding:
         """Return whether request state may no longer be read."""
         return self._frozen
 
-    def _key(self, key: Any) -> Any:
-        if key is None and self._keys:
-            return self._keys[0]
-        return key
-
-    def _ambient_value(self, key: Any) -> TenantContextPayload | None:
-        ambient = self._ambient
-        if isinstance(ambient, TenantRequestBinding):
-            return ambient.resolve(key)
-        return ambient
-
-    async def _ambient_value_async(self, key: Any) -> TenantContextPayload | None:
-        ambient = self._ambient
-        if isinstance(ambient, TenantRequestBinding):
-            return await ambient.aresolve(key)
-        return ambient
-
     def resolve(self, key: Any = None) -> TenantContextPayload | None:
         """Return the tenant for ``key``, resolving it synchronously on first use.
 
@@ -182,13 +165,6 @@ class TenantRequestBinding:
         self._memo[memo_key] = payload
         return payload
 
-    def _require_resolved(self, key: Any, payload: TenantContextPayload | None) -> TenantContextPayload:
-        if payload is not None:
-            return payload
-        if not self._frozen and self._missing is not None:
-            self._missing(self._key(key))
-        raise TenantContextError(_MISSING_TENANT_MESSAGE)
-
     def require(self, key: Any = None) -> TenantContextPayload:
         """Return the tenant for ``key`` or reject the request.
 
@@ -228,6 +204,30 @@ class TenantRequestBinding:
                 except Exception:
                     self._memo[id(key)] = None
         self._frozen = True
+
+    def _key(self, key: Any) -> Any:
+        if key is None and self._keys:
+            return self._keys[0]
+        return key
+
+    def _ambient_value(self, key: Any) -> TenantContextPayload | None:
+        ambient = self._ambient
+        if isinstance(ambient, TenantRequestBinding):
+            return ambient.resolve(key)
+        return ambient
+
+    async def _ambient_value_async(self, key: Any) -> TenantContextPayload | None:
+        ambient = self._ambient
+        if isinstance(ambient, TenantRequestBinding):
+            return await ambient.aresolve(key)
+        return ambient
+
+    def _require_resolved(self, key: Any, payload: TenantContextPayload | None) -> TenantContextPayload:
+        if payload is not None:
+            return payload
+        if not self._frozen and self._missing is not None:
+            self._missing(self._key(key))
+        raise TenantContextError(_MISSING_TENANT_MESSAGE)
 
 
 tenant_context_var: ContextVar[TenantContextPayload | TenantRequestBinding | None] = ContextVar(

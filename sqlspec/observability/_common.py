@@ -24,7 +24,8 @@ _QQUOTE_PATTERN: Final[str] = (
     r"))"
 )
 _COMMON_SQL_HEAD: Final[str] = (
-    r"(?P<comment>--[^\n]*(?:\n|\Z)|/\*[\s\S]*?(?:\*/|\Z))"
+    r"(?P<ident>(?:[ACDF-MOPR-WYZ_acdf-mopr-wyz]|[eEbBxXqQ](?!')|[nN](?![qQ]?'))[A-Za-z0-9_]*)"
+    r"|(?P<comment>--[^\n]*(?:\n|\Z)|/\*[\s\S]*?(?:\*/|\Z))"
     r"|(?P<dquote>\"(?>[^\"]+|\"\")*(?:\"|\Z))"
     r"|(?P<bquote>`(?>[^`]+|``)*(?:`|\Z))"
     r"|(?P<dollar>\$(?P<tag>(?:[A-Za-z_][A-Za-z0-9_]*)?)\$[\s\S]*?(?:\$(?P=tag)\$|\Z))"
@@ -47,9 +48,6 @@ _SQL_REDACT_ANSI_PATTERN: Final[re.Pattern[str]] = re.compile(
     f"{_COMMON_SQL_HEAD}"
     r"|(?P<squote>(?:(?<![A-Za-z0-9_])[nNbBxX])?'(?>[^']+|'')*(?:'|\Z))"
     f"{_NUMERIC_LITERAL_PATTERN}"
-)
-_TRAILING_BS_SPLIT_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?<!\\)(?:\\\\)*\\'[ \t]*(?:,[ \t]*(?:'|[eEnNbBxXqQ]'|[0-9])|[);])"
 )
 
 _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
@@ -156,12 +154,11 @@ def compute_sql_hash(sql: str) -> str:
 
 def redact_sql_literals(sql: str) -> str:
     """Mask string, dollar-quoted, Oracle alternative-quoted, and bare numeric SQL literals."""
-    redacted, unclosed, saw_bs_quote, saw_bs_split = _scan_sql_literals(sql, _SQL_REDACT_BACKSLASH_PATTERN, ansi=False)
-    if saw_bs_quote and (unclosed or saw_bs_split):
-        ansi_redacted, ansi_unclosed, _, ansi_sep_bs = _scan_sql_literals(sql, _SQL_REDACT_ANSI_PATTERN, ansi=True)
-        if not ansi_unclosed or ansi_sep_bs:
-            return ansi_redacted
-    return redacted
+    spans, saw_bs_quote = _scan_sql_literals(sql, _SQL_REDACT_BACKSLASH_PATTERN)
+    if saw_bs_quote:
+        ansi_spans, _ = _scan_sql_literals(sql, _SQL_REDACT_ANSI_PATTERN)
+        spans = _merge_redacted_spans(spans, ansi_spans)
+    return _apply_redacted_spans(sql, spans)
 
 
 _OTEL_TRACE_MODULE: Any = None
@@ -210,65 +207,54 @@ def _get_sqlcommenter_context() -> Any:
     return _SQLCOMMENTER_CONTEXT.get()
 
 
-def _has_odd_trailing_backslashes(token: str) -> bool:
-    """Return True when ``token`` ends with an odd number of backslashes before its closing quote."""
-    body_start = token.find("'") + 1
-    if len(token) < body_start + 2 or not token.endswith("'"):
-        return False
-    backslashes = 0
-    idx = len(token) - 2
-    while idx >= body_start and token[idx] == "\\":
-        backslashes += 1
-        idx -= 1
-    return backslashes % 2 == 1
+def _scan_sql_literals(sql: str, pattern: re.Pattern[str]) -> tuple[list[tuple[int, int, bool]], bool]:
+    r"""Collect literal redaction intervals and detect ``\'`` sequences inside single-quoted spans."""
+    spans: list[tuple[int, int, bool]] = []
+    saw_bs_quote = False
+    for match in pattern.finditer(sql):
+        group = match.lastgroup
+        if group in {"ident", "comment", "dquote", "bquote"}:
+            continue
+        if group == "number":
+            spans.append((match.start(), match.end(), False))
+            continue
+        if group == "squote" and not saw_bs_quote and "\\'" in match.group(0):
+            saw_bs_quote = True
+        spans.append((match.start(), match.end(), True))
+    return spans, saw_bs_quote
 
 
-def _is_unclosed_squote(token: str, *, ansi: bool) -> bool:
-    """Return True when a matched single-quoted literal reached EOF without closing cleanly."""
-    body_start = token.find("'") + 1
-    if len(token) == body_start or not token.endswith("'"):
-        return True
-    if ansi:
-        return False
-    return _has_odd_trailing_backslashes(token)
+def _merge_redacted_spans(
+    primary_spans: list[tuple[int, int, bool]], secondary_spans: list[tuple[int, int, bool]]
+) -> list[tuple[int, int, bool]]:
+    """Compute the merged sorted union of backslash and ANSI literal intervals."""
+    combined = sorted(primary_spans + secondary_spans, key=lambda item: (item[0], item[1]))
+    if not combined:
+        return []
+    merged: list[tuple[int, int, bool]] = []
+    cur_start, cur_end, cur_is_string = combined[0]
+    for start, end, is_string in combined[1:]:
+        if start < cur_end or (start == cur_end and cur_is_string == is_string):
+            cur_end = max(cur_end, end)
+            cur_is_string = cur_is_string or is_string
+        else:
+            merged.append((cur_start, cur_end, cur_is_string))
+            cur_start, cur_end, cur_is_string = start, end, is_string
+    merged.append((cur_start, cur_end, cur_is_string))
+    return merged
 
 
-def _scan_sql_literals(sql: str, pattern: re.Pattern[str], *, ansi: bool) -> tuple[str, bool, bool, bool]:
-    """Scan ``sql`` linearly, returning redacted text and single-quote termination signals."""
+def _apply_redacted_spans(sql: str, spans: list[tuple[int, int, bool]]) -> str:
+    """Replace sorted disjoint intervals with string or numeric redaction masks."""
+    if not spans:
+        return sql
     parts: list[str] = []
     pos = 0
-    unclosed = False
-    saw_bs_quote = False
-    saw_bs_split = False
-    sql_len = len(sql)
-    for match in pattern.finditer(sql):
-        if match.start() > pos:
-            parts.append(sql[pos : match.start()])
-        group = match.lastgroup
-        token = match.group(0)
-        if group in {"comment", "dquote", "bquote"}:
-            parts.append(token)
-        elif group == "number":
-            parts.append("***")
-        elif group == "squote":
-            parts.append("'***'")
-            if "\\" in token:
-                if ansi:
-                    if _has_odd_trailing_backslashes(token):
-                        next_idx = match.end()
-                        while next_idx < sql_len and sql[next_idx] in {" ", "\t"}:
-                            next_idx += 1
-                        if next_idx == sql_len or sql[next_idx] in {",", ")", ";"}:
-                            saw_bs_split = True
-                elif "\\'" in token:
-                    saw_bs_quote = True
-                    if _TRAILING_BS_SPLIT_PATTERN.search(token) is not None:
-                        saw_bs_split = True
-            if match.end() == sql_len and _is_unclosed_squote(token, ansi=ansi):
-                unclosed = True
-        else:
-            parts.append("'***'")
-        pos = match.end()
-    if pos < sql_len:
+    for start, end, is_string in spans:
+        if start > pos:
+            parts.append(sql[pos:start])
+        parts.append("'***'" if is_string else "***")
+        pos = end
+    if pos < len(sql):
         parts.append(sql[pos:])
-    return "".join(parts), unclosed, saw_bs_quote, saw_bs_split
+    return "".join(parts)

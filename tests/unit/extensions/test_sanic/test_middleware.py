@@ -17,6 +17,7 @@ from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.sanic._utils import has_context_value
+from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 pytestmark = pytest.mark.anyio
@@ -567,3 +568,34 @@ async def test_sanic_commit_mode_redirect_and_manual_rollback_behavior(
     finally:
         reader.close()
     assert rows == ([("written",)] if expect_persisted else [])
+
+
+async def test_disable_di_with_routing_middleware_binds_routing_context_in_handler() -> None:
+    """disable_di with active routing middleware binds RoutingContext inside live handlers."""
+    from sanic import response
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        replicas=[{"database": ":memory:"}],
+        bind_key="orders",
+        extension_config={
+            "sanic": {"disable_di": True, "enable_routing_middleware": True, "default_routing_mode": "primary"}
+        },
+    )
+    app = Sanic(f"SQLSpecDisableDiRouting_{uuid4().hex}")
+    app.config.USE_UVLOOP = False
+    SQLSpecPlugin(config, app)
+
+    @app.get("/routing-state")
+    async def routing_state(_request: Any) -> Any:
+        payload = RoutingContext.current()
+        entry = RoutingContext.get_entry("orders")
+        return response.json({"has_scope": payload is not None, "mode": entry.mode if entry is not None else None})
+
+    try:
+        _, resp = await app.asgi_client.get("/routing-state")
+        assert resp.status == 200
+        assert resp.json == {"has_scope": True, "mode": "primary"}
+    finally:
+        Sanic.unregister_app(app)
+    assert RoutingContext.current() is None

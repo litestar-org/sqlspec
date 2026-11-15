@@ -321,22 +321,22 @@ class ConnectionCleanupMiddleware:
     ``http.response.start`` during streaming responses or ``after_response`` hooks.
     """
 
-    __slots__ = ("_app", "_targets")
+    __slots__ = ("_app", "_routing_targets", "_targets")
 
     def __init__(self, app: "ASGIApp", *, targets: "tuple[_ConnectionCleanupTarget, ...]") -> None:
         self._app = app
         self._targets = targets
+        self._routing_targets = tuple(target for target in targets if target.enable_routing_middleware)
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if scope.get("type") not in {ScopeType.HTTP, ScopeType.WEBSOCKET} or not self._targets:
             await self._app(scope, receive, send)
             return
-        routing_targets = [target for target in self._targets if target.enable_routing_middleware]
-        if not routing_targets:
+        if not self._routing_targets:
             await self._run_request(scope, receive, send)
             return
         payload = RoutingContext.current() or RoutingContextPayload()
-        for target in routing_targets:
+        for target in self._routing_targets:
             if target.default_routing_mode == "primary" and payload.get(target.bind_key) is None:
                 payload = payload.with_entry(target.bind_key, RoutingEntry("primary"))
             cookie_header, routing_header_value = extract_asgi_routing_headers(
@@ -757,7 +757,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 commit_mode=state.commit_mode,
                 bind_key=state.config.bind_key,
                 default_routing_mode=state.default_routing_mode,
-                enable_routing_middleware=state.enable_routing_middleware,
+                enable_routing_middleware=_is_routing_state_active(state),
                 routing_header_bytes=state.routing_header.lower().encode("ascii")
                 if state.routing_header is not None
                 else None,
@@ -1722,16 +1722,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         )
         raise KeyError(msg)
 
-    def _raise_duplicate_connection_keys(self) -> None:
-        """Raise error when connection keys are not unique."""
-        msg = "When using multiple database configuration, each configuration must have a unique `connection_key`."
-        raise ImproperConfigurationError(detail=msg)
-
-    def _raise_duplicate_pool_keys(self) -> None:
-        """Raise error when pool keys are not unique."""
-        msg = "When using multiple database configuration, each configuration must have a unique `pool_key`."
-        raise ImproperConfigurationError(detail=msg)
-
 
 class SQLCommenterMiddleware:
     """ASGI middleware that populates SQLCommenterContext with Litestar request attributes.
@@ -2052,3 +2042,16 @@ def _detach_and_delete_scope_state(scope: "Scope", key: str) -> None:
         detach = getattr(value, "_detach_connection", None)
         if detach is not None:
             detach()
+
+
+def _is_routing_state_active(state: PluginConfigState) -> bool:
+    return bool(
+        state.enable_routing_middleware
+        and (
+            getattr(state.config, "has_replicas", False)
+            or getattr(state.config, "supports_read_routing", False)
+            or state.routing_header is not None
+            or state.write_pin_cookie is not None
+            or state.default_routing_mode != "auto"
+        )
+    )

@@ -77,6 +77,7 @@ class SQLSpecPlugin:
         "_extractor",
         "_lifecycle_listeners_added",
         "_request_middleware_added",
+        "_routing_states",
         "_sqlspec",
         "_tenant_states",
     )
@@ -106,6 +107,10 @@ class SQLSpecPlugin:
             settings = self._extract_extension_settings(cfg)
             state = self._config_state(cfg, settings)
             self._config_states.append(state)
+
+        self._routing_states: tuple[SanicConfigState, ...] = tuple(
+            state for state in self._config_states if _is_routing_state_active(state)
+        )
 
         correlation_state = self._first_correlation_state()
         self._extractor = (
@@ -784,10 +789,9 @@ class SQLSpecPlugin:
             request: Sanic request instance.
         """
         self._bind_active_request(request)
-        routing_states = [state for state in self._config_states if state.enable_routing_middleware]
-        if routing_states and not has_context_value(request.ctx, _ROUTING_SCOPE_KEY):
+        if self._routing_states and not has_context_value(request.ctx, _ROUTING_SCOPE_KEY):
             payload = RoutingContext.current() or RoutingContextPayload()
-            for state in routing_states:
+            for state in self._routing_states:
                 if state.default_routing_mode == "primary" and payload.get(state.config.bind_key) is None:
                     payload = payload.with_entry(state.config.bind_key, RoutingEntry("primary"))
                 payload = apply_request_routing_hints(
@@ -874,10 +878,9 @@ class SQLSpecPlugin:
         Returns:
             ``True`` when connection management or observability middleware is enabled.
         """
-        return any(
+        return bool(self._routing_states) or any(
             not state.disable_di
             or _has_tenant_strategy(state.config)
-            or state.enable_routing_middleware
             or state.enable_correlation_middleware
             or self._state_enables_sqlcommenter(state)
             for state in self._config_states
@@ -1430,3 +1433,16 @@ def _detach_deferred_session(deferred: Any) -> None:
         detach = getattr(deferred, "_detach_connection", None)
         if detach is not None:
             detach()
+
+
+def _is_routing_state_active(state: SanicConfigState) -> bool:
+    return bool(
+        state.enable_routing_middleware
+        and (
+            getattr(state.config, "has_replicas", False)
+            or getattr(state.config, "supports_read_routing", False)
+            or state.routing_header is not None
+            or state.write_pin_cookie is not None
+            or state.default_routing_mode != "auto"
+        )
+    )

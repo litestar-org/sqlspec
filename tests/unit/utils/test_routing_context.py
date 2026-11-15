@@ -91,7 +91,8 @@ def test_payload_and_entry_are_immutable_snapshots() -> None:
         ([(b"x-sqlspec-routing", b"primary")], ("primary", None, None)),
         ([(b"x-sqlspec-routing", b"replica:reporting")], ("replica", "reporting", None)),
         ([(b"cookie", b"wp=lsn-10")], ("primary", None, "lsn-10")),
-        ([(b"cookie", b"wp=1"), (b"x-sqlspec-routing", b"replica")], ("replica", None, None)),
+        ([(b"cookie", b"wp=1"), (b"x-sqlspec-routing", b"replica")], ("primary", None, None)),
+        ([(b"cookie", b"wp=1"), (b"x-sqlspec-routing", b"replica:reporting")], ("primary", None, None)),
         ([(b"x-sqlspec-routing", b"bogus")], ("auto", None, None)),
         ([(b"x-sqlspec-routing", b"replica:" + b"a" * 257)], ("auto", None, None)),
         ([(b"x-sqlspec-routing", b"replica:bad\x7fgroup")], ("auto", None, None)),
@@ -221,8 +222,8 @@ async def test_middleware_signed_cookie_and_disabled_header(
     [
         ("auto", ("primary", None, "lsn-77", True)),
         ("primary", ("primary", None, None, False)),
-        ("replica", ("replica", None, None, False)),
-        ("replica:reporting", ("replica", "reporting", None, False)),
+        ("replica", ("primary", None, "lsn-77", True)),
+        ("replica:reporting", ("primary", None, "lsn-77", True)),
     ],
 )
 def test_apply_request_routing_hints_auto_header_preserves_verified_write_pin(
@@ -299,3 +300,40 @@ async def test_middleware_auto_header_preserves_signed_write_pin() -> None:
         send,
     )
     assert observed == [("primary", None, "lsn-88", True)]
+
+
+@pytest.mark.parametrize(
+    ("header_value", "expected"),
+    [("replica", ("replica", None, None, False)), ("replica:reporting", ("replica", "reporting", None, False))],
+)
+def test_apply_request_routing_hints_replica_applies_without_active_write_pin(
+    header_value: str, expected: tuple[str, str | None, str | None, bool]
+) -> None:
+    payload = apply_request_routing_hints(
+        RoutingContextPayload(),
+        bind_key="orders",
+        routing_header_value=header_value,
+        cookie_value=None,
+        write_pin_cookie="wp",
+        routing_secret="cookie-secret",
+    )
+    entry = payload.get("orders")
+    assert entry is not None
+    assert (entry.mode, entry.bind_group, entry.causal_token, entry.pinned_by_write) == expected
+
+
+def test_with_write_pin_and_mark_write_short_circuit_when_already_pinned() -> None:
+    initial = RoutingContextPayload().with_write_pin("orders", causal_token="lsn-5")
+    assert initial.with_write_pin("orders") is initial
+    assert initial.with_write_pin("orders", causal_token="lsn-5") is initial
+    updated = initial.with_write_pin("orders", causal_token="lsn-6")
+    assert updated is not initial
+    assert updated.get("orders") == RoutingEntry("primary", causal_token="lsn-6", pinned_by_write=True)
+
+    with RoutingContext.scope(initial):
+        assert RoutingContext.mark_write("orders")
+        assert RoutingContext.current() is initial
+        assert RoutingContext.mark_write("orders", causal_token="lsn-5")
+        assert RoutingContext.current() is initial
+        assert RoutingContext.mark_write("orders", causal_token="lsn-6")
+        assert RoutingContext.current() is not initial

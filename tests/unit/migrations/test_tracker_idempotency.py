@@ -709,7 +709,7 @@ async def test_tracker_real_sqlite_sequenced_insert_increments_execution_sequenc
 @pytest.mark.parametrize(
     ("dialect", "expected_enter_fragment", "expected_exit_fragment"),
     [
-        ("postgres", "pg_advisory_lock", "pg_advisory_unlock"),
+        ("postgres", "pg_try_advisory_lock", "pg_advisory_unlock"),
         ("mysql", "GET_LOCK", "RELEASE_LOCK"),
         ("tsql", "sp_getapplock", "sp_releaseapplock"),
         ("sqlite", "BEGIN IMMEDIATE", None),
@@ -729,6 +729,8 @@ async def test_tracker_acquire_lock_dialect_statements_and_release_on_error(
         executed.append((sql_text, params))
         if sql_text == "BEGIN IMMEDIATE":
             tx_state["active"] = True
+        if "pg_try_advisory_lock" in sql_text:
+            return SQLResult(data=[{"acquired": True}])
         if "sp_getapplock" in sql_text:
             return SQLResult(data=[{"res": 0}])
         return SQLResult()
@@ -917,10 +919,11 @@ async def test_postgres_acquire_lock_rolls_back_before_unlock_and_preserves_prim
 
     def _exec_sync(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
         sql_text = str(stmt)
-        if "pg_advisory_lock" in sql_text:
+        if "pg_try_advisory_lock" in sql_text:
             tx_state["active"] = True
             events.append("lock")
-        elif "pg_advisory_unlock" in sql_text:
+            return SQLResult(data=[{"acquired": True}])
+        if "pg_advisory_unlock" in sql_text:
             events.append("unlock")
             if unlock_raises:
                 raise RuntimeError("unlock socket failure")
@@ -1423,7 +1426,10 @@ async def test_async_acquire_lock_uses_transaction_open_and_unlocks_on_cancellat
         async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
             sql_text = str(stmt)
             events.append(f"exec:{sql_text}")
-            if "pg_advisory_lock" in sql_text or sql_text == "BEGIN IMMEDIATE":
+            if "pg_try_advisory_lock" in sql_text:
+                open_tx["active"] = True
+                return SQLResult(data=[{"acquired": True}])
+            if sql_text == "BEGIN IMMEDIATE":
                 open_tx["active"] = True
             if "sp_getapplock" in sql_text:
                 return SQLResult(data=[{"res": 0}])
@@ -1559,7 +1565,10 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
             dialect = backend
 
             async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
-                executed.append(str(stmt))
+                sql_text = str(stmt)
+                executed.append(sql_text)
+                if "pg_try_advisory_lock" in sql_text:
+                    return SQLResult(data=[{"acquired": True}])
                 return SQLResult()
 
             async def rollback(self) -> None:
@@ -1587,7 +1596,10 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
         dialect = backend
 
         def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
-            executed.append(str(stmt))
+            sql_text = str(stmt)
+            executed.append(sql_text)
+            if "pg_try_advisory_lock" in sql_text:
+                return SQLResult(data=[{"acquired": True}])
             return SQLResult()
 
         def rollback(self) -> None:
@@ -1729,12 +1741,12 @@ async def test_sqlite_unrecovered_savepoint_failure_rolls_back_outer_transaction
 @pytest.mark.parametrize(
     ("driver_kind", "dialect", "expected_backend", "expected_lock_sql"),
     [
-        ("adbc", "postgres", "postgres", "pg_advisory_lock"),
+        ("adbc", "postgres", "postgres", "pg_try_advisory_lock"),
         ("adbc", "mysql", "mysql", "GET_LOCK"),
         ("adbc", "tsql", "mssql", "sp_getapplock"),
         ("adbc", "sqlite", "", None),
         ("adbc", "cockroachdb", "", None),
-        ("arrow_odbc", "postgres", "postgres", "pg_advisory_lock"),
+        ("arrow_odbc", "postgres", "postgres", "pg_try_advisory_lock"),
         ("arrow_odbc", "mysql", "mysql", "GET_LOCK"),
         ("arrow_odbc", "tsql", "mssql", "sp_getapplock"),
         ("arrow_odbc", "sqlite", "", None),
@@ -1766,6 +1778,8 @@ def test_bridge_driver_migration_advisory_lock_classification_and_sqlite_exclusi
     def _capture_execute(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
         sql_text = str(stmt)
         executed.append(sql_text)
+        if "pg_try_advisory_lock" in sql_text:
+            return SQLResult(data=[{"acquired": True}])
         if "GET_LOCK" in sql_text:
             return SQLResult(data=[{"acquired": 1}])
         if "sp_getapplock" in sql_text:
@@ -1798,7 +1812,10 @@ def test_adbc_postgres_lock_error_unwind_rolls_back_implicit_transaction(monkeyp
     assert driver._has_implicit_transaction() is True  # pyright: ignore[reportPrivateUsage]
 
     def _capture_execute(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
-        events.append(f"execute:{stmt}")
+        sql_text = str(stmt)
+        events.append(f"execute:{sql_text}")
+        if "pg_try_advisory_lock" in sql_text:
+            return SQLResult(data=[{"acquired": True}])
         return SQLResult()
 
     monkeypatch.setattr(AdbcDriver, "execute", _capture_execute)
@@ -1818,6 +1835,9 @@ def test_adbc_postgres_lock_error_unwind_rolls_back_implicit_transaction(monkeyp
     [
         ("audit.ddl_migrations", "public", True, ""),
         ('"Audit".ddl_migrations', "public", True, ""),
+        ("Sales.ddl_migrations", "sales", False, "sales.ddl_migrations"),
+        ('"Sales".ddl_migrations', "sales", True, ""),
+        ("Sales.ddl_migrations", '"sales"', True, ""),
         ("audit.ddl_migrations", "audit", False, "audit.ddl_migrations"),
         ('"Audit"."DdlMigrations"', "Audit", False, '"Audit"."DdlMigrations"'),
         ("audit.ddl_migrations", None, False, "audit.ddl_migrations"),
@@ -1898,3 +1918,116 @@ async def test_postgres_ensure_tracking_table_validates_relation_kind_and_trigge
             tracker_sync.ensure_tracking_table(driver_sync)
         return
     tracker_sync.ensure_tracking_table(driver_sync)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_postgres_acquire_lock_retries_until_acquired(is_async: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PostgreSQL acquire_lock polls pg_try_advisory_lock until lock ownership succeeds."""
+    outcomes = iter([False, False, True])
+    executed: list[str] = []
+    sleeps: list[float] = []
+
+    def _next_result(sql_text: str) -> SQLResult:
+        executed.append(sql_text)
+        if "pg_try_advisory_lock" in sql_text:
+            return SQLResult(data=[{"acquired": next(outcomes)}])
+        return SQLResult()
+
+    clock = iter([0.0, 0.01, 0.02])
+    monkeypatch.setattr("sqlspec.migrations.tracker._monotonic", lambda: next(clock))
+    monkeypatch.setattr("sqlspec.migrations.tracker._sleep", lambda duration: sleeps.append(duration))
+
+    async def _async_sleep(duration: float) -> None:
+        sleeps.append(duration)
+
+    monkeypatch.setattr("sqlspec.migrations.tracker._async_sleep", _async_sleep)
+
+    if is_async:
+
+        class _RetryAsyncDriver:
+            dialect = "postgres"
+
+            async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+                return _next_result(str(stmt))
+
+            async def _transaction_open(self) -> bool:
+                return False
+
+        driver_async: Any = _RetryAsyncDriver()
+        async with AsyncMigrationTracker().acquire_lock(driver_async, timeout_seconds=1):
+            pass
+    else:
+
+        class _RetrySyncDriver:
+            dialect = "postgres"
+
+            def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+                return _next_result(str(stmt))
+
+            def _connection_in_transaction(self) -> bool:
+                return False
+
+        driver_sync: Any = _RetrySyncDriver()
+        with SyncMigrationTracker().acquire_lock(driver_sync, timeout_seconds=1):
+            pass
+
+    assert sum("pg_try_advisory_lock" in sql for sql in executed) == 3
+    assert any("pg_advisory_unlock" in sql for sql in executed)
+    assert len(sleeps) == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("timeout_seconds", [0, 2], ids=["zero-timeout", "positive-timeout"])
+async def test_postgres_acquire_lock_timeout_raises_migration_error(
+    is_async: bool, timeout_seconds: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PostgreSQL acquire_lock raises MigrationError when pg_try_advisory_lock never succeeds before deadline."""
+    executed: list[str] = []
+    clock_ticks = iter([10.0, 10.5, 12.5])
+
+    monkeypatch.setattr("sqlspec.migrations.tracker._monotonic", lambda: next(clock_ticks, 99.0))
+    monkeypatch.setattr("sqlspec.migrations.tracker._sleep", lambda _duration: None)
+
+    async def _async_sleep(_duration: float) -> None:
+        return None
+
+    monkeypatch.setattr("sqlspec.migrations.tracker._async_sleep", _async_sleep)
+
+    if is_async:
+
+        class _BusyAsyncDriver:
+            dialect = "postgres"
+
+            async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+                executed.append(str(stmt))
+                return SQLResult(data=[{"acquired": False}])
+
+            async def _transaction_open(self) -> bool:
+                return False
+
+        driver_async: Any = _BusyAsyncDriver()
+        with pytest.raises(MigrationError, match="Failed to acquire PostgreSQL migration lock"):
+            async with AsyncMigrationTracker().acquire_lock(driver_async, timeout_seconds=timeout_seconds):
+                pass
+    else:
+
+        class _BusySyncDriver:
+            dialect = "postgres"
+
+            def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+                executed.append(str(stmt))
+                return SQLResult(data=[{"acquired": False}])
+
+            def _connection_in_transaction(self) -> bool:
+                return False
+
+        driver_sync: Any = _BusySyncDriver()
+        with pytest.raises(MigrationError, match="Failed to acquire PostgreSQL migration lock"):
+            with SyncMigrationTracker().acquire_lock(driver_sync, timeout_seconds=timeout_seconds):
+                pass
+
+    expected_attempts = 1 if timeout_seconds == 0 else 2
+    assert sum("pg_try_advisory_lock" in sql for sql in executed) == expected_attempts
+    assert not any("pg_advisory_unlock" in sql for sql in executed)

@@ -267,3 +267,32 @@ async def test_litestar_unawaited_deferred_sessions_are_detached_after_response(
     for handle in leaked:
         with pytest.raises(ImproperConfigurationError, match="already closed"):
             await handle.select_value("SELECT 1")
+
+
+@pytest.mark.parametrize(
+    ("first_ext", "second_ext"),
+    [
+        ({"read_session_key": "shared_key"}, {"routing_session_key": "shared_key"}),
+        (
+            {"connection_key": "shared_conn", "pool_key": "pool_a", "session_key": "sess_a"},
+            {"read_connection_key": "shared_conn"},
+        ),
+    ],
+)
+def test_litestar_cross_config_duplicate_dependency_key_raises(
+    first_ext: dict[str, Any], second_ext: dict[str, Any]
+) -> None:
+    """Duplicate DI keys across multiple database configurations raise ImproperConfigurationError."""
+    first = SqliteConfig(bind_key="first", extension_config={"litestar": first_ext})
+    second = SqliteConfig(bind_key="second", extension_config={"litestar": second_ext})
+    plugin = SQLSpecPlugin([first, second])
+
+    @get("/ping", sync_to_thread=False)
+    def ping() -> dict[str, bool]:
+        return {"ok": True}
+
+    with (
+        pytest.raises(ImproperConfigurationError, match="must be unique"),
+        create_test_client([ping], plugins=[plugin]),
+    ):
+        pass

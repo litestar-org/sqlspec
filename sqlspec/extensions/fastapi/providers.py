@@ -13,7 +13,7 @@ import os
 import typing
 from collections.abc import Callable, Mapping
 from enum import Enum
-from functools import partial
+from functools import lru_cache, partial
 from inspect import isclass
 from types import GenericAlias
 from typing import Annotated, Any, Literal, NamedTuple, NotRequired, TypeVar, cast
@@ -456,6 +456,7 @@ def _resolve_context_identity(request: Any) -> str:
     return str(path or "fastapi:standalone")
 
 
+@lru_cache(maxsize=256)
 def _derive_cursor_secret(secret: str | bytes, context_identity: str) -> bytes:
     secret_bytes = secret if isinstance(secret, bytes) else secret.encode("utf-8")
     return hmac.new(secret_bytes, context_identity.encode("utf-8"), hashlib.sha256).digest()

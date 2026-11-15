@@ -70,12 +70,13 @@ __all__ = (
 class SQLSpecRequestLeaseMiddleware:
     """Own every database lease through ASGI streaming and background completion."""
 
-    __slots__ = ("app", "config_states")
+    __slots__ = ("_routing_states", "app", "config_states")
 
     def __init__(self, app: "ASGIApp", config_states: "Sequence[SQLSpecConfigState]") -> None:
         """Bind the downstream application and its active database configurations."""
         self.app = app
         self.config_states = tuple(config_states)
+        self._routing_states = tuple(state for state in self.config_states if _is_routing_state_active(state))
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -86,23 +87,27 @@ class SQLSpecRequestLeaseMiddleware:
             if scope["type"] == "http"
             else cast("Request", HTTPConnection(scope))
         )
-        routing_states = [state for state in self.config_states if state.enable_routing_middleware]
-        payload = RoutingContext.current() or RoutingContextPayload()
-        for state in routing_states:
-            bind_key = getattr(state.config, "bind_key", None)
-            if state.default_routing_mode == "primary" and payload.get(bind_key) is None:
-                payload = payload.with_entry(bind_key, RoutingEntry("primary"))
-            cookie_header, routing_header_value = extract_asgi_routing_headers(
-                scope, state.routing_header_bytes, include_cookies=state.write_pin_cookie is not None
-            )
-            payload = apply_request_routing_hints(
-                payload,
-                bind_key=bind_key,
-                routing_header_value=routing_header_value,
-                cookie_header=cookie_header,
-                write_pin_cookie=state.write_pin_cookie,
-                routing_secret=state.routing_secret,
-            )
+        routing_scope: Any
+        if self._routing_states:
+            payload = RoutingContext.current() or RoutingContextPayload()
+            for state in self._routing_states:
+                bind_key = getattr(state.config, "bind_key", None)
+                if state.default_routing_mode == "primary" and payload.get(bind_key) is None:
+                    payload = payload.with_entry(bind_key, RoutingEntry("primary"))
+                cookie_header, routing_header_value = extract_asgi_routing_headers(
+                    scope, state.routing_header_bytes, include_cookies=state.write_pin_cookie is not None
+                )
+                payload = apply_request_routing_hints(
+                    payload,
+                    bind_key=bind_key,
+                    routing_header_value=routing_header_value,
+                    cookie_header=cookie_header,
+                    write_pin_cookie=state.write_pin_cookie,
+                    routing_secret=state.routing_secret,
+                )
+            routing_scope = RoutingContext.scope(payload)
+        else:
+            routing_scope = nullcontext()
         status_code = 500
         response_complete = False
         completions: list[_ResponseCompletion] = []
@@ -117,7 +122,6 @@ class SQLSpecRequestLeaseMiddleware:
                 for completion in completions:
                     completion.complete = True
 
-        routing_scope: Any = RoutingContext.scope(payload) if routing_states else nullcontext()
         async with routing_scope, AsyncExitStack() as stack:
             with ExitStack() as sync_stack:
                 for state in self.config_states:
@@ -948,3 +952,16 @@ def _clear_deferred_session(request: "Request", key: str) -> None:
         detach = getattr(deferred, "_detach_connection", None)
         if callable(detach):
             detach()
+
+
+def _is_routing_state_active(state: "SQLSpecConfigState") -> bool:
+    return bool(
+        state.enable_routing_middleware
+        and (
+            getattr(state.config, "has_replicas", False)
+            or getattr(state.config, "supports_read_routing", False)
+            or state.routing_header is not None
+            or state.write_pin_cookie is not None
+            or state.default_routing_mode != "auto"
+        )
+    )

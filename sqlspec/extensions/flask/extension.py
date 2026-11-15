@@ -109,6 +109,10 @@ class SQLSpecPlugin:
             ):
                 self._enable_sqlcommenter = True
 
+        self._routing_states: tuple[FlaskConfigState, ...] = tuple(
+            state for state in self._config_states if _is_routing_state_active(state)
+        )
+
         if app is not None:
             self.init_app(app)
 
@@ -159,7 +163,7 @@ class SQLSpecPlugin:
 
         app.extensions["sqlspec"] = {"plugin": self, "pools": pools}
 
-        if any(
+        if self._routing_states or any(
             not state.disable_di
             or _has_tenant_strategy(state.config)
             or state.enable_correlation_middleware
@@ -504,10 +508,9 @@ class SQLSpecPlugin:
         """
         from flask import g, request
 
-        routing_states = [state for state in self._config_states if state.enable_routing_middleware]
-        if routing_states and not has_context_value(g, _ROUTING_SCOPE_KEY):
+        if self._routing_states and not has_context_value(g, _ROUTING_SCOPE_KEY):
             payload = RoutingContext.current() or RoutingContextPayload()
-            for state in routing_states:
+            for state in self._routing_states:
                 if state.default_routing_mode == "primary" and payload.get(state.config.bind_key) is None:
                     payload = payload.with_entry(state.config.bind_key, RoutingEntry("primary"))
                 payload = apply_request_routing_hints(
@@ -1176,3 +1179,16 @@ async def _exit_tenant_connection(
 def _current_tenant_payload() -> TenantContextPayload | None:
     binding = TenantContext.current_binding()
     return binding if isinstance(binding, TenantContextPayload) else None
+
+
+def _is_routing_state_active(state: FlaskConfigState) -> bool:
+    return bool(
+        state.enable_routing_middleware
+        and (
+            getattr(state.config, "has_replicas", False)
+            or getattr(state.config, "supports_read_routing", False)
+            or state.routing_header is not None
+            or state.write_pin_cookie is not None
+            or state.default_routing_mode != "auto"
+        )
+    )

@@ -111,7 +111,15 @@ class RoutingContextPayload:
         self, bind_key: str | None = None, *, causal_token: str | None = None
     ) -> "RoutingContextPayload":
         """Return a primary-pinned snapshot retaining the bind's causal metadata."""
-        old = self.get(bind_key) or RoutingEntry()
+        existing = self.get(bind_key)
+        if (
+            existing is not None
+            and existing.mode == "primary"
+            and existing.pinned_by_write
+            and (causal_token is None or existing.causal_token == causal_token)
+        ):
+            return self
+        old = existing or RoutingEntry()
         return self.with_entry(
             bind_key,
             RoutingEntry(
@@ -181,7 +189,9 @@ class RoutingContext:
         payload = cls.current()
         if payload is None:
             return False
-        cls.set(payload.with_write_pin(bind_key, causal_token=causal_token))
+        updated = payload.with_write_pin(bind_key, causal_token=causal_token)
+        if updated is not payload:
+            cls.set(updated)
         return True
 
     @classmethod
@@ -497,15 +507,16 @@ def apply_request_routing_hints(
                 get_logger("sqlspec.routing").debug("Ignoring invalid write-pin cookie %r", resolved_cookie)
     cleaned_header = routing_header_value.strip() if routing_header_value is not None else ""
     if cleaned_header:
-        if cleaned_header == "auto":
+        if cleaned_header == "primary":
+            payload = payload.with_entry(bind_key, RoutingEntry("primary"))
+        elif cleaned_header in {"auto", "replica"}:
             existing = payload.get(bind_key)
             if existing is None or not existing.pinned_by_write:
-                payload = payload.with_entry(bind_key, RoutingEntry("auto"))
-        elif cleaned_header in {"primary", "replica"}:
-            entry = RoutingEntry("primary" if cleaned_header == "primary" else "replica")
-            payload = payload.with_entry(bind_key, entry)
+                payload = payload.with_entry(bind_key, RoutingEntry("auto" if cleaned_header == "auto" else "replica"))
         elif cleaned_header.startswith("replica:") and is_valid_routing_token(cleaned_header[8:]):
-            payload = payload.with_entry(bind_key, RoutingEntry("replica", bind_group=cleaned_header[8:]))
+            existing = payload.get(bind_key)
+            if existing is None or not existing.pinned_by_write:
+                payload = payload.with_entry(bind_key, RoutingEntry("replica", bind_group=cleaned_header[8:]))
         elif strict_headers:
             msg = f"Invalid routing header {cleaned_header!r}"
             raise RoutingContextError(msg)
@@ -609,6 +620,8 @@ def _split_cookie_segments(cookie_header: str) -> list[str]:
 
 
 def _extract_cookie_value(cookie_header: str, cookie_name: str) -> str | None:
+    if not cookie_name or cookie_name not in cookie_header:
+        return None
     cookie = SimpleCookie()
     try:
         cookie.load(cookie_header)

@@ -58,22 +58,21 @@ _BRIDGE_DRIVER_CLASS_NAMES: Final[frozenset[str]] = frozenset({"AdbcDriver", "Ar
 _PG_RELATION_GUARD_SQL: Final[str] = (
     "SELECT "
     "c.relkind::text AS relkind, "
-    "EXISTS ("
-    "SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal"
-    ") AS has_user_triggers "
+    "(COUNT(t.tgrelid) > 0) AS has_user_triggers "
     "FROM pg_catalog.pg_class c "
-    "WHERE c.oid = pg_catalog.to_regclass(:version_table)"
+    "LEFT JOIN pg_catalog.pg_trigger t ON t.tgrelid = c.oid AND NOT t.tgisinternal "
+    "WHERE c.oid = pg_catalog.to_regclass(:version_table) "
+    "GROUP BY c.oid, c.relkind"
 )
 _PG_RLS_SCHEMA_CHECK_SQL: Final[str] = (
     "SELECT n.nspname::text AS schema_name, c.relname::text AS table_name "
     "FROM pg_catalog.pg_class c "
     "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+    "LEFT JOIN pg_catalog.pg_policy p ON p.polrelid = c.oid "
     "WHERE n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
     "AND c.relkind IN ('r', 'p') "
-    "AND ("
-    "c.relrowsecurity "
-    "OR EXISTS (SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid)"
-    ")"
+    "GROUP BY n.nspname, c.relname, c.relrowsecurity "
+    "HAVING c.relrowsecurity OR COUNT(p.polrelid) > 0"
 )
 
 
@@ -187,10 +186,15 @@ class BaseMigrationTracker(Generic[DriverT]):
         clean_schema = version_table_schema.strip() if isinstance(version_table_schema, str) else ""
         explicit_schema_identifier = _parse_ddl_identifier(clean_schema) if clean_schema else None
         if explicit_schema_identifier is not None:
-            if (
-                embedded_schema_identifier is not None
-                and explicit_schema_identifier.name != embedded_schema_identifier.name
-            ):
+            schemas_conflict = False
+            if embedded_schema_identifier is not None:
+                if embedded_schema_identifier.quoted or explicit_schema_identifier.quoted:
+                    schemas_conflict = explicit_schema_identifier.name != embedded_schema_identifier.name
+                else:
+                    schemas_conflict = (
+                        explicit_schema_identifier.name.lower() != embedded_schema_identifier.name.lower()
+                    )
+            if schemas_conflict and embedded_schema_identifier is not None:
                 msg = (
                     f"Conflicting migration version table schemas: '{embedded_schema_identifier.name}' in "
                     f"version_table_name '{version_table_name}' vs explicit version_table_schema "

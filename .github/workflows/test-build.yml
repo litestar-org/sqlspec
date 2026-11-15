@@ -188,7 +188,7 @@ jobs:
         run: uv sync --frozen --extra performance --group build
 
       - name: Build source distribution
-        run: uv build --sdist
+        run: uv build --sdist --no-build-isolation
 
       - name: Upload source artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -219,7 +219,7 @@ jobs:
         run: uv sync --frozen --extra performance --group build
 
       - name: Build standard wheel
-        run: uv build --wheel
+        run: uv build --wheel --no-build-isolation
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -424,7 +424,12 @@ jobs:
           uv pip install --no-config --python test-mypyc --no-index --no-deps --find-links dist-mypyc/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
           uv pip install --no-config --python test-mypyc --require-hashes -r .build-requirements/runtime.txt
           uv run --no-project --python test-mypyc python -I -c "import sqlspec, os, sys; v=sqlspec.__version__; e=os.environ['SQLSPEC_EXPECTED_VERSION']; sys.exit(0 if v == e else (sys.stderr.write(f'version mismatch: got {v}, expected {e}\n') or 1))"
-          uv pip install --no-config --python test-mypyc --require-hashes -r .build-requirements/smoke.txt || echo "::warning::obstore or pyarrow unavailable; the obstore smoke check will be skipped"
+          grep -v '^[[:space:]]*--hash=' .build-requirements/smoke.txt | sed -e 's/[[:space:]]*\\$//' > .build-requirements/smoke-specs.txt
+          if uv pip install --no-config --python test-mypyc --dry-run --only-binary :all: -r .build-requirements/smoke-specs.txt; then
+            uv pip install --no-config --python test-mypyc --require-hashes --only-binary :all: -r .build-requirements/smoke.txt
+          else
+            echo "::warning::obstore or pyarrow binary wheel unavailable for Python ${PYTHON_VERSION}; the obstore smoke check will be skipped"
+          fi
           uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py --require-compiled
 
   verify-packages:
