@@ -56,7 +56,7 @@ Combine multiple optional extras in a single install command when adding drivers
 
 ## Database Driver Extras
 
-Install only the driver extras needed by your deployment target. See [Databases](../databases/index.md) for adapter-by-adapter connection and pool configuration.
+Each extra installs a supported minimum version of its driver or library, so an install never resolves to a release older than the one SQLSpec is tested against. Install only the driver extras needed by your deployment target. See [Databases](../databases/index.md) for adapter-by-adapter connection and pool configuration.
 
 | Family | Extra | Installed Driver Package(s) |
 | --- | --- | --- |

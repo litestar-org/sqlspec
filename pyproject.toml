@@ -32,51 +32,55 @@ Issue = "https://github.com/litestar-org/sqlspec/issues/"
 Source = "https://github.com/litestar-org/sqlspec"
 
 [project.optional-dependencies]
-adbc = ["adbc_driver_manager", "pyarrow>=14.0.1"]
+adbc = ["adbc_driver_manager>=1.5.0", "pyarrow>=14.0.1"]
 adk = ["google-adk>=2.14.1"]
-aiomysql = ["aiomysql"]
-aiosqlite = ["aiosqlite"]
-alloydb = ["google-cloud-alloydb-connector"]
+aiomysql = ["aiomysql>=0.2.0"]
+aiosqlite = ["aiosqlite>=0.20.0"]
+alloydb = ["google-cloud-alloydb-connector>=1.4.0"]
 arrow-odbc = ["arrow-odbc>=10.4", "pyarrow>=14.0.1"]
 asyncmy = ["asyncmy>=0.2.13"]
-asyncpg = ["asyncpg"]
-attrs = ["attrs", "cattrs"]
-bigquery = ["google-cloud-bigquery", "google-cloud-bigquery-storage", "google-cloud-storage"]
-cloud-sql = ["cloud-sql-python-connector"]
-cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
+asyncpg = ["asyncpg>=0.30.0"]
+attrs = ["attrs>=23.1.0", "cattrs>=23.1.0"]
+bigquery = [
+  "google-cloud-bigquery>=3.25.0",
+  "google-cloud-bigquery-storage>=2.25.0",
+  "google-cloud-storage>=2.18.0",
+]
+cloud-sql = ["cloud-sql-python-connector>=1.12.0"]
+cockroachdb = ["psycopg[binary,pool]>=3.2.0", "asyncpg>=0.30.0"]
 db2 = ["ibm_db>=3.3.0"]
-duckdb = ["duckdb", "pytz", "pyarrow>=14.0.1"]
-fastapi = ["fastapi"]
-flask = ["flask"]
-fsspec = ["fsspec"]
+duckdb = ["duckdb>=1.1.0", "pytz>=2023.3", "pyarrow>=14.0.1"]
+fastapi = ["fastapi>=0.115.3"]
+flask = ["flask>=3.0.0"]
+fsspec = ["fsspec>=2024.2.0"]
 litestar = ["litestar>=2.23.0"]
-msgspec = ["msgspec"]
+msgspec = ["msgspec>=0.18.6"]
 mssql-python = ["mssql-python>=1.13"]
 mypyc = ["sqlglot[c]>=30.13.0"]
 mysql-connector = [
-  "mysql-connector-python; python_version < '3.12'",
-  "mysql-connector-python<9.7.0; python_version >= '3.12'",
+  "mysql-connector-python>=9.0.0; python_version < '3.12'",
+  "mysql-connector-python>=9.0.0,<9.7.0; python_version >= '3.12'",
 ]
 nanoid = ["fastnanoid>=0.4.1"]
-obstore = ["obstore"]
-opentelemetry = ["opentelemetry-api>=1.45.2", "opentelemetry-instrumentation"]
+obstore = ["obstore>=0.8.0"]
+opentelemetry = ["opentelemetry-api>=1.45.2", "opentelemetry-instrumentation>=0.50b0"]
 oracledb = ["oracledb>=3.4"]
-orjson = ["orjson"]
-pandas = ["pandas", "pyarrow>=14.0.1"]
-performance = ["librt>=0.10.0", "msgspec"]
-polars = ["polars", "pyarrow>=14.0.1"]
-prometheus = ["prometheus-client"]
+orjson = ["orjson>=3.10.0"]
+pandas = ["pandas>=2.0.0", "pyarrow>=14.0.1"]
+performance = ["librt>=0.10.0", "msgspec>=0.18.6"]
+polars = ["polars>=1.0.0", "pyarrow>=14.0.1"]
+prometheus = ["prometheus-client>=0.20.0"]
 psqlpy = ["psqlpy>=0.12.1"]
-psycopg = ["psycopg[binary,pool]"]
-pydantic = ["pydantic", "pydantic-extra-types"]
-pymssql = ["pymssql"]
-pymysql = ["pymysql"]
-sanic = ["sanic"]
+psycopg = ["psycopg[binary,pool]>=3.2.0"]
+pydantic = ["pydantic>=2.7.0", "pydantic-extra-types>=2.7.0"]
+pymssql = ["pymssql>=2.3.0"]
+pymysql = ["pymysql>=1.1.1"]
+sanic = ["sanic>=23.12.0"]
 snowflake = ["snowflake-connector-python>=4.0.0", "pyarrow>=14.0.1"]
 spanner = ["google-cloud-spanner>=3.64.0"]
 sqlanywhere = ["sqlanydb>=1.0.14"]
-starlette = ["starlette"]
-sybase = ["pymssql"]
+starlette = ["starlette>=0.40.0"]
+sybase = ["pymssql>=2.3.0"]
 teradata = ["teradatasql>=20.0.0"]
 uuid = ["uuid-utils>=0.17.0"]
 
@@ -173,9 +177,9 @@ exclude-newer = "7 days"
 # so the SQLSpec mysql-connector extra resolves to an existing wheel.
 # Cap pymysql<=1.2.0 for aiomysql compatibility with internal pymysql connection/cursor APIs.
 override-dependencies = [
-  "mysql-connector-python; python_version < '3.12'",
-  "mysql-connector-python<9.7.0; python_version >= '3.12'",
-  "pymysql<=1.2.0",
+  "mysql-connector-python>=9.0.0; python_version < '3.12'",
+  "mysql-connector-python>=9.0.0,<9.7.0; python_version >= '3.12'",
+  "pymysql>=1.1.1,<=1.2.0",
 ]
 constraint-dependencies = ["opentelemetry-sdk>=1.45.2"]
 
