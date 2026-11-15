@@ -1619,7 +1619,7 @@ async def test_cockroach_psycopg_async_read_connection_rollback_error_handling(b
 def test_cockroach_psycopg_sync_read_replica_failover_maps_driver_errors(
     failure_stage: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CockroachPsycopgSync pool and connection acquire errors map for ReadReplicaGroup failover."""
+    """CockroachPsycopgSync pool and connection acquire errors map for ReplicaGroup failover."""
 
     class _GoodSyncConn:
         def __init__(self) -> None:
@@ -1672,7 +1672,7 @@ def test_cockroach_psycopg_sync_read_replica_failover_maps_driver_errors(
 async def test_cockroach_psycopg_async_read_replica_failover_maps_driver_errors(
     failure_stage: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CockroachPsycopgAsync pool and connection acquire errors map for ReadReplicaGroup failover."""
+    """CockroachPsycopgAsync pool and connection acquire errors map for ReplicaGroup failover."""
 
     class _GoodAsyncConn:
         def __init__(self) -> None:

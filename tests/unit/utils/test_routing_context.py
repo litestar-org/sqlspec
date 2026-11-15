@@ -21,10 +21,10 @@ from sqlspec.utils.routing import (
     "kwargs",
     [
         {"mode": "invalid"},
-        {"mode": "primary", "bind_group": "a"},
-        {"bind_group": ""},
-        {"bind_group": "reporting\r\nx-injected: 1"},
-        {"bind_group": "a" * 257},
+        {"mode": "primary", "replica_group": "a"},
+        {"replica_group": ""},
+        {"replica_group": "reporting\r\nx-injected: 1"},
+        {"replica_group": "a" * 257},
         {"causal_token": ""},
         {"causal_token": "lsn\x00evil"},
         {"causal_token": "t" * 257},
@@ -40,18 +40,18 @@ def test_invalid_routing_directives(kwargs: dict[str, Any]) -> None:
 def test_nested_scopes_and_primary_pin_preserve_metadata() -> None:
     assert RoutingContext.mark_write("billing") is False
     assert RoutingContext.current() is None
-    with RoutingContext.replica(bind_group="reporting", causal_token="a", max_staleness_seconds=2):
+    with RoutingContext.replica(replica_group="reporting", causal_token="a", max_staleness_seconds=2):
         outer = cast(RoutingContextPayload, RoutingContext.current())
         with RoutingContext.primary("billing"):
             assert cast(RoutingEntry, RoutingContext.get_entry("billing")).mode == "primary"
-            assert cast(RoutingEntry, RoutingContext.get_entry("other")).bind_group == "reporting"
+            assert cast(RoutingEntry, RoutingContext.get_entry("other")).replica_group == "reporting"
         assert RoutingContext.current() is outer
         RoutingContext.mark_write("orders", causal_token="b")
         entry = cast(RoutingEntry, RoutingContext.get_entry("orders"))
         assert (
             entry.mode,
             entry.pinned_by_write,
-            entry.bind_group,
+            entry.replica_group,
             entry.causal_token,
             entry.max_staleness_seconds,
         ) == ("primary", True, "reporting", "b", 2)
@@ -106,7 +106,7 @@ async def test_middleware_hints_and_reset(
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
         entry = RoutingContext.get_entry() or RoutingEntry()
-        observed.append((entry.mode, entry.bind_group, entry.causal_token))
+        observed.append((entry.mode, entry.replica_group, entry.causal_token))
         RoutingContext.mark_write(causal_token="after-write")
         await asyncio.sleep(0)
         assert cast(RoutingEntry, RoutingContext.get_entry()).causal_token == "after-write"
@@ -126,7 +126,7 @@ async def test_middleware_async_extractor_exception_reset_and_lifespan() -> None
     seen: list[RoutingEntry | None] = []
 
     async def extractor(scope: Any) -> RoutingEntry:
-        return RoutingEntry("replica", bind_group="custom")
+        return RoutingEntry("replica", replica_group="custom")
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
         seen.append(RoutingContext.get_entry())
@@ -144,7 +144,7 @@ async def test_middleware_async_extractor_exception_reset_and_lifespan() -> None
     assert seen == []
     with pytest.raises(RuntimeError, match="handler failed"):
         await middleware({"type": "websocket", "headers": []}, receive, send)
-    assert cast(RoutingEntry, seen[0]).bind_group == "custom"
+    assert cast(RoutingEntry, seen[0]).replica_group == "custom"
     assert RoutingContext.current() is None
     with pytest.raises(RuntimeError):
         await middleware({"type": "lifespan"}, receive, send)
@@ -201,7 +201,7 @@ async def test_middleware_signed_cookie_and_disabled_header(
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
         entry = RoutingContext.get_entry("orders") or RoutingEntry()
-        observed.append((entry.mode, entry.bind_group, entry.causal_token))
+        observed.append((entry.mode, entry.replica_group, entry.causal_token))
 
     async def receive() -> dict[str, Any]:
         return {"type": "http.request"}
@@ -248,7 +248,7 @@ def test_apply_request_routing_hints_auto_header_preserves_verified_primary_pin(
     )
     entry = payload.get("orders")
     assert entry is not None
-    assert (entry.mode, entry.bind_group, entry.causal_token, entry.pinned_by_write) == expected
+    assert (entry.mode, entry.replica_group, entry.causal_token, entry.pinned_by_write) == expected
 
 
 @pytest.mark.parametrize("cookie_value", ["1", "lsn-10"])
@@ -286,7 +286,7 @@ async def test_middleware_auto_header_preserves_signed_primary_pin() -> None:
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
         entry = RoutingContext.get_entry("orders") or RoutingEntry()
-        observed.append((entry.mode, entry.bind_group, entry.causal_token, entry.pinned_by_write))
+        observed.append((entry.mode, entry.replica_group, entry.causal_token, entry.pinned_by_write))
 
     async def receive() -> dict[str, Any]:
         return {"type": "http.request"}
@@ -327,7 +327,7 @@ def test_apply_request_routing_hints_replica_applies_without_active_primary_pin(
     )
     entry = payload.get("orders")
     assert entry is not None
-    assert (entry.mode, entry.bind_group, entry.causal_token, entry.pinned_by_write) == expected
+    assert (entry.mode, entry.replica_group, entry.causal_token, entry.pinned_by_write) == expected
 
 
 def test_with_primary_pin_and_mark_write_short_circuit_when_already_pinned() -> None:

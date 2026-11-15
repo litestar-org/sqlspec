@@ -17,7 +17,7 @@ from sqlspec import (
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
-from sqlspec.config import ReadReplicaGroup
+from sqlspec.config import ReplicaGroup
 from sqlspec.core.compiler import OperationProfile
 from sqlspec.core.routing import RandomSelector, ReplicaHealthBreaker, ReplicaSpec, RoundRobinSelector
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
@@ -46,7 +46,7 @@ def check_routing_primitives() -> None:
     RoutingContext.reset(token)
     with RoutingContext.primary("analytics") as primary_context:
         assert_type(primary_context, RoutingContextPayload)
-    with RoutingContext.replica(bind_group="analytics", max_staleness_seconds=5.0) as replica_context:
+    with RoutingContext.replica(replica_group="analytics", max_staleness_seconds=5.0) as replica_context:
         assert_type(replica_context, RoutingContextPayload)
     with RoutingContext.auto("analytics") as auto_context:
         assert_type(auto_context, RoutingContextPayload)
@@ -57,13 +57,13 @@ async def check_async_routing_scopes() -> None:
         assert_type(scope, RoutingContextPayload)
     async with RoutingContext.primary() as primary:
         assert_type(primary, RoutingContextPayload)
-    async with RoutingContext.replica(bind_group="reporting") as replica:
+    async with RoutingContext.replica(replica_group="reporting") as replica:
         assert_type(replica, RoutingContextPayload)
 
 
 def check_sync_generics(primary: SqliteConfig, replica: SqliteConfig) -> None:
-    group = ReadReplicaGroup([replica])
-    assert_type(group, ReadReplicaGroup[SqliteConfig])
+    group = ReplicaGroup([replica])
+    assert_type(group, ReplicaGroup[SqliteConfig])
     with primary.provide_read_session() as read_driver:
         assert_type(read_driver, SqliteDriver)
     with primary.provide_routing_session() as routing_session:
@@ -82,8 +82,8 @@ def check_sync_generics(primary: SqliteConfig, replica: SqliteConfig) -> None:
 
 
 async def check_async_generics(primary: AiosqliteConfig, replica: AiosqliteConfig) -> None:
-    group = ReadReplicaGroup([replica])
-    assert_type(group, ReadReplicaGroup[AiosqliteConfig])
+    group = ReplicaGroup([replica])
+    assert_type(group, ReplicaGroup[AiosqliteConfig])
     async with primary.provide_read_session() as read_driver:
         assert_type(read_driver, AiosqliteDriver)
     async with primary.provide_routing_session() as routing_session:

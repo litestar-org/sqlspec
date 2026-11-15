@@ -1222,12 +1222,12 @@ class ReplicaRoutableConfigProtocol(Protocol):
     @property
     def replica_groups(self) -> "Mapping[str, Any]": ...
 
-    def provide_read_connection(self, *args: Any, bind_group: str | None = None, **kwargs: Any) -> Any: ...
+    def provide_read_connection(self, *args: Any, replica_group: str | None = None, **kwargs: Any) -> Any: ...
 
     def provide_read_session(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: Any = None,
         bypass_tenant: bool = False,

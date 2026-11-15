@@ -1,7 +1,7 @@
 # Routing APIs
 
 ```python
-from sqlspec.config import ReadReplicaGroup
+from sqlspec.config import ReplicaGroup
 from sqlspec.core.routing import (
     RandomSelector,
     ReplicaHealthBreaker,

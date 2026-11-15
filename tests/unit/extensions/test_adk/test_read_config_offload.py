@@ -55,7 +55,7 @@ def test_adk_read_selection_preserves_primary_and_scope_reset(
     store = store_type(writer, read_config=reader)
     assert store.config is writer
     assert store.read_config is reader
-    assert store.read_config_enabled is True
+    assert store.enable_replica_reads is True
     assert store.read_label() == "reader"
     assert store.read_label(primary=True) == "writer"
     with pytest.raises(RuntimeError, match="restore"), adk_primary_read_scope():
@@ -74,11 +74,11 @@ def test_adk_read_selection_preserves_primary_and_scope_reset(
 
 def test_adk_offload_defaults_kill_switch_and_validation() -> None:
     writer = SqliteConfig()
-    assert _SessionProbe(writer).read_config_enabled is False
-    disabled = SqliteConfig(extension_config={"adk": {"read_config_enabled": False}})
-    assert _SessionProbe(disabled, read_config=SqliteConfig()).read_config_enabled is False
+    assert _SessionProbe(writer).enable_replica_reads is False
+    disabled = SqliteConfig(extension_config={"adk": {"enable_replica_reads": False}})
+    assert _SessionProbe(disabled, read_config=SqliteConfig()).enable_replica_reads is False
     with pytest.raises(ImproperConfigurationError, match="boolean"):
-        _SessionProbe(SqliteConfig(extension_config={"adk": {"read_config_enabled": "yes"}}))
+        _SessionProbe(SqliteConfig(extension_config={"adk": {"enable_replica_reads": "yes"}}))
     with pytest.raises(ImproperConfigurationError, match="same adapter"):
         _SessionProbe(writer, read_config=cast("SqliteConfig", AiosqliteConfig()))
 
@@ -109,7 +109,7 @@ async def test_adk_primary_scope_isolated_between_concurrent_tasks(tmp_path: Pat
 
 
 @pytest.mark.parametrize("store_type", [_SessionProbe, _MemoryProbe, _ArtifactProbe])
-def test_adk_read_bind_group_routes_replica_group_and_respects_context_override(
+def test_adk_default_replica_group_routes_replica_group_and_respects_context_override(
     tmp_path: Path, store_type: type[_SessionProbe] | type[_MemoryProbe] | type[_ArtifactProbe]
 ) -> None:
     default_reader = SqliteConfig(connection_config={"database": str(tmp_path / "default.db")})
@@ -118,7 +118,7 @@ def test_adk_read_bind_group_routes_replica_group_and_respects_context_override(
         connection_config={"database": str(tmp_path / "writer.db")},
         bind_key="agents",
         replicas={"default": [default_reader], "analytics": [analytics_reader]},
-        extension_config={"adk": {"read_bind_group": "analytics"}},
+        extension_config={"adk": {"default_replica_group": "analytics"}},
     )
     for config, label in ((writer, "writer"), (default_reader, "default"), (analytics_reader, "analytics")):
         with config.provide_session() as session:
@@ -126,9 +126,9 @@ def test_adk_read_bind_group_routes_replica_group_and_respects_context_override(
             session.execute("INSERT INTO sources VALUES (:origin)", {"origin": label})
     try:
         store = store_type(writer)
-        assert store.read_bind_group == "analytics"
+        assert store.default_replica_group == "analytics"
         assert store.read_label() == "analytics"
-        with RoutingContext.replica("agents", bind_group="default"):
+        with RoutingContext.replica("agents", replica_group="default"):
             assert store.read_label() == "default"
         with RoutingContext.primary("agents"):
             assert store.read_label() == "writer"
@@ -137,7 +137,7 @@ def test_adk_read_bind_group_routes_replica_group_and_respects_context_override(
 
 
 @pytest.mark.parametrize("invalid_group", ["", "bad\r\ngroup", 123])
-def test_adk_rejects_invalid_read_bind_group(invalid_group: Any) -> None:
-    config = SqliteConfig(extension_config={"adk": cast("Any", {"read_bind_group": invalid_group})})
-    with pytest.raises(ImproperConfigurationError, match="read_bind_group"):
+def test_adk_rejects_invalid_default_replica_group(invalid_group: Any) -> None:
+    config = SqliteConfig(extension_config={"adk": cast("Any", {"default_replica_group": invalid_group})})
+    with pytest.raises(ImproperConfigurationError, match="default_replica_group"):
         _SessionProbe(config)

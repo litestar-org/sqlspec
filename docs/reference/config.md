@@ -15,7 +15,7 @@ from sqlspec.config import (
     NoPoolSyncConfig,
     OpenTelemetryConfig,
     PrometheusConfig,
-    ReadReplicaGroup,
+    ReplicaGroup,
     PythonTemplateOverride,
     SanicConfig,
     SQLTemplateOverride,
@@ -156,7 +156,7 @@ Top-level `extension_config` mapping passed to any database configuration class.
 
 ## Read Replica Topology
 
-::: sqlspec.config.ReadReplicaGroup
+::: sqlspec.config.ReplicaGroup
     options:
       heading_level: 4
       members: false

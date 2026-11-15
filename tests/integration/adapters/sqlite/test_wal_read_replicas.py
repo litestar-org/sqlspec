@@ -80,7 +80,7 @@ async def test_wal_adk_reads_use_reader_pool_and_mutations_keep_primary(tmp_path
     config = config_type(
         connection_config={"database": str(tmp_path / "adk.db")},
         replicas=True,
-        extension_config={"adk": {"read_config_enabled": True}},
+        extension_config={"adk": {"enable_replica_reads": True}},
     )
     try:
         store = AiosqliteADKStore(config) if isinstance(config, AiosqliteConfig) else SqliteADKStore(config)

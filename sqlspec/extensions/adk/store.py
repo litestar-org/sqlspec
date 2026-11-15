@@ -71,13 +71,13 @@ class _ADKStoreCommon(Generic[ConfigT]):
     __slots__ = (
         "_app_state_table",
         "_config",
+        "_default_replica_group",
+        "_enable_replica_reads",
         "_events_table",
         "_metadata_table",
         "_owner_id_column_ddl",
         "_owner_id_column_name",
-        "_read_bind_group",
         "_read_config",
-        "_read_config_enabled",
         "_session_table",
         "_user_state_table",
     )
@@ -104,7 +104,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
         """
         self._config = config
         self._read_config = read_config
-        self._read_config_enabled, self._read_bind_group = _adk_read_settings(config, read_config)
+        self._enable_replica_reads, self._default_replica_group = _adk_read_settings(config, read_config)
         store_config = self._store_config_from_extension()
         self._session_table: str = str(store_config["session_table"])
         self._events_table: str = str(store_config["events_table"])
@@ -130,14 +130,14 @@ class _ADKStoreCommon(Generic[ConfigT]):
         return self._read_config
 
     @property
-    def read_config_enabled(self) -> bool:
+    def enable_replica_reads(self) -> bool:
         """Return whether this store opts into pure-read offload."""
-        return self._read_config_enabled
+        return self._enable_replica_reads
 
     @property
-    def read_bind_group(self) -> str | None:
+    def default_replica_group(self) -> str | None:
         """Return the configured named replica group for ADK reads."""
-        return self._read_bind_group
+        return self._default_replica_group
 
     @property
     def config(self) -> ConfigT:
@@ -193,14 +193,26 @@ class _ADKStoreCommon(Generic[ConfigT]):
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
         return _adk_read_provider(
-            self._config, self._read_config, self._read_config_enabled, self._read_bind_group, primary, False, kwargs
+            self._config,
+            self._read_config,
+            self._enable_replica_reads,
+            self._default_replica_group,
+            primary,
+            False,
+            kwargs,
         )
 
     def _provide_read_session(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
         return _adk_read_provider(
-            self._config, self._read_config, self._read_config_enabled, self._read_bind_group, primary, True, kwargs
+            self._config,
+            self._read_config,
+            self._enable_replica_reads,
+            self._default_replica_group,
+            primary,
+            True,
+            kwargs,
         )
 
     def _drop_tables_sql(self) -> "list[str]":
@@ -1173,29 +1185,29 @@ def _adk_read_settings(
     config: "DatabaseConfigProtocol[Any, Any, Any]", read_config: "DatabaseConfigProtocol[Any, Any, Any] | None"
 ) -> tuple[bool, str | None]:
     settings = config.extension_config.get("adk", {})
-    read_bind_group = settings.get("read_bind_group")
-    if read_bind_group is not None and (
-        not isinstance(read_bind_group, str) or not is_valid_routing_token(read_bind_group)
+    default_replica_group = settings.get("default_replica_group")
+    if default_replica_group is not None and (
+        not isinstance(default_replica_group, str) or not is_valid_routing_token(default_replica_group)
     ):
-        msg = "ADK read_bind_group must be None or a non-empty printable string of at most 256 characters"
+        msg = "ADK default_replica_group must be None or a non-empty printable string of at most 256 characters"
         raise ImproperConfigurationError(msg)
-    enabled = settings.get("read_config_enabled", read_config is not None or read_bind_group is not None)
+    enabled = settings.get("enable_replica_reads", read_config is not None or default_replica_group is not None)
     if not isinstance(enabled, bool):
-        msg = "ADK read_config_enabled must be a boolean"
+        msg = "ADK enable_replica_reads must be a boolean"
         raise ImproperConfigurationError(msg)
     if read_config is not None and (
         config.is_async != read_config.is_async or resolve_adapter_name(config) != resolve_adapter_name(read_config)
     ):
         msg = "ADK reader configuration must use the same adapter and execution mode as the primary"
         raise ImproperConfigurationError(msg)
-    return enabled, read_bind_group
+    return enabled, default_replica_group
 
 
 def _adk_read_provider(
     config: "DatabaseConfigProtocol[Any, Any, Any]",
     read_config: "DatabaseConfigProtocol[Any, Any, Any] | None",
     enabled: bool,
-    read_bind_group: str | None,
+    default_replica_group: str | None,
     primary: bool,
     session: bool,
     kwargs: dict[str, Any],
@@ -1208,18 +1220,18 @@ def _adk_read_provider(
     if read_config is not None:
         return read_config.provide_session(**kwargs) if session else read_config.provide_connection(**kwargs)
     call_kwargs = dict(kwargs)
-    explicit_group = call_kwargs.pop("bind_group", None)
+    explicit_group = call_kwargs.pop("replica_group", None)
     effective_group = (
         explicit_group
         if explicit_group is not None
-        else entry.bind_group
-        if entry is not None and entry.bind_group is not None
-        else read_bind_group
+        else entry.replica_group
+        if entry is not None and entry.replica_group is not None
+        else default_replica_group
     )
     if effective_group is not None:
         return (
-            config.provide_read_session(bind_group=effective_group, **call_kwargs)
+            config.provide_read_session(replica_group=effective_group, **call_kwargs)
             if session
-            else config.provide_read_connection(bind_group=effective_group, **call_kwargs)
+            else config.provide_read_connection(replica_group=effective_group, **call_kwargs)
         )
     return config.provide_read_session(**call_kwargs) if session else config.provide_read_connection(**call_kwargs)

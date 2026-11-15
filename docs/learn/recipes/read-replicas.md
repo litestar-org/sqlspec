@@ -75,7 +75,7 @@ config = AsyncpgConfig(
 )
 ```
 
-Request a group with `bind_group="reporting"`. `ReadReplicaGroup` accepts explicit configs and exposes `strategy="round_robin"` or `"random"`. The first uses smooth weighted round robin; the second uses weighted random selection. A group can set failure/recovery limits, a causal validator, and `fallback_to_primary=False`. The default permits primary fallback after eligible readers fail checkout. Failover never retries SQL after a session has been yielded.
+Request a group with `replica_group="reporting"`. `ReplicaGroup` accepts explicit configs and exposes `strategy="round_robin"` or `"random"`. The first uses smooth weighted round robin; the second uses weighted random selection. A group can set failure/recovery limits, a causal validator, and `fallback_to_primary=False`. The default permits primary fallback after eligible readers fail checkout. Failover never retries SQL after a session has been yielded.
 
 Owned replica pools share the primary's startup, shutdown, and observability setup. Registry telemetry gives each reader a distinct key, such as `orders:replica:0` or `orders:replica:reporting:0`. A separately registered config is counted once.
 
@@ -98,7 +98,7 @@ A routing session sends only parsed, read-only statements to readers. Writes, lo
 from sqlspec.utils.routing import RoutingContext
 
 with RoutingContext.scope():
-    with RoutingContext.replica(bind_group="reporting"):
+    with RoutingContext.replica(replica_group="reporting"):
         pass
     with RoutingContext.primary():
         pass

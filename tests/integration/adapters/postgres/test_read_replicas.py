@@ -9,7 +9,7 @@ from google.adk.events import Event
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.asyncpg.adk.store import AsyncpgADKStore
-from sqlspec.config import ReadReplicaGroup
+from sqlspec.config import ReplicaGroup
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.routing import ReplicaSpec
 from sqlspec.exceptions import ReadOnlyTransactionError
@@ -38,7 +38,7 @@ async def test_async_native_replica_balance_readonly_and_causal_helpers(
 ) -> None:
     base = {"asyncpg": asyncpg_config, "psycopg": psycopg_async_config, "psqlpy": psqlpy_config}[adapter]
     replicas = [_reader(base, adapter, "reader1"), _reader(base, adapter, "reader2")]
-    group: ReadReplicaGroup[Any] = ReadReplicaGroup([ReplicaSpec(replicas[0], weight=2), ReplicaSpec(replicas[1])])
+    group: ReplicaGroup[Any] = ReplicaGroup([ReplicaSpec(replicas[0], weight=2), ReplicaSpec(replicas[1])])
     config = type(base)(connection_config=dict(base.connection_config), replicas=group)
     table = quote_identifier("routing_" + uuid4().hex)
     async with base.provide_session() as session:

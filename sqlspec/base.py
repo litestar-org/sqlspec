@@ -293,7 +293,7 @@ class SQLSpec:
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         **kwargs: Any,
     ) -> "AbstractContextManager[ConnectionT]": ...
     @overload
@@ -301,14 +301,14 @@ class SQLSpec:
         self,
         config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[ConnectionT]": ...
     def provide_read_connection(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         **kwargs: Any,
     ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
         """Provide a read connection with lifecycle events owned by the selected configuration.
@@ -316,14 +316,14 @@ class SQLSpec:
         Args:
             config: Configuration instance owning the replica topology.
             *args: Positional arguments forwarded to the read provider.
-            bind_group: Named replica group, or the default group.
+            replica_group: Named replica group, or the default group.
             **kwargs: Additional read provider arguments.
 
         Returns:
             A context manager yielding the selected connection.
         """
         self._ensure_registered(config)
-        context = config.provide_read_connection(*args, bind_group=bind_group, **kwargs)
+        context = config.provide_read_connection(*args, replica_group=replica_group, **kwargs)
         if _is_async_context_manager(context):
             return _RuntimeReadAsyncContext[ConnectionT](context, session=False)
         return _RuntimeReadSyncContext[ConnectionT](cast("AbstractContextManager[ConnectionT]", context), session=False)
@@ -333,7 +333,7 @@ class SQLSpec:
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -344,7 +344,7 @@ class SQLSpec:
         self,
         config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -354,7 +354,7 @@ class SQLSpec:
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -365,7 +365,7 @@ class SQLSpec:
         Args:
             config: Configuration instance owning the replica topology.
             *args: Positional arguments forwarded to the read provider.
-            bind_group: Named replica group, or the default group.
+            replica_group: Named replica group, or the default group.
             statement_config: Statement configuration override.
             tenant: Tenant identity or payload for the selected session.
             bypass_tenant: Explicitly bypass tenant setup.
@@ -377,7 +377,7 @@ class SQLSpec:
         self._ensure_registered(config)
         context = config.provide_read_session(
             *args,
-            bind_group=bind_group,
+            replica_group=replica_group,
             statement_config=statement_config,
             tenant=tenant,
             bypass_tenant=bypass_tenant,
@@ -392,7 +392,7 @@ class SQLSpec:
         self,
         config: "SyncDatabaseConfig[ConnectionT, PoolT, SyncDriverT] | NoPoolSyncConfig[ConnectionT, SyncDriverT]",
         *,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -402,7 +402,7 @@ class SQLSpec:
         self,
         config: "AsyncDatabaseConfig[ConnectionT, PoolT, AsyncDriverT] | NoPoolAsyncConfig[ConnectionT, AsyncDriverT]",
         *,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -411,7 +411,7 @@ class SQLSpec:
         self,
         config: "SyncDatabaseConfig[ConnectionT, PoolT, SyncDriverT] | NoPoolSyncConfig[ConnectionT, SyncDriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, AsyncDriverT] | NoPoolAsyncConfig[ConnectionT, AsyncDriverT]",
         *,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -420,7 +420,7 @@ class SQLSpec:
 
         Args:
             config: Configuration instance owning the replica topology.
-            bind_group: Replica group used for eligible reads.
+            replica_group: Replica group used for eligible reads.
             statement_config: Statement configuration override.
             tenant: Tenant identity or payload for physical checkouts.
             bypass_tenant: Explicitly bypass tenant setup.
@@ -430,7 +430,7 @@ class SQLSpec:
         """
         self._ensure_registered(config)
         session = config.provide_routing_session(
-            bind_group=bind_group, statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant
+            replica_group=replica_group, statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant
         )
         session._registry_lifecycle = True
         return session

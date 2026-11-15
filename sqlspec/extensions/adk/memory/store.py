@@ -43,15 +43,15 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
 
     __slots__ = (
         "_config",
+        "_default_replica_group",
         "_enable_bm25",
+        "_enable_replica_reads",
         "_enabled",
         "_max_results",
         "_memory_table",
         "_owner_id_column_ddl",
         "_owner_id_column_name",
-        "_read_bind_group",
         "_read_config",
-        "_read_config_enabled",
         "_scann_num_leaves",
         "_scann_quantizer",
         "_use_fts",
@@ -72,7 +72,7 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         """
         self._config = config
         self._read_config = read_config
-        self._read_config_enabled, self._read_bind_group = _adk_read_settings(config, read_config)
+        self._enable_replica_reads, self._default_replica_group = _adk_read_settings(config, read_config)
         store_config = self._store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
@@ -98,14 +98,14 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         return self._read_config
 
     @property
-    def read_config_enabled(self) -> bool:
+    def enable_replica_reads(self) -> bool:
         """Return whether this store opts into pure-read offload."""
-        return self._read_config_enabled
+        return self._enable_replica_reads
 
     @property
-    def read_bind_group(self) -> str | None:
+    def default_replica_group(self) -> str | None:
         """Return the configured named replica group for ADK reads."""
-        return self._read_bind_group
+        return self._default_replica_group
 
     @property
     def config(self) -> ConfigT:
@@ -181,14 +181,26 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
         return _adk_read_provider(
-            self._config, self._read_config, self._read_config_enabled, self._read_bind_group, primary, False, kwargs
+            self._config,
+            self._read_config,
+            self._enable_replica_reads,
+            self._default_replica_group,
+            primary,
+            False,
+            kwargs,
         )
 
     def _provide_read_session(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
         return _adk_read_provider(
-            self._config, self._read_config, self._read_config_enabled, self._read_bind_group, primary, True, kwargs
+            self._config,
+            self._read_config,
+            self._enable_replica_reads,
+            self._default_replica_group,
+            primary,
+            True,
+            kwargs,
         )
 
     def _store_config_from_extension(self) -> _ADKMemoryStoreConfig:

@@ -62,7 +62,6 @@ _ARROW_STACK_OPTIONS: Final[tuple[str, ...]] = ("return_format", "native_only", 
 
 class _RoutingSessionState:
     __slots__ = (
-        "_bind_group",
         "_bypass_tenant",
         "_closed",
         "_config",
@@ -70,9 +69,10 @@ class _RoutingSessionState:
         "_preparer",
         "_primary_driver",
         "_registry_lifecycle",
-        "_replica_bind_group",
         "_replica_causal_token",
         "_replica_driver",
+        "_replica_group",
+        "_replica_group",
         "_replica_max_staleness",
         "_replica_streams",
         "_replica_strict",
@@ -158,7 +158,7 @@ class _RoutingSessionState:
     def _initialize(
         self,
         config: Any,
-        bind_group: str | None,
+        replica_group: str | None,
         statement_config: StatementConfig | None,
         tenant: str | UUID | TenantContextPayload | None,
         bypass_tenant: bool,
@@ -167,7 +167,7 @@ class _RoutingSessionState:
             msg = "provide_routing_session() cannot combine tenant with bypass_tenant=True"
             raise ImproperConfigurationError(msg)
         self._config = config
-        self._bind_group = bind_group
+        self._replica_group = replica_group
         self._statement_config = statement_config or config.statement_config
         self._tenant = tenant
         self._bypass_tenant = bypass_tenant
@@ -176,7 +176,7 @@ class _RoutingSessionState:
         self._registry_lifecycle = False
         self._primary_driver: Any = None
         self._replica_driver: Any = None
-        self._replica_bind_group: str | None = None
+        self._replica_group: str | None = None
         self._replica_causal_token: str | None = None
         self._replica_max_staleness: float | None = None
         self._replica_strict = False
@@ -253,8 +253,8 @@ class _RoutingSessionState:
             return False
         return bool(
             self._config.supports_read_routing
-            or self._bind_group is not None
-            or (entry is not None and entry.bind_group is not None)
+            or self._replica_group is not None
+            or (entry is not None and entry.replica_group is not None)
         )
 
     @staticmethod
@@ -301,13 +301,13 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         self,
         config: "SyncDatabaseConfig[Any, Any, SyncDriverT] | NoPoolSyncConfig[Any, SyncDriverT]",
         *,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: StatementConfig | None = None,
         tenant: str | UUID | TenantContextPayload | None = None,
         bypass_tenant: bool = False,
     ) -> None:
         """Configure lazy physical checkouts and optional tenant identity."""
-        self._initialize(config, bind_group, statement_config, tenant, bypass_tenant)
+        self._initialize(config, replica_group, statement_config, tenant, bypass_tenant)
         self._stack = ExitStack()
         self._primary_read_stack: ExitStack | None = None
         self._replica_stack: ExitStack | None = None
@@ -939,19 +939,21 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     def _acquire_replica(self) -> SyncDriverT:
         self._ensure_open()
         entry = RoutingContext.get_entry(self._config.bind_key)
-        bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
+        replica_group = (
+            entry.replica_group if entry is not None and entry.replica_group is not None else self._replica_group
+        )
         causal_token = entry.causal_token if entry is not None else None
         max_staleness = entry.max_staleness_seconds if entry is not None else None
         strict_replica = entry is not None and entry.mode == "replica"
         if (
             self._replica_driver is None
-            or bind_group != self._replica_bind_group
+            or replica_group != self._replica_group
             or causal_token != self._replica_causal_token
             or max_staleness != self._replica_max_staleness
             or strict_replica != self._replica_strict
         ):
             context = self._config.provide_read_session(
-                bind_group=bind_group,
+                replica_group=replica_group,
                 statement_config=self._statement_config,
                 tenant=self._tenant,
                 bypass_tenant=self._bypass_tenant,
@@ -968,7 +970,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                 if driver is self._primary_driver:
                     context.__exit__(None, None, None)
                     self._replica_driver = self._primary_driver
-                    self._replica_bind_group = bind_group
+                    self._replica_group = replica_group
                     self._replica_causal_token = causal_token
                     self._replica_max_staleness = max_staleness
                     self._replica_strict = strict_replica
@@ -999,7 +1001,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                     self._primary_read_stack = lease_stack
                 elif managed_replicas and self._primary_driver is None:
                     self._primary_driver = self._replica_driver
-            self._replica_bind_group = bind_group
+            self._replica_group = replica_group
             self._replica_causal_token = causal_token
             self._replica_max_staleness = max_staleness
             self._replica_strict = strict_replica
@@ -1026,13 +1028,13 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         self,
         config: "AsyncDatabaseConfig[Any, Any, AsyncDriverT] | NoPoolAsyncConfig[Any, AsyncDriverT]",
         *,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: StatementConfig | None = None,
         tenant: str | UUID | TenantContextPayload | None = None,
         bypass_tenant: bool = False,
     ) -> None:
         """Configure lazy physical checkouts and optional tenant identity."""
-        self._initialize(config, bind_group, statement_config, tenant, bypass_tenant)
+        self._initialize(config, replica_group, statement_config, tenant, bypass_tenant)
         self._stack = AsyncExitStack()
         self._primary_read_stack: AsyncExitStack | None = None
         self._replica_stack: AsyncExitStack | None = None
@@ -1664,19 +1666,21 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     async def _acquire_replica(self) -> AsyncDriverT:
         self._ensure_open()
         entry = RoutingContext.get_entry(self._config.bind_key)
-        bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
+        replica_group = (
+            entry.replica_group if entry is not None and entry.replica_group is not None else self._replica_group
+        )
         causal_token = entry.causal_token if entry is not None else None
         max_staleness = entry.max_staleness_seconds if entry is not None else None
         strict_replica = entry is not None and entry.mode == "replica"
         if (
             self._replica_driver is None
-            or bind_group != self._replica_bind_group
+            or replica_group != self._replica_group
             or causal_token != self._replica_causal_token
             or max_staleness != self._replica_max_staleness
             or strict_replica != self._replica_strict
         ):
             context = self._config.provide_read_session(
-                bind_group=bind_group,
+                replica_group=replica_group,
                 statement_config=self._statement_config,
                 tenant=self._tenant,
                 bypass_tenant=self._bypass_tenant,
@@ -1693,7 +1697,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                 if driver is self._primary_driver:
                     await context.__aexit__(None, None, None)
                     self._replica_driver = self._primary_driver
-                    self._replica_bind_group = bind_group
+                    self._replica_group = replica_group
                     self._replica_causal_token = causal_token
                     self._replica_max_staleness = max_staleness
                     self._replica_strict = strict_replica
@@ -1724,7 +1728,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                     self._primary_read_stack = lease_stack
                 elif managed_replicas and self._primary_driver is None:
                     self._primary_driver = self._replica_driver
-            self._replica_bind_group = bind_group
+            self._replica_group = replica_group
             self._replica_causal_token = causal_token
             self._replica_max_staleness = max_staleness
             self._replica_strict = strict_replica

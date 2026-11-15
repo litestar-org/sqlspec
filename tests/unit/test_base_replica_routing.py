@@ -42,7 +42,7 @@ def test_read_session_uses_selected_runtime_and_distinct_replica_metrics() -> No
     try:
         with spec.provide_read_session(primary) as session:
             assert session.select_value("SELECT 1") == 1
-        with spec.provide_read_session(primary, bind_group="analytics") as session:
+        with spec.provide_read_session(primary, replica_group="analytics") as session:
             assert session.select_value("SELECT 2") == 2
         assert events == [
             ("replica", "connection_create"),

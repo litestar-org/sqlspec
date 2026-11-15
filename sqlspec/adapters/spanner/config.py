@@ -520,7 +520,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
     def provide_read_connection(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         exact_staleness: "timedelta | None" = None,
         max_staleness: "timedelta | None" = None,
         read_timestamp: "datetime | None" = None,
@@ -529,7 +529,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         **kwargs: Any,
     ) -> "AbstractContextManager[SpannerSyncConnection]":
         """Provide a snapshot connection using configured or request read bounds."""
-        self._resolve_read_group(bind_group)
+        self._resolve_replica_group(replica_group)
         if kwargs.pop("transaction", False):
             msg = "Read-only Spanner snapshots cannot use transaction=True"
             raise ImproperConfigurationError(msg)
@@ -702,7 +702,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
     def provide_read_session(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
         statement_config: "StatementConfig | None" = None,
@@ -723,7 +723,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         Use for query workloads that benefit from Spanner's snapshot reads.
         For DDL/DML, use :meth:`provide_session` (write-capable by default).
         """
-        self._resolve_read_group(bind_group)
+        self._resolve_replica_group(replica_group)
         if kwargs.pop("transaction", False):
             msg = "Read-only Spanner snapshots cannot use transaction=True"
             raise ImproperConfigurationError(msg)
@@ -1094,7 +1094,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
     def provide_read_connection(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         exact_staleness: "timedelta | None" = None,
         max_staleness: "timedelta | None" = None,
         read_timestamp: "datetime | None" = None,
@@ -1103,7 +1103,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[SpannerAsyncConnection]":
         """Provide a snapshot connection using configured or request read bounds."""
-        self._resolve_read_group(bind_group)
+        self._resolve_replica_group(replica_group)
         if kwargs.pop("transaction", False):
             msg = "Read-only Spanner snapshots cannot use transaction=True"
             raise ImproperConfigurationError(msg)
@@ -1276,7 +1276,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
     def provide_read_session(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
         statement_config: "StatementConfig | None" = None,
@@ -1297,7 +1297,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         Use for query workloads that benefit from Spanner's snapshot reads.
         For DDL/DML, use :meth:`provide_session` (write-capable by default).
         """
-        self._resolve_read_group(bind_group)
+        self._resolve_replica_group(replica_group)
         if kwargs.pop("transaction", False):
             msg = "Read-only Spanner snapshots cannot use transaction=True"
             raise ImproperConfigurationError(msg)

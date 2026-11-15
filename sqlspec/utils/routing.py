@@ -51,7 +51,7 @@ class RoutingEntry:
 
     Args:
         mode: Requested routing mode.
-        bind_group: Optional replica group name.
+        replica_group: Optional replica group name.
         causal_token: Adapter-specific causal consistency token.
         max_staleness_seconds: Maximum configured replica staleness.
         pinned_by_write: Whether this directive follows a write.
@@ -59,7 +59,7 @@ class RoutingEntry:
 
     mode: RoutingMode = "auto"
     _: KW_ONLY
-    bind_group: str | None = None
+    replica_group: str | None = None
     causal_token: str | None = None
     max_staleness_seconds: float | None = None
     pinned_by_write: bool = False
@@ -68,14 +68,14 @@ class RoutingEntry:
         if self.mode not in {"auto", "primary", "replica"}:
             msg = f"Invalid routing mode {self.mode!r}"
             raise RoutingContextError(msg)
-        if self.bind_group is not None and not _is_valid_routing_token(self.bind_group):
-            msg = "bind_group must be a non-empty printable string of at most 256 characters"
+        if self.replica_group is not None and not _is_valid_routing_token(self.replica_group):
+            msg = "replica_group must be a non-empty printable string of at most 256 characters"
             raise RoutingContextError(msg)
         if self.causal_token is not None and not _is_valid_routing_token(self.causal_token):
             msg = "causal_token must be a non-empty printable string of at most 256 characters"
             raise RoutingContextError(msg)
-        if self.mode == "primary" and self.bind_group is not None and not self.pinned_by_write:
-            msg = "bind_group cannot be combined with mode='primary'"
+        if self.mode == "primary" and self.replica_group is not None and not self.pinned_by_write:
+            msg = "replica_group cannot be combined with mode='primary'"
             raise RoutingContextError(msg)
         if self.max_staleness_seconds is not None and (
             not isfinite(self.max_staleness_seconds) or self.max_staleness_seconds < 0
@@ -124,7 +124,7 @@ class RoutingContextPayload:
             bind_key,
             RoutingEntry(
                 "primary",
-                bind_group=old.bind_group,
+                replica_group=old.replica_group,
                 causal_token=old.causal_token if causal_token is None else causal_token,
                 max_staleness_seconds=old.max_staleness_seconds,
                 pinned_by_write=True,
@@ -225,7 +225,7 @@ class RoutingContext:
         cls,
         bind_key: str | None = None,
         *,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         causal_token: str | None = None,
         max_staleness_seconds: float | None = None,
     ) -> RoutingScope:
@@ -236,7 +236,7 @@ class RoutingContext:
                 bind_key,
                 RoutingEntry(
                     "replica",
-                    bind_group=bind_group,
+                    replica_group=replica_group,
                     causal_token=causal_token,
                     max_staleness_seconds=max_staleness_seconds,
                 ),
@@ -516,7 +516,7 @@ def apply_request_routing_hints(
         elif cleaned_header.startswith("replica:") and is_valid_routing_token(cleaned_header[8:]):
             existing = payload.get(bind_key)
             if existing is None or not existing.pinned_by_write:
-                payload = payload.with_entry(bind_key, RoutingEntry("replica", bind_group=cleaned_header[8:]))
+                payload = payload.with_entry(bind_key, RoutingEntry("replica", replica_group=cleaned_header[8:]))
         elif strict_headers:
             msg = f"Invalid routing header {cleaned_header!r}"
             raise RoutingContextError(msg)

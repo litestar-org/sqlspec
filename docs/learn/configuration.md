@@ -123,7 +123,7 @@ When you integrate SQLSpec through `SQLSpecPlugin` (Litestar), an ASGI lifespan 
 
 ## Read Replicas and Pool Derivation
 
-Add `replicas=` to a primary config for reader endpoints. Pass a DSN, a list, per-reader overrides, weighted `ReplicaSpec` values, named groups, or a `ReadReplicaGroup`. Use `True` only where the adapter defines a native read intent or local-reader shortcut.
+Add `replicas=` to a primary config for reader endpoints. Pass a DSN, a list, per-reader overrides, weighted `ReplicaSpec` values, named groups, or a `ReplicaGroup`. Use `True` only where the adapter defines a native read intent or local-reader shortcut.
 
 ```python
 from sqlspec.adapters.asyncpg import AsyncpgConfig

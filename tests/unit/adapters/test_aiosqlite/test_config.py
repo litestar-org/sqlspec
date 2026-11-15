@@ -427,7 +427,7 @@ async def test_session_context_aenter_failure_releases_and_detaches_driver() -> 
 
 
 async def test_aiosqlite_read_replica_failover_on_timeout_and_cantopen(tmp_path: Path) -> None:
-    """AiosqliteConnectTimeoutError and SQLITE_CANTOPEN trigger ReadReplicaGroup failover."""
+    """AiosqliteConnectTimeoutError and SQLITE_CANTOPEN trigger ReplicaGroup failover."""
     assert issubclass(AiosqliteConnectTimeoutError, ConnectionTimeoutError)
     assert issubclass(AiosqliteConnectTimeoutError, DatabaseConnectionError)
 

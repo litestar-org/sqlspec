@@ -130,8 +130,8 @@ def _build_store(
     config = _DummyConfig(connection)
     store._config = config
     store._read_config = None
-    store._read_config_enabled = False
-    store._read_bind_group = None
+    store._enable_replica_reads = False
+    store._default_replica_group = None
     store._events_table = "test_events"
     store._session_table = "test_sessions"
     store._app_state_table = "test_app_state"

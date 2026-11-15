@@ -98,7 +98,7 @@ __all__ = (
     "PoolT",
     "PrometheusConfig",
     "PythonTemplateOverride",
-    "ReadReplicaGroup",
+    "ReplicaGroup",
     "SQLTemplateOverride",
     "SanicConfig",
     "StarletteConfig",
@@ -118,7 +118,7 @@ ConfigT = TypeVar(
 
 DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBase")
 ReplicaItemInput: TypeAlias = "DatabaseConfigProtocol[Any, Any, Any] | ReplicaSpec | Mapping[str, Any] | str | bool"
-ReplicaGroupInput: TypeAlias = "ReadReplicaGroup[Any] | Sequence[ReplicaItemInput]"
+ReplicaGroupInput: TypeAlias = "ReplicaGroup[Any] | Sequence[ReplicaItemInput]"
 ReplicasInput: TypeAlias = "bool | ReplicaItemInput | ReplicaGroupInput | Mapping[str, Any]"
 
 logger = get_logger("sqlspec.config")
@@ -854,9 +854,9 @@ class ADKConfig(TypedDict):
     migration_mode: NotRequired[ExtensionMigrationMode]
     """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
-    read_config_enabled: NotRequired[bool]
+    enable_replica_reads: NotRequired[bool]
     """Enable optional read configuration for ADK lookups."""
-    read_bind_group: NotRequired[str | None]
+    default_replica_group: NotRequired[str | None]
     """Named replica group used for ADK reads."""
 
 
@@ -1017,7 +1017,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 
     _tenant_key: Any
     _is_replica: bool
-    _replica_groups: "dict[str, ReadReplicaGroup[Any]]"
+    _replica_groups: "dict[str, ReplicaGroup[Any]]"
     _replica_pools_initialized: bool
     _migration_loader: "SQLFileLoader | None"
     _migration_commands: "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] | None"
@@ -1088,7 +1088,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         }
 
     @property
-    def replica_groups(self) -> "Mapping[str, ReadReplicaGroup[Any]]":
+    def replica_groups(self) -> "Mapping[str, ReplicaGroup[Any]]":
         """Return a read-only view of named replica groups."""
         return MappingProxyType(self._replica_groups)
 
@@ -1176,7 +1176,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     def provide_routing_session(
         self,
         *,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -1184,7 +1184,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Construct a lazy routing facade for this configuration.
 
         Args:
-            bind_group: Replica group used for eligible reads.
+            replica_group: Replica group used for eligible reads.
             statement_config: Statement configuration override.
             tenant: Tenant identity or payload for physical checkouts.
             bypass_tenant: Explicitly bypass tenant setup.
@@ -1198,7 +1198,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             async_config = cast("AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", self)
             return AsyncRoutingSession(
                 async_config,
-                bind_group=bind_group,
+                replica_group=replica_group,
                 statement_config=statement_config,
                 tenant=tenant,
                 bypass_tenant=bypass_tenant,
@@ -1206,25 +1206,25 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         sync_config = cast("SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]", self)
         return SyncRoutingSession(
             sync_config,
-            bind_group=bind_group,
+            replica_group=replica_group,
             statement_config=statement_config,
             tenant=tenant,
             bypass_tenant=bypass_tenant,
         )
 
     def provide_read_connection(
-        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+        self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
         """Provide a replica connection, honoring scoped primary pins."""
         return cast(
             "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]",
-            self._provide_read(False, args, kwargs, bind_group),
+            self._provide_read(False, args, kwargs, replica_group),
         )
 
     def provide_read_session(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -1234,7 +1234,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         kwargs.update(statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant)
         return cast(
             "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]",
-            self._provide_read(True, args, kwargs, bind_group),
+            self._provide_read(True, args, kwargs, replica_group),
         )
 
     def __hash__(self) -> int:
@@ -1610,7 +1610,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             config._tenant_key = self._tenant_key
         return ReplicaSpec(config, weight=spec.weight, name=spec.name, max_staleness_seconds=spec.max_staleness_seconds)
 
-    def _normalize_replicas(self, replicas: "ReplicasInput | None") -> "dict[str, ReadReplicaGroup[Any]]":
+    def _normalize_replicas(self, replicas: "ReplicasInput | None") -> "dict[str, ReplicaGroup[Any]]":
         if not replicas:
             return {}
         if self._is_replica:
@@ -1619,41 +1619,45 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         groups: Mapping[Any, Any]
         if isinstance(replicas, Mapping):
             grouped = all(
-                isinstance(value, ReadReplicaGroup)
+                isinstance(value, ReplicaGroup)
                 or (isinstance(value, Sequence) and not isinstance(value, (str, bytes, Mapping)))
                 for value in replicas.values()
             )
             if grouped:
                 groups = replicas
-            elif any(isinstance(value, ReadReplicaGroup) for value in replicas.values()):
-                msg = "Cannot mix ReadReplicaGroup entries with scalar connection override keys in replicas mapping"
+            elif any(isinstance(value, ReplicaGroup) for value in replicas.values()):
+                msg = "Cannot mix ReplicaGroup entries with scalar connection override keys in replicas mapping"
                 raise ImproperConfigurationError(msg)
             else:
                 groups = {"default": [replicas]}
-        elif isinstance(replicas, ReadReplicaGroup) or (
+        elif isinstance(replicas, ReplicaGroup) or (
             isinstance(replicas, Sequence) and not isinstance(replicas, (str, bytes))
         ):
             groups = {"default": replicas}
         else:
             groups = {"default": [replicas]}
-        result: dict[str, ReadReplicaGroup[Any]] = {}
+        result: dict[str, ReplicaGroup[Any]] = {}
         for name, items in groups.items():
             if not isinstance(name, str) or not name:
                 msg = "Replica group names must be nonempty strings"
                 raise ImproperConfigurationError(msg)
-            if isinstance(items, ReadReplicaGroup):
+            if isinstance(items, ReplicaGroup):
                 for spec in items.specs:
                     self._normalize_replica(spec)
                 result[name] = items
             else:
-                result[name] = ReadReplicaGroup([self._normalize_replica(item) for item in items], name=name)
+                result[name] = ReplicaGroup([self._normalize_replica(item) for item in items], name=name)
         return result
 
-    def _resolve_read_group(self, bind_group: str | None) -> "tuple[ReadReplicaGroup[Any] | None, RoutingEntry | None]":
+    def _resolve_replica_group(
+        self, replica_group: str | None
+    ) -> "tuple[ReplicaGroup[Any] | None, RoutingEntry | None]":
         entry = RoutingContext.get_entry(self.bind_key)
-        if bind_group is None and entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+        if replica_group is None and entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
             return None, entry
-        effective_group = bind_group if bind_group is not None else entry.bind_group if entry is not None else None
+        effective_group = (
+            replica_group if replica_group is not None else entry.replica_group if entry is not None else None
+        )
         if not self._replica_groups and effective_group is None:
             return None, entry
         group_key = effective_group if effective_group is not None else "default"
@@ -1661,13 +1665,13 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             return self._replica_groups[group_key], entry
         if effective_group is None and (entry is None or entry.mode != "replica"):
             return None, entry
-        msg = f"Unknown replica bind_group {group_key!r}; available groups: {sorted(self._replica_groups)}"
+        msg = f"Unknown replica replica_group {group_key!r}; available groups: {sorted(self._replica_groups)}"
         raise RoutingContextError(msg)
 
     def _provide_read(
-        self, session: bool, args: tuple[Any, ...], kwargs: dict[str, Any], bind_group: str | None
+        self, session: bool, args: tuple[Any, ...], kwargs: dict[str, Any], replica_group: str | None
     ) -> Any:
-        group, entry = self._resolve_read_group(bind_group)
+        group, entry = self._resolve_replica_group(replica_group)
         if group is not None:
             provider = group.provide_session if session else group.provide_connection
             return provider(
@@ -2347,18 +2351,18 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         raise NotImplementedError
 
     def provide_read_connection(
-        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+        self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT]":
         """Provide a read connection with this config's execution mode."""
         return cast(
             "AbstractContextManager[ConnectionT]",
-            super().provide_read_connection(*args, bind_group=bind_group, **kwargs),
+            super().provide_read_connection(*args, replica_group=replica_group, **kwargs),
         )
 
     def provide_read_session(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -2369,7 +2373,7 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
             "AbstractContextManager[DriverT]",
             super().provide_read_session(
                 *args,
-                bind_group=bind_group,
+                replica_group=replica_group,
                 statement_config=statement_config,
                 tenant=tenant,
                 bypass_tenant=bypass_tenant,
@@ -2380,7 +2384,7 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
     def provide_routing_session(
         self: "NoPoolSyncConfig[ConnectionT, SyncDriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -2392,7 +2396,7 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         return SyncRoutingSession(
             self,
             *args,
-            bind_group=bind_group,
+            replica_group=replica_group,
             statement_config=statement_config,
             tenant=tenant,
             bypass_tenant=bypass_tenant,
@@ -2468,18 +2472,18 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         raise NotImplementedError
 
     def provide_read_connection(
-        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+        self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a read connection with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[ConnectionT]",
-            super().provide_read_connection(*args, bind_group=bind_group, **kwargs),
+            super().provide_read_connection(*args, replica_group=replica_group, **kwargs),
         )
 
     def provide_read_session(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -2490,7 +2494,7 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
             "AbstractAsyncContextManager[DriverT]",
             super().provide_read_session(
                 *args,
-                bind_group=bind_group,
+                replica_group=replica_group,
                 statement_config=statement_config,
                 tenant=tenant,
                 bypass_tenant=bypass_tenant,
@@ -2501,7 +2505,7 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
     def provide_routing_session(
         self: "NoPoolAsyncConfig[ConnectionT, AsyncDriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -2513,7 +2517,7 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         return AsyncRoutingSession(
             self,
             *args,
-            bind_group=bind_group,
+            replica_group=replica_group,
             statement_config=statement_config,
             tenant=tenant,
             bypass_tenant=bypass_tenant,
@@ -2629,18 +2633,18 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         return cast("AbstractContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
     def provide_read_connection(
-        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+        self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT]":
         """Provide a read connection with this config's execution mode."""
         return cast(
             "AbstractContextManager[ConnectionT]",
-            super().provide_read_connection(*args, bind_group=bind_group, **kwargs),
+            super().provide_read_connection(*args, replica_group=replica_group, **kwargs),
         )
 
     def provide_read_session(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -2651,7 +2655,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
             "AbstractContextManager[DriverT]",
             super().provide_read_session(
                 *args,
-                bind_group=bind_group,
+                replica_group=replica_group,
                 statement_config=statement_config,
                 tenant=tenant,
                 bypass_tenant=bypass_tenant,
@@ -2662,7 +2666,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
     def provide_routing_session(
         self: "SyncDatabaseConfig[ConnectionT, PoolT, SyncDriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -2674,7 +2678,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         return SyncRoutingSession(
             self,
             *args,
-            bind_group=bind_group,
+            replica_group=replica_group,
             statement_config=statement_config,
             tenant=tenant,
             bypass_tenant=bypass_tenant,
@@ -2813,18 +2817,18 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         return cast("AbstractAsyncContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
     def provide_read_connection(
-        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+        self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a read connection with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[ConnectionT]",
-            super().provide_read_connection(*args, bind_group=bind_group, **kwargs),
+            super().provide_read_connection(*args, replica_group=replica_group, **kwargs),
         )
 
     def provide_read_session(
         self,
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -2835,7 +2839,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
             "AbstractAsyncContextManager[DriverT]",
             super().provide_read_session(
                 *args,
-                bind_group=bind_group,
+                replica_group=replica_group,
                 statement_config=statement_config,
                 tenant=tenant,
                 bypass_tenant=bypass_tenant,
@@ -2846,7 +2850,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
     def provide_routing_session(
         self: "AsyncDatabaseConfig[ConnectionT, PoolT, AsyncDriverT]",
         *args: Any,
-        bind_group: str | None = None,
+        replica_group: str | None = None,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
         bypass_tenant: bool = False,
@@ -2858,7 +2862,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         return AsyncRoutingSession(
             self,
             *args,
-            bind_group=bind_group,
+            replica_group=replica_group,
             statement_config=statement_config,
             tenant=tenant,
             bypass_tenant=bypass_tenant,
@@ -2945,7 +2949,7 @@ class _ReadAsyncContext(Generic[ConfigT]):
         return await self._context.__aexit__(*args)
 
 
-class ReadReplicaGroup(Generic[ConfigT]):
+class ReplicaGroup(Generic[ConfigT]):
     """Managed homogeneous read pools with checkout-only failover."""
 
     __slots__ = (

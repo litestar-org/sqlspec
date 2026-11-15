@@ -232,7 +232,7 @@ async def test_adapter_store_offloads_only_pure_reads(
         assert calls
         assert {label for label, action in calls} == {"writer"}
     calls.clear()
-    writer.extension_config["adk"] = {"read_config_enabled": False}
+    writer.extension_config["adk"] = {"enable_replica_reads": False}
     disabled = store_type(writer, read_config=reader)
     disabled_method = (
         disabled.list_artifact_keys if artifact else disabled.search_entries if memory else disabled.list_sessions

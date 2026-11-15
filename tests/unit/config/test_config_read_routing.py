@@ -13,7 +13,7 @@ from sqlspec.config import (
     LitestarConfig,
     NoPoolAsyncConfig,
     NoPoolSyncConfig,
-    ReadReplicaGroup,
+    ReplicaGroup,
     SanicConfig,
     StarletteConfig,
 )
@@ -61,7 +61,7 @@ async def test_read_routing_honors_pins_explicit_groups_and_zero_replica_fallbac
     with RoutingContext.scope():
         RoutingContext.mark_write("app")
         pinned = primary.provide_read_session()
-        explicit = primary.provide_read_session(bind_group="analytics")
+        explicit = primary.provide_read_session(replica_group="analytics")
         if primary.is_async:
             async with pinned as session:
                 assert await session.select_value("SELECT 2") == 2
@@ -77,7 +77,7 @@ async def test_read_routing_honors_pins_explicit_groups_and_zero_replica_fallbac
                 assert session.select_value("SELECT 3") == 3
                 assert explicit._selection_receipt.config is analytics
     with pytest.raises(RoutingContextError, match="missing"):
-        primary.provide_read_session(bind_group="missing")
+        primary.provide_read_session(replica_group="missing")
     plain = config_type()
     fallback = plain.provide_read_session()
     if plain.is_async:
@@ -99,7 +99,7 @@ def test_replica_topology_rejects_mixed_nested_and_unsupported_modes() -> None:
     for replicas in (
         [nested],
         [AiosqliteConfig()],
-        {"default": ReadReplicaGroup([SqliteConfig()]), "database": "replica.db"},
+        {"default": ReplicaGroup([SqliteConfig()]), "database": "replica.db"},
     ):
         with pytest.raises(ImproperConfigurationError):
             SqliteConfig(replicas=replicas)
@@ -124,7 +124,7 @@ def test_extension_routing_options_are_documented_optional_fields() -> None:
         assert fields <= schema.__optional_keys__
     for schema in (LitestarConfig, StarletteConfig, FastAPIConfig, SanicConfig):
         assert "read_pool_key" in schema.__optional_keys__
-    assert {"read_config_enabled", "read_bind_group"} <= ADKConfig.__optional_keys__
+    assert {"enable_replica_reads", "default_replica_group"} <= ADKConfig.__optional_keys__
 
 
 class TenantEndpoint(NoPoolAsyncConfig[Any, Any]):

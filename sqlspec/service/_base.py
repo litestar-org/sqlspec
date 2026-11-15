@@ -49,14 +49,14 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         session: The caller-owned driver session, mutually exclusive with config.
         config: Database configuration used to acquire sessions per helper call.
         read_config: Optional dedicated reader configuration with the same execution mode.
-        read_bind_group: Preferred replica group for read helpers.
+        default_replica_group: Preferred replica group for read helpers.
         loader: Optional SQL file loader to expose without resolving named queries.
     """
 
     __slots__ = (
         "_config",
+        "_default_replica_group",
         "_loader",
-        "_read_bind_group",
         "_read_config",
         "_session",
         "_transaction_key",
@@ -69,7 +69,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         *,
         config: "AsyncDatabaseConfig[Any, Any, AsyncDriverT] | NoPoolAsyncConfig[Any, AsyncDriverT] | None" = None,
         read_config: "AsyncDatabaseConfig[Any, Any, AsyncDriverT] | NoPoolAsyncConfig[Any, AsyncDriverT] | None" = None,
-        read_bind_group: str | None = None,
+        default_replica_group: str | None = None,
         loader: "SQLFileLoader | None" = None,
     ) -> None:
         if (session is None) == (config is None):
@@ -82,7 +82,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             msg = "Reader configuration must match the service execution mode"
             raise ImproperConfigurationError(msg)
         self._read_config = read_config
-        self._read_bind_group = read_bind_group
+        self._default_replica_group = default_replica_group
         self._session = session
         self._config = config
         self._loader = loader
@@ -127,9 +127,9 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         return self._read_config
 
     @property
-    def read_bind_group(self) -> str | None:
+    def default_replica_group(self) -> str | None:
         """Return the preferred replica group."""
-        return self._read_bind_group
+        return self._default_replica_group
 
     def provide_session(
         self, session: AsyncDriverT | None = None, *, read_only: bool = False
@@ -158,7 +158,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         raise ImproperConfigurationError(msg)
 
     def provide_read_session(
-        self, session: AsyncDriverT | None = None, *, bind_group: str | None = None
+        self, session: AsyncDriverT | None = None, *, replica_group: str | None = None
     ) -> AbstractAsyncContextManager[AsyncDriverT]:
         """Borrow an active writer transaction or acquire a reader session."""
         if session is not None:
@@ -172,7 +172,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             self._session._transaction_depth > 0 or _connection_in_transaction(self._session)
         ):
             return nullcontext(self._session)
-        group = bind_group if bind_group is not None else self._read_bind_group
+        group = replica_group if replica_group is not None else self._default_replica_group
         writer_bind = (
             self._config.bind_key
             if self._config is not None
@@ -185,7 +185,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         if target is not None:
             if self._read_config is not None and not target.supports_read_routing and group is None:
                 return target.provide_session()
-            return target.provide_read_session(bind_group=group)
+            return target.provide_read_session(replica_group=group)
         if self._session is not None:
             return nullcontext(self._session)
         msg = "No session or config is available to provide a read session"
@@ -556,14 +556,14 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         session: The caller-owned driver session, mutually exclusive with config.
         config: Database configuration used to acquire sessions per helper call.
         read_config: Optional dedicated reader configuration with the same execution mode.
-        read_bind_group: Preferred replica group for read helpers.
+        default_replica_group: Preferred replica group for read helpers.
         loader: Optional SQL file loader to expose without resolving named queries.
     """
 
     __slots__ = (
         "_config",
+        "_default_replica_group",
         "_loader",
-        "_read_bind_group",
         "_read_config",
         "_session",
         "_transaction_key",
@@ -576,7 +576,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         *,
         config: "SyncDatabaseConfig[Any, Any, SyncDriverT] | NoPoolSyncConfig[Any, SyncDriverT] | None" = None,
         read_config: "SyncDatabaseConfig[Any, Any, SyncDriverT] | NoPoolSyncConfig[Any, SyncDriverT] | None" = None,
-        read_bind_group: str | None = None,
+        default_replica_group: str | None = None,
         loader: "SQLFileLoader | None" = None,
     ) -> None:
         if (session is None) == (config is None):
@@ -589,7 +589,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             msg = "Reader configuration must match the service execution mode"
             raise ImproperConfigurationError(msg)
         self._read_config = read_config
-        self._read_bind_group = read_bind_group
+        self._default_replica_group = default_replica_group
         self._session = session
         self._config = config
         self._loader = loader
@@ -632,9 +632,9 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         return self._read_config
 
     @property
-    def read_bind_group(self) -> str | None:
+    def default_replica_group(self) -> str | None:
         """Return the preferred replica group."""
-        return self._read_bind_group
+        return self._default_replica_group
 
     def provide_session(
         self, session: SyncDriverT | None = None, *, read_only: bool = False
@@ -663,7 +663,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         raise ImproperConfigurationError(msg)
 
     def provide_read_session(
-        self, session: SyncDriverT | None = None, *, bind_group: str | None = None
+        self, session: SyncDriverT | None = None, *, replica_group: str | None = None
     ) -> AbstractContextManager[SyncDriverT]:
         """Borrow an active writer transaction or acquire a reader session."""
         if session is not None:
@@ -677,7 +677,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             self._session._transaction_depth > 0 or _connection_in_transaction(self._session)
         ):
             return nullcontext(self._session)
-        group = bind_group if bind_group is not None else self._read_bind_group
+        group = replica_group if replica_group is not None else self._default_replica_group
         writer_bind = (
             self._config.bind_key
             if self._config is not None
@@ -690,7 +690,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         if target is not None:
             if self._read_config is not None and not target.supports_read_routing and group is None:
                 return target.provide_session()
-            return target.provide_read_session(bind_group=group)
+            return target.provide_read_session(replica_group=group)
         if self._session is not None:
             return nullcontext(self._session)
         msg = "No session or config is available to provide a read session"

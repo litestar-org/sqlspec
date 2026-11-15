@@ -297,7 +297,7 @@ class ReplicaUnavailableError(OperationalError):
 
 
 class RoutingContextError(ImproperConfigurationError):
-    """Invalid routing mode, bind group, or primary-only operation."""
+    """Invalid routing mode, replica group, or primary-only operation."""
 
 
 class QueryTimeoutError(OperationalError):

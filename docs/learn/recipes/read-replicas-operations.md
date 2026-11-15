@@ -38,7 +38,7 @@ Here `app` is the existing ASGI application. In the built-in Litestar, Starlette
 
 Use a positive timeout for bounded MySQL GTID waits. MySQL treats `0` as unlimited; MariaDB treats `0` as a nonblocking check.
 
-`ReadReplicaGroup(causal_validator=...)` can validate an application token after checkout and before yielding. A failed check cleans up that candidate and tries the next eligible reader or the configured primary fallback. Causal tokens are opaque to the generic router; it cannot infer replica lag from a host name or weight.
+`ReplicaGroup(causal_validator=...)` can validate an application token after checkout and before yielding. A failed check cleans up that candidate and tries the next eligible reader or the configured primary fallback. Causal tokens are opaque to the generic router; it cannot infer replica lag from a host name or weight.
 
 ## Failures and Recovery
 

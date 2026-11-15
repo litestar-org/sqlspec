@@ -859,7 +859,7 @@ async def test_session_context_aenter_failure_releases_and_detaches_driver() -> 
 async def test_psqlpy_read_replica_failover_maps_driver_errors(
     failure_stage: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Psqlpy pool build and acquire errors map to DatabaseConnectionError so ReadReplicaGroup fails over."""
+    """Psqlpy pool build and acquire errors map to DatabaseConnectionError so ReplicaGroup fails over."""
     good_conn = SimpleNamespace(in_transaction=AsyncMock(return_value=False))
     good_ctx = AsyncMock()
     good_ctx.__aenter__.return_value = good_conn

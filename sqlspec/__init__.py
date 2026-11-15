@@ -54,7 +54,7 @@ if TYPE_CHECKING:
         Update,
         sql,
     )
-    from sqlspec.config import AsyncDatabaseConfig, ReadReplicaGroup, SyncDatabaseConfig
+    from sqlspec.config import AsyncDatabaseConfig, ReplicaGroup, SyncDatabaseConfig
     from sqlspec.core import (
         SQL,
         ArrowResult,
@@ -171,8 +171,8 @@ __all__ = (
     "QueryBuilder",
     "RandomSelector",
     "ReadOnlyTransactionError",
-    "ReadReplicaGroup",
     "RedactionConfig",
+    "ReplicaGroup",
     "ReplicaHealthBreaker",
     "ReplicaSelector",
     "ReplicaSpec",
@@ -250,7 +250,7 @@ suppress_erroneous_sqlglot_log_messages()
 
 
 _EXPORTS: dict[str, tuple[str, str | None]] = {
-    "ReadReplicaGroup": ("sqlspec.config", "ReadReplicaGroup"),
+    "ReplicaGroup": ("sqlspec.config", "ReplicaGroup"),
     "RandomSelector": ("sqlspec.core.routing", "RandomSelector"),
     "ReplicaHealthBreaker": ("sqlspec.core.routing", "ReplicaHealthBreaker"),
     "ReplicaSelector": ("sqlspec.core.routing", "ReplicaSelector"),

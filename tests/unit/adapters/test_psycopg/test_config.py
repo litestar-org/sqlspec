@@ -1290,7 +1290,7 @@ async def test_psycopg_session_context_enter_failure_releases_and_detaches_drive
 def test_psycopg_sync_read_replica_failover_maps_driver_errors(
     failure_stage: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PsycopgSyncConfig pool and acquire errors map via create_mapped_exception for ReadReplicaGroup failover."""
+    """PsycopgSyncConfig pool and acquire errors map via create_mapped_exception for ReplicaGroup failover."""
     good_conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
     good_ctx = MagicMock()
     good_ctx.__enter__.return_value = good_conn
@@ -1325,7 +1325,7 @@ def test_psycopg_sync_read_replica_failover_maps_driver_errors(
 async def test_psycopg_async_read_replica_failover_maps_driver_errors(
     failure_stage: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PsycopgAsyncConfig pool and acquire errors map via create_mapped_exception for ReadReplicaGroup failover."""
+    """PsycopgAsyncConfig pool and acquire errors map via create_mapped_exception for ReplicaGroup failover."""
     good_conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
     good_ctx = AsyncMock()
     good_ctx.__aenter__.return_value = good_conn

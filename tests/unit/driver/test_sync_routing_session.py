@@ -223,7 +223,7 @@ async def test_nested_read_policy_revalidates_cached_replica(tmp_path: Path, asy
     from typing import Any
 
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.config import ReadReplicaGroup
+    from sqlspec.config import ReplicaGroup
     from sqlspec.core.routing import ReplicaSpec
 
     databases = [tmp_path / "writer.db", tmp_path / "old.db", tmp_path / "fresh.db"]
@@ -244,7 +244,7 @@ async def test_nested_read_policy_revalidates_cached_replica(tmp_path: Path, asy
         checked.append(token)
         return int(await session.select_value("SELECT version FROM progress")) >= int(token)
 
-    group: ReadReplicaGroup[Any] = ReadReplicaGroup(
+    group: ReplicaGroup[Any] = ReplicaGroup(
         [ReplicaSpec(old, max_staleness_seconds=10), ReplicaSpec(fresh, max_staleness_seconds=1)],
         causal_validator=async_caught_up if async_mode else sync_caught_up,
         fallback_to_primary=False,
@@ -332,13 +332,13 @@ async def test_native_unopenable_reader_maps_checkout_failure(tmp_path: Path, as
     from typing import Any
 
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.config import ReadReplicaGroup
+    from sqlspec.config import ReplicaGroup
     from sqlspec.exceptions import DatabaseConnectionError, ReplicaUnavailableError
 
     config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
     missing = tmp_path / "missing" / "reader.db"
     reader = config_type(connection_config={"database": str(missing)})
-    group: ReadReplicaGroup[Any] = ReadReplicaGroup([reader], fallback_to_primary=fallback)
+    group: ReplicaGroup[Any] = ReplicaGroup([reader], fallback_to_primary=fallback)
     primary = config_type(connection_config={"database": str(tmp_path / "writer.db")}, replicas={"default": group})
     try:
         if fallback:
@@ -470,7 +470,7 @@ async def test_replica_policy_change_releases_finished_lease_and_protects_stream
     from typing import Any
 
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.config import ReadReplicaGroup
+    from sqlspec.config import ReplicaGroup
 
     config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
     reader = config_type(
@@ -478,7 +478,7 @@ async def test_replica_policy_change_releases_finished_lease_and_protects_stream
     )
     primary = config_type(
         connection_config={"database": str(tmp_path / "writer.db")},
-        replicas={"default": ReadReplicaGroup([reader], causal_validator=lambda _driver, _token: True)},
+        replicas={"default": ReplicaGroup([reader], causal_validator=lambda _driver, _token: True)},
     )
     query = "SELECT 1 AS value UNION ALL SELECT 2 AS value"
     stream: Any = None

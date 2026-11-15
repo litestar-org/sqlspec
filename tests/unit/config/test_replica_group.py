@@ -5,13 +5,7 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.config import (
-    AsyncDatabaseConfig,
-    NoPoolAsyncConfig,
-    NoPoolSyncConfig,
-    ReadReplicaGroup,
-    SyncDatabaseConfig,
-)
+from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, ReplicaGroup, SyncDatabaseConfig
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     ImproperConfigurationError,
@@ -76,7 +70,7 @@ class AsyncEndpoint(NoPoolAsyncConfig[Any, Any]):
 async def test_group_failover_is_limited_to_checkout(endpoint_type: Any) -> None:
     failed = endpoint_type(connection_config={"fail": True})
     ready = endpoint_type(connection_config={"dsn": "ready"})
-    group = ReadReplicaGroup([failed, ready], failure_threshold=1, fallback_to_primary=False)
+    group = ReplicaGroup([failed, ready], failure_threshold=1, fallback_to_primary=False)
     context = group.provide_session(tenant="acme", bypass_tenant=False)
     with pytest.raises(ValueError, match="caller failure"):
         if group.is_async:
@@ -100,7 +94,7 @@ async def test_group_failover_is_limited_to_checkout(endpoint_type: Any) -> None
 async def test_group_rejects_stale_replica_without_poisoning_health(endpoint_type: Any) -> None:
     stale = endpoint_type(connection_config={"dsn": "stale"})
     ready = endpoint_type(connection_config={"dsn": "ready"})
-    group = ReadReplicaGroup([stale, ready], causal_validator=lambda session, token: session == token)
+    group = ReplicaGroup([stale, ready], causal_validator=lambda session, token: session == token)
     context = group.provide_session(causal_token="ready")
     if group.is_async:
         async with context as session:
@@ -116,7 +110,7 @@ async def test_group_rejects_stale_replica_without_poisoning_health(endpoint_typ
 async def test_group_falls_back_to_primary_or_reports_exhaustion(endpoint_type: Any) -> None:
     failed = endpoint_type(connection_config={"fail": True})
     primary = endpoint_type(connection_config={"dsn": "primary"})
-    group = ReadReplicaGroup([failed], failure_threshold=1)
+    group = ReplicaGroup([failed], failure_threshold=1)
     context = group.provide_session(primary=primary)
     if group.is_async:
         async with context as session:
@@ -144,7 +138,7 @@ async def test_async_validator_cancellation_unwinds_lease_and_releases_probe() -
 
     endpoint = AsyncEndpoint()
     now = [0.0]
-    group = ReadReplicaGroup(
+    group = ReplicaGroup(
         [endpoint], causal_validator=validator, failure_threshold=1, recovery_seconds=1, clock=lambda: now[0]
     )
     group.breaker.record_failure(0)
@@ -169,7 +163,7 @@ def test_sync_group_rejects_async_validator_and_cleans_up() -> None:
         return True
 
     endpoint = SyncEndpoint()
-    group = ReadReplicaGroup([endpoint], causal_validator=validator)
+    group = ReplicaGroup([endpoint], causal_validator=validator)
     with pytest.raises(ImproperConfigurationError, match="async causal validator"):
         with group.provide_session(causal_token="token"):
             pytest.fail("A sync group cannot await validation")
@@ -179,7 +173,7 @@ def test_sync_group_rejects_async_validator_and_cleans_up() -> None:
 @pytest.mark.parametrize("configs", [[], [SyncEndpoint(), AsyncEndpoint()], ["not a config"]])
 def test_group_rejects_invalid_topologies(configs: Any) -> None:
     with pytest.raises(ImproperConfigurationError):
-        ReadReplicaGroup(configs)
+        ReplicaGroup(configs)
 
 
 @pytest.mark.parametrize("endpoint_type", [SyncEndpoint, AsyncEndpoint])
@@ -190,7 +184,7 @@ async def test_validator_error_unwinds_actual_exception_without_retry(endpoint_t
     def validator(session: Any, token: str) -> bool:
         raise ValueError("validator failed")
 
-    group = ReadReplicaGroup([first, second], causal_validator=validator)
+    group = ReplicaGroup([first, second], causal_validator=validator)
     with pytest.raises(ValueError, match="validator failed"):
         if group.is_async:
             async with group.provide_session(causal_token="token"):
@@ -207,7 +201,7 @@ async def test_validator_error_unwinds_actual_exception_without_retry(endpoint_t
 async def test_close_attempts_every_replica_before_propagating_error(endpoint_type: Any) -> None:
     failed = endpoint_type(connection_config={"fail_close": True})
     ready = endpoint_type()
-    group = ReadReplicaGroup([failed, ready])
+    group = ReplicaGroup([failed, ready])
     with pytest.raises(OSError, match="close failed"):
         if group.is_async:
             await cast("Awaitable[None]", group.close_pools())
@@ -284,7 +278,7 @@ async def test_causal_validator_transient_failure_fails_over_and_trips_breaker(
             raise exc_type("replica unreachable during causal check")
         return True
 
-    group = ReadReplicaGroup(
+    group = ReplicaGroup(
         [failing, ready],
         failure_threshold=1,
         fallback_to_primary=False,
@@ -312,7 +306,7 @@ async def test_causal_validator_exhaustion_falls_back_or_raises_with_cause(endpo
     def validator(_session: Any, _token: str) -> bool:
         raise causal_error
 
-    group = ReadReplicaGroup([failing], failure_threshold=1, fallback_to_primary=fallback, causal_validator=validator)
+    group = ReplicaGroup([failing], failure_threshold=1, fallback_to_primary=fallback, causal_validator=validator)
     if fallback:
         context = group.provide_session(primary=primary, causal_token="lsn-11")
         if group.is_async:
@@ -342,7 +336,7 @@ async def test_causal_validator_failure_reopens_half_open_probe(endpoint_type: A
     def validator(_session: Any, _token: str) -> bool:
         raise TimeoutError("probe timed out")
 
-    group = ReadReplicaGroup(
+    group = ReplicaGroup(
         [endpoint],
         failure_threshold=1,
         recovery_seconds=5.0,
@@ -378,7 +372,7 @@ async def test_causal_validator_failure_respects_primary_fallback_policy(endpoin
     def validator(_session: Any, _token: str) -> bool:
         raise DatabaseConnectionError("lag query disconnected")
 
-    group = ReadReplicaGroup([failing], failure_threshold=1, causal_validator=validator)
+    group = ReplicaGroup([failing], failure_threshold=1, causal_validator=validator)
     with pytest.raises(DatabaseConnectionError, match="lag query disconnected"):
         if group.is_async:
             async with group.provide_session(primary=primary, causal_token="lsn-13"):
@@ -452,15 +446,15 @@ async def test_create_pool_skips_replica_walk_once_initialized_and_resets_on_clo
     primary = endpoint_cls(connection_config={"dsn": "primary"}, replicas=[replica])
     group = primary.replica_groups["default"]
     walk_calls = 0
-    original_create_pools = ReadReplicaGroup.create_pools
+    original_create_pools = ReplicaGroup.create_pools
 
-    def spy_create_pools(group_self: ReadReplicaGroup) -> Any:
+    def spy_create_pools(group_self: ReplicaGroup) -> Any:
         nonlocal walk_calls
         if group_self is group:
             walk_calls += 1
         return original_create_pools(group_self)
 
-    monkeypatch.setattr(ReadReplicaGroup, "create_pools", spy_create_pools)
+    monkeypatch.setattr(ReplicaGroup, "create_pools", spy_create_pools)
 
     assert primary._replica_pools_initialized is False
     if asynchronous:
@@ -502,7 +496,7 @@ async def test_unreachable_replica_during_primary_create_pool_is_isolated_and_re
     now = [0.0]
     endpoint_cls: Any = _PooledAsyncEndpoint if asynchronous else _PooledSyncEndpoint
     unreachable = endpoint_cls(connection_config={"dsn": "replica-a"}, fail_exc=exc_factory())
-    group = ReadReplicaGroup([unreachable], failure_threshold=1, recovery_seconds=5.0, clock=lambda: now[0])
+    group = ReplicaGroup([unreachable], failure_threshold=1, recovery_seconds=5.0, clock=lambda: now[0])
     primary = endpoint_cls(connection_config={"dsn": "primary"}, replicas={"default": group})
 
     with caplog.at_level("WARNING", logger="sqlspec.config"):
