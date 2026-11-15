@@ -393,10 +393,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Return whether a DuckDB schema exists."""
 
         def _check_schema() -> bool:
-            result = self.connection.execute(
+            rows = self.connection.execute(
                 "SELECT 1 FROM information_schema.schemata WHERE schema_name = ?", [schema]
-            ).fetchone()
-            return result is not None
+            ).fetchall()
+            return bool(rows)
 
         handler = self.handle_database_exceptions()
         res = self._run_with_exception_handler(handler, _check_schema)
@@ -983,8 +983,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
     def _switch_migration_search_path(self, schema: str) -> None:
         if self._migration_schema_restore is None:
-            row = self.connection.execute("SELECT current_setting('search_path')").fetchone()
-            self._migration_schema_restore = "" if row is None else str(row[0])
+            rows = self.connection.execute("SELECT current_setting('search_path')").fetchall()
+            self._migration_schema_restore = str(rows[0][0]) if rows else ""
         self.connection.execute(f"SET search_path = {quote_identifier(schema)}")
 
     def _end_transaction_if_active(self, *, commit: bool) -> None:
