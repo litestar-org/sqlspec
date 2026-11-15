@@ -333,7 +333,7 @@ def test_schema_squash_unquotes_dotted_version_table_exclusion(tmp_path: Path) -
     runner.context = MigrationContext(driver=driver, dialect="sqlite")
     squasher = MigrationSquasher(tmp_path, runner, strategy="schema", version_table='"audit.v1"."ddl.migrations"')
     create_stmts, drop_stmts = squasher._extract_schema_ddl_from_context()  # pyright: ignore[reportPrivateUsage]
-    assert seen_exclusions == [("ddl.migrations",), ("ddl.migrations",)]
+    assert seen_exclusions == [("ddl.migrations", "ddl.migrations_lock")] * 2
     assert create_stmts == ["CREATE TABLE users (id INTEGER);"]
     assert drop_stmts == ["DROP TABLE users;"]
 

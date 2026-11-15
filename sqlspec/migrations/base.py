@@ -96,6 +96,42 @@ _PG_RLS_SCHEMA_CHECK_SQL: Final[str] = (
     "GROUP BY n.nspname, c.relname, c.relrowsecurity "
     "HAVING c.relrowsecurity OR COUNT(p.polrelid) > 0"
 )
+_PG_SCHEMA_OMISSIONS_SQL: Final[str] = (
+    "SELECT 'grant' AS object_kind, n.nspname::text AS schema_name, c.relname::text AS object_name "
+    "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE c.relacl IS NOT NULL AND c.relkind IN ('r', 'p') "
+    "AND n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "UNION ALL "
+    "SELECT 'function', n.nspname::text, p.proname::text "
+    "FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+    "WHERE n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d "
+    "WHERE d.objid = p.oid AND d.classid = 'pg_catalog.pg_proc'::regclass AND d.deptype = 'e') "
+    "UNION ALL "
+    "SELECT 'trigger', n.nspname::text, c.relname::text || '.' || t.tgname::text "
+    "FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid "
+    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE NOT t.tgisinternal AND n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "UNION ALL "
+    "SELECT 'domain', n.nspname::text, ty.typname::text "
+    "FROM pg_catalog.pg_type ty JOIN pg_catalog.pg_namespace n ON n.oid = ty.typnamespace "
+    "WHERE ty.typtype = 'd' AND n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d "
+    "WHERE d.objid = ty.oid AND d.classid = 'pg_catalog.pg_type'::regclass AND d.deptype = 'e')"
+)
+_ORACLE_VPD_POLICY_SQL: Final[str] = (
+    "SELECT object_owner AS schema_name, object_name AS table_name, policy_name "
+    "FROM all_policies "
+    "WHERE object_owner = COALESCE(:schema_name, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'))"
+)
+_MSSQL_SECURITY_POLICY_SQL: Final[str] = (
+    "SELECT OBJECT_SCHEMA_NAME(p.target_object_id) AS schema_name, "
+    "OBJECT_NAME(p.target_object_id) AS table_name, sp.name AS policy_name "
+    "FROM sys.security_policies sp "
+    "JOIN sys.security_predicates p ON p.object_id = sp.object_id "
+    "WHERE sp.is_enabled = 1"
+)
+_MAX_OMITTED_NAMES: Final[int] = 50
 
 
 class LoadedMigrationMetadata(TypedDict):
@@ -1508,36 +1544,155 @@ def _extract_catalog_rows(result: Any) -> "list[Mapping[str, Any]]":
     return rows
 
 
-def _validate_postgres_rls_rows(
-    rows: "Sequence[Mapping[str, Any]]",
+def _excluded_table_names(exclude_tables: "Sequence[str] | None") -> set[str]:
+    """Return lowercase bare table names from qualified or quoted ``exclude_tables`` entries."""
+    excluded: set[str] = set()
+    for table_name in exclude_tables or ():
+        parts = split_qualified_identifier(table_name, quote_chars='"`', allow_bracket_quotes=True)
+        bare = parts[-1] if parts else table_name.strip('"`[]')
+        if bare:
+            excluded.add(bare.lower())
+    return excluded
+
+
+def _validate_schema_extraction_rows(
+    refused: "Sequence[Mapping[str, Any]]",
+    omitted: "Sequence[Mapping[str, Any]]",
     *,
+    backend_label: str,
     exclude_tables: "Sequence[str] | None" = None,
     use_squash_error: bool = False,
 ) -> None:
-    """Raise when PostgreSQL catalog rows indicate RLS or attached policies on included tables."""
-    if not rows:
-        return
-    excluded: set[str] = set()
-    if exclude_tables:
-        for table_name in exclude_tables:
-            parts = split_qualified_identifier(table_name, quote_chars='"`', allow_bracket_quotes=True)
-            bare = parts[-1] if parts else table_name.strip('"`[]')
-            if bare:
-                excluded.add(bare.lower())
+    """Refuse row-security objects on included tables and warn about objects extraction does not emit.
+
+    Args:
+        refused: Catalog rows naming tables protected by row-level security policies.
+        omitted: Catalog rows naming grants, functions, triggers, and domains extraction drops.
+        backend_label: Backend name used in messages.
+        exclude_tables: Tables ignored by both checks.
+        use_squash_error: Raise ``SquashValidationError`` instead of ``MigrationError``.
+
+    Raises:
+        SquashValidationError: When ``use_squash_error`` is set and a protected table is found.
+        MigrationError: When a protected table is found.
+    """
+    excluded = _excluded_table_names(exclude_tables)
     protected: list[str] = []
-    for row in rows:
+    for row in refused:
         table_name = str(row.get("table_name") or row.get("relname") or "").strip()
         if table_name and table_name.lower() in excluded:
             continue
         schema_name = str(row.get("schema_name") or row.get("nspname") or "").strip()
         label = f"{schema_name}.{table_name}" if schema_name and table_name else (table_name or "<table_with_rls>")
         protected.append(label)
-    if not protected:
-        return
+    if protected:
+        msg = (
+            f"Schema extraction cannot include {backend_label} tables protected by row-level security policies "
+            f"({', '.join(protected)}): extraction does not emit those policies (use --strategy ddl instead)"
+        )
+        if use_squash_error:
+            raise SquashValidationError(msg)
+        raise MigrationError(msg)
+    dropped: list[str] = []
+    kinds: list[str] = []
+    for row in omitted:
+        object_name = str(row.get("object_name") or "").strip()
+        table_part = object_name.split(".", 1)[0].lower()
+        if table_part in excluded:
+            continue
+        kind = str(row.get("object_kind") or "object").strip()
+        schema_name = str(row.get("schema_name") or "").strip()
+        dropped.append(f"{kind}:{schema_name}.{object_name}" if schema_name else f"{kind}:{object_name}")
+        if kind not in kinds:
+            kinds.append(kind)
+    if dropped:
+        log_with_context(
+            logger,
+            logging.WARNING,
+            "migration.schema_extraction.omitted",
+            object_kinds=kinds,
+            object_count=len(dropped),
+            names=dropped[:_MAX_OMITTED_NAMES],
+        )
+
+
+def _schema_extraction_plan(driver: Any) -> "tuple[str, str, str | None, bool] | None":
+    """Return ``(backend_label, refusal_sql, omissions_sql, takes_schema)`` for backends with catalog checks."""
+    if _is_postgres_non_cockroach_driver(driver):
+        return "PostgreSQL", _PG_RLS_SCHEMA_CHECK_SQL, _PG_SCHEMA_OMISSIONS_SQL, True
+    raw_dialect = getattr(driver, "dialect", None)
+    dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+    if dialect == "oracle":
+        return "Oracle", _ORACLE_VPD_POLICY_SQL, None, True
+    if dialect in {"mssql", "tsql"}:
+        return "SQL Server", _MSSQL_SECURITY_POLICY_SQL, None, False
+    return None
+
+
+def _extraction_check_error(backend_label: str, exc: Exception) -> MigrationError:
+    """Build the error raised when a catalog query cannot prove the schema is free of row-security policies."""
     msg = (
-        f"Schema extraction cannot include PostgreSQL tables with RLS or row-level policies "
-        f"({', '.join(protected)}): schema extraction does not emit RLS policies (use --strategy ddl instead)"
+        f"Schema extraction cannot prove the {backend_label} schema has no row-security policies "
+        f"because the catalog query failed: {exc}"
     )
-    if use_squash_error:
-        raise SquashValidationError(msg)
-    raise MigrationError(msg)
+    return MigrationError(msg)
+
+
+def _ensure_schema_extraction_safe_sync(
+    driver: Any,
+    *,
+    schema: str | None = None,
+    exclude_tables: "Sequence[str] | None" = None,
+    use_squash_error: bool = False,
+) -> None:
+    """Refuse row-security objects and warn about dropped objects before schema extraction.
+
+    Args:
+        driver: Active synchronous driver.
+        schema: Inspected schema, or None for the current schema.
+        exclude_tables: Tables ignored by the checks.
+        use_squash_error: Raise ``SquashValidationError`` instead of ``MigrationError``.
+    """
+    plan = _schema_extraction_plan(driver)
+    if plan is None:
+        return
+    label, refusal_sql, omissions_sql, takes_schema = plan
+    parameters = {"schema_name": schema} if takes_schema else None
+    try:
+        refused = _extract_catalog_rows(driver.execute(refusal_sql, parameters))
+        omitted = _extract_catalog_rows(driver.execute(omissions_sql, parameters)) if omissions_sql else []
+    except SQLSpecError as exc:
+        raise _extraction_check_error(label, exc) from exc
+    _validate_schema_extraction_rows(
+        refused, omitted, backend_label=label, exclude_tables=exclude_tables, use_squash_error=use_squash_error
+    )
+
+
+async def _ensure_schema_extraction_safe_async(
+    driver: Any,
+    *,
+    schema: str | None = None,
+    exclude_tables: "Sequence[str] | None" = None,
+    use_squash_error: bool = False,
+) -> None:
+    """Refuse row-security objects and warn about dropped objects before schema extraction.
+
+    Args:
+        driver: Active asynchronous driver.
+        schema: Inspected schema, or None for the current schema.
+        exclude_tables: Tables ignored by the checks.
+        use_squash_error: Raise ``SquashValidationError`` instead of ``MigrationError``.
+    """
+    plan = _schema_extraction_plan(driver)
+    if plan is None:
+        return
+    label, refusal_sql, omissions_sql, takes_schema = plan
+    parameters = {"schema_name": schema} if takes_schema else None
+    try:
+        refused = _extract_catalog_rows(await driver.execute(refusal_sql, parameters))
+        omitted = _extract_catalog_rows(await driver.execute(omissions_sql, parameters)) if omissions_sql else []
+    except SQLSpecError as exc:
+        raise _extraction_check_error(label, exc) from exc
+    _validate_schema_extraction_rows(
+        refused, omitted, backend_label=label, exclude_tables=exclude_tables, use_squash_error=use_squash_error
+    )

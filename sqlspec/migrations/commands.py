@@ -26,13 +26,11 @@ from sqlglot.errors import SqlglotError
 from sqlspec.builder import CreateTable, sql
 from sqlspec.exceptions import MigrationError, SQLBuilderError, SQLSpecError, SquashValidationError
 from sqlspec.migrations.base import (
-    _PG_RLS_SCHEMA_CHECK_SQL,
     BaseMigrationCommands,
     BaseMigrationTracker,
     _driver_in_transaction_async,
-    _extract_catalog_rows,
-    _is_postgres_non_cockroach_driver,
-    _validate_postgres_rls_rows,
+    _ensure_schema_extraction_safe_async,
+    _ensure_schema_extraction_safe_sync,
 )
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
@@ -357,7 +355,8 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         """
         if include_migrations_table:
             return ()
-        return (str(self.tracker.version_table_name),)
+        version_table_name = str(self.tracker.version_table_name)
+        return (version_table_name, f"{version_table_name}_lock")
 
     def _tracking_table_exists(self, tables: "Sequence[TableMetadata]") -> bool:
         """Return whether the migration tracking table appears in introspected table metadata.
@@ -1220,24 +1219,18 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         return MigrationCommandsCore._terminate_statement(drop.sql(dialect=dialect, copy=False))
 
     @staticmethod
-    def _ensure_postgres_rls_safe_sync(
+    def _ensure_schema_extraction_safe_sync(
         driver: Any, *, schema: str | None = None, exclude_tables: "Sequence[str] | None" = None
     ) -> None:
-        """Raise when PostgreSQL target tables enable RLS or define row-level policies."""
-        if not _is_postgres_non_cockroach_driver(driver):
-            return
-        result = driver.execute(_PG_RLS_SCHEMA_CHECK_SQL, {"schema_name": schema})
-        _validate_postgres_rls_rows(_extract_catalog_rows(result), exclude_tables=exclude_tables)
+        """Refuse row-security objects and warn about objects schema extraction drops."""
+        _ensure_schema_extraction_safe_sync(driver, schema=schema, exclude_tables=exclude_tables)
 
     @staticmethod
-    async def _ensure_postgres_rls_safe_async(
+    async def _ensure_schema_extraction_safe_async(
         driver: Any, *, schema: str | None = None, exclude_tables: "Sequence[str] | None" = None
     ) -> None:
-        """Raise asynchronously when PostgreSQL target tables enable RLS or define row-level policies."""
-        if not _is_postgres_non_cockroach_driver(driver):
-            return
-        result = await driver.execute(_PG_RLS_SCHEMA_CHECK_SQL, {"schema_name": schema})
-        _validate_postgres_rls_rows(_extract_catalog_rows(result), exclude_tables=exclude_tables)
+        """Refuse row-security objects and warn about objects schema extraction drops asynchronously."""
+        await _ensure_schema_extraction_safe_async(driver, schema=schema, exclude_tables=exclude_tables)
 
 
 class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRunner]):
@@ -1813,7 +1806,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         if from_schema:
             excluded = self._version_table_exclusion()
             with self.config.provide_session() as driver:
-                self._ensure_postgres_rls_safe_sync(driver, schema=schema, exclude_tables=excluded)
+                self._ensure_schema_extraction_safe_sync(driver, schema=schema, exclude_tables=excluded)
                 up_sql, down_sql = schema_ddl_statements(
                     driver.data_dictionary.get_schema_ddl(
                         driver, schema=schema, exclude_tables=excluded, direction="create"
@@ -1864,7 +1857,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         _, echo_value, _ = self._resolve_output_policy(False, echo, False)
         excluded = self._version_table_exclusion(include_migrations_table)
         with self.config.provide_session() as driver:
-            self._ensure_postgres_rls_safe_sync(driver, schema=schema, exclude_tables=excluded)
+            self._ensure_schema_extraction_safe_sync(driver, schema=schema, exclude_tables=excluded)
             create_res = driver.data_dictionary.get_schema_ddl(
                 driver,
                 schema=schema,
@@ -1989,7 +1982,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     allow_gaps=allow_gaps,
                     applied_migrations=self._read_applied_migrations(driver),
                 )
-                self._ensure_postgres_rls_safe_sync(driver, exclude_tables=excluded)
+                self._ensure_schema_extraction_safe_sync(driver, exclude_tables=excluded)
                 schema_ddl = schema_ddl_statements(
                     driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="create"),
                     driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="drop"),
@@ -3107,7 +3100,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         if from_schema:
             excluded = self._version_table_exclusion()
             async with self.config.provide_session() as driver:
-                await self._ensure_postgres_rls_safe_async(driver, schema=schema, exclude_tables=excluded)
+                await self._ensure_schema_extraction_safe_async(driver, schema=schema, exclude_tables=excluded)
                 up_sql, down_sql = schema_ddl_statements(
                     await driver.data_dictionary.get_schema_ddl(
                         driver, schema=schema, exclude_tables=excluded, direction="create"
@@ -3158,7 +3151,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         _, echo_value, _ = self._resolve_output_policy(False, echo, False)
         excluded = self._version_table_exclusion(include_migrations_table)
         async with self.config.provide_session() as driver:
-            await self._ensure_postgres_rls_safe_async(driver, schema=schema, exclude_tables=excluded)
+            await self._ensure_schema_extraction_safe_async(driver, schema=schema, exclude_tables=excluded)
             create_res = await driver.data_dictionary.get_schema_ddl(
                 driver,
                 schema=schema,
@@ -3286,7 +3279,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     allow_gaps=allow_gaps,
                     applied_migrations=await self._read_applied_migrations(driver),
                 )
-                await self._ensure_postgres_rls_safe_async(driver, exclude_tables=excluded)
+                await self._ensure_schema_extraction_safe_async(driver, exclude_tables=excluded)
                 schema_ddl = schema_ddl_statements(
                     await driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="create"),
                     await driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="drop"),
