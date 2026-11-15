@@ -22,7 +22,6 @@ from sqlspec.storage._arrow_payload import (
 )
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
-    FILE_PROTOCOL,
     check_local_delete_target,
     ensure_path_within_root,
     is_file_destination,
@@ -310,7 +309,7 @@ class FSSpecBackend:
                 directory and ``recursive`` is False.
         """
         resolved_path = self._resolve_path(path)
-        if self.protocol == FILE_PROTOCOL:
+        if self.protocol in _LOCAL_PROTOCOLS:
             check_local_delete_target(resolved_path, self.base_path, recursive=recursive)
         execute_sync_storage_operation(
             partial(self.fs.rm, resolved_path, recursive=recursive, **kwargs),

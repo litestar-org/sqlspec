@@ -1702,6 +1702,38 @@ def test_obstore_file_root_refused(tmp_path: Path) -> None:
     assert not (tmp_path / "a").exists()
 
 
+def test_obstore_file_root_refused_even_recursive(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f.txt").write_text("x")
+    (tmp_path / "keep.txt").write_text("k")
+    backend = ObStoreBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync(".", recursive=True)
+
+    assert (tmp_path / "keep.txt").exists()
+    assert (tmp_path / "a" / "f.txt").exists()
+
+
+@pytest.mark.anyio
+async def test_obstore_file_root_refused_async(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f.txt").write_text("x")
+    (tmp_path / "keep.txt").write_text("k")
+    backend = ObStoreBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        await backend.delete_async(".", recursive=True)
+    with pytest.raises(StorageOperationFailedError):
+        await backend.delete_async("a")
+
+    assert (tmp_path / "keep.txt").exists()
+    assert (tmp_path / "a" / "f.txt").exists()
+
+    await backend.delete_async("a", recursive=True)
+    assert not (tmp_path / "a").exists()
+
+
 def test_obstore_init_error_hides_uri_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     import obstore.store as obs_store
 

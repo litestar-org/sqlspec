@@ -1192,6 +1192,19 @@ def test_fsspec_file_root_refused_even_recursive(tmp_path: Path) -> None:
     assert (tmp_path / "keep.txt").exists()
 
 
+def test_fsspec_local_protocol_root_refused_even_recursive(tmp_path: Path) -> None:
+    _delete_layout(tmp_path)
+    backend = FSSpecBackend(f"local://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync(".", recursive=True)
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync("a")
+
+    assert (tmp_path / "keep.txt").exists()
+    assert (tmp_path / "a" / "f.txt").exists()
+
+
 def test_fsspec_file_directory_requires_recursive(tmp_path: Path) -> None:
     _delete_layout(tmp_path)
     backend = FSSpecBackend(f"file://{tmp_path}")
