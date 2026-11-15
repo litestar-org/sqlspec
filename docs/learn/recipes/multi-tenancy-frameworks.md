@@ -209,10 +209,10 @@ app = SQLSpecTenantMiddleware(inner_app, extractor=verified_tenant)
   checkin.
 - **Streaming and background tasks**: The tenant resolved for the request stays
   in effect for streaming bodies and background tasks in every framework.
-  Starlette and FastAPI also hold request leases open through streaming bodies
-  and `BackgroundTask` completion; Litestar and Sanic release the request
-  connection when the response starts, so open a new session inside the stream
-  or task.
+  Starlette and FastAPI hold request leases open through streaming bodies and
+  `BackgroundTask` completion. Litestar, Sanic, and Flask hold them through
+  streaming bodies and release them when the stream finishes, so open a new
+  session inside background tasks that run afterwards.
 - **Detached workers**: Never pass a request session to work outliving the HTTP
   response; pass the verified `tenant_id` and open
   `config.provide_session(tenant=tenant_id)` in the worker (see

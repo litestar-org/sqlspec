@@ -93,6 +93,14 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 `get_routing_session` and `get_routing_session_async` create an opt-in facade that selects a reader or pins primary as work requires. Pure ASGI middleware scopes the request and closes owned checkouts. Add `SQLSpecRoutingMiddleware` from `sqlspec.utils.routing` to read routing hints and scope write pins. Tenant identity remains a separate access check. See [Read Replicas](../learn/recipes/read-replicas.md).
 
+## Connection Lifetime
+
+- **Normal responses**: The request connection is committed or rolled back and released after the response is finalized.
+- **Streaming responses**: The connection stays held until the body finishes or the client disconnects, so the request session works inside the streaming body.
+- **Background work**: A `BackgroundTask` keeps the request connection until it completes, so the task can use the request session.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
+
 ## Recap
 
 - Pass a config, config list, or `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or `db_plugin.init_app(app)`) and retrieve sessions with `db_plugin.get_session(request)` or `await db_plugin.get_session_async(request)`; connections are checked out on first access.

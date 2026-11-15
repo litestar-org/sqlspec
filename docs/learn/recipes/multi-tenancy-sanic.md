@@ -130,11 +130,11 @@ leases roll back open transactions (including in `"manual"` mode), while
 psycopg and CockroachDB psycopg leases commit a clean exit, so commit
 explicitly or set `commit_mode="autocommit"` to control persistence.
 
-For a streaming handler, SQLSpec releases the request connection at the
-`request.respond()` call. The request tenant stays in effect until the handler
-returns, so open a new session with `config.provide_session()` after
-`respond()` instead of reusing the request session. This example uses the
-extractor configuration from [Upfront Extractor](#upfront-extractor):
+For a streaming handler, SQLSpec keeps the request connection until the
+handler returns, and the request tenant stays in effect for the same period, so
+the request session keeps working after `request.respond()`. This example opens
+a separate session with `config.provide_session()` for the export query, using
+the extractor configuration from [Upfront Extractor](#upfront-extractor):
 
 ```python
 @app.get("/projects/export")

@@ -128,6 +128,14 @@ Use `get_read_session(request, key=...)` for a lazy reader, or await `get_read_s
 
 Startup and shutdown listeners manage the primary and its reader pools together. Request cleanup closes every acquired session on success, errors, and cancellation. Tenant receipt checks apply to readers too. Use `SQLSpecRoutingMiddleware` for a request-local routing scope and stateless hints; see [Read Replicas](../learn/recipes/read-replicas.md).
 
+## Connection Lifetime
+
+- **Normal responses**: The request connection is committed or rolled back and released when the handler returns and the response completes.
+- **Streaming responses**: The connection stays held while a `ResponseStream` body or a handler that called `request.respond()` runs, and is released when the handler returns.
+- **Background work**: Tasks that outlive the handler run after the connection is released. Open a new session with `config.provide_session()` inside the task.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
+
 ## Recap
 
 - Configure `session_key`, `commit_mode`, `disable_di`, and observability flags in `extension_config["sanic"]`.

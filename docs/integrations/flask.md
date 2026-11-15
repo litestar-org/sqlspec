@@ -87,6 +87,14 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 For an async adapter, Flask runs these calls through `PortalProvider`. Tenant and routing payloads copy into that work. Writes merge their primary pin back to the request; a portal timeout pins conservatively before it raises if completion is uncertain. Each request still owns cleanup. Use explicit worker scopes outside HTTP requests. See [Replica Operations](../learn/recipes/read-replicas-operations.md) for lag and failure behavior.
 
+## Connection Lifetime
+
+- **Normal responses**: The request connection is committed or rolled back and released when the request context tears down after the response.
+- **Streaming responses**: A streamed response keeps the connection until its generator finishes, so the generator can use the request session.
+- **Background work**: Threads or tasks that outlive the request run after the connection is released. Open a new session with `config.provide_session()` in the worker.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
+
 ## Recap
 
 - Initialize `SQLSpecPlugin` with `plugin.init_app(app)` and access request-scoped sessions via `plugin.get_session()`.

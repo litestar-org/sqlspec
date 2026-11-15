@@ -340,6 +340,14 @@ def create_app() -> Litestar:
 
 Create the `AsyncpgConfig` once and pass that same instance to both `SQLSpecPlugin(config)` and `DatabaseProvider(config)` so Dishka sessions draw from the pool managed by Litestar's lifespan.
 
+## Connection Lifetime
+
+- **Normal responses**: The request connection is committed or rolled back when the response starts and released after the final body frame.
+- **Streaming responses**: The connection stays held until the stream finishes or the client disconnects, so the request session works inside a `Stream` body.
+- **Background work**: A background task runs after the connection is released. Open a new session with `config.provide_session()` inside the task.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
+
 ## Recap
 
 - `SQLSpecPlugin` manages pool lifecycles, injects `db_session` / `db_connection` / `db_pool`, maps `NotFoundError` (`404`) and `IntegrityError` (`409`), and registers `litestar db` and `litestar sessions delete-expired` CLI commands automatically.

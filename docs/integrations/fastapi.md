@@ -136,6 +136,14 @@ Use `Depends(db_ext.provide_read_session())` for a reader dependency. The typed 
 
 Add `app.add_middleware(SQLSpecRoutingMiddleware)` for request routing scopes and header/cookie hints. The middleware is exported from `sqlspec.utils.routing`. Read sessions keep the same tenant checks and lazy physical checkout as ordinary sessions. See [Read Replicas](../learn/recipes/read-replicas.md) for topology setup.
 
+## Connection Lifetime
+
+- **Normal responses**: The request connection is committed or rolled back and released after the response is finalized.
+- **Streaming responses**: The connection stays held until the body finishes or the client disconnects, so the request session works inside a `StreamingResponse` body.
+- **Background work**: A `BackgroundTask` keeps the request connection until it completes, so the task can use the request session.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
+
 ## Recap
 
 - Instantiate `db_ext = SQLSpecPlugin(config, app)` (passing a single config, a list of configs, or a `SQLSpec` registry) to bind pool lifecycles and request sessions to FastAPI.
