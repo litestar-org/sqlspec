@@ -384,8 +384,16 @@ def test_events_queue_retention_zero_deletes_immediately_on_ack() -> None:
     config.extension_config = {"events": {"retention_seconds": 0, "cleanup_on_ack": True}}
     config.provide_session.return_value = session_cm
 
+    leased_until = datetime(2026, 11, 13, 12, 0, 30, tzinfo=UTC)
+    driver.select_one_or_none.return_value = {
+        "event_id": "evt-1",
+        "channel": "alerts",
+        "attempts": 1,
+        "lease_expires_at": leased_until,
+    }
     queue = SyncTableEventQueue(config)
-    queue.ack("evt-1")
+    queue._record_lease("evt-1", "alerts", leased_until)
+    assert queue.ack("evt-1") is True
     executed_stmt = driver.execute.call_args[0][0]
     assert "DELETE FROM" in executed_stmt.sql
 
