@@ -33,6 +33,7 @@ def test_pool_propagates_commit_conflicts_and_releases_connection(tmp_path: Path
                 connection.execute("BEGIN")
                 connection.execute("INSERT INTO items VALUES (1)")
                 other.execute("INSERT INTO items VALUES (1)")
+                connection.commit()
         assert pool.size() == 0
         assert other.execute("SELECT id FROM items").fetchall() == [(1,)]
     finally:
@@ -535,8 +536,8 @@ def test_close_closes_connections_opened_on_other_threads(tmp_path: Path) -> Non
             connection.execute("SELECT 1")
 
 
-def test_clean_exit_commits_an_open_transaction(tmp_path: Path) -> None:
-    """A file-backed session that exits normally must keep its work."""
+def test_normal_exit_rolls_back_open_transaction(tmp_path: Path) -> None:
+    """Uncommitted work is rolled back when a pooled connection is returned normally."""
     database = str(tmp_path / "commit.duckdb")
     pool = DuckDBConnectionPool(connection_config={"database": database})
     try:
@@ -546,7 +547,7 @@ def test_clean_exit_commits_an_open_transaction(tmp_path: Path) -> None:
             connection.execute("INSERT INTO items VALUES (1)")
 
         with pool.get_connection() as connection:
-            assert connection.execute("SELECT id FROM items").fetchall() == [(1,)]
+            assert connection.execute("SELECT id FROM items").fetchall() == []
     finally:
         pool.close()
 
@@ -657,6 +658,7 @@ def test_duckdb_nested_cancelled_error_handled_by_outer_commit(tmp_path: Path) -
                     raise asyncio.CancelledError()
             except asyncio.CancelledError:
                 pass
+            connection.commit()
 
         with pool.get_connection() as connection:
             assert connection.execute("SELECT COUNT(*) FROM items").fetchone() == (1,)
@@ -729,6 +731,7 @@ async def test_duckdb_pool_isolates_concurrent_async_tasks(tmp_path: Path) -> No
                     entered_both.set()
                 await entered_both.wait()
                 await asyncio.sleep(0.01)
+                outer.commit()
 
         async def failing_worker() -> None:
             nonlocal entered_count

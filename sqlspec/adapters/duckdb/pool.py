@@ -288,6 +288,7 @@ class DuckDBConnectionPool:
         gets its own dedicated DuckDB connection to prevent concurrent cursor and
         transaction sharing.
 
+        Uncommitted work is rolled back when the outermost checkout exits normally.
         Re-entrant checkouts on the same thread or task reuse the active connection
         without committing, rolling back, or closing on inner exits.
 
@@ -310,13 +311,12 @@ class DuckDBConnectionPool:
         else:
             if depth == 0:
                 try:
-                    connection.commit()
-                except Exception:
-                    with suppress(Exception):
-                        connection.rollback()
-                    if not self._is_memory_db:
-                        self._close_thread_connection()
-                    raise
+                    connection.rollback()
+                except Exception as exc:
+                    if "no transaction is active" not in str(exc).lower():
+                        if not self._is_memory_db:
+                            self._close_thread_connection()
+                        raise
         finally:
             state["depth"] = depth
 
