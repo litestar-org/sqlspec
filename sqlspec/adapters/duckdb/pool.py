@@ -22,6 +22,7 @@ from sqlspec.adapters.duckdb.core import (
     create_duckdb_profile_path,
     create_mapped_exception,
 )
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -88,6 +89,7 @@ class DuckDBConnectionPool:
     """
 
     __slots__ = (
+        "_baseline_databases",
         "_connection_config",
         "_connection_registry",
         "_enable_statement_profiling",
@@ -103,6 +105,7 @@ class DuckDBConnectionPool:
         "_pool_id",
         "_profile_paths",
         "_recycle",
+        "_reset_session_on_release",
         "_secrets",
         "_thread_local",
     )
@@ -116,6 +119,7 @@ class DuckDBConnectionPool:
         secrets: "list[dict[str, Any]] | None" = None,
         on_connection_create: "Callable[[DuckDBConnection], DuckDBConnection | None] | None" = None,
         enable_statement_profiling: bool = False,
+        reset_session_on_release: bool = False,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -127,6 +131,8 @@ class DuckDBConnectionPool:
             secrets: List of secrets to create
             on_connection_create: Callback executed when connection is created
             enable_statement_profiling: Whether to enable per-connection JSON statement profiling
+            reset_session_on_release: Drop temporary objects and detach added databases when a connection is
+                released.
         """
         self._connection_config = connection_config
         self._recycle = pool_recycle_seconds
@@ -136,6 +142,8 @@ class DuckDBConnectionPool:
         self._has_dynamic_secrets: bool = any(callable(secret.get("value_provider")) for secret in self._secrets)
         self._on_connection_create = on_connection_create
         self._enable_statement_profiling = enable_statement_profiling
+        self._reset_session_on_release = reset_session_on_release
+        self._baseline_databases: dict[int, tuple[frozenset[str], str]] = {}
         self._profile_paths: dict[int, Path] = {}
         self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
@@ -270,6 +278,10 @@ class DuckDBConnectionPool:
             with self._lock:
                 self._profile_paths[id(connection)] = profile_path
         storage_protocols.update(connection.list_filesystems())
+        if record_thread_state and self._reset_session_on_release:
+            baseline = _database_baseline(connection)
+            with self._lock:
+                self._baseline_databases[id(connection)] = baseline
         if record_thread_state:
             state = self._checkout_state()
             state["storage_extensions"] = frozenset(loaded_extensions)
@@ -317,6 +329,7 @@ class DuckDBConnectionPool:
                         if not self._is_memory_db:
                             self._close_thread_connection()
                         raise
+                self._reset_connection_or_retire(connection)
         finally:
             state["depth"] = depth
 
@@ -373,11 +386,40 @@ class DuckDBConnectionPool:
         return connection
 
     def release(self, connection: DuckDBConnection) -> None:
-        """Release a connection (no-op for thread-local connections).
+        """Release a connection; thread-local connections stay open unless a session reset fails.
 
         Args:
-            connection: The connection to release (ignored)
+            connection: The connection to release
         """
+        if self._reset_session_on_release:
+            self._reset_connection_or_retire(connection)
+
+    def _reset_connection(self, connection: DuckDBConnection) -> None:
+        if not self._reset_session_on_release:
+            return
+        with self._lock:
+            baseline = self._baseline_databases.get(id(connection))
+        _reset_session_state(connection, baseline)
+        if self._on_connection_create is not None:
+            replacement = self._on_connection_create(connection)
+            if replacement is not None and replacement is not connection:
+                msg = "on_connection_create returned a different connection during session reset"
+                raise ImproperConfigurationError(msg)
+
+    def _reset_connection_or_retire(self, connection: DuckDBConnection) -> None:
+        try:
+            self._reset_connection(connection)
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.reset_failed",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+                error_type=type(exc).__name__,
+            )
+            self._close_thread_connection()
 
     def _create_connection(self) -> DuckDBConnection:
         """Create a pool-owned connection and record it for shutdown."""
@@ -641,6 +683,7 @@ class DuckDBConnectionPool:
         """Close a pool-owned connection and drop it from the shutdown registry."""
         with self._lock:
             self._connection_registry.discard(connection)
+            self._baseline_databases.pop(id(connection), None)
             profile_path = self._profile_paths.pop(id(connection), None)
         with suppress(Exception):
             connection.close()
@@ -678,6 +721,48 @@ class DuckDBConnectionPool:
         except Exception:
             return False
         return True
+
+
+def _database_baseline(connection: DuckDBConnection) -> "tuple[frozenset[str], str]":
+    names = frozenset(
+        str(row[0]) for row in connection.execute("SELECT database_name FROM duckdb_databases()").fetchall()
+    )
+    current = connection.execute("SELECT current_database()").fetchall()
+    return names, str(current[0][0]) if current else ""
+
+
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _reset_session_state(connection: DuckDBConnection, baseline: "tuple[frozenset[str], str] | None") -> None:
+    """Remove temporary objects and added databases a previous lease left on a pooled connection.
+
+    Args:
+        connection: Connection whose lease just ended.
+        baseline: Database names and default database captured when the connection was created.
+    """
+    macros = connection.execute(
+        "SELECT function_name, function_type FROM duckdb_functions() WHERE database_name = 'temp' AND NOT internal"
+    ).fetchall()
+    for name, function_type in macros:
+        keyword = "MACRO TABLE" if function_type == "table_macro" else "MACRO"
+        connection.execute(f"DROP {keyword} IF EXISTS temp.main.{_quote_identifier(str(name))}")
+    for query, keyword in (
+        ("SELECT view_name FROM duckdb_views() WHERE temporary AND NOT internal", "VIEW"),
+        ("SELECT table_name FROM duckdb_tables() WHERE temporary", "TABLE"),
+        ("SELECT sequence_name FROM duckdb_sequences() WHERE temporary", "SEQUENCE"),
+    ):
+        for (name,) in connection.execute(query).fetchall():
+            connection.execute(f"DROP {keyword} IF EXISTS temp.main.{_quote_identifier(str(name))}")
+    if baseline is None:
+        return
+    names, default_database = baseline
+    if default_database:
+        connection.execute(f"USE {_quote_identifier(default_database)}")
+    for (name,) in connection.execute("SELECT database_name FROM duckdb_databases() WHERE NOT internal").fetchall():
+        if str(name) not in names:
+            connection.execute(f"DETACH DATABASE {_quote_identifier(str(name))}")
 
 
 def _current_async_task() -> "asyncio.Task[Any] | None":

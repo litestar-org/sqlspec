@@ -135,6 +135,10 @@ Pass `DuckDBDriverFeatures` keys inside `driver_features={...}` on `DuckDBConfig
 | `enable_statement_profiling` | `bool` | `False` | Capture per-statement DuckDB JSON operator profiles on `StatementEvent.profile` (defaults to `False`). |
 <!-- GENERATED:END config-table:sqlspec.adapters.duckdb.config.DuckDBDriverFeatures -->
 
+## Connection Exit
+
+Uncommitted work rolls back when a pooled connection is returned, whether the context exits cleanly or with an exception, so call `commit()` before leaving the session. Statements outside an explicit transaction run in autocommit mode and are unaffected. Set `driver_features["reset_session_on_release"] = True` to also drop temporary objects and detach added databases on release. See [Session Reset on Release](../learn/configuration.md#session-reset-on-release).
+
 ## Type Mappings & Dialect Notes
 
 | Database Type | Python Type | Notes / Feature Flag |

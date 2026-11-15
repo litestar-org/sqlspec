@@ -33,6 +33,14 @@ SQLITE_MEMORY_CACHE_SIZE: Final = -16000
 SQLITE_WAL_SWITCH_ATTEMPTS: Final = 50
 SQLITE_WAL_SWITCH_DELAY: Final = 0.01
 _MAX_IDLE_TASK_CONNECTIONS: Final[int] = 8
+_SESSION_BASELINE_PRAGMAS: Final[tuple[tuple[str, str], ...]] = (
+    ("foreign_keys", "OFF"),
+    ("query_only", "OFF"),
+    ("trusted_schema", "ON"),
+    ("cell_size_check", "OFF"),
+    ("recursive_triggers", "OFF"),
+)
+_TEMP_OBJECT_DROP_ORDER: Final[tuple[str, ...]] = ("trigger", "view", "index", "table")
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -65,6 +73,7 @@ class SqliteConnectionPool:
         "_pool_id",
         "_recycle_seconds",
         "_registry_lock",
+        "_reset_session_on_release",
         "_runtime_setup",
         "_task_connections",
         "_task_slots",
@@ -84,6 +93,7 @@ class SqliteConnectionPool:
         runtime_setup: "dict[str, Any] | None" = None,
         is_read_only: bool = False,
         serialize_writes: bool = False,
+        reset_session_on_release: bool = False,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -97,6 +107,8 @@ class SqliteConnectionPool:
             runtime_setup: Runtime feature configuration applied after internal PRAGMAs
             is_read_only: Enforce read-only queries and omit write PRAGMAs.
             serialize_writes: Hold a reentrant writer lock throughout each lease.
+            reset_session_on_release: Drop temp objects, detach databases, and restore baseline PRAGMAs when a
+                connection is released.
         """
         if "check_same_thread" not in connection_parameters:
             connection_parameters = {**connection_parameters, "check_same_thread": False}
@@ -126,6 +138,7 @@ class SqliteConnectionPool:
         self._health_check_interval = health_check_interval
         self._on_connection_create = on_connection_create
         self._runtime_setup = runtime_setup
+        self._reset_session_on_release = reset_session_on_release
         self._pool_id = str(uuid4())[:8]
 
     @property
@@ -246,6 +259,8 @@ class SqliteConnectionPool:
                 end_transaction(connection, commit=False)
             except Exception:
                 self._retire_context_connection(connection)
+            else:
+                self._reset_connection_or_retire(connection)
         finally:
             if self._write_lock is not None:
                 self._write_lock.release()
@@ -321,6 +336,7 @@ class SqliteConnectionPool:
                     except Exception:
                         self._retire_context_connection(connection)
                     raise
+                self._reset_connection_or_retire(connection)
         finally:
             with self._registry_lock:
                 remaining = self._connection_depths.get(connection, 1) - 1
@@ -330,6 +346,33 @@ class SqliteConnectionPool:
                     self._connection_depths.pop(connection, None)
                 if outermost and self._checked_out_count > 0:
                     self._checked_out_count -= 1
+
+    def _reset_connection(self, connection: SqliteConnection) -> None:
+        if not self._reset_session_on_release:
+            return
+        runtime_pragmas = self._runtime_setup.get("pragmas", ()) if self._runtime_setup is not None else ()
+        _reset_session_state(
+            connection,
+            query_only=self._is_read_only,
+            foreign_keys=self._enable_foreign_keys,
+            busy_timeout=self._enable_optimizations,
+            runtime_pragmas=runtime_pragmas,
+        )
+
+    def _reset_connection_or_retire(self, connection: SqliteConnection) -> None:
+        try:
+            self._reset_connection(connection)
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "pool.connection.reset_failed",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                database=self._database_name,
+                error_type=type(exc).__name__,
+            )
+            self._retire_context_connection(connection)
 
     def _prune_dead_threads(self) -> None:
         """Prune connections owned by dead threads or completed asyncio tasks."""
@@ -711,6 +754,51 @@ def _classify_memory_mode(connection_parameters: "Mapping[str, Any]") -> "tuple[
     is_memory_db = "mode=memory" in database_str or (database_str.startswith("file:") and ":memory:" in database_str)
     is_shared_memory = is_memory_db and "cache=shared" in database_str
     return is_memory_db, is_shared_memory
+
+
+def _reset_session_state(
+    connection: "SqliteConnection", *, query_only: bool, foreign_keys: bool, busy_timeout: bool, runtime_pragmas: "Any"
+) -> None:
+    """Remove session state a previous lease left on a pooled connection.
+
+    Args:
+        connection: Connection whose lease just ended.
+        query_only: Whether the pool enforces read-only queries.
+        foreign_keys: Whether the pool enables foreign-key enforcement.
+        busy_timeout: Whether the pool applies its busy-timeout optimization.
+        runtime_pragmas: Configured ``(name, value)`` PRAGMA pairs applied after the baseline.
+    """
+    original_factory = connection.row_factory
+    connection.row_factory = None
+    try:
+        for _, name, _file in connection.execute("PRAGMA database_list").fetchall():
+            if name not in {"main", "temp"}:
+                _execute_and_close(connection, f"DETACH DATABASE {_quote_identifier(name)}")
+        temp_objects = connection.execute(
+            "SELECT type, name FROM temp.sqlite_master WHERE name NOT LIKE 'sqlite!_%' ESCAPE '!'"
+        ).fetchall()
+        for object_type in _TEMP_OBJECT_DROP_ORDER:
+            for found_type, name in temp_objects:
+                if found_type == object_type:
+                    _execute_and_close(
+                        connection, f"DROP {object_type.upper()} IF EXISTS temp.{_quote_identifier(name)}"
+                    )
+        for pragma_name, pragma_value in _SESSION_BASELINE_PRAGMAS:
+            _execute_and_close(connection, f"PRAGMA {pragma_name} = {pragma_value}")
+        if busy_timeout:
+            _execute_and_close(connection, f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
+        if query_only:
+            _execute_and_close(connection, "PRAGMA query_only = ON")
+        if foreign_keys:
+            _execute_and_close(connection, "PRAGMA foreign_keys = ON")
+        for pragma_name, pragma_value in runtime_pragmas:
+            _execute_and_close(connection, f"PRAGMA {pragma_name} = {pragma_value}")
+    finally:
+        connection.row_factory = original_factory
+
+
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
 
 
 def _execute_and_close(connection: "SqliteConnection", statement: str) -> None:

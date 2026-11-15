@@ -142,6 +142,8 @@ class SqliteDriverFeatures(TypedDict):
     """Custom JSON deserializer used for JSON column decoding (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[SqliteConnection], None]]"
     """Synchronous hook called with each raw ``sqlite3.Connection`` after PRAGMA setup."""
+    reset_session_on_release: NotRequired[bool]
+    """Drop temp objects, detach databases, and restore baseline PRAGMAs when a connection is released (defaults to ``False``)."""
     enable_events: NotRequired[bool]
     """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
@@ -301,6 +303,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         self._user_connection_hook: Callable[[SqliteConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._reset_session_on_release = bool(features_dict.pop("reset_session_on_release", False))
         self._runtime_setup: dict[str, Any] | None = _build_runtime_setup(features_dict)
 
         super().__init__(
@@ -316,6 +319,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         )
         if self._user_connection_hook is not None:
             self.driver_features["on_connection_create"] = self._user_connection_hook
+        if self._reset_session_on_release:
+            self.driver_features["reset_session_on_release"] = True
 
     def derive_pool(
         self,
@@ -427,6 +432,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             runtime_setup=self._runtime_setup,
             is_read_only=is_read_only_sqlite_config(self.connection_config),
             serialize_writes=self._serialize_writes,
+            reset_session_on_release=self._reset_session_on_release,
             **pool_kwargs,
         )
 

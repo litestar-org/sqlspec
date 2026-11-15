@@ -217,6 +217,8 @@ class DuckDBDriverFeatures(TypedDict):
     """Secrets provisioned on new connections for object stores and external catalogs."""
     on_connection_create: NotRequired["Callable[[DuckDBConnection], DuckDBConnection | None]"]
     """Callback invoked when a new ``DuckDBPyConnection`` is opened."""
+    reset_session_on_release: NotRequired[bool]
+    """Drop temporary objects and detach added databases when a connection is released (defaults to ``False``)."""
     json_serializer: NotRequired["Callable[[Any], str]"]
     """Serializer converting dict/list parameters to JSON text (defaults to ``sqlspec.utils.serializers.to_json``)."""
     enable_uuid_conversion: NotRequired[bool]
@@ -452,6 +454,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             secrets=secrets_dicts,
             on_connection_create=self._user_connection_hook,
             enable_statement_profiling=bool(self.driver_features.get("enable_statement_profiling", False)),
+            reset_session_on_release=bool(self.driver_features.get("reset_session_on_release", False)),
             **pool_kwargs,
         )
 

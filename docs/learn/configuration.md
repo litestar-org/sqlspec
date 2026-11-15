@@ -97,6 +97,17 @@ Every `LifecycleContext` dictionary includes `"config"` (`str`), plus `"bind_key
 | `on_query_complete` | Immediately after wire statement execution succeeds | `sql`, `parameters`, `driver`, `operation`, `is_many`, `is_script`, `rows_affected` |
 | `on_error` | When statement execution raises an exception | `exception`, `sql`, `parameters`, `driver`, `operation`, `is_many`, `is_script` |
 
+## Session Reset on Release
+
+Pooled connections are reused, so a temporary table, attached database, or changed setting from one session can still be present when the next session gets the same connection. Set `driver_features["reset_session_on_release"] = True` to run a built-in reset every time a connection is released. The reset runs after any open transaction is rolled back. If it fails, the connection is closed instead of being reused.
+
+| Adapter | What the reset removes or restores |
+| --- | --- |
+| SQLite, aiosqlite | Detaches every database except `main` and `temp`, drops every object in the temp schema, restores the `foreign_keys`, `query_only`, `trusted_schema`, `cell_size_check`, and `recursive_triggers` settings, then re-applies the pool's configured PRAGMAs |
+| DuckDB | Drops temporary tables, views, sequences, and macros, detaches databases that were not attached when the connection opened, then runs `on_connection_create` again |
+
+The option is off by default. Custom resets keep using each driver's native pool callbacks, and the built-in reset runs first when both are set.
+
 ## Startup Warmup and Shutdown Cleanup
 
 In long-running web workers or CLI tools, verify connectivity and pre-initialize migration commands during startup, and always close the pool during shutdown:

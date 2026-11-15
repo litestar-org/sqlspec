@@ -204,6 +204,8 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
 
 Context managers returned by `provide_connection`, `provide_session`, and `pool.get_connection` automatically commit open uncommitted work on a clean context exit and roll back on any exception (including cancellation), on both `SqliteConfig` and `AiosqliteConfig`. Call `rollback()` explicitly before exiting cleanly if you want to discard open modifications. Direct `pool.acquire()` and `pool.release()` calls do not commit on release; releasing an uncommitted connection directly rolls back any open work.
 
+Set `driver_features["reset_session_on_release"] = True` to also drop temp objects, detach added databases, and restore baseline PRAGMAs on release. See [Session Reset on Release](../learn/configuration.md#session-reset-on-release).
+
 ## WAL Read-Only Reader Pools
 
 For a file-backed database, `SqliteConfig(replicas=True)` and `AiosqliteConfig(replicas=True)` derive a read-only URI for the same file. The writer owns WAL setup. Readers use `mode=ro` and `PRAGMA query_only=1`, skip write pragmas such as `journal_mode=WAL` and `synchronous=NORMAL`, and retain connection hooks. Memory-only databases cannot provide this file-reader shortcut.

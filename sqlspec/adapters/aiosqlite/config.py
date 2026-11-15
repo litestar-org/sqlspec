@@ -160,6 +160,8 @@ class AiosqliteDriverFeatures(TypedDict):
     """Custom JSON serializer used for bound parameters (defaults to ``to_json``)."""
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     """Custom JSON deserializer used for JSON column decoding (defaults to ``from_json``)."""
+    reset_session_on_release: NotRequired[bool]
+    """Drop temp objects, detach databases, and restore baseline PRAGMAs when a connection is released (defaults to ``False``)."""
     on_connection_create: "NotRequired[Callable[[AiosqliteConnection], Awaitable[None]]]"
     """Async hook invoked with each ``aiosqlite.Connection`` after PRAGMA initialization."""
     enable_events: NotRequired[bool]
@@ -363,6 +365,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         self._user_connection_hook: Callable[[AiosqliteConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._reset_session_on_release = bool(features_dict.pop("reset_session_on_release", False))
         self._runtime_setup: dict[str, Any] | None = _build_runtime_setup(features_dict)
 
         super().__init__(
@@ -378,6 +381,8 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         )
         if self._user_connection_hook is not None:
             self.driver_features["on_connection_create"] = self._user_connection_hook
+        if self._reset_session_on_release:
+            self.driver_features["reset_session_on_release"] = True
 
     def derive_pool(
         self,
@@ -514,6 +519,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             health_check_interval=health_check_interval,
             on_connection_create=self._user_connection_hook,
             runtime_setup=self._runtime_setup,
+            reset_session_on_release=self._reset_session_on_release,
             is_read_only=is_read_only_sqlite_config(self.connection_config),
             **pool_kwargs,
         )
