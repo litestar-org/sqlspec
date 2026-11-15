@@ -320,7 +320,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         """Commit the current transaction, ignoring idle connections."""
         if not self._transaction_active:
-            self._end_idle_transaction(commit=True)
+            self._end_transaction_if_active(commit=True)
             return
         handler = self.handle_database_exceptions()
         try:
@@ -332,7 +332,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def rollback(self) -> None:
         """Roll back the current transaction, ignoring idle connections."""
         if not self._transaction_active:
-            self._end_idle_transaction(commit=False)
+            self._end_transaction_if_active(commit=False)
             return
         handler = self.handle_database_exceptions()
         try:
@@ -987,7 +987,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             self._migration_schema_restore = "" if row is None else str(row[0])
         self.connection.execute(f"SET search_path = {quote_identifier(schema)}")
 
-    def _end_idle_transaction(self, *, commit: bool) -> None:
+    def _end_transaction_if_active(self, *, commit: bool) -> None:
         """End a manually opened transaction or ignore DuckDB's idle transaction error."""
         action = self.connection.commit if commit else self.connection.rollback
         try:

@@ -1051,7 +1051,7 @@ async def test_mysqlconnector_async_rollback_and_close_handles_async_autocommit_
             )
 
     conn = _FakeAsyncConnection()
-    await mysqlconnector_config_module._rollback_and_close_async(conn, None)
+    await mysqlconnector_config_module._rollback_before_release_async(conn, None)
 
     assert conn.rollback.await_count == expected_rollback
     conn.close.assert_awaited_once()
@@ -1075,7 +1075,7 @@ async def test_mysqlconnector_async_rollback_and_close_falls_back_to_get_autocom
             raise mc_errors.ProgrammingError("Use `await get_autocommit()` instead")
 
     conn = _FakeAsyncConnectionNoAttr()
-    await mysqlconnector_config_module._rollback_and_close_async(conn, None)
+    await mysqlconnector_config_module._rollback_before_release_async(conn, None)
 
     conn.get_autocommit.assert_awaited_once()
     assert conn.rollback.await_count == expected_rollback

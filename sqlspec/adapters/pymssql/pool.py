@@ -229,7 +229,7 @@ class PymssqlConnectionPool:
             return
         connection = holder.connection
         holder.connection = None
-        if holder.depth == 0 and holder.generation == self._generation and not _in_transaction(connection):
+        if holder.depth == 0 and holder.generation == self._generation and not _is_in_transaction(connection):
             with self._registry_lock:
                 if (
                     holder.generation == self._generation
@@ -361,5 +361,5 @@ def _current_async_task() -> "asyncio.Task[Any] | None":
     return asyncio.current_task(loop) if loop is not None else None
 
 
-def _in_transaction(connection: PymssqlConnection) -> bool:
+def _is_in_transaction(connection: PymssqlConnection) -> bool:
     return bool(getattr(connection, "in_transaction", False))

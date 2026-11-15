@@ -206,7 +206,7 @@ class PyMysqlConnectionPool:
                     self._retire_connection(connection)
                 return
 
-            if outermost and not self._autocommit_enabled(connection):
+            if outermost and not self._is_autocommit_enabled(connection):
                 try:
                     connection.rollback()
                 except BaseException:
@@ -250,7 +250,7 @@ class PyMysqlConnectionPool:
             return self._checked_out
 
     @staticmethod
-    def _autocommit_enabled(connection: PyMysqlConnection) -> bool:
+    def _is_autocommit_enabled(connection: PyMysqlConnection) -> bool:
         """Return whether autocommit is active on a PyMySQL connection."""
         get_autocommit = getattr(connection, "get_autocommit", None)
         if callable(get_autocommit):
@@ -311,7 +311,7 @@ class PyMysqlConnectionPool:
             return
         connection = holder.connection
         holder.connection = None
-        if holder.depth == 0 and holder.generation == self._generation and not _in_transaction(connection):
+        if holder.depth == 0 and holder.generation == self._generation and not _is_in_transaction(connection):
             with self._registry_lock:
                 if (
                     holder.generation == self._generation
@@ -424,5 +424,5 @@ def _current_async_task() -> "asyncio.Task[Any] | None":
     return asyncio.current_task(loop) if loop is not None else None
 
 
-def _in_transaction(connection: PyMysqlConnection) -> bool:
+def _is_in_transaction(connection: PyMysqlConnection) -> bool:
     return bool(int(getattr(connection, "server_status", 0) or 0) & _SERVER_STATUS_IN_TRANS)

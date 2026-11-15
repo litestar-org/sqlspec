@@ -248,9 +248,9 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
             return
         exc_type = kwargs.get("exc_type")
         try:
-            if _conn is not None and (exc_type is not None or await _psqlpy_in_transaction(_conn)):
+            if _conn is not None and (exc_type is not None or await _is_in_transaction(_conn)):
                 try:
-                    await _rollback_or_terminate(_conn)
+                    await _rollback_before_release(_conn)
                 except BaseException:
                     if exc_type is None:
                         raise
@@ -314,9 +314,9 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
         connection = self._connection
         self._connection = None
         try:
-            if connection is not None and (exc_type is not None or await _psqlpy_in_transaction(connection)):
+            if connection is not None and (exc_type is not None or await _is_in_transaction(connection)):
                 try:
-                    await _rollback_or_terminate(connection)
+                    await _rollback_before_release(connection)
                 except BaseException:
                     if exc_type is None:
                         raise
@@ -784,7 +784,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         self._initialized_connection_ids.clear()
 
 
-async def _psqlpy_in_transaction(connection: Any) -> bool:
+async def _is_in_transaction(connection: Any) -> bool:
     """Return whether a psqlpy connection currently holds an open transaction."""
     in_transaction = getattr(connection, "in_transaction", None)
     if callable(in_transaction):
@@ -816,7 +816,7 @@ async def _reset_or_terminate(connection: Any) -> None:
         raise
 
 
-async def _rollback_or_terminate(connection: Any) -> None:
+async def _rollback_before_release(connection: Any) -> None:
     """Roll back open work on a psqlpy connection or terminate the backend on failure."""
     try:
         await connection.execute("ROLLBACK")

@@ -31,7 +31,7 @@ class PsqlpyRLSStrategy(PostgresTenantSettings):
 
     async def checkout(self, connection: "PsqlpyConnection", payload: "TenantContextPayload") -> TenantLeaseState:
         """Capture the previous session state before applying tenant identity."""
-        if await _in_transaction(connection):
+        if await _is_in_transaction(connection):
             msg = "Connection entered tenant checkout with an open transaction."
             raise TenantContextError(msg)
         sql, params = self.prepare_checkout(payload)
@@ -50,13 +50,13 @@ class PsqlpyRLSStrategy(PostgresTenantSettings):
             except Exception as exc:
                 msg = "Tenant session restoration failed"
                 raise with_cause(TenantCleanupError(msg), exc)
-        if await _in_transaction(connection):
+        if await _is_in_transaction(connection):
             try:
                 await connection.execute("ROLLBACK")
             except Exception as exc:
                 msg = "Tenant connection kept an open transaction after checkin"
                 raise with_cause(TenantCleanupError(msg), exc)
-            if await _in_transaction(connection):
+            if await _is_in_transaction(connection):
                 msg = "Tenant connection kept an open transaction after checkin"
                 raise TenantCleanupError(msg)
 
@@ -118,7 +118,7 @@ class PsqlpyTenantLease(AsyncTenantLease):
             await connection.execute("ROLLBACK")
 
 
-async def _in_transaction(connection: Any) -> bool:
+async def _is_in_transaction(connection: Any) -> bool:
     """Return whether a psqlpy connection currently holds an open transaction."""
     in_transaction = getattr(connection, "in_transaction", None)
     if callable(in_transaction):

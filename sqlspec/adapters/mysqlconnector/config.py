@@ -335,7 +335,7 @@ class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
         if self._connection is not None:
             conn = self._connection
             self._connection = None
-            _rollback_and_close_sync(conn, exc_type)
+            _rollback_before_release_sync(conn, exc_type)
         return None
 
 
@@ -355,7 +355,7 @@ class _MysqlConnectorSyncSessionConnectionHandler(SyncPoolSessionFactory):
             return
         conn = self._connection
         self._connection = None
-        _rollback_and_close_sync(conn, kwargs.get("exc_type"))
+        _rollback_before_release_sync(conn, kwargs.get("exc_type"))
 
 
 class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -373,7 +373,7 @@ class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
         if self._connection is not None:
             conn = self._connection
             self._connection = None
-            await _rollback_and_close_async(conn, exc_type)
+            await _rollback_before_release_async(conn, exc_type)
         return None
 
 
@@ -389,7 +389,7 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
             return
         conn = self._connection
         self._connection = None
-        await _rollback_and_close_async(conn, kwargs.get("exc_type"))
+        await _rollback_before_release_async(conn, kwargs.get("exc_type"))
 
 
 _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"pool_name", "pool_size", "pool_reset_session"})
@@ -824,7 +824,7 @@ async def _disconnect_raw_async(raw_cnx: Any) -> None:
                 await close_res
 
 
-def _sync_autocommit_enabled(conn: Any) -> bool:
+def _is_autocommit_enabled_sync(conn: Any) -> bool:
     """Return whether autocommit is active on a sync mysql-connector connection without querying the server."""
     if getattr(conn, "in_transaction", False):
         return False
@@ -845,12 +845,12 @@ def _sync_autocommit_enabled(conn: Any) -> bool:
     return autocommit if isinstance(autocommit, bool) else False
 
 
-def _rollback_and_close_sync(conn: Any, exc_type: "type[BaseException] | None") -> None:
+def _rollback_before_release_sync(conn: Any, exc_type: "type[BaseException] | None") -> None:
     """Roll back open work, return the pooled wrapper, and disconnect the socket when either step fails."""
     raw_cnx = getattr(conn, "_cnx", None)
     failure: BaseException | None = None
     try:
-        if not _sync_autocommit_enabled(conn):
+        if not _is_autocommit_enabled_sync(conn):
             conn.rollback()
     except BaseException as exc:
         failure = exc
@@ -865,7 +865,7 @@ def _rollback_and_close_sync(conn: Any, exc_type: "type[BaseException] | None") 
         raise failure
 
 
-async def _async_autocommit_enabled(conn: Any) -> bool:
+async def _is_autocommit_enabled_async(conn: Any) -> bool:
     """Return whether autocommit is active on an async mysql-connector connection.
 
     Async connections in mysql-connector raise ``ProgrammingError`` when accessing
@@ -892,12 +892,12 @@ async def _async_autocommit_enabled(conn: Any) -> bool:
     return False
 
 
-async def _rollback_and_close_async(conn: Any, exc_type: "type[BaseException] | None") -> None:
+async def _rollback_before_release_async(conn: Any, exc_type: "type[BaseException] | None") -> None:
     """Roll back open async work, return the pooled wrapper, and disconnect the socket when either step fails."""
     raw_cnx = getattr(conn, "_cnx", None)
     failure: BaseException | None = None
     try:
-        if not await _async_autocommit_enabled(conn):
+        if not await _is_autocommit_enabled_async(conn):
             await conn.rollback()
     except BaseException as exc:
         failure = exc

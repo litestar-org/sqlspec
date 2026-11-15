@@ -541,7 +541,7 @@ def _normalize_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dic
     return config
 
 
-def _autocommit_enabled(connection: Any) -> bool:
+def _is_autocommit_enabled(connection: Any) -> bool:
     """Return whether autocommit is active on an aiomysql connection."""
     get_autocommit = getattr(connection, "get_autocommit", None)
     if callable(get_autocommit):
@@ -580,7 +580,7 @@ async def _reset_session(config: Any, connection: Any) -> None:
 
 async def _rollback_before_release(connection: Any) -> None:
     """Roll back open work before pool release and close the connection when rollback fails."""
-    if getattr(connection, "closed", False) or _autocommit_enabled(connection):
+    if getattr(connection, "closed", False) or _is_autocommit_enabled(connection):
         return
     try:
         await connection.rollback()
