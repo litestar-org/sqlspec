@@ -1389,3 +1389,133 @@ def test_count_query_strips_tsql_leading_top_placeholders(
     assert "count(*)" in compiled_sql.lower()
     assert "TOP" not in compiled_sql.upper()
     assert compiled_params == expected_params
+
+
+def _profile_config(profile: str) -> "StatementConfig":
+    from sqlspec.adapters.asyncpg.core import default_statement_config as asyncpg_config
+    from sqlspec.adapters.duckdb.core import default_statement_config as duckdb_config
+    from sqlspec.adapters.mssql_python.core import default_statement_config as mssql_config
+    from sqlspec.adapters.snowflake.core import default_statement_config as snowflake_config
+    from sqlspec.adapters.teradata.core import default_statement_config as teradata_config
+
+    return {
+        "mssql": mssql_config,
+        "duckdb": duckdb_config,
+        "teradata": teradata_config,
+        "snowflake": snowflake_config,
+        "asyncpg": asyncpg_config,
+    }[profile]
+
+
+@pytest.mark.parametrize(
+    ("profile", "query_sql", "positional", "named", "expected_sql", "expected_params"),
+    [
+        (
+            "mssql",
+            "SELECT TOP (?) id, name FROM items WHERE tenant_id = ?",
+            (50, 7),
+            {},
+            "SELECT COUNT(*) FROM items WHERE tenant_id = ?",
+            [7],
+        ),
+        (
+            "mssql",
+            "SELECT TOP (?) id, ? AS lbl FROM items WHERE tenant_id = ? AND x = ?",
+            (50, "L", 7, 8),
+            {},
+            "SELECT COUNT(*) FROM items WHERE tenant_id = ? AND x = ?",
+            [7, 8],
+        ),
+        (
+            "teradata",
+            "SELECT TOP ? id FROM items WHERE tenant_id = ?",
+            (50, 7),
+            {},
+            "SELECT COUNT(*) FROM items WHERE tenant_id = ?",
+            [7],
+        ),
+        (
+            "snowflake",
+            "SELECT TOP 5 id, ? FROM items WHERE tenant_id = ?",
+            ("L", 7),
+            {},
+            "SELECT COUNT(*) FROM items WHERE tenant_id = ?",
+            [7],
+        ),
+        (
+            "duckdb",
+            "select :label as label, id from docs where tenant_id = :tenant_id",
+            (),
+            {"label": 10, "tenant_id": 1},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = ?",
+            [1],
+        ),
+        (
+            "duckdb",
+            "select $1 as label, id from docs where tenant_id = $2",
+            (10, 1),
+            {},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = $1",
+            [1],
+        ),
+        (
+            "duckdb",
+            "select id from docs where tenant_id = :t limit :n",
+            (),
+            {"t": 1, "n": 5},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = ?",
+            [1],
+        ),
+        (
+            "asyncpg",
+            "select :label as label, id from docs where tenant_id = :tenant_id",
+            (),
+            {"label": 10, "tenant_id": 1},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = $1",
+            [1],
+        ),
+        (
+            "asyncpg",
+            "select $1 as label, id from docs where tenant_id = $2",
+            (10, 1),
+            {},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = $1",
+            [1],
+        ),
+    ],
+)
+def test_count_query_profiles(
+    sqlite_driver: "SqliteDriver",
+    profile: str,
+    query_sql: str,
+    positional: tuple[Any, ...],
+    named: "dict[str, Any]",
+    expected_sql: str,
+    expected_params: "list[Any]",
+) -> None:
+    """Count queries bind each retained value to its own placeholder on every adapter profile."""
+    config = _profile_config(profile)
+    statement = SQL(query_sql, *positional, statement_config=config, **named)
+    compiled_sql, compiled_params = sqlite_driver._count_query(statement).compile()
+    assert compiled_sql == expected_sql
+    assert list(compiled_params) == expected_params
+
+
+@pytest.mark.parametrize("label", [10, 11])
+def test_duckdb_paginate_total_counts_own_tenant(label: int) -> None:
+    """DuckDB pagination totals count the caller's tenant rows regardless of the selected label value."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+    from sqlspec.service import SQLSpecSyncService
+
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as session:
+        session.execute("create table docs(id int primary key, tenant_id int, title text, price int)")
+        rows = [(1, 1, "a", 1), (2, 1, "b", 1)]
+        rows += [(100 + i, 10, f"t{i}", 1) for i in range(7)]
+        rows += [(200 + i, 11, f"u{i}", 1) for i in range(13)]
+        session.execute_many("insert into docs values (?, ?, ?, ?)", rows)
+        page = SQLSpecSyncService(session).paginate(
+            SQL("select :label as label, id, title from docs where tenant_id = :tenant_id", label=label, tenant_id=1)
+        )
+    assert page.total == 2
+    assert sorted(item["id"] for item in page.items) == [1, 2]
