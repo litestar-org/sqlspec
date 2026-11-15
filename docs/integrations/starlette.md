@@ -80,9 +80,9 @@ Configure `commit_mode` inside `extension_config["starlette"]` (`"autocommit"` b
 | `primary_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
 | `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 | `read_pool_key` | `str` | - | Request key for the selected read pool. |
-| `cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
-| `cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
-| `cursor_encrypt` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
+| `pagination_cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
+| `pagination_cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
+| `pagination_cursor_encrypted` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
 <!-- GENERATED:END config-table:sqlspec.config.StarletteConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.

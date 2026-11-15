@@ -145,13 +145,13 @@ class FilterConfig(TypedDict):
     """Default sort order. Defaults to ``"desc"``."""
     pagination_type: NotRequired[Literal["limit_offset", "cursor"]]
     """Pagination strategy to enable: ``"limit_offset"`` or ``"cursor"``."""
-    cursor_keys: NotRequired[CursorKeys]
+    pagination_cursor_keys: NotRequired[CursorKeys]
     """Field names, (field, direction) pairs, or CursorKey values. The last key must be unique per row."""
-    cursor_secret: NotRequired[str | bytes]
+    pagination_cursor_secret: NotRequired[str | bytes]
     """Secret enabling HMAC-SHA256 signed cursors."""
-    cursor_ttl: NotRequired[int | float | dt.timedelta]
+    pagination_cursor_ttl: NotRequired[int | float | dt.timedelta]
     """Cursor expiration window in seconds or timedelta."""
-    cursor_encrypt: NotRequired[bool]
+    pagination_cursor_encrypted: NotRequired[bool]
     """Encrypt cursor payloads at rest when a cursor secret is configured."""
     pagination_size: NotRequired[int]
     """Default page size for limit/offset or cursor pagination."""
@@ -210,11 +210,11 @@ def create_filter_dependencies(
         A dependency provider function for the combined filter function.
     """
     env_secret = (
-        _resolve_env_cursor_secret()
-        if config.get("pagination_type") == "cursor" and config.get("cursor_secret") is None
+        _resolve_env_pagination_cursor_secret()
+        if config.get("pagination_type") == "cursor" and config.get("pagination_cursor_secret") is None
         else None
     )
-    if config.get("pagination_type") == "cursor" and config.get("cursor_secret") is None:
+    if config.get("pagination_type") == "cursor" and config.get("pagination_cursor_secret") is None:
         cache_key = hash((_make_hashable(config), env_secret))
     else:
         cache_key = hash(_make_hashable(config))
@@ -344,21 +344,21 @@ def _create_statement_filters(
             )
 
     if config.get("pagination_type") == "cursor":
-        cursor_keys = config.get("cursor_keys")
-        if not cursor_keys:
-            msg = "pagination_type='cursor' requires a non-empty 'cursor_keys' value"
+        pagination_cursor_keys = config.get("pagination_cursor_keys")
+        if not pagination_cursor_keys:
+            msg = "pagination_type='cursor' requires a non-empty 'pagination_cursor_keys' value"
             raise ImproperConfigurationError(msg)
         filters[dep_defaults.CURSOR_FILTER_DEPENDENCY_KEY] = _create_provide(
             _bind_provider(
                 _CursorFilterProvider(
-                    cursor_keys,
+                    pagination_cursor_keys,
                     config.get("pagination_size", dep_defaults.DEFAULT_PAGINATION_SIZE),
                     config.get("pagination_max_size", dep_defaults.DEFAULT_PAGINATION_MAX_SIZE),
-                    config.get("cursor_secret"),
+                    config.get("pagination_cursor_secret"),
                     config.get("sort_field"),
                     config,
-                    ttl=config.get("cursor_ttl"),
-                    encrypt=config.get("cursor_encrypt"),
+                    ttl=config.get("pagination_cursor_ttl"),
+                    encrypted=config.get("pagination_cursor_encrypted"),
                     env_secret=env_secret,
                 ),
                 _provide_cursor_filter,
@@ -528,11 +528,11 @@ def _make_hashable(value: Any) -> HashableType:
     return str(value)
 
 
-def _resolve_env_cursor_secret() -> str | None:
-    return os.environ.get("SQLSPEC_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
+def _resolve_env_pagination_cursor_secret() -> str | None:
+    return os.environ.get("SQLSPEC_PAGINATION_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
 
 
-def _resolve_context_identity(request: Any) -> str:
+def _resolve_cursor_route_identity(request: Any) -> str:
     if request is None:
         return "litestar:standalone"
     scope = getattr(request, "scope", None)
@@ -545,9 +545,7 @@ def _resolve_context_identity(request: Any) -> str:
     return str(path or "litestar:standalone")
 
 
-_CURSOR_KEY_REQUIRED_MESSAGE = (
-    "Cursor pagination requires a cursor secret; set cursor_secret or the SQLSPEC_CURSOR_SECRET environment variable"
-)
+_CURSOR_KEY_REQUIRED_MESSAGE = "Cursor pagination requires a cursor secret; set pagination_cursor_secret or the SQLSPEC_PAGINATION_CURSOR_SECRET environment variable"
 
 
 def _tenant_identity_of(payload: Any) -> str:
@@ -579,7 +577,7 @@ async def _resolve_cursor_tenant_identity(plugin: Any) -> str:
 
 
 @lru_cache(maxsize=256)
-def _derive_cursor_secret(secret: str | bytes, context_identity: str) -> bytes:
+def _derive_route_cursor_key(secret: str | bytes, context_identity: str) -> bytes:
     secret_bytes = secret if isinstance(secret, bytes) else secret.encode("utf-8")
     return hmac.new(secret_bytes, context_identity.encode("utf-8"), hashlib.sha256).digest()
 
@@ -825,22 +823,22 @@ class _LimitOffsetFilterProvider:
 class _CursorFilterProvider:
     def __init__(
         self,
-        cursor_keys: CursorKeys,
+        pagination_cursor_keys: CursorKeys,
         default_page_size: int,
         max_page_size: int,
         secret: str | bytes | None,
         sort_field: SortField | None,
         config: FilterConfig,
         ttl: float | dt.timedelta | None = None,
-        encrypt: bool | None = None,
+        encrypted: bool | None = None,
         env_secret: str | None = None,
     ) -> None:
-        self.cursor_keys = normalize_cursor_keys(cursor_keys)
+        self.pagination_cursor_keys = normalize_cursor_keys(pagination_cursor_keys)
         self.default_page_size = default_page_size
         self.max_page_size = max_page_size
         self.secret = secret
-        self.ttl = config.get("cursor_ttl") if ttl is None else ttl
-        self.encrypt = config.get("cursor_encrypt") if encrypt is None else encrypt
+        self.ttl = config.get("pagination_cursor_ttl") if ttl is None else ttl
+        self.encrypted = config.get("pagination_cursor_encrypted") if encrypted is None else encrypted
         self.env_secret = env_secret
         self.sort_field = sort_field
         self.config = copy.deepcopy(config)
@@ -896,14 +894,14 @@ class _CursorFilterProvider:
         return _memoize_deepcopy(
             self,
             _CursorFilterProvider(
-                self.cursor_keys,
+                self.pagination_cursor_keys,
                 self.default_page_size,
                 self.max_page_size,
                 self.secret,
                 copy.deepcopy(self.sort_field, memo),
                 copy.deepcopy(self.config, memo),
                 ttl=copy.deepcopy(self.ttl, memo),
-                encrypt=self.encrypt,
+                encrypted=self.encrypted,
                 env_secret=self.env_secret,
             ),
             memo,
@@ -914,19 +912,19 @@ def _effective_cursor_keys(
     context: _CursorFilterProvider, field_name: str | None, sort_order: SortOrder | None
 ) -> tuple[CursorKey, ...]:
     if context.sort_resolution is None:
-        return context.cursor_keys
+        return context.pagination_cursor_keys
     resolved_field = context.sort_resolution.normalize(field_name or context.sort_resolution.default_query_value)
     if resolved_field is None:
         msg = f"Invalid orderBy field '{field_name}'. Allowed fields: {context.allowed_field_names}"
         raise ValidationException(detail=msg)
-    existing = next((key for key in context.cursor_keys if key.field_name == resolved_field), None)
+    existing = next((key for key in context.pagination_cursor_keys if key.field_name == resolved_field), None)
     leading = CursorKey(
         resolved_field,
         sort_order or context.sort_order_default,
         nulls=existing.nulls if existing else None,
         result_name=existing.result_name if existing else None,
     )
-    return (leading, *(key for key in context.cursor_keys if key.field_name != resolved_field))
+    return (leading, *(key for key in context.pagination_cursor_keys if key.field_name != resolved_field))
 
 
 async def _provide_cursor_filter(
@@ -945,29 +943,31 @@ async def _provide_cursor_filter(
 
     if context.secret is not None:
         resolved_secret: str | bytes | None = context.secret
-    elif plugin is not None and getattr(plugin, "cursor_secret", None) is not None:
-        resolved_secret = getattr(plugin, "cursor_secret", None)
+    elif plugin is not None and getattr(plugin, "pagination_cursor_secret", None) is not None:
+        resolved_secret = getattr(plugin, "pagination_cursor_secret", None)
     else:
         resolved_secret = context.env_secret
 
     resolved_ttl = (
         context.ttl
         if context.ttl is not None
-        else (getattr(plugin, "cursor_ttl", None) if plugin is not None else None)
+        else (getattr(plugin, "pagination_cursor_ttl", None) if plugin is not None else None)
     )
-    plugin_encrypt = getattr(plugin, "cursor_encrypt", None) if plugin is not None else None
-    resolved_encrypt = bool(
-        context.encrypt if context.encrypt is not None else (plugin_encrypt if plugin_encrypt is not None else False)
+    plugin_encrypted = getattr(plugin, "pagination_cursor_encrypted", None) if plugin is not None else None
+    resolved_encrypted = bool(
+        context.encrypted
+        if context.encrypted is not None
+        else (plugin_encrypted if plugin_encrypted is not None else False)
     )
 
     if resolved_secret is None:
         raise ImproperConfigurationError(_CURSOR_KEY_REQUIRED_MESSAGE)
-    derived_secret = _derive_cursor_secret(
-        resolved_secret, _resolve_context_identity(request) + await _resolve_cursor_tenant_identity(plugin)
+    derived_secret = _derive_route_cursor_key(
+        resolved_secret, _resolve_cursor_route_identity(request) + await _resolve_cursor_tenant_identity(plugin)
     )
     try:
         return CursorFilter(
-            keys, resolved_page_size, cursor, derived_secret, ttl=resolved_ttl, encrypt=resolved_encrypt
+            keys, resolved_page_size, cursor, derived_secret, ttl=resolved_ttl, encrypted=resolved_encrypted
         )
     except InvalidCursorError as exc:
         raise ValidationException(detail="Invalid pagination cursor") from exc

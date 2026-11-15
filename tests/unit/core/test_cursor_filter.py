@@ -327,24 +327,24 @@ def test_cursor_key_rejects_malformed_field_names(field_name: str) -> None:
 def test_cursor_filter_ttl_and_encrypt_roundtrip() -> None:
     keys = [CursorKey("id")]
     with patch("sqlspec.core._cursor.time.time", side_effect=[1000.0, 1020.0, 1060.0]):
-        flt = CursorFilter(keys, 10, secret="my-secret", ttl=dt.timedelta(seconds=60), encrypt=True)
+        flt = CursorFilter(keys, 10, secret="my-secret", ttl=dt.timedelta(seconds=60), encrypted=True)
         token = flt.encode({"id": 5}, backward=False)
         assert token.startswith("e1.")
 
-        decoded_filter = CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypt=True)
+        decoded_filter = CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypted=True)
         assert decoded_filter.values == (5,)
 
         with pytest.raises(InvalidCursorError):
-            CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypt=False)
+            CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypted=False)
 
         with pytest.raises(InvalidCursorError, match="expired"):
-            CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypt=True)
+            CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypted=True)
 
 
-def test_cursor_filter_cache_key_and_serialization_with_ttl_encrypt() -> None:
+def test_cursor_filter_cache_key_and_serialization_with_ttl_encrypted() -> None:
     keys = [CursorKey("id")]
-    f1 = CursorFilter(keys, 10, secret="s1", ttl=60, encrypt=True)
-    f2 = CursorFilter(keys, 10, secret="s2", ttl=120, encrypt=False)
+    f1 = CursorFilter(keys, 10, secret="s1", ttl=60, encrypted=True)
+    f2 = CursorFilter(keys, 10, secret="s2", ttl=120, encrypted=False)
 
     cache_key = f1.get_cache_key()
     assert cache_key == f2.get_cache_key()
@@ -352,10 +352,10 @@ def test_cursor_filter_cache_key_and_serialization_with_ttl_encrypt() -> None:
 
     copied = copy.deepcopy(f1)
     assert copied.ttl == 60
-    assert copied.encrypt is True
+    assert copied.encrypted is True
     assert copied.encode({"id": 7}, backward=False).startswith("e1.")
 
     unpickled = pickle.loads(pickle.dumps(f1))
     assert unpickled.ttl == 60
-    assert unpickled.encrypt is True
+    assert unpickled.encrypted is True
     assert unpickled.encode({"id": 7}, backward=False).startswith("e1.")

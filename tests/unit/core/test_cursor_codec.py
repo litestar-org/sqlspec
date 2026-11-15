@@ -272,66 +272,66 @@ def test_decode_rejects_malformed_expiration_claim(payload: dict[str, Any]) -> N
 @pytest.mark.parametrize("bad_secret", [None, b""])
 def test_encrypt_requires_non_empty_secret(bad_secret: bytes | None) -> None:
     with pytest.raises(ValueError, match="secret"):
-        encode_cursor([1], "o", secret=bad_secret, encrypt=True)
+        encode_cursor([1], "o", secret=bad_secret, encrypted=True)
     with pytest.raises(ValueError, match="secret"):
-        decode_cursor("e1.AAAA.AAAA", "o", 1, secret=bad_secret, encrypt=True)
+        decode_cursor("e1.AAAA.AAAA", "o", 1, secret=bad_secret, encrypted=True)
 
 
 def test_encrypted_cursor_roundtrip_hides_plaintext_and_uses_fresh_nonce() -> None:
     secret = b"0123456789abcdef0123456789abcdef"
     with patch("sqlspec.core._cursor.time.time", return_value=2000.0):
-        t1 = encode_cursor(["alice", 99], "o", secret=secret, ttl=60, encrypt=True)
-        t2 = encode_cursor(["alice", 99], "o", secret=secret, ttl=60, encrypt=True)
+        t1 = encode_cursor(["alice", 99], "o", secret=secret, ttl=60, encrypted=True)
+        t2 = encode_cursor(["alice", 99], "o", secret=secret, ttl=60, encrypted=True)
         assert t1.startswith("e1.")
         assert t2.startswith("e1.")
         assert len(t1.split(".")) == 3
         assert t1 != t2
         raw_ciphertext = base64.urlsafe_b64decode(t1.split(".")[1] + "===")
         assert b"alice" not in raw_ciphertext
-        decoded = decode_cursor(t1, "o", 2, secret=secret, ttl=60, encrypt=True)
+        decoded = decode_cursor(t1, "o", 2, secret=secret, ttl=60, encrypted=True)
         assert decoded.values == ("alice", 99)
 
 
 @pytest.mark.parametrize("tamper", ["ciphertext", "mac", "truncated_nonce", "wrong_secret"])
 def test_encrypted_cursor_rejects_tampering(tamper: str) -> None:
     secret = b"secret-key-material"
-    token = encode_cursor(["alice"], "o", secret=secret, encrypt=True)
+    token = encode_cursor(["alice"], "o", secret=secret, encrypted=True)
     version, body_b64, mac_b64 = token.split(".")
     if tamper == "ciphertext":
         raw = bytearray(base64.urlsafe_b64decode(body_b64 + "==="))
         raw[-1] ^= 0xFF
         mutated = f"{version}.{base64.urlsafe_b64encode(bytes(raw)).rstrip(b'=').decode('ascii')}.{mac_b64}"
         with pytest.raises(InvalidCursorError):
-            decode_cursor(mutated, "o", 1, secret=secret, encrypt=True)
+            decode_cursor(mutated, "o", 1, secret=secret, encrypted=True)
     elif tamper == "mac":
         raw_mac = bytearray(base64.urlsafe_b64decode(mac_b64 + "==="))
         raw_mac[0] ^= 0xFF
         mutated = f"{version}.{body_b64}.{base64.urlsafe_b64encode(bytes(raw_mac)).rstrip(b'=').decode('ascii')}"
         with pytest.raises(InvalidCursorError):
-            decode_cursor(mutated, "o", 1, secret=secret, encrypt=True)
+            decode_cursor(mutated, "o", 1, secret=secret, encrypted=True)
     elif tamper == "truncated_nonce":
         short_body = base64.urlsafe_b64encode(b"short").rstrip(b"=").decode("ascii")
         with pytest.raises(InvalidCursorError):
-            decode_cursor(f"{version}.{short_body}.{mac_b64}", "o", 1, secret=secret, encrypt=True)
+            decode_cursor(f"{version}.{short_body}.{mac_b64}", "o", 1, secret=secret, encrypted=True)
     else:
         with pytest.raises(InvalidCursorError):
-            decode_cursor(token, "o", 1, secret=b"different-secret", encrypt=True)
+            decode_cursor(token, "o", 1, secret=b"different-secret", encrypted=True)
 
 
 def test_cursor_mode_mismatch_rejected() -> None:
     secret = b"secret-key-material"
-    signed = encode_cursor([1], "o", secret=secret, encrypt=False)
+    signed = encode_cursor([1], "o", secret=secret, encrypted=False)
     unsigned = encode_cursor([1], "o")
-    encrypted = encode_cursor([1], "o", secret=secret, encrypt=True)
+    encrypted = encode_cursor([1], "o", secret=secret, encrypted=True)
 
     with pytest.raises(InvalidCursorError):
-        decode_cursor(signed, "o", 1, secret=secret, encrypt=True)
+        decode_cursor(signed, "o", 1, secret=secret, encrypted=True)
     with pytest.raises(InvalidCursorError):
-        decode_cursor(unsigned, "o", 1, secret=secret, encrypt=True)
+        decode_cursor(unsigned, "o", 1, secret=secret, encrypted=True)
     with pytest.raises(InvalidCursorError):
-        decode_cursor(encrypted, "o", 1, secret=secret, encrypt=False)
+        decode_cursor(encrypted, "o", 1, secret=secret, encrypted=False)
     with pytest.raises(InvalidCursorError):
-        decode_cursor(encrypted, "o", 1, secret=None, encrypt=False)
+        decode_cursor(encrypted, "o", 1, secret=None, encrypted=False)
 
 
 @pytest.mark.parametrize(

@@ -140,7 +140,7 @@ def encode_cursor(
     backward: bool = False,
     secret: bytes | None = None,
     ttl: float | dt.timedelta | None = None,
-    encrypt: bool = False,
+    encrypted: bool = False,
 ) -> str:
     """Encode sort keys into an opaque URL-safe token.
 
@@ -150,7 +150,7 @@ def encode_cursor(
         backward: Whether the token traverses backward.
         secret: Optional signing or encryption key.
         ttl: Optional positive finite expiration duration in seconds or timedelta.
-        encrypt: Encrypt the payload using HMAC-SHA256 CTR + Encrypt-then-MAC.
+        encrypted: Encrypt the payload using HMAC-SHA256 CTR + Encrypt-then-MAC.
 
     Returns:
         The cursor token.
@@ -163,8 +163,8 @@ def encode_cursor(
     if secret is not None and not secret:
         msg = "secret must not be empty"
         raise ValueError(msg)
-    if encrypt and not secret:
-        msg = "secret must be non-empty when encrypt=True"
+    if encrypted and not secret:
+        msg = "secret must be non-empty when encrypted=True"
         raise ValueError(msg)
 
     payload: dict[str, Any] = {
@@ -183,7 +183,7 @@ def encode_cursor(
         payload["e"] = expires_at
 
     plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    if encrypt:
+    if encrypted:
         assert secret is not None
         encryption_key, mac_key = _derive_encryption_keys(secret)
         nonce = secrets.token_bytes(_NONCE_LENGTH)
@@ -212,7 +212,7 @@ def decode_cursor(
     *,
     secret: bytes | None = None,
     ttl: float | dt.timedelta | None = None,
-    encrypt: bool = False,
+    encrypted: bool = False,
 ) -> DecodedCursor:
     """Validate a cursor and recover its sort keys.
 
@@ -222,7 +222,7 @@ def decode_cursor(
         key_count: Expected number of sort keys.
         secret: Optional required signing or encryption key.
         ttl: Optional maximum cursor lifetime enforced against issued-at/expiration claims.
-        encrypt: Require encrypted ``e1`` tokens when True and reject them when False.
+        encrypted: Require encrypted ``e1`` tokens when True and reject them when False.
 
     Returns:
         Typed sort-key values and traversal direction.
@@ -235,8 +235,8 @@ def decode_cursor(
     if secret is not None and not secret:
         msg = "secret must not be empty"
         raise ValueError(msg)
-    if encrypt and not secret:
-        msg = "secret must be non-empty when encrypt=True"
+    if encrypted and not secret:
+        msg = "secret must be non-empty when encrypted=True"
         raise ValueError(msg)
     if not isinstance(token, str) or not token or len(token) > CURSOR_TOKEN_MAX_LENGTH:
         msg = "Invalid pagination cursor: malformed token"
@@ -244,9 +244,9 @@ def decode_cursor(
 
     parts = token.split(".")
     if len(parts) == _ENCRYPTED_PART_COUNT:
-        raw_bytes = _decode_encrypted_parts(parts, secret=secret, encrypt=encrypt)
+        raw_bytes = _decode_encrypted_parts(parts, secret=secret, encrypted=encrypted)
     elif len(parts) in {1, _SIGNED_PART_COUNT}:
-        raw_bytes = _decode_signed_parts(parts, secret=secret, encrypt=encrypt)
+        raw_bytes = _decode_signed_parts(parts, secret=secret, encrypted=encrypted)
     else:
         msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg)
@@ -337,12 +337,12 @@ def _apply_keystream(encryption_key: bytes, nonce: bytes, data: bytes) -> bytes:
     return bytes(output)
 
 
-def _decode_signed_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool) -> bytes:
+def _decode_signed_parts(parts: "list[str]", *, secret: bytes | None, encrypted: bool) -> bytes:
     for part in parts:
         if _B64_PART_PATTERN.fullmatch(part) is None:
             msg = "Invalid pagination cursor: malformed token"
             raise InvalidCursorError(msg)
-    if encrypt:
+    if encrypted:
         msg = "Invalid pagination cursor: encryption required"
         raise InvalidCursorError(msg)
     body = parts[0]
@@ -365,7 +365,7 @@ def _decode_signed_parts(parts: "list[str]", *, secret: bytes | None, encrypt: b
         raise InvalidCursorError(msg) from exc
 
 
-def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool) -> bytes:
+def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypted: bool) -> bytes:
     if (
         parts[0] != _ENCRYPTED_PREFIX
         or _B64_PART_PATTERN.fullmatch(parts[1]) is None
@@ -376,7 +376,7 @@ def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt
     if secret is None:
         msg = "Invalid pagination cursor: missing secret"
         raise InvalidCursorError(msg)
-    if not encrypt:
+    if not encrypted:
         msg = "Invalid pagination cursor: unexpected encrypted token"
         raise InvalidCursorError(msg)
     encryption_key, mac_key = _derive_encryption_keys(secret)

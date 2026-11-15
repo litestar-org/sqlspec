@@ -971,62 +971,64 @@ def test_starlette_plugin_cursor_config_and_conflicts(monkeypatch: pytest.Monkey
     """Verify Starlette SQLSpecPlugin cursor configuration, env fallback, and conflict detection."""
     import datetime as dt
 
-    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SQLSPEC_PAGINATION_CURSOR_SECRET", raising=False)
     monkeypatch.delenv("SECRET_KEY", raising=False)
 
     base = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
-    assert base.cursor_secret is None
-    assert base.cursor_ttl is None
-    assert base.cursor_encrypt is None
+    assert base.pagination_cursor_secret is None
+    assert base.pagination_cursor_ttl is None
+    assert base.pagination_cursor_encrypted is None
 
     monkeypatch.setenv("SECRET_KEY", "flask-style-secret")
-    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "primary-env-secret")
+    monkeypatch.setenv("SQLSPEC_PAGINATION_CURSOR_SECRET", "primary-env-secret")
     from_env = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
-    assert from_env.cursor_secret == "primary-env-secret"
-    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "mutated-later")
-    assert from_env.cursor_secret == "primary-env-secret"
+    assert from_env.pagination_cursor_secret == "primary-env-secret"
+    monkeypatch.setenv("SQLSPEC_PAGINATION_CURSOR_SECRET", "mutated-later")
+    assert from_env.pagination_cursor_secret == "primary-env-secret"
 
     explicit = SQLSpecPlugin(
         AiosqliteConfig(
             connection_config={"database": ":memory:"},
-            extension_config={"starlette": {"cursor_ttl": 60, "cursor_encrypt": True}},
+            extension_config={"starlette": {"pagination_cursor_ttl": 60, "pagination_cursor_encrypted": True}},
         ),
-        cursor_secret="kwarg-secret",
-        cursor_ttl=dt.timedelta(seconds=60),
-        cursor_encrypt=True,
+        pagination_cursor_secret="kwarg-secret",
+        pagination_cursor_ttl=dt.timedelta(seconds=60),
+        pagination_cursor_encrypted=True,
     )
-    assert explicit.cursor_secret == "kwarg-secret"
-    assert explicit.cursor_ttl == dt.timedelta(seconds=60)
-    assert explicit.cursor_encrypt is True
+    assert explicit.pagination_cursor_secret == "kwarg-secret"
+    assert explicit.pagination_cursor_ttl == dt.timedelta(seconds=60)
+    assert explicit.pagination_cursor_encrypted is True
 
-    with pytest.raises(ImproperConfigurationError, match="cursor_secret"):
+    with pytest.raises(ImproperConfigurationError, match="pagination_cursor_secret"):
         SQLSpecPlugin([
             AiosqliteConfig(
                 bind_key="one",
                 connection_config={"database": ":memory:"},
-                extension_config={"starlette": {"cursor_secret": b"abc"}},
+                extension_config={"starlette": {"pagination_cursor_secret": b"abc"}},
             ),
             AiosqliteConfig(
                 bind_key="two",
                 connection_config={"database": ":memory:"},
-                extension_config={"starlette": {"cursor_secret": "abc"}},
+                extension_config={"starlette": {"pagination_cursor_secret": "abc"}},
             ),
         ])
 
-    with pytest.raises(ImproperConfigurationError, match="cursor_ttl"):
+    with pytest.raises(ImproperConfigurationError, match="pagination_cursor_ttl"):
         SQLSpecPlugin(
             AiosqliteConfig(
-                connection_config={"database": ":memory:"}, extension_config={"starlette": {"cursor_ttl": 30}}
+                connection_config={"database": ":memory:"},
+                extension_config={"starlette": {"pagination_cursor_ttl": 30}},
             ),
-            cursor_ttl=60,
+            pagination_cursor_ttl=60,
         )
 
-    with pytest.raises(ImproperConfigurationError, match="cursor_encrypt"):
+    with pytest.raises(ImproperConfigurationError, match="pagination_cursor_encrypted"):
         SQLSpecPlugin(
             AiosqliteConfig(
-                connection_config={"database": ":memory:"}, extension_config={"starlette": {"cursor_encrypt": False}}
+                connection_config={"database": ":memory:"},
+                extension_config={"starlette": {"pagination_cursor_encrypted": False}},
             ),
-            cursor_encrypt=True,
+            pagination_cursor_encrypted=True,
         )
 
 

@@ -527,10 +527,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
     __slots__ = (
         "_correlation_headers",
-        "_cursor_encrypt",
-        "_cursor_secret",
-        "_cursor_ttl",
         "_enable_sqlcommenter_middleware",
+        "_pagination_cursor_encrypted",
+        "_pagination_cursor_secret",
+        "_pagination_cursor_ttl",
         "_plugin_configs",
         "_sqlspec",
     )
@@ -540,9 +540,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         sqlspec: "SQLSpec | AnyDatabaseConfig | Sequence[DatabaseConfigProtocol[Any, Any, Any]]",
         *,
         loader: "SQLFileLoader | None" = None,
-        cursor_secret: str | bytes | None = None,
-        cursor_ttl: float | dt.timedelta | None = None,
-        cursor_encrypt: bool | None = None,
+        pagination_cursor_secret: str | bytes | None = None,
+        pagination_cursor_ttl: float | dt.timedelta | None = None,
+        pagination_cursor_encrypted: bool | None = None,
     ) -> None:
         """Initialize SQLSpec plugin.
 
@@ -550,9 +550,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             sqlspec: Pre-configured SQLSpec registry, a single database
                 configuration, or a sequence of database configurations.
             loader: Optional SQL file loader instance attached to the registry.
-            cursor_secret: Optional application-wide cursor signing secret.
-            cursor_ttl: Optional default cursor expiration window.
-            cursor_encrypt: Optional default cursor encryption flag.
+            pagination_cursor_secret: Optional application-wide cursor signing secret.
+            pagination_cursor_ttl: Optional default cursor expiration window.
+            pagination_cursor_encrypted: Optional default cursor encryption flag.
         """
         self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
 
@@ -565,8 +565,13 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             state = self._config_state(config_union, settings)
             self._plugin_configs.append(state)
 
-        self._cursor_secret, self._cursor_ttl, self._cursor_encrypt = _resolve_plugin_cursor_settings(
-            extracted_settings, cursor_secret=cursor_secret, cursor_ttl=cursor_ttl, cursor_encrypt=cursor_encrypt
+        self._pagination_cursor_secret, self._pagination_cursor_ttl, self._pagination_cursor_encrypted = (
+            _resolve_plugin_cursor_settings(
+                extracted_settings,
+                pagination_cursor_secret=pagination_cursor_secret,
+                pagination_cursor_ttl=pagination_cursor_ttl,
+                pagination_cursor_encrypted=pagination_cursor_encrypted,
+            )
         )
 
         correlation_headers: list[str] = []
@@ -596,19 +601,19 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         return tuple(state.config for state in self._plugin_configs if has_tenant_strategy(state.config))
 
     @property
-    def cursor_secret(self) -> str | bytes | None:
+    def pagination_cursor_secret(self) -> str | bytes | None:
         """Return resolved application-wide cursor secret."""
-        return self._cursor_secret
+        return self._pagination_cursor_secret
 
     @property
-    def cursor_ttl(self) -> int | float | dt.timedelta | None:
+    def pagination_cursor_ttl(self) -> int | float | dt.timedelta | None:
         """Return resolved application-wide cursor TTL."""
-        return self._cursor_ttl
+        return self._pagination_cursor_ttl
 
     @property
-    def cursor_encrypt(self) -> bool | None:
+    def pagination_cursor_encrypted(self) -> bool | None:
         """Return resolved application-wide cursor encryption setting."""
-        return self._cursor_encrypt
+        return self._pagination_cursor_encrypted
 
     @property
     def sqlspec(self) -> SQLSpec:
@@ -1404,9 +1409,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "disable_di": disable_di,
             "manage_lifespan": litestar_config.get("manage_lifespan", not disable_di),
             "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
-            "cursor_secret": litestar_config.get("cursor_secret"),
-            "cursor_ttl": litestar_config.get("cursor_ttl"),
-            "cursor_encrypt": litestar_config.get("cursor_encrypt"),
+            "pagination_cursor_secret": litestar_config.get("pagination_cursor_secret"),
+            "pagination_cursor_ttl": litestar_config.get("pagination_cursor_ttl"),
+            "pagination_cursor_encrypted": litestar_config.get("pagination_cursor_encrypted"),
         }
 
     def _config_state(self, config: "AnyDatabaseConfig", settings: "dict[str, Any]") -> PluginConfigState:
@@ -1844,9 +1849,9 @@ def _resource_cleanup_modes(state: PluginConfigState) -> tuple[tuple[str | None,
     )
 
 
-def _normalize_ttl_seconds(value: Any) -> float:
+def _normalize_pagination_cursor_ttl(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float, dt.timedelta)):
-        msg = "cursor_ttl must be an int, float, or datetime.timedelta"
+        msg = "pagination_cursor_ttl must be an int, float, or datetime.timedelta"
         raise ImproperConfigurationError(msg)
     return value.total_seconds() if isinstance(value, dt.timedelta) else float(value)
 
@@ -1854,49 +1859,49 @@ def _normalize_ttl_seconds(value: Any) -> float:
 def _resolve_plugin_cursor_settings(
     settings_list: "Sequence[Mapping[str, Any]]",
     *,
-    cursor_secret: str | bytes | None,
-    cursor_ttl: float | dt.timedelta | None,
-    cursor_encrypt: bool | None,
+    pagination_cursor_secret: str | bytes | None,
+    pagination_cursor_ttl: float | dt.timedelta | None,
+    pagination_cursor_encrypted: bool | None,
 ) -> "tuple[str | bytes | None, float | dt.timedelta | None, bool | None]":
-    resolved_secret: str | bytes | None = cursor_secret
+    resolved_secret: str | bytes | None = pagination_cursor_secret
     for settings in settings_list:
-        candidate = settings.get("cursor_secret")
+        candidate = settings.get("pagination_cursor_secret")
         if candidate is None:
             continue
         if resolved_secret is None:
             resolved_secret = candidate
         elif resolved_secret != candidate:
-            msg = "Conflicting 'cursor_secret' values across plugin configuration"
+            msg = "Conflicting 'pagination_cursor_secret' values across plugin configuration"
             raise ImproperConfigurationError(msg)
     if resolved_secret is None:
-        resolved_secret = os.environ.get("SQLSPEC_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
+        resolved_secret = os.environ.get("SQLSPEC_PAGINATION_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
 
     resolved_ttl: int | float | dt.timedelta | None = None
     resolved_ttl_seconds: float | None = None
-    if cursor_ttl is not None:
-        resolved_ttl = cursor_ttl
-        resolved_ttl_seconds = _normalize_ttl_seconds(cursor_ttl)
+    if pagination_cursor_ttl is not None:
+        resolved_ttl = pagination_cursor_ttl
+        resolved_ttl_seconds = _normalize_pagination_cursor_ttl(pagination_cursor_ttl)
     for settings in settings_list:
-        candidate_ttl = settings.get("cursor_ttl")
+        candidate_ttl = settings.get("pagination_cursor_ttl")
         if candidate_ttl is None:
             continue
-        candidate_seconds = _normalize_ttl_seconds(candidate_ttl)
+        candidate_seconds = _normalize_pagination_cursor_ttl(candidate_ttl)
         if resolved_ttl_seconds is None:
             resolved_ttl = candidate_ttl
             resolved_ttl_seconds = candidate_seconds
         elif resolved_ttl_seconds != candidate_seconds:
-            msg = "Conflicting 'cursor_ttl' values across plugin configuration"
+            msg = "Conflicting 'pagination_cursor_ttl' values across plugin configuration"
             raise ImproperConfigurationError(msg)
 
-    resolved_encrypt: bool | None = cursor_encrypt
+    resolved_encrypt: bool | None = pagination_cursor_encrypted
     for settings in settings_list:
-        candidate_encrypt = settings.get("cursor_encrypt")
+        candidate_encrypt = settings.get("pagination_cursor_encrypted")
         if candidate_encrypt is None:
             continue
         if resolved_encrypt is None:
             resolved_encrypt = bool(candidate_encrypt)
         elif resolved_encrypt != bool(candidate_encrypt):
-            msg = "Conflicting 'cursor_encrypt' values across plugin configuration"
+            msg = "Conflicting 'pagination_cursor_encrypted' values across plugin configuration"
             raise ImproperConfigurationError(msg)
 
     return resolved_secret, resolved_ttl, resolved_encrypt

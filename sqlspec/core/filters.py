@@ -706,18 +706,18 @@ class CursorFilter(PaginationFilter):
         cursor: Optional token identifying the next or previous page.
         secret: Optional nonempty signing or encryption key.
         ttl: Optional positive finite cursor lifetime in seconds or timedelta.
-        encrypt: Encrypt cursor tokens using HMAC-SHA256 CTR + Encrypt-then-MAC.
+        encrypted: Encrypt cursor tokens using HMAC-SHA256 CTR + Encrypt-then-MAC.
 
     Raises:
         ValueError: Keys, limit, secret, or ttl are invalid.
         InvalidCursorError: The token does not match the requested ordering, is invalid, or has expired.
     """
 
-    __slots__ = ("_backward", "_cursor", "_encrypt", "_fingerprint", "_keys", "_limit", "_secret", "_ttl", "_values")
+    __slots__ = ("_backward", "_cursor", "_encrypted", "_fingerprint", "_keys", "_limit", "_secret", "_ttl", "_values")
     _keys: tuple[CursorKey, ...]
     _secret: bytes | None
     _ttl: float | dt.timedelta | None
-    _encrypt: bool
+    _encrypted: bool
     _values: tuple[Any, ...] | None
 
     def __init__(
@@ -728,7 +728,7 @@ class CursorFilter(PaginationFilter):
         secret: str | bytes | None = None,
         *,
         ttl: float | dt.timedelta | None = None,
-        encrypt: bool = False,
+        encrypted: bool = False,
     ) -> None:
         self._keys = normalize_cursor_keys(keys)
         if len({key.field_name for key in self._keys}) != len(self._keys) or len({
@@ -743,20 +743,25 @@ class CursorFilter(PaginationFilter):
         if self._secret == b"":
             msg = "secret must not be empty"
             raise ValueError(msg)
-        if encrypt and not self._secret:
-            msg = "secret must not be empty when encrypt=True"
+        if encrypted and not self._secret:
+            msg = "secret must not be empty when encrypted=True"
             raise ValueError(msg)
         normalize_cursor_ttl(ttl)
         self._limit = limit
         self._cursor = cursor
         self._ttl = ttl
-        self._encrypt = bool(encrypt)
+        self._encrypted = bool(encrypted)
         self._fingerprint = order_fingerprint([(key.field_name, key.sort_order, key.nulls) for key in self._keys])
         self._values = None
         self._backward = False
         if cursor is not None:
             decoded = decode_cursor(
-                cursor, self._fingerprint, len(self._keys), secret=self._secret, ttl=self._ttl, encrypt=self._encrypt
+                cursor,
+                self._fingerprint,
+                len(self._keys),
+                secret=self._secret,
+                ttl=self._ttl,
+                encrypted=self._encrypted,
             )
             self._values = decoded.values
             self._backward = decoded.backward
@@ -765,7 +770,7 @@ class CursorFilter(PaginationFilter):
                 raise InvalidCursorError(msg)
 
     def __reduce__(self) -> "tuple[Any, ...]":
-        """Reconstruct via helper supporting keyword-only ttl and encrypt options."""
+        """Reconstruct via helper supporting keyword-only ttl and encrypted options."""
         return (_rebuild_cursor_filter, self._reconstruction_args())
 
     @property
@@ -785,8 +790,8 @@ class CursorFilter(PaginationFilter):
         return self._ttl
 
     @property
-    def encrypt(self) -> bool:
-        return self._encrypt
+    def encrypted(self) -> bool:
+        return self._encrypted
 
     @property
     def backward(self) -> bool:
@@ -877,7 +882,7 @@ class CursorFilter(PaginationFilter):
             backward=backward,
             secret=self._secret,
             ttl=self._ttl,
-            encrypt=self._encrypt,
+            encrypted=self._encrypted,
         )
 
     def build_page(self, rows: list[dict[str, Any]]) -> CursorPagination[dict[str, Any]]:
@@ -934,7 +939,7 @@ class CursorFilter(PaginationFilter):
         return values
 
     def _reconstruction_args(self) -> tuple[Any, ...]:
-        return self._keys, self._limit, self._cursor, self._secret, self._ttl, self._encrypt
+        return self._keys, self._limit, self._cursor, self._secret, self._ttl, self._encrypted
 
 
 class OrderByFilter(StatementFilter):
@@ -1432,6 +1437,6 @@ def _rebuild_cursor_filter(
     cursor: str | None,
     secret: bytes | None,
     ttl: "float | dt.timedelta | None",
-    encrypt: bool,
+    encrypted: bool,
 ) -> CursorFilter:
-    return CursorFilter(keys, limit, cursor, secret, ttl=ttl, encrypt=encrypt)
+    return CursorFilter(keys, limit, cursor, secret, ttl=ttl, encrypted=encrypted)

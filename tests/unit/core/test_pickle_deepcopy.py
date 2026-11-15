@@ -45,7 +45,7 @@ def _filter_samples() -> "list[StatementFilter]":
     return [
         LimitOffsetFilter(10, 5),
         CursorFilter([CursorKey("id")], 10),
-        CursorFilter([CursorKey("id")], 10, secret=b"secret-key", ttl=300.0, encrypt=True),
+        CursorFilter([CursorKey("id")], 10, secret=b"secret-key", ttl=300.0, encrypted=True),
         OrderByFilter("id", "desc"),
         SearchFilter("name", "foo", ignore_case=True),
         SearchFilter("name", "100%_test/path", ignore_case=True, escape_wildcards=True),

@@ -631,7 +631,9 @@ def test_page_size_invalid_configuration(size: int, maximum: int, message: str) 
 def test_cursor_key_shorthand_supports_sorting_and_signed_continuation(keys: Any) -> None:
     import copy
 
-    config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret="secret", sort_field="name")
+    config = FilterConfig(
+        pagination_type="cursor", pagination_cursor_keys=keys, pagination_cursor_secret="secret", sort_field="name"
+    )
     provider = _get_dependency(provide_filters(config), "cursor_filter")
     expected = (CursorKey("name", "desc"), CursorKey("id"))
     page_filter = _run(provider(field_name="name", sort_order="desc"))
@@ -640,7 +642,10 @@ def test_cursor_key_shorthand_supports_sorting_and_signed_continuation(keys: Any
     canonical = _get_dependency(
         provide_filters(
             FilterConfig(
-                pagination_type="cursor", cursor_keys=list(expected), cursor_secret="secret", sort_field="name"
+                pagination_type="cursor",
+                pagination_cursor_keys=list(expected),
+                pagination_cursor_secret="secret",
+                sort_field="name",
             )
         ),
         "cursor_filter",
@@ -657,7 +662,7 @@ def test_cursor_key_shorthand_supports_sorting_and_signed_continuation(keys: Any
 def test_cursor_mode_requires_cursor_keys() -> None:
     from sqlspec.exceptions import ImproperConfigurationError
 
-    with pytest.raises(ImproperConfigurationError, match="requires a non-empty 'cursor_keys'"):
+    with pytest.raises(ImproperConfigurationError, match="requires a non-empty 'pagination_cursor_keys'"):
         provide_filters(FilterConfig(pagination_type="cursor"))
 
 
@@ -666,20 +671,20 @@ def test_cursor_provider_builds_filter_and_preserves_key_order() -> None:
 
     config = FilterConfig(
         pagination_type="cursor",
-        cursor_keys=[CursorKey("name"), CursorKey("id")],
-        cursor_secret="secret",
+        pagination_cursor_keys=[CursorKey("name"), CursorKey("id")],
+        pagination_cursor_secret="secret",
         pagination_size=2,
         search="name",
     )
     provider = _get_dependency(provide_filters(config), "cursor_filter")
     result = _run(provider())
     assert isinstance(result, CursorFilter)
-    assert result.keys == tuple(config["cursor_keys"])
+    assert result.keys == tuple(config["pagination_cursor_keys"])
     assert result.limit == 2
     assert _run(provider(page_size=5)).limit == 5
-    config["cursor_keys"] = list(reversed(config["cursor_keys"]))
+    config["pagination_cursor_keys"] = list(reversed(config["pagination_cursor_keys"]))
     reverse_provider = _get_dependency(provide_filters(config), "cursor_filter")
-    assert _run(reverse_provider()).keys == tuple(config["cursor_keys"])
+    assert _run(reverse_provider()).keys == tuple(config["pagination_cursor_keys"])
     assert reverse_provider is not provider
     assert list(inspect.signature(provide_filters(config)).parameters) == ["search_filter", "cursor_filter"]
 
@@ -690,8 +695,8 @@ def test_cursor_provider_composes_order_by(field_name: str | None, order: Litera
 
     config = FilterConfig(
         pagination_type="cursor",
-        cursor_keys=[CursorKey("id", nulls="last", result_name="identifier")],
-        cursor_secret="secret",
+        pagination_cursor_keys=[CursorKey("id", nulls="last", result_name="identifier")],
+        pagination_cursor_secret="secret",
         sort_field=["name", "id"],
         sort_field_aliases={"identifier": "id"},
     )
@@ -700,14 +705,17 @@ def test_cursor_provider_composes_order_by(field_name: str | None, order: Litera
     if field_name == "identifier":
         assert keys == (CursorKey("id", "desc", nulls="last", result_name="identifier"),)
     else:
-        assert keys == (CursorKey("name", order or "desc"), config["cursor_keys"][0])
+        assert keys == (CursorKey("name", order or "desc"), config["pagination_cursor_keys"][0])
 
 
 def test_cursor_provider_rejects_unknown_order_by() -> None:
     from sqlspec.core import CursorKey
 
     config = FilterConfig(
-        pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret", sort_field="name"
+        pagination_type="cursor",
+        pagination_cursor_keys=[CursorKey("id")],
+        pagination_cursor_secret="secret",
+        sort_field="name",
     )
     provider = _get_dependency(provide_filters(config), "cursor_filter")
     with pytest.raises(RequestValidationError, match="Invalid orderBy"):
@@ -718,7 +726,9 @@ def test_cursor_provider_rejects_unknown_order_by() -> None:
 def test_cursor_provider_invalid_cursor(token: str) -> None:
     from sqlspec.core import CursorKey
 
-    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret")
+    config = FilterConfig(
+        pagination_type="cursor", pagination_cursor_keys=[CursorKey("id")], pagination_cursor_secret="secret"
+    )
     provider = _get_dependency(provide_filters(config), "cursor_filter")
     with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
         _run(provider(cursor=token))
@@ -730,11 +740,15 @@ def test_cursor_secret_signs_tokens_and_rejects_tampering() -> None:
 
     from sqlspec.core import CursorKey
 
-    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret")
+    config = FilterConfig(
+        pagination_type="cursor", pagination_cursor_keys=[CursorKey("id")], pagination_cursor_secret="secret"
+    )
     provider = _get_dependency(provide_filters(config), "cursor_filter")
     token = _run(provider()).encode({"id": 1}, backward=False)
     assert _run(provider(cursor=token)).limit == 20
-    other_config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="other")
+    other_config = FilterConfig(
+        pagination_type="cursor", pagination_cursor_keys=[CursorKey("id")], pagination_cursor_secret="other"
+    )
     other_provider = _get_dependency(provide_filters(other_config), "cursor_filter")
     with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
         _run(other_provider(cursor=token))
@@ -750,7 +764,10 @@ def test_cursor_sort_field_order_changes_cached_default() -> None:
     from sqlspec.core import CursorKey
 
     config = FilterConfig(
-        pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret", sort_field=["name", "id"]
+        pagination_type="cursor",
+        pagination_cursor_keys=[CursorKey("id")],
+        pagination_cursor_secret="secret",
+        sort_field=["name", "id"],
     )
     first = _get_dependency(provide_filters(config), "cursor_filter")
     config["sort_field"] = ["id", "name"]
@@ -766,7 +783,7 @@ def test_cursor_secret_cache_preserves_type(secrets: tuple[str | bytes, str | by
     keys = [CursorKey("id")]
     providers = []
     for secret in secrets:
-        config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret=secret)
+        config = FilterConfig(pagination_type="cursor", pagination_cursor_keys=keys, pagination_cursor_secret=secret)
         providers.append(_get_dependency(provide_filters(config), "cursor_filter"))
     for index, _secret in enumerate(secrets):
         token = _run(providers[index]()).encode({"id": 1}, backward=False)
@@ -787,7 +804,7 @@ def test_fastapi_plugin_cursor_config_starlette_fallback_and_endpoint_keys(monke
     from sqlspec.extensions.fastapi import SQLSpecPlugin
     from sqlspec.extensions.fastapi import providers as fastapi_providers
 
-    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SQLSPEC_PAGINATION_CURSOR_SECRET", raising=False)
     monkeypatch.delenv("SECRET_KEY", raising=False)
 
     captured_calls: list[dict[str, Any]] = []
@@ -799,9 +816,9 @@ def test_fastapi_plugin_cursor_config_starlette_fallback_and_endpoint_keys(monke
         secret: str | bytes | None = None,
         *,
         ttl: float | dt.timedelta | None = None,
-        encrypt: bool = False,
+        encrypted: bool = False,
     ) -> dict[str, Any]:
-        payload = {"keys": keys, "limit": limit, "cursor": cursor, "secret": secret, "ttl": ttl, "encrypt": encrypt}
+        payload = {"keys": keys, "limit": limit, "cursor": cursor, "secret": secret, "ttl": ttl, "encrypted": encrypted}
         captured_calls.append(payload)
         return payload
 
@@ -812,20 +829,24 @@ def test_fastapi_plugin_cursor_config_starlette_fallback_and_endpoint_keys(monke
         AiosqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={
-                "starlette": {"cursor_secret": "starlette-inherited-secret", "cursor_ttl": 45, "cursor_encrypt": True}
+                "starlette": {
+                    "pagination_cursor_secret": "starlette-inherited-secret",
+                    "pagination_cursor_ttl": 45,
+                    "pagination_cursor_encrypted": True,
+                }
             },
         ),
         app,
     )
-    standalone_dep = provide_filters(FilterConfig(pagination_type="cursor", cursor_keys=["id"]))
-    plugin_dep = plugin.provide_filters(FilterConfig(pagination_type="cursor", cursor_keys=["id"]))
+    standalone_dep = provide_filters(FilterConfig(pagination_type="cursor", pagination_cursor_keys=["id"]))
+    plugin_dep = plugin.provide_filters(FilterConfig(pagination_type="cursor", pagination_cursor_keys=["id"]))
     override_dep = plugin.provide_filters(
         FilterConfig(
             pagination_type="cursor",
-            cursor_keys=["id"],
-            cursor_secret="route-override",
-            cursor_ttl=10,
-            cursor_encrypt=False,
+            pagination_cursor_keys=["id"],
+            pagination_cursor_secret="route-override",
+            pagination_cursor_ttl=10,
+            pagination_cursor_encrypted=False,
         )
     )
 
@@ -857,16 +878,16 @@ def test_fastapi_plugin_cursor_config_starlette_fallback_and_endpoint_keys(monke
     users_call, orders_call, custom_call = captured_calls
     assert users_call["secret"] == hmac.new(b"starlette-inherited-secret", b"/users", hashlib.sha256).digest()
     assert users_call["ttl"] == 45
-    assert users_call["encrypt"] is True
+    assert users_call["encrypted"] is True
 
     assert orders_call["secret"] == hmac.new(b"starlette-inherited-secret", b"/orders", hashlib.sha256).digest()
     assert orders_call["secret"] != users_call["secret"]
     assert orders_call["ttl"] == 45
-    assert orders_call["encrypt"] is True
+    assert orders_call["encrypted"] is True
 
     assert custom_call["secret"] == hmac.new(b"route-override", b"/custom", hashlib.sha256).digest()
     assert custom_call["ttl"] == 10
-    assert custom_call["encrypt"] is False
+    assert custom_call["encrypted"] is False
 
 
 def test_fastapi_standalone_cursor_env_fallback_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -887,40 +908,46 @@ def test_fastapi_standalone_cursor_env_fallback_precedence(monkeypatch: pytest.M
         secret: str | bytes | None = None,
         *,
         ttl: float | dt.timedelta | None = None,
-        encrypt: bool = False,
+        encrypted: bool = False,
     ) -> dict[str, Any]:
-        payload = {"keys": keys, "limit": limit, "cursor": cursor, "secret": secret, "ttl": ttl, "encrypt": encrypt}
+        payload = {"keys": keys, "limit": limit, "cursor": cursor, "secret": secret, "ttl": ttl, "encrypted": encrypted}
         captured.append(payload)
         return payload
 
     monkeypatch.setattr(fastapi_providers, "CursorFilter", _recording_cursor_filter)
     monkeypatch.setenv("SECRET_KEY", "secret-key-fallback")
-    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SQLSPEC_PAGINATION_CURSOR_SECRET", raising=False)
     dep_fallback = _get_dependency(
-        provide_filters({"pagination_type": "cursor", "cursor_keys": ["id"]}), "cursor_filter"
+        provide_filters({"pagination_type": "cursor", "pagination_cursor_keys": ["id"]}), "cursor_filter"
     )
-    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "primary-env-key")
+    monkeypatch.setenv("SQLSPEC_PAGINATION_CURSOR_SECRET", "primary-env-key")
     dep_primary = _get_dependency(
-        provide_filters({"pagination_type": "cursor", "cursor_keys": ["id"]}), "cursor_filter"
+        provide_filters({"pagination_type": "cursor", "pagination_cursor_keys": ["id"]}), "cursor_filter"
     )
-    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "changed-too-late")
+    monkeypatch.setenv("SQLSPEC_PAGINATION_CURSOR_SECRET", "changed-too-late")
 
     _run(dep_fallback())
     _run(dep_primary())
     assert captured[0]["secret"] == hmac.new(b"secret-key-fallback", b"fastapi:standalone", hashlib.sha256).digest()
     assert captured[1]["secret"] == hmac.new(b"primary-env-key", b"fastapi:standalone", hashlib.sha256).digest()
 
-    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "env-none-one")
+    monkeypatch.setenv("SQLSPEC_PAGINATION_CURSOR_SECRET", "env-none-one")
     dep_none_one = _get_dependency(
         provide_filters(
-            cast("FilterConfig", {"pagination_type": "cursor", "cursor_keys": ["id"], "cursor_secret": None})
+            cast(
+                "FilterConfig",
+                {"pagination_type": "cursor", "pagination_cursor_keys": ["id"], "pagination_cursor_secret": None},
+            )
         ),
         "cursor_filter",
     )
-    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "env-none-two")
+    monkeypatch.setenv("SQLSPEC_PAGINATION_CURSOR_SECRET", "env-none-two")
     dep_none_two = _get_dependency(
         provide_filters(
-            cast("FilterConfig", {"pagination_type": "cursor", "cursor_keys": ["id"], "cursor_secret": None})
+            cast(
+                "FilterConfig",
+                {"pagination_type": "cursor", "pagination_cursor_keys": ["id"], "pagination_cursor_secret": None},
+            )
         ),
         "cursor_filter",
     )
@@ -932,12 +959,15 @@ def test_fastapi_standalone_cursor_env_fallback_precedence(monkeypatch: pytest.M
     explicit_none_plugin = SQLSpecPlugin(
         AiosqliteConfig(
             connection_config={"database": ":memory:"},
-            extension_config={"fastapi": {"cursor_secret": "plugin-none-secret"}},
+            extension_config={"fastapi": {"pagination_cursor_secret": "plugin-none-secret"}},
         )
     )
     dep_plugin_inherited = _get_dependency(
         explicit_none_plugin.provide_filters(
-            cast("FilterConfig", {"pagination_type": "cursor", "cursor_keys": ["id"], "cursor_secret": None})
+            cast(
+                "FilterConfig",
+                {"pagination_type": "cursor", "pagination_cursor_keys": ["id"], "pagination_cursor_secret": None},
+            )
         ),
         "cursor_filter",
     )
@@ -952,16 +982,16 @@ def _cursor_request(plugin: Any = None) -> Any:
     return SimpleNamespace(app=SimpleNamespace(state=state), scope={"path": "/items", "root_path": ""})
 
 
-def _tenant_plugin(*configs: Any, cursor_secret: str | None = "plugin-secret") -> Any:
+def _tenant_plugin(*configs: Any, pagination_cursor_secret: str | None = "plugin-secret") -> Any:
     from types import SimpleNamespace
 
-    return SimpleNamespace(cursor_secret=cursor_secret, _tenant_configs=lambda: tuple(configs))
+    return SimpleNamespace(pagination_cursor_secret=pagination_cursor_secret, _tenant_configs=lambda: tuple(configs))
 
 
 def _cursor_provider(secret: str | None = None) -> Any:
-    config = FilterConfig(pagination_type="cursor", cursor_keys=["id"])
+    config = FilterConfig(pagination_type="cursor", pagination_cursor_keys=["id"])
     if secret is not None:
-        config["cursor_secret"] = secret
+        config["pagination_cursor_secret"] = secret
     return _get_dependency(provide_filters(config), "cursor_filter")
 
 
@@ -988,7 +1018,7 @@ async def _issue_and_resume(
 def test_cursor_provider_requires_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     from sqlspec.exceptions import ImproperConfigurationError
 
-    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SQLSPEC_PAGINATION_CURSOR_SECRET", raising=False)
     monkeypatch.delenv("SECRET_KEY", raising=False)
     provider = _cursor_provider()
     with pytest.raises(ImproperConfigurationError, match="requires a cursor secret"):
@@ -996,7 +1026,7 @@ def test_cursor_provider_requires_secret(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_cursor_provider_uses_plugin_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SQLSPEC_PAGINATION_CURSOR_SECRET", raising=False)
     monkeypatch.delenv("SECRET_KEY", raising=False)
     provider = _cursor_provider()
     request = _cursor_request(_tenant_plugin())

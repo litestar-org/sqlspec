@@ -82,9 +82,9 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `S
 | `primary_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
 | `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 | `read_pool_key` | `str` | - | Request key for the selected read pool. |
-| `cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
-| `cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
-| `cursor_encrypt` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
+| `pagination_cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
+| `pagination_cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
+| `pagination_cursor_encrypted` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
 <!-- GENERATED:END config-table:sqlspec.config.FastAPIConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
@@ -95,7 +95,7 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, an aut
 
 ## Declarative Filter Dependencies
 
-Use `db_ext.provide_filters(FilterConfig(...))` (or `from sqlspec.extensions.fastapi import FilterConfig, provide_filters`) to generate typed FastAPI `Depends` callables that parse query parameters directly into `StatementFilter` lists (`LimitOffsetFilter`, `CursorFilter` returning `HTTP 422` on malformed cursor tokens, `OrderByFilter`, `SearchFilter`, `BeforeAfterFilter`, and `InCollectionFilter`). Application-wide `cursor_secret`, `cursor_ttl`, and `cursor_encrypt` configured via `FastAPIConfig`, `SQLSpecPlugin(...)`, or `SQLSPEC_CURSOR_SECRET` / `SECRET_KEY` environment variables are inherited by both `db_ext.provide_filters(...)` and standalone `provide_filters(...)` with per-endpoint signing keys. A cursor secret is required: cursor requests raise `ImproperConfigurationError` when none resolves. Tokens are bound to the request tenant of every tenant-enabled configuration, so a token from one tenant is rejected for another. Search filters escape `%`, `_`, and `/` by default; set `search_escape_wildcards=False` in `FilterConfig` to opt out:
+Use `db_ext.provide_filters(FilterConfig(...))` (or `from sqlspec.extensions.fastapi import FilterConfig, provide_filters`) to generate typed FastAPI `Depends` callables that parse query parameters directly into `StatementFilter` lists (`LimitOffsetFilter`, `CursorFilter` returning `HTTP 422` on malformed cursor tokens, `OrderByFilter`, `SearchFilter`, `BeforeAfterFilter`, and `InCollectionFilter`). Application-wide `pagination_cursor_secret`, `pagination_cursor_ttl`, and `pagination_cursor_encrypted` configured via `FastAPIConfig`, `SQLSpecPlugin(...)`, or `SQLSPEC_PAGINATION_CURSOR_SECRET` / `SECRET_KEY` environment variables are inherited by both `db_ext.provide_filters(...)` and standalone `provide_filters(...)` with per-endpoint signing keys. A cursor secret is required: cursor requests raise `ImproperConfigurationError` when none resolves. Tokens are bound to the request tenant of every tenant-enabled configuration, so a token from one tenant is rejected for another. Search filters escape `%`, `_`, and `/` by default; set `search_escape_wildcards=False` in `FilterConfig` to opt out:
 
 ```python
 from typing import Annotated, Any
@@ -111,7 +111,7 @@ user_filters = provide_filters(
         id_filter=UUID,
         sort_field={"created_at", "name"},
         pagination_type="cursor",
-        cursor_keys="id",
+        pagination_cursor_keys="id",
         pagination_size=25,
         search="name,email",
         search_ignore_case=True,

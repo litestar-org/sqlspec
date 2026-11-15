@@ -554,11 +554,11 @@ class LitestarConfig(TypedDict):
     """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
-    cursor_secret: NotRequired[str | bytes]
+    pagination_cursor_secret: NotRequired[str | bytes]
     """Application-wide secret enabling HMAC-SHA256 signed pagination cursors."""
-    cursor_ttl: NotRequired[int | float | dt.timedelta]
+    pagination_cursor_ttl: NotRequired[int | float | dt.timedelta]
     """Default cursor expiration window in seconds or timedelta."""
-    cursor_encrypt: NotRequired[bool]
+    pagination_cursor_encrypted: NotRequired[bool]
     """Encrypt cursor payloads at rest when a cursor secret is configured."""
 
 
@@ -643,11 +643,11 @@ class StarletteConfig(TypedDict):
     """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
-    cursor_secret: NotRequired[str | bytes]
+    pagination_cursor_secret: NotRequired[str | bytes]
     """Application-wide secret enabling HMAC-SHA256 signed pagination cursors."""
-    cursor_ttl: NotRequired[int | float | dt.timedelta]
+    pagination_cursor_ttl: NotRequired[int | float | dt.timedelta]
     """Default cursor expiration window in seconds or timedelta."""
-    cursor_encrypt: NotRequired[bool]
+    pagination_cursor_encrypted: NotRequired[bool]
     """Encrypt cursor payloads at rest when a cursor secret is configured."""
 
 

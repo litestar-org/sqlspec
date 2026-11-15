@@ -247,12 +247,12 @@ class SQLSpecPlugin(_StarlettePlugin):
             dep_defaults = DEPENDENCY_DEFAULTS
 
         merged = dict(config)
-        if merged.get("cursor_secret") is None and self._cursor_secret is not None:
-            merged["cursor_secret"] = self._cursor_secret
-        if merged.get("cursor_ttl") is None and self._cursor_ttl is not None:
-            merged["cursor_ttl"] = self._cursor_ttl
-        if merged.get("cursor_encrypt") is None and self._cursor_encrypt is not None:
-            merged["cursor_encrypt"] = self._cursor_encrypt
+        if merged.get("pagination_cursor_secret") is None and self._pagination_cursor_secret is not None:
+            merged["pagination_cursor_secret"] = self._pagination_cursor_secret
+        if merged.get("pagination_cursor_ttl") is None and self._pagination_cursor_ttl is not None:
+            merged["pagination_cursor_ttl"] = self._pagination_cursor_ttl
+        if merged.get("pagination_cursor_encrypted") is None and self._pagination_cursor_encrypted is not None:
+            merged["pagination_cursor_encrypted"] = self._pagination_cursor_encrypted
         return _provide_filters(cast("FilterConfig", merged), dep_defaults=dep_defaults)
 
     def _read_routing_dependency(
@@ -353,7 +353,7 @@ class SQLSpecPlugin(_StarlettePlugin):
             "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
             "tenant_extractor": framework_config.get("tenant_extractor"),
             "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "fastapi"),
-            "cursor_secret": framework_config.get("cursor_secret"),
-            "cursor_ttl": framework_config.get("cursor_ttl"),
-            "cursor_encrypt": framework_config.get("cursor_encrypt"),
+            "pagination_cursor_secret": framework_config.get("pagination_cursor_secret"),
+            "pagination_cursor_ttl": framework_config.get("pagination_cursor_ttl"),
+            "pagination_cursor_encrypted": framework_config.get("pagination_cursor_encrypted"),
         }

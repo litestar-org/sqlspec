@@ -88,9 +88,9 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `primary_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
 | `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 | `read_pool_key` | `str` | - | Request key for the selected read pool. |
-| `cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
-| `cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
-| `cursor_encrypt` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
+| `pagination_cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
+| `pagination_cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
+| `pagination_cursor_encrypted` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
 <!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
 
 ## Multi-Database Dependency Keys
@@ -203,7 +203,7 @@ async def list_users(
     )
 ```
 
-For bidirectional keyset pagination (`CursorPagination`), set `pagination_type="cursor"` and `cursor_keys="id"` (or pass `CursorKey` specs) on `FilterConfig`; see [Filtering and Pagination](../learn/filtering-and-pagination.md). Configure application-wide cursor signing (`cursor_secret`), expiration (`cursor_ttl`), and payload encryption (`cursor_encrypt`) once via `LitestarConfig` or `SQLSpecPlugin(..., cursor_secret=..., cursor_ttl=..., cursor_encrypt=...)` (falling back to `SQLSPEC_CURSOR_SECRET` / `SECRET_KEY` environment variables when omitted); `create_filter_dependencies(...)` inherits those settings from application state automatically and derives per-endpoint signing keys without duplicating configuration per controller. A cursor secret is required: cursor requests raise `ImproperConfigurationError` when none resolves. Tokens are bound to the request tenant of every tenant-enabled configuration, so a token from one tenant is rejected for another. Search filters escape `%`, `_`, and `/` by default; set `search_escape_wildcards=False` in `FilterConfig` to opt out.
+For bidirectional keyset pagination (`CursorPagination`), set `pagination_type="cursor"` and `pagination_cursor_keys="id"` (or pass `CursorKey` specs) on `FilterConfig`; see [Filtering and Pagination](../learn/filtering-and-pagination.md). Configure application-wide cursor signing (`pagination_cursor_secret`), expiration (`pagination_cursor_ttl`), and payload encryption (`pagination_cursor_encrypted`) once via `LitestarConfig` or `SQLSpecPlugin(..., pagination_cursor_secret=..., pagination_cursor_ttl=..., pagination_cursor_encrypted=...)` (falling back to `SQLSPEC_PAGINATION_CURSOR_SECRET` / `SECRET_KEY` environment variables when omitted); `create_filter_dependencies(...)` inherits those settings from application state automatically and derives per-endpoint signing keys without duplicating configuration per controller. A cursor secret is required: cursor requests raise `ImproperConfigurationError` when none resolves. Tokens are bound to the request tenant of every tenant-enabled configuration, so a token from one tenant is rejected for another. Search filters escape `%`, `_`, and `/` by default; set `search_escape_wildcards=False` in `FilterConfig` to opt out.
 
 ## Server-Side Session Stores
 
