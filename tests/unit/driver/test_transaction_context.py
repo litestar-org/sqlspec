@@ -469,7 +469,7 @@ def test_failed_duckdb_session_discards_a_file_connection(tmp_path: Path) -> Non
         config.close_pool()
 
 
-def test_detached_connection_sentinel_semantics() -> None:
+def test_closed_connection_sentinel_semantics() -> None:
     assert bool(_CLOSED_CONNECTION) is False
     assert repr(_CLOSED_CONNECTION) == "<ClosedConnection>"
     with pytest.raises(AttributeError):
@@ -508,7 +508,7 @@ def test_operation_requires_transaction_classification(
 
 
 @pytest.mark.parametrize("tx_method", ["begin", "commit", "rollback"])
-def test_sync_detached_driver_rejects_operations_and_keeps_cache_disabled(
+def test_sync_closed_driver_rejects_operations_and_keeps_cache_disabled(
     sync_config: SqliteConfig, tx_method: str
 ) -> None:
     with sync_config.provide_session() as session:
@@ -523,7 +523,7 @@ def test_sync_detached_driver_rejects_operations_and_keeps_cache_disabled(
 
 
 @pytest.mark.parametrize("tx_method", ["begin", "commit", "rollback"])
-async def test_async_detached_driver_rejects_operations_and_keeps_cache_disabled(
+async def test_async_closed_driver_rejects_operations_and_keeps_cache_disabled(
     async_config: AiosqliteConfig, tx_method: str
 ) -> None:
     async with async_config.provide_session() as session:
@@ -537,7 +537,7 @@ async def test_async_detached_driver_rejects_operations_and_keeps_cache_disabled
             await getattr(session, tx_method)()
 
 
-def test_sqlspec_runtime_sync_provide_session_detaches_and_emits_raw_connection_destroy(tmp_path: Path) -> None:
+def test_sqlspec_runtime_sync_provide_session_closes_and_emits_raw_connection_destroy(tmp_path: Path) -> None:
     destroyed: list[dict[str, Any]] = []
     lifecycle: LifecycleConfig = {"on_connection_destroy": [destroyed.append]}
     spec = SQLSpec(observability_config=ObservabilityConfig(lifecycle=lifecycle))
@@ -555,7 +555,7 @@ def test_sqlspec_runtime_sync_provide_session_detaches_and_emits_raw_connection_
         cfg.close_pool()
 
 
-async def test_sqlspec_runtime_async_provide_session_detaches_and_emits_raw_connection_destroy(tmp_path: Path) -> None:
+async def test_sqlspec_runtime_async_provide_session_closes_and_emits_raw_connection_destroy(tmp_path: Path) -> None:
     destroyed: list[dict[str, Any]] = []
     lifecycle: LifecycleConfig = {"on_connection_destroy": [destroyed.append]}
     spec = SQLSpec(observability_config=ObservabilityConfig(lifecycle=lifecycle))

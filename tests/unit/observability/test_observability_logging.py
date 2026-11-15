@@ -395,7 +395,6 @@ def test_sql_logger_independent_configuration(caplog) -> None:
 
         default_statement_observer(event)
 
-        # Should still receive the log since sqlspec.sql is at INFO
         sql_records = [r for r in caplog.records if r.name == "sqlspec.sql"]
         assert len(sql_records) >= 1
     finally:

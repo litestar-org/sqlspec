@@ -1,4 +1,4 @@
-"""Session contexts close open streams before rollback, release, and detach."""
+"""Session contexts close open streams before rollback, release, and session close."""
 
 import asyncio
 import importlib
@@ -8,13 +8,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.psycopg.core import TRANSACTION_STATUS_INTRANS
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import StatementConfig
 from sqlspec.driver._common import _CLOSED_CONNECTION
@@ -234,6 +235,42 @@ async def test_started_native_stream_does_not_lock_reused_connection(embedded: "
         await resolve(config.close_pool())
 
 
+def open_transaction_connection(adapter: str, is_async: bool, events: "list[str]") -> MagicMock:
+    """Return a fake server connection that reports an open transaction and logs its rollback.
+
+    Args:
+        adapter: Adapter package the connection stands in for.
+        is_async: Whether the adapter driver awaits connection calls.
+        events: Event log receiving ``"rollback"``.
+
+    Returns:
+        The configured connection mock.
+    """
+    connection = MagicMock()
+
+    def record_rollback(*_args: Any, **_kwargs: Any) -> None:
+        events.append("rollback")
+
+    if adapter == "psycopg":
+        connection.info.transaction_status = TRANSACTION_STATUS_INTRANS
+    elif adapter == "oracledb":
+        connection.transaction_in_progress = True
+    if adapter == "asyncpg":
+        connection.is_in_transaction.return_value = True
+
+        async def execute(sql: str, *_args: Any, **_kwargs: Any) -> None:
+            if sql == "ROLLBACK":
+                record_rollback()
+
+        connection.execute = execute
+    elif is_async:
+        connection.rollback = AsyncMock(side_effect=record_rollback)
+    else:
+        connection.rollback.side_effect = record_rollback
+    return connection
+
+
+CONTEXT_ROLLBACK_ADAPTERS = frozenset({"psycopg", "mssql_python"})
 FAKE_FAMILIES = (
     ("psycopg", "PsycopgSyncSessionContext", "PsycopgSyncConfig", False),
     ("psycopg", "PsycopgAsyncSessionContext", "PsycopgAsyncConfig", True),
@@ -250,7 +287,7 @@ FAKE_FAMILIES = (
     FAKE_FAMILIES,
     ids=[f"{adapter}-{context}" for adapter, context, _, _ in FAKE_FAMILIES],
 )
-async def test_server_context_orders_stream_close_rollback_release_detach(
+async def test_server_context_orders_stream_close_rollback_release_close(
     monkeypatch: pytest.MonkeyPatch, adapter: str, context_name: str, config_name: str, is_async: bool
 ) -> None:
     typing_module = importlib.import_module(f"sqlspec.adapters.{adapter}._typing")
@@ -258,7 +295,7 @@ async def test_server_context_orders_stream_close_rollback_release_detach(
     context_cls = getattr(typing_module, context_name)
     config = getattr(config_module, config_name)()
     events: list[str] = []
-    connection = MagicMock()
+    connection = open_transaction_connection(adapter, is_async, events)
 
     def acquire() -> Any:
         return connection
@@ -273,20 +310,8 @@ async def test_server_context_orders_stream_close_rollback_release_detach(
         events.append("release")
 
     def prepare(driver: Any) -> Any:
-        driver_cls = type(driver)
-        if is_async:
-
-            async def rollback(self: Any) -> None:
-                events.append("rollback")
-
-            monkeypatch.setattr(driver_cls, "rollback", rollback)
-        else:
-
-            def sync_rollback(self: Any) -> None:
-                events.append("rollback")
-
-            monkeypatch.setattr(driver_cls, "rollback", sync_rollback)
-        monkeypatch.setattr(driver_cls, "_connection_in_transaction", lambda self: True)
+        if not is_async:
+            driver.begin()
         driver._register_open_stream(make_stream(events, is_async=is_async))
         return driver
 
@@ -303,9 +328,8 @@ async def test_server_context_orders_stream_close_rollback_release_detach(
     else:
         driver = context.__enter__()
         context.__exit__(None, None, None)
-    assert events[0] == "stream-close"
-    assert events[-1] == "release"
-    assert events.index("stream-close") < events.index("release")
+    expected_rollback = ["rollback"] if adapter in CONTEXT_ROLLBACK_ADAPTERS else []
+    assert events == ["stream-close", *expected_rollback, "release"]
     assert driver.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError):
         driver.connection.cursor()

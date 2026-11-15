@@ -9,7 +9,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from tests.unit.extensions.test_deferred_request_session import FRAMEWORKS, Access, _serve
+from tests.unit.extensions._framework_apps import FRAMEWORKS, Access, serve
 
 QUERY = "SELECT status FROM items ORDER BY status"
 
@@ -71,7 +71,7 @@ def test_request_stream_closed_before_release(framework: str, tmp_path: Path) ->
         streams.append(stream)
         return {"status": row["status"]}
 
-    with _serve(framework, config, {"read_one": read_one}) as run:
+    with serve(framework, config, {"read_one": read_one}) as run:
         assert run("read_one", 200) == (200, {"status": 1})
     assert observed == [True]
     stream = streams[0]

@@ -1,6 +1,7 @@
 """SQLSpec session stores run on the request's database session while a request holds one."""
 
 import asyncio
+import json
 import sqlite3
 import threading
 from collections.abc import AsyncIterator
@@ -205,9 +206,8 @@ async def test_session_write_commits_with_successful_request(harness: Harness) -
         response = await client.get("/")
         session_id = client.cookies.get("session")
     assert response.status_code == 200
-    assert session_id is not None
     assert harness.row_count() == 1
-    assert await harness.store.get(session_id) is not None
+    assert json.loads(await harness.store.get(session_id or "") or b"null") == {"x": 1}
 
 
 async def test_session_write_rolls_back_with_failing_request(harness: Harness) -> None:
@@ -223,26 +223,24 @@ async def test_store_outside_request_opens_own_session(harness: Harness) -> None
     assert harness.row_count() == 1
 
 
-async def test_store_write_precedes_finalize(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.extensions.litestar import handlers, plugin
-
+async def test_store_write_joins_request_transaction_before_finalize(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The session write lands inside the open request transaction and becomes visible once the request commits."""
     original_set = type(harness.store).set
-    original_finalize = handlers._finalize_request_transaction  # pyright: ignore[reportPrivateUsage]
 
     async def recording_set(self: Any, *args: Any, **kwargs: Any) -> Any:
-        harness.events.append("store-set")
-        return await original_set(self, *args, **kwargs)
-
-    async def recording_finalize(*args: Any, **kwargs: Any) -> Any:
-        harness.events.append("sqlspec-finalize")
-        return await original_finalize(*args, **kwargs)
+        result = await original_set(self, *args, **kwargs)
+        harness.events.append(f"store-set:visible={harness.row_count()}")
+        return result
 
     monkeypatch.setattr(type(harness.store), "set", recording_set)
-    monkeypatch.setattr(handlers, "_finalize_request_transaction", recording_finalize)
-    monkeypatch.setattr(plugin, "_finalize_request_transaction", recording_finalize)
     async with AsyncTestClient(harness.app) as client:
-        await client.get("/")
-    assert harness.events == ["handler", "store-set", "sqlspec-finalize"]
+        response = await client.get("/")
+    assert response.status_code == 200
+    assert harness.events == ["handler", "store-set:visible=0"]
+    assert harness.row_count() == 1
+    assert len(harness.acquisitions) == 1
 
 
 async def test_deferred_request_session_is_borrowed(tmp_path: Path) -> None:
@@ -306,8 +304,7 @@ async def test_manual_mode_store_commits_its_own_transaction(manual_harness: Har
     assert manual_harness.row_count() == 1
     assert manual_harness.row_count("notes") == 1
     assert len(manual_harness.acquisitions) == 1
-    assert session_id is not None
-    assert await manual_harness.store.get(session_id) is not None
+    assert json.loads(await manual_harness.store.get(session_id or "") or b"null") == {"x": 1}
 
 
 async def test_manual_mode_store_write_rolls_back_with_uncommitted_work(manual_harness: Harness) -> None:

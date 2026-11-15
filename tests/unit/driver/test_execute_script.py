@@ -404,13 +404,11 @@ def test_script_inlines_non_dml_statements(sqlite_sync_driver: Any, script: str,
     driver = _asyncpg_script_driver(sqlite_sync_driver)
     statement = SQL(script, statement_config=asyncpg_statement_config, **parameters).as_script()
 
-    pieces = driver._bound_script_statements(statement)
+    pieces = driver._bound_script_statements(statement) or []
 
-    assert pieces is not None
-    for piece in pieces:
-        keyword = piece.raw_sql.split()[0].upper()
-        _, execution_parameters = piece.compile()
-        assert bool(execution_parameters) is (keyword == "SELECT")
+    keywords = [piece.raw_sql.split()[0].upper() for piece in pieces]
+    assert keywords
+    assert [bool(piece.compile()[1]) for piece in pieces] == [keyword == "SELECT" for keyword in keywords]
 
 
 @requires_interpreted
@@ -420,9 +418,8 @@ def test_script_binds_dml_statements_on_postgres_profile(sqlite_sync_driver: Any
         "INSERT INTO t VALUES (:v); SET search_path = :s", statement_config=asyncpg_statement_config, v=1, s="public"
     ).as_script()
 
-    pieces = driver._bound_script_statements(statement)
+    pieces = driver._bound_script_statements(statement) or []
 
-    assert pieces is not None
     assert [piece.statement_config.parameter_config.needs_static_script_compilation for piece in pieces] == [
         False,
         True,
@@ -435,9 +432,8 @@ def test_script_oracle_begin_block_binds(sqlite_sync_driver: Any) -> None:
     driver = SqliteDriver(sqlite_sync_driver.connection, statement_config=oracle_statement_config)
     statement = SQL("BEGIN INSERT INTO t VALUES (:v); END;", statement_config=oracle_statement_config, v=1).as_script()
 
-    pieces = driver._bound_script_statements(statement)
+    pieces = driver._bound_script_statements(statement) or []
 
-    assert pieces is not None
     assert [piece.statement_config.parameter_config.needs_static_script_compilation for piece in pieces] == [False]
 
 

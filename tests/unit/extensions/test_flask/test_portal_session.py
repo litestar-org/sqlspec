@@ -94,10 +94,10 @@ def test_flask_session_on_async_configuration_blocks_through_the_portal(tmp_path
     assert _stored(database) == [201, 7]
 
 
-def test_portal_session_detach_connection_detaches_without_portal_hop(tmp_path: Path) -> None:
+def test_portal_session_closes_without_portal_hop(tmp_path: Path) -> None:
     provider = PortalProvider()
     provider.start()
-    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "portal_detach.db")})
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "portal_close.db")})
     session_ctx = config.provide_session()
     real_session: Any = None
     try:

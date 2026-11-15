@@ -50,6 +50,12 @@ def _event(text: str) -> Event:
     )
 
 
+def _event_texts(session: Any) -> "list[str] | None":
+    if session is None:
+        return None
+    return [event.content.parts[0].text for event in session.events if event.content and event.content.parts]
+
+
 async def _create(service: SQLSpecSessionService) -> Any:
     return await service.create_session(
         app_name="app", user_id="alice", state={"k": "alice-secret", "user:pref": "A"}, session_id="S1"
@@ -62,10 +68,7 @@ async def test_append_event_after_create_session(service: SQLSpecSessionService)
     await service.append_event(session, _event("hello from alice"))
 
     stored = await service.get_session(app_name="app", user_id="alice", session_id="S1")
-    assert stored is not None
-    assert [event.content.parts[0].text for event in stored.events if event.content and event.content.parts] == [
-        "hello from alice"
-    ]
+    assert _event_texts(stored) == ["hello from alice"]
 
 
 async def test_append_two_events_in_sequence(service: SQLSpecSessionService) -> None:
@@ -75,8 +78,7 @@ async def test_append_two_events_in_sequence(service: SQLSpecSessionService) -> 
     await service.append_event(session, _event("second"))
 
     stored = await service.get_session(app_name="app", user_id="alice", session_id="S1")
-    assert stored is not None
-    assert len(stored.events) == 2
+    assert _event_texts(stored) == ["first", "second"]
 
 
 async def test_create_session_timestamp_matches_storage(service: SQLSpecSessionService) -> None:
@@ -84,5 +86,4 @@ async def test_create_session_timestamp_matches_storage(service: SQLSpecSessionS
 
     stored = await service.get_session(app_name="app", user_id="alice", session_id="S1")
 
-    assert stored is not None
-    assert session.last_update_time == stored.last_update_time
+    assert getattr(stored, "last_update_time", None) == session.last_update_time

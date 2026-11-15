@@ -11,9 +11,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.driver._routing import SyncRoutingSession
-from sqlspec.driver._stream import SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError
 
 _QUERY = "select x from t order by x"
@@ -81,7 +79,7 @@ async def open_session(mode: str, database: str) -> "AsyncIterator[Any]":
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("lazy", [False, True], ids=["native", "eager_fallback"])
-async def test_detached_driver_stream_raises(
+async def test_closed_driver_stream_raises(
     mode: str, database: str, lazy: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async with open_session(mode, database) as session:
@@ -95,7 +93,7 @@ async def test_detached_driver_stream_raises(
 
 
 @pytest.mark.anyio
-async def test_lazy_unstarted_stream_raises_after_detach(
+async def test_lazy_unstarted_stream_raises_after_close(
     mode: str, database: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async with open_session(mode, database) as session:
@@ -136,7 +134,7 @@ async def test_close_open_streams_is_idempotent(mode: str, database: str) -> Non
             await next_row(stream)
 
 
-def test_routing_stream_raises_after_inner_detach(database: str) -> None:
+def test_routing_stream_raises_after_inner_close(database: str) -> None:
     config = SqliteConfig(connection_config={"database": database}, replicas=[{"database": database}])
     try:
         with SyncRoutingSession(config) as session:
@@ -174,30 +172,13 @@ async def test_second_session_never_sees_first_stream_rows(mode: str, database: 
     assert seen == [{"x": "A0"}]
 
 
-class ConnectionProbeSource:
-    """Sync stream source that records which connection its driver holds when it closes."""
-
-    def __init__(self, driver: Any) -> None:
-        self._driver = driver
-        self.connection_at_close: Any = None
-
-    def start(self) -> None:
-        return None
-
-    def fetch_chunk(self) -> "list[dict[str, Any]]":
-        return []
-
-    def close(self, error: bool = False) -> None:
-        self.connection_at_close = self._driver.connection
-
-
-def test_mark_closed_installs_closed_sentinel_before_closing_streams(database: str) -> None:
-    config = SqliteConfig(connection_config={"database": database})
-    try:
-        with config.provide_session() as session:
-            source = ConnectionProbeSource(session)
-            session._register_open_stream(SyncRowStream(source))
-            session._mark_closed()
-            assert source.connection_at_close is _CLOSED_CONNECTION
-    finally:
-        config.close_pool()
+@pytest.mark.anyio
+async def test_exited_session_and_its_stream_refuse_work(mode: str, database: str) -> None:
+    """After session exit the session and its started stream both raise instead of using the released connection."""
+    async with open_session(mode, database) as session:
+        stream = session.select_stream(_QUERY, chunk_size=1)
+        assert await next_row(stream) == {"x": "A0"}
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        await resolve(session.select_value("select 1"))
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        await next_row(stream)

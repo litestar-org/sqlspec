@@ -4,6 +4,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -253,50 +254,51 @@ async def test_async_lease_lock_acquires_renews_and_releases(async_lease_driver:
     assert await driver.select("SELECT lock_name FROM ddl_migrations_lock") == []
 
 
-def test_release_raises_when_lease_was_taken_over(tmp_path: Path) -> None:
+@asynccontextmanager
+async def _held_lease(tmp_path: Path, is_async: bool, error: "BaseException | None") -> "AsyncIterator[None]":
+    """Acquire the migration lease, delete it as another migrator would, then raise ``error`` if given."""
+    if is_async:
+        async_config = AiosqliteConfig(connection_config={"database": str(tmp_path / "lost.db")})
+        try:
+            async with async_config.provide_connection() as connection:
+                driver = _LeaseAiosqliteDriver(
+                    connection,
+                    statement_config=async_config.statement_config,
+                    driver_features=async_config.driver_features,
+                )
+                async with AsyncMigrationTracker().acquire_lock(driver):
+                    await driver.execute("DELETE FROM ddl_migrations_lock")
+                    if error is not None:
+                        raise error
+                    yield
+        finally:
+            await async_config.close_pool()
+        return
     config = _duckdb_config(tmp_path / "lost.duckdb")
-    tracker = SyncMigrationTracker()
     try:
-        with config.provide_session() as driver:
-            with pytest.raises(MigrationError, match="lease expired"):
-                with tracker.acquire_lock(driver):
-                    driver.execute("DELETE FROM ddl_migrations_lock")
-    finally:
-        config.close_pool()
-
-
-def test_release_after_takeover_does_not_mask_original_error(tmp_path: Path) -> None:
-    config = _duckdb_config(tmp_path / "lost_err.duckdb")
-    tracker = SyncMigrationTracker()
-    try:
-        with config.provide_session() as driver:
-            with pytest.raises(ValueError, match="boom"):
-                with tracker.acquire_lock(driver):
-                    driver.execute("DELETE FROM ddl_migrations_lock")
-                    raise ValueError("boom")
+        with config.provide_session() as sync_driver, SyncMigrationTracker().acquire_lock(sync_driver):
+            sync_driver.execute("DELETE FROM ddl_migrations_lock")
+            if error is not None:
+                raise error
+            yield
     finally:
         config.close_pool()
 
 
 @pytest.mark.anyio
-async def test_async_release_raises_when_lease_was_taken_over(async_lease_driver: _LeaseAiosqliteDriver) -> None:
-    tracker = AsyncMigrationTracker()
-
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_release_raises_when_lease_was_taken_over(tmp_path: Path, is_async: bool) -> None:
     with pytest.raises(MigrationError, match="lease expired"):
-        async with tracker.acquire_lock(async_lease_driver):
-            await async_lease_driver.execute("DELETE FROM ddl_migrations_lock")
+        async with _held_lease(tmp_path, is_async, None):
+            pass
 
 
 @pytest.mark.anyio
-async def test_async_release_after_takeover_does_not_mask_original_error(
-    async_lease_driver: _LeaseAiosqliteDriver,
-) -> None:
-    tracker = AsyncMigrationTracker()
-
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_release_after_takeover_does_not_mask_original_error(tmp_path: Path, is_async: bool) -> None:
     with pytest.raises(ValueError, match="boom"):
-        async with tracker.acquire_lock(async_lease_driver):
-            await async_lease_driver.execute("DELETE FROM ddl_migrations_lock")
-            raise ValueError("boom")
+        async with _held_lease(tmp_path, is_async, ValueError("boom")):
+            pass
 
 
 def test_lease_renewed_before_each_reconciler(tmp_path: Path) -> None:
