@@ -176,7 +176,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
-        should_renew = self._should_renew(renew_for)
+        should_renew = self._is_renewal_requested(renew_for)
         try:
             with self._provide_replica_session(primary=renew_for is not None) as driver:
                 if should_renew:

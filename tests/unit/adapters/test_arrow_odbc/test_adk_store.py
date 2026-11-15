@@ -486,7 +486,7 @@ def test_arrow_odbc_sql_builders_scope_events_and_memory(
 def test_arrow_odbc_get_session_gates_update_and_commit_on_should_renew(
     renew_for: int | timedelta | None, expected_updates: int, expected_commits: int
 ) -> None:
-    """ArrowOdbcADKStore.get_session runs UPDATE and commit() only when _should_renew holds."""
+    """ArrowOdbcADKStore.get_session runs UPDATE and commit() only when _is_renewal_requested holds."""
     store, driver, _ = _store_with_driver()
     now = datetime(2026, 1, 1, tzinfo=UTC)
     driver.select_one_or_none.return_value = {

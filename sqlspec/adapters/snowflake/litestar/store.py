@@ -94,7 +94,7 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
             if row is None:
                 return None
             expires_at = row["expires_at"]
-            if self._should_renew(renew_for) and expires_at is not None:
+            if self._is_renewal_requested(renew_for) and expires_at is not None:
                 renewed = self._calculate_expires_at(renew_for)
                 if renewed is not None:
                     driver.execute(f"UPDATE {self._table_name} SET expires_at = ? WHERE session_id = ?", (renewed, key))

@@ -156,7 +156,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
                 data_blob, expires_at = row
 
-                if self._should_renew(renew_for) and expires_at is not None:
+                if self._is_renewal_requested(renew_for) and expires_at is not None:
                     expires_in_seconds = _oracle_expiry_seconds(renew_for)
                     if expires_in_seconds is not None:
                         update_sql = f"""
@@ -544,7 +544,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
                 data_blob, expires_at = row
 
-                if self._should_renew(renew_for) and expires_at is not None:
+                if self._is_renewal_requested(renew_for) and expires_at is not None:
                     expires_in_seconds = _oracle_expiry_seconds(renew_for)
                     if expires_in_seconds is not None:
                         update_sql = f"""

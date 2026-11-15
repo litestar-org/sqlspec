@@ -12,7 +12,11 @@ from sqlspec.extensions.adk._table_utils import (
     unique_statements,
     validate_owner_id_column_ddl,
 )
-from sqlspec.extensions.adk.store import _adk_read_provider, _adk_read_settings, _reconcile_adk_schema_sync
+from sqlspec.extensions.adk.store import (
+    _provide_adk_read_context,
+    _reconcile_adk_schema_sync,
+    _resolve_adk_read_settings,
+)
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -72,7 +76,7 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         """
         self._config = config
         self._read_config = read_config
-        self._enable_replica_reads, self._default_replica_group = _adk_read_settings(config, read_config)
+        self._enable_replica_reads, self._default_replica_group = _resolve_adk_read_settings(config, read_config)
         store_config = self._store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
@@ -180,7 +184,7 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
     def _provide_replica_connection(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
-        return _adk_read_provider(
+        return _provide_adk_read_context(
             self._config,
             self._read_config,
             self._enable_replica_reads,
@@ -193,7 +197,7 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
     def _provide_replica_session(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
-        return _adk_read_provider(
+        return _provide_adk_read_context(
             self._config,
             self._read_config,
             self._enable_replica_reads,

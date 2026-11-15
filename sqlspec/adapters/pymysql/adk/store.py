@@ -780,7 +780,7 @@ def _select_session(
         with store._provide_replica_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
-                if store._should_renew(renew_for):
+                if store._is_renewal_requested(renew_for):
                     cursor.execute(
                         f"""
                         UPDATE {_table_ref(store._session_table)}

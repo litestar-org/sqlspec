@@ -265,7 +265,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 self._provide_replica_connection(primary=renew_for is not None) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
-                if self._should_renew(renew_for):
+                if self._is_renewal_requested(renew_for):
                     await cursor.execute(
                         f"""
                         UPDATE {_table_ref(self._session_table)}

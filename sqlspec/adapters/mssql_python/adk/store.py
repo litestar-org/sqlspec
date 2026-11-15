@@ -227,7 +227,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
-            if self._should_renew(renew_for):
+            if self._is_renewal_requested(renew_for):
                 self._execute(
                     f"""
                     UPDATE {_table_ref(self._session_table)}

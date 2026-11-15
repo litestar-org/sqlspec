@@ -1370,7 +1370,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             Session record or None if not found.
         """
-        if self._should_renew(renew_for):
+        if self._is_renewal_requested(renew_for):
             now_val = self._encode_timestamp(datetime.now(UTC))
             sql = f"""
             UPDATE {self._session_table}

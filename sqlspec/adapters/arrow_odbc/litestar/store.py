@@ -130,7 +130,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
                     driver.commit()
                 return None
 
-            if self._should_renew(renew_for) and expires_at is not None:
+            if self._is_renewal_requested(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     driver.execute(*self._sql.renew(key, new_expires_at))

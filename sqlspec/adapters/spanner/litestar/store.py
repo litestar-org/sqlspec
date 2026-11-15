@@ -314,7 +314,7 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
         data = result.get("data")
         expires_at = self._timestamp_to_datetime(result.get("expires_at"))
 
-        if self._should_renew(renew_for) and expires_at is not None:
+        if self._is_renewal_requested(renew_for) and expires_at is not None:
             new_expires = self._calculate_expires_at(renew_for)
             update_sql = self._build_renew_session_sql()
             params = self._build_params(key, new_expires)
@@ -401,7 +401,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
         data = result.get("data")
         expires_at = self._timestamp_to_datetime(result.get("expires_at"))
 
-        if self._should_renew(renew_for) and expires_at is not None:
+        if self._is_renewal_requested(renew_for) and expires_at is not None:
             new_expires = self._calculate_expires_at(renew_for)
             update_sql = self._build_renew_session_sql()
             params = self._build_params(key, new_expires)

@@ -928,7 +928,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         renew_for: "int | timedelta | None" = None,
         read: bool = False,
     ) -> "StoredSession | None":
-        if self._should_renew(renew_for):
+        if self._is_renewal_requested(renew_for):
             self._run_write([self._build_renew_session_statement(app_name, user_id, session_id)])
 
         sql, params, types = self._build_get_session_query(app_name, user_id, session_id)
@@ -1390,7 +1390,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         renew_for: "int | timedelta | None" = None,
         read: bool = False,
     ) -> "StoredSession | None":
-        if self._should_renew(renew_for):
+        if self._is_renewal_requested(renew_for):
             await self._run_write([self._build_renew_session_statement(app_name, user_id, session_id)])
 
         sql, params, types = self._build_get_session_query(app_name, user_id, session_id)

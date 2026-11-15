@@ -159,7 +159,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                 return None
 
             expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if self._should_renew(renew_for) and expires_at is not None:
+            if self._is_renewal_requested(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     with MssqlPythonCursor(conn) as update_cursor:

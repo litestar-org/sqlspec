@@ -438,7 +438,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
 
         return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
 
-    def _should_renew(self, renew_for: "int | timedelta | None") -> bool:
+    def _is_renewal_requested(self, renew_for: "int | timedelta | None") -> bool:
         """Return whether ``renew_for`` requests session expiration renewal.
 
         Args:

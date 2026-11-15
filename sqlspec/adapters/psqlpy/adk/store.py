@@ -183,7 +183,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        if self._should_renew(renew_for):
+        if self._is_renewal_requested(renew_for):
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP

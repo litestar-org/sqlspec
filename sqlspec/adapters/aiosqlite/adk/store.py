@@ -208,7 +208,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         try:
             async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 await self._ensure_pragmas(conn)
-                if self._should_renew(renew_for):
+                if self._is_renewal_requested(renew_for):
                     update_sql = f"""
                     UPDATE {self._session_table}
                     SET update_time = ?

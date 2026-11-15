@@ -262,7 +262,7 @@ def test_adk_store_common_should_renew_requires_positive_duration(
     renew_for: int | timedelta | None, expected: bool
 ) -> None:
     store = SqliteADKStore(_sqlite_config())
-    assert store._should_renew(renew_for) is expected
+    assert store._is_renewal_requested(renew_for) is expected
 
 
 @pytest.mark.parametrize(

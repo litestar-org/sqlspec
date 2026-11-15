@@ -442,7 +442,7 @@ async def test_spanner_litestar_get_renews_only_for_positive_duration(
         sync_cfg.get_database.return_value = sync_db
         sync_cfg.provide_replica_session.side_effect = lambda: _context_manager_yielding(sync_driver)
         sync_store = SpannerSyncStore(sync_cfg)
-        assert sync_store._should_renew(renew_for) is (expected_txn_calls == 1)  # pyright: ignore[reportPrivateUsage]
+        assert sync_store._is_renewal_requested(renew_for) is (expected_txn_calls == 1)  # pyright: ignore[reportPrivateUsage]
         result = sync_store._get("s1", renew_for=renew_for)  # pyright: ignore[reportPrivateUsage]
         assert result == b"abc"
         assert sync_db.run_in_transaction.call_count == expected_txn_calls
@@ -455,7 +455,7 @@ async def test_spanner_litestar_get_renews_only_for_positive_duration(
         async_cfg.get_database = AsyncMock(return_value=async_db)
         async_cfg.provide_replica_session.side_effect = lambda: _async_context_manager_yielding(async_driver)
         async_store = SpannerAsyncStore(async_cfg)
-        assert async_store._should_renew(renew_for) is (expected_txn_calls == 1)  # pyright: ignore[reportPrivateUsage]
+        assert async_store._is_renewal_requested(renew_for) is (expected_txn_calls == 1)  # pyright: ignore[reportPrivateUsage]
         result = await async_store.get("s1", renew_for=renew_for)
         assert result == b"abc"
         assert async_db.run_in_transaction.await_count == expected_txn_calls

@@ -359,7 +359,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         renew_for: "int | timedelta | None" = None,
         read: bool = False,
     ) -> "StoredSession | None":
-        if self._should_renew(renew_for):
+        if self._is_renewal_requested(renew_for):
             self._update_session_touch(app_name, user_id, session_id, read=read)
 
         sql = f"""

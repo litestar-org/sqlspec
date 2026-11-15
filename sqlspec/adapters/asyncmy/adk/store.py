@@ -264,7 +264,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 self._provide_replica_connection(primary=renew_for is not None) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
-                if self._should_renew(renew_for):
+                if self._is_renewal_requested(renew_for):
                     await cursor.execute(
                         f"""
                         UPDATE {_table_ref(self._session_table)}

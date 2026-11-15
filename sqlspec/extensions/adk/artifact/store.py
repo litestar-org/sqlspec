@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_artifact_store_config
 from sqlspec.extensions.adk._table_utils import ensure_table_name
-from sqlspec.extensions.adk.store import _adk_read_provider, _adk_read_settings
+from sqlspec.extensions.adk.store import _provide_adk_read_context, _resolve_adk_read_settings
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -47,7 +47,7 @@ class _ADKArtifactStoreCommon(Generic[ConfigT]):
         """
         self._config = config
         self._read_config = read_config
-        self._enable_replica_reads, self._default_replica_group = _adk_read_settings(config, read_config)
+        self._enable_replica_reads, self._default_replica_group = _resolve_adk_read_settings(config, read_config)
         store_config = _adk_artifact_store_config(self._config)
         self._artifact_table: str = store_config["artifact_table"]
         ensure_table_name(self._artifact_table)
@@ -80,7 +80,7 @@ class _ADKArtifactStoreCommon(Generic[ConfigT]):
     def _provide_replica_connection(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
-        return _adk_read_provider(
+        return _provide_adk_read_context(
             self._config,
             self._read_config,
             self._enable_replica_reads,
@@ -93,7 +93,7 @@ class _ADKArtifactStoreCommon(Generic[ConfigT]):
     def _provide_replica_session(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
-        return _adk_read_provider(
+        return _provide_adk_read_context(
             self._config,
             self._read_config,
             self._enable_replica_reads,

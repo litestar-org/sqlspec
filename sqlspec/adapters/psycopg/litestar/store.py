@@ -105,7 +105,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
                 if row is None:
                     return None
 
-                if self._should_renew(renew_for) and row["expires_at"] is not None:
+                if self._is_renewal_requested(renew_for) and row["expires_at"] is not None:
                     new_expires_at = self._calculate_expires_at(renew_for)
                     if new_expires_at is not None:
                         update_sql = f"""
@@ -467,7 +467,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
                 if row is None:
                     return None
 
-                if self._should_renew(renew_for) and row["expires_at"] is not None:
+                if self._is_renewal_requested(renew_for) and row["expires_at"] is not None:
                     new_expires_at = self._calculate_expires_at(renew_for)
                     if new_expires_at is not None:
                         update_sql = f"""

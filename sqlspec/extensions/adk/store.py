@@ -104,7 +104,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
         """
         self._config = config
         self._read_config = read_config
-        self._enable_replica_reads, self._default_replica_group = _adk_read_settings(config, read_config)
+        self._enable_replica_reads, self._default_replica_group = _resolve_adk_read_settings(config, read_config)
         store_config = self._store_config_from_extension()
         self._session_table: str = str(store_config["session_table"])
         self._events_table: str = str(store_config["events_table"])
@@ -192,7 +192,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
     def _provide_replica_connection(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
-        return _adk_read_provider(
+        return _provide_adk_read_context(
             self._config,
             self._read_config,
             self._enable_replica_reads,
@@ -205,7 +205,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
     def _provide_replica_session(
         self, *, primary: bool = False, **kwargs: Any
     ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
-        return _adk_read_provider(
+        return _provide_adk_read_context(
             self._config,
             self._read_config,
             self._enable_replica_reads,
@@ -262,7 +262,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
 
         return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
 
-    def _should_renew(self, renew_for: "int | timedelta | None") -> bool:
+    def _is_renewal_requested(self, renew_for: "int | timedelta | None") -> bool:
         """Return whether ``renew_for`` requests session expiration renewal.
 
         Args:
@@ -1181,7 +1181,7 @@ def _reconcile_adk_schema_sync(
         )
 
 
-def _adk_read_settings(
+def _resolve_adk_read_settings(
     config: "DatabaseConfigProtocol[Any, Any, Any]", read_config: "DatabaseConfigProtocol[Any, Any, Any] | None"
 ) -> tuple[bool, str | None]:
     settings = config.extension_config.get("adk", {})
@@ -1203,7 +1203,7 @@ def _adk_read_settings(
     return enabled, default_replica_group
 
 
-def _adk_read_provider(
+def _provide_adk_read_context(
     config: "DatabaseConfigProtocol[Any, Any, Any]",
     read_config: "DatabaseConfigProtocol[Any, Any, Any] | None",
     enabled: bool,

@@ -283,7 +283,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        should_touch = self._should_renew(renew_for)
+        should_touch = self._is_renewal_requested(renew_for)
         if should_touch:
             query = pg_sql.SQL("""
             UPDATE {table}
@@ -913,7 +913,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Get session by ID."""
-        should_touch = self._should_renew(renew_for)
+        should_touch = self._is_renewal_requested(renew_for)
         if should_touch:
             query = pg_sql.SQL("""
             UPDATE {table}

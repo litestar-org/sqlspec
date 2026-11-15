@@ -447,7 +447,7 @@ def test_adbc_litestar_store_set_ttl_precision_and_immediate_expiry(
 def test_adbc_litestar_store_get_renews_only_for_positive_duration(
     renew_for: int | timedelta | None, expected_executes: int, expected_commits: int
 ) -> None:
-    """AdbcStore._get updates expires_at only when _should_renew(renew_for) holds."""
+    """AdbcStore._get updates expires_at only when _is_renewal_requested(renew_for) holds."""
     executed: list[tuple[str, tuple[Any, ...]]] = []
     commits = 0
     future_time = datetime.now(UTC) + timedelta(seconds=120)
@@ -467,7 +467,7 @@ def test_adbc_litestar_store_get_renews_only_for_positive_duration(
     store = AdbcStore(cast("Any", config_stub))
     store._dialect = "postgresql"
 
-    assert store._should_renew(renew_for) is (expected_executes == 1)
+    assert store._is_renewal_requested(renew_for) is (expected_executes == 1)
     assert store._calculate_expires_at(None) is None
     assert store._get("sess_1", renew_for=renew_for) == b"payload"
     assert len(executed) == expected_executes

@@ -104,7 +104,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 if row is None:
                     return None
                 session = _session(row)
-                if self._should_renew(renew_for):
+                if self._is_renewal_requested(renew_for):
                     now = datetime.now(UTC)
                     driver.execute(
                         f"UPDATE {self._session_table} SET update_time = ? WHERE app_name = ? AND user_id = ? AND id = ?",

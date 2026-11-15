@@ -626,7 +626,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             data = result["data"] if "data" in result else result["DATA"]
             expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
 
-            if self._should_renew(renew_for) and expires_at:
+            if self._is_renewal_requested(renew_for) and expires_at:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 p1_update = self._get_param_placeholder(1)
                 p2_update = self._get_param_placeholder(2)

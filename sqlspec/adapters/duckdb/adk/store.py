@@ -594,7 +594,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
         try:
             with self._provide_replica_connection(primary=not read) as conn:
-                if self._should_renew(renew_for):
+                if self._is_renewal_requested(renew_for):
                     renew_sql = f"""
                     UPDATE {self._session_table}
                     SET update_time = ?

@@ -302,7 +302,7 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
             row = driver.select_one_or_none(select_session_sql(self._table_name), (key, utc_now()))
             if row is None:
                 return None
-            if self._should_renew(renew_for) and row["expires_at"] is not None:
+            if self._is_renewal_requested(renew_for) and row["expires_at"] is not None:
                 new_expires_at = to_db_timestamp(self._calculate_expires_at(renew_for))
                 if new_expires_at is not None:
                     driver.execute(renew_session_sql(self._table_name), (new_expires_at, utc_now(), key))
@@ -395,7 +395,7 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
             row = await driver.select_one_or_none(select_session_sql(self._table_name), (key, utc_now()))
             if row is None:
                 return None
-            if self._should_renew(renew_for) and row["expires_at"] is not None:
+            if self._is_renewal_requested(renew_for) and row["expires_at"] is not None:
                 new_expires_at = to_db_timestamp(self._calculate_expires_at(renew_for))
                 if new_expires_at is not None:
                     await driver.execute(renew_session_sql(self._table_name), (new_expires_at, utc_now(), key))

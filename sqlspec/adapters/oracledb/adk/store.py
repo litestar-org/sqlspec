@@ -572,7 +572,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         try:
             async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 with conn.cursor() as cursor:
-                    if self._should_renew(renew_for):
+                    if self._is_renewal_requested(renew_for):
                         await cursor.execute(
                             f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
                             {"app_name": app_name, "user_id": user_id, "id": session_id},
@@ -1718,7 +1718,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
-        should_renew = self._should_renew(renew_for)
+        should_renew = self._is_renewal_requested(renew_for)
         try:
             with self._provide_replica_connection(primary=renew_for is not None) as conn, conn.cursor() as cursor:
                 if should_renew:

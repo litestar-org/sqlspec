@@ -254,7 +254,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             data = result.get("data")
             expires_at = result.get("expires_at")
 
-            if self._should_renew(renew_for) and expires_at is not None:
+            if self._is_renewal_requested(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 new_expires_at_ts = self._datetime_to_timestamp(new_expires_at)
                 if new_expires_at_ts is not None:

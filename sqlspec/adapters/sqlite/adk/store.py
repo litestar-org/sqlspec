@@ -202,7 +202,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
         params = (app_name, user_id, session_id)
         update_params: tuple[Any, ...]
-        if self._should_renew(renew_for):
+        if self._is_renewal_requested(renew_for):
             update_sql = f"""
             UPDATE {self._session_table}
             SET update_time = ?
