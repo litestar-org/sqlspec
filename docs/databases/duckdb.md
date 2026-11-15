@@ -127,6 +127,7 @@ Pass `DuckDBDriverFeatures` keys inside `driver_features={...}` on `DuckDBConfig
 | `extensions` | `Sequence[DuckDBExtensionConfig]` | - | Extensions installed and loaded automatically when each pooled connection opens. |
 | `secrets` | `Sequence[DuckDBSecretConfig]` | - | Secrets provisioned on new connections for object stores and external catalogs. |
 | `on_connection_create` | `Callable[[DuckDBConnection], DuckDBConnection or None]` | - | Callback invoked when a new `DuckDBPyConnection` is opened. |
+| `reset_session_on_release` | `bool` | `False` | Drop temporary objects and detach added databases when a connection is released (defaults to `False`). |
 | `json_serializer` | `Callable[[Any], str]` | `sqlspec.utils.serializers.to_json` | Serializer converting dict/list parameters to JSON text (defaults to `sqlspec.utils.serializers.to_json`). |
 | `enable_uuid_conversion` | `bool` | `True` | Convert `UUID` parameters to strings on bind while returning `UUID` objects from `UUID` columns (defaults to `True`). |
 | `extension_flags` | `dict[str, Any]` | - | Startup-only extension security flags merged into `connection_config` before `duckdb.connect`. |

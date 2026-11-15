@@ -117,6 +117,7 @@ Pass `AsyncpgDriverFeatures` keys inside `driver_features={...}` on `AsyncpgConf
 | `enable_events` | `bool` | `True` | Enable SQLSpec event channel pub/sub support (defaults to `True` when `events` is configured). |
 | `events_backend` | `Literal['notify', 'notify_queue', 'poll_queue']` | - | Event transport backend (`notify` for LISTEN/NOTIFY, `notify_queue`, or `poll_queue`). |
 | `on_connection_create` | `Callable[[AsyncpgConnection], Awaitable[None]]` | - | Async hook invoked with each raw `asyncpg` connection after internal codec setup. |
+| `reset_session_on_release` | `bool` | `False` | Clear cursors, session authorization, settings, listeners, session-level locks, plans, temp objects, and sequences when a connection is released (defaults to `False`). |
 | `pooler_mode` | `Literal['session', 'transaction', 'statement', 'auto'] or None` | - | External pooler compatibility mode; sets `statement_cache_size=0` in `transaction` or `statement` mode. |
 | `direct_dsn` | `str or Mapping[str, Any] or None` | - | Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and `LISTEN/NOTIFY`. |
 | `tenant_strategy` | `AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"rls"` shorthand, applied to every session and connection lease. |

@@ -10,7 +10,7 @@ Use `RoutingContext.scope()` in workers. `mark_write()` outside a scope returns 
 
 ## Carry a Choice Between Requests
 
-`SQLSpecRoutingMiddleware` binds a routing scope for an ASGI request and restores it in `finally`. The default `x-sqlspec-routing` header accepts `auto`, `primary`, `replica`, or `replica:reporting`. A configured write-pin cookie can carry a primary pin or causal token. A custom extractor can return a `RoutingEntry` or `RoutingContextPayload`.
+`SQLSpecRoutingMiddleware` binds a routing scope for an ASGI request and restores it in `finally`. The default `x-sqlspec-routing` header accepts `auto`, `primary`, `replica`, or `replica:reporting`. A configured primary pin cookie can carry a primary pin or causal token. A custom extractor can return a `RoutingEntry` or `RoutingContextPayload`.
 
 ```python
 from sqlspec.utils.routing import SQLSpecRoutingMiddleware, sign_primary_pin
@@ -46,7 +46,7 @@ Use a positive timeout for bounded MySQL GTID waits. MySQL treats `0` as unlimit
 
 Groups track repeated checkout failures through `ReplicaHealthBreaker`. `failure_threshold` opens a failed candidate's circuit. After `recovery_seconds`, one attempt probes it; success closes the circuit. Caller query errors after yield do not trigger checkout retry or replay.
 
-For automatic read providers, the default `fallback_to_primary=True` permits primary checkout after reader exhaustion. Set it to `False` when primary load must remain bounded; exhaustion raises `ReplicaUnavailableError`. An explicit `RoutingContext.replica()` choice never uses this fallback: missing replica groups or exhausted readers raise `ReplicaUnavailableError`. Outside an active transaction, an explicit replica scope can override a historical write pin; normal automatic routing remains pinned. Named groups must exist. A cancelled call releases its half-open probe. It finishes the failed lease before another attempt uses it.
+For automatic read providers, the default `fallback_to_primary=True` permits primary checkout after reader exhaustion. Set it to `False` when primary load must remain bounded; exhaustion raises `ReplicaUnavailableError`. An explicit `RoutingContext.replica()` choice never uses this fallback: missing replica groups or exhausted readers raise `ReplicaUnavailableError`. Outside an active transaction, an explicit replica scope can override a historical primary pin; normal automatic routing remains pinned. Named groups must exist. A cancelled call releases its half-open probe. It finishes the failed lease before another attempt uses it.
 
 Close a routing stream before changing its replica policy. An open stream retains its selected lease; conflicting policy changes raise `RoutingContextError` until the stream closes.
 

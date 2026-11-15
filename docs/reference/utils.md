@@ -37,7 +37,7 @@ See [Tenant APIs](tenant.md) for immutable payloads, restoring scopes, bypass, r
 
 ## Routing Context
 
-See [Routing APIs](routing.md) for scoped intent, primary write pins, and request middleware. [Read Replicas](../learn/recipes/read-replicas.md) covers setup and selection.
+See [Routing APIs](routing.md) for scoped intent, primary pins, and request middleware. [Read Replicas](../learn/recipes/read-replicas.md) covers setup and selection.
 
 ## Schema, Serialization & Identifiers
 

@@ -92,7 +92,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
     | `factory` | `SqliteConnectionFactory or None` | - | Custom `sqlite3.Connection` subclass passed to `sqlite3.connect`. |
     | `cached_statements` | `int` | - | Number of compiled SQLite VM statements cached per connection by `sqlite3`. |
     | `query_only` | `bool` | - | Enforce read-only queries on every physical connection. |
-    | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. Required for `file:` URIs (including memory URIs); without it the value is treated as a filename. |
+    | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. |
     | `autocommit` | `SQLiteAutocommitMode` | - | PEP 249 / Python 3.12+ autocommit control flag or `sqlite3.LEGACY_TRANSACTION_CONTROL` (`-1`). |
     | `pool_recycle_seconds` | `int` | - | Maximum connection age in seconds before recycling pooled SQLite connections. |
     | `health_check_interval` | `float` | - | Minimum interval in seconds between connection liveness probes in `SqliteConnectionPool`. |
@@ -110,6 +110,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer used for bound parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer used for JSON column decoding (defaults to `from_json`). |
     | `on_connection_create` | `Callable[[SqliteConnection], None]` | - | Synchronous hook called with each raw `sqlite3.Connection` after PRAGMA setup. |
+    | `reset_session_on_release` | `bool` | `False` | Drop temp objects, detach databases, and restore baseline PRAGMAs when a connection is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable table-backed SQLSpec event queue support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` is the sole SQLite backend). |
     | `custom_functions` | `Sequence[SqliteFunctionConfig]` | - | Scalar SQL functions registered via `conn.create_function` on each connection. |
@@ -145,7 +146,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
     | `factory` | `AiosqliteConnectionFactory or None` | - | Custom `sqlite3.Connection` subclass instantiated on the worker thread. |
     | `cached_statements` | `int` | - | Number of compiled SQLite VM statements cached per connection. |
     | `query_only` | `bool` | - | Enforce read-only queries on every physical connection. |
-    | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. Required for `file:` URIs (including memory URIs); without it the value is treated as a filename. |
+    | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. |
     | `iter_chunk_size` | `int` | - | Row batch size fetched per worker-thread hop when iterating `aiosqlite` cursors. |
     | `autocommit` | `SQLiteAutocommitMode` | - | PEP 249 / Python 3.12+ autocommit flag or `sqlite3.LEGACY_TRANSACTION_CONTROL` (`-1`). |
     | `pool_size` | `int` | - | Maximum number of worker-backed SQLite connections managed by `AiosqliteConnectionPool`. |
@@ -167,6 +168,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
     | `enable_custom_adapters` | `bool` | `False` | Register global `sqlite3` module type adapters/converters (defaults to `False`). |
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer used for bound parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer used for JSON column decoding (defaults to `from_json`). |
+    | `reset_session_on_release` | `bool` | `False` | Drop temp objects, detach databases, and restore baseline PRAGMAs when a connection is released (defaults to `False`). |
     | `on_connection_create` | `Callable[[AiosqliteConnection], Awaitable[None]]` | - | Async hook invoked with each `aiosqlite.Connection` after PRAGMA initialization. |
     | `enable_events` | `bool` | - | Enable durable table-backed SQLSpec event queue support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` is the sole SQLite backend). |

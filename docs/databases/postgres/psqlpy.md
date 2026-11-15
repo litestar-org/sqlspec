@@ -131,6 +131,7 @@ Pass `PsqlpyDriverFeatures` keys inside `driver_features={...}` on `PsqlpyConfig
 | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to statement parameter conversion (defaults to `to_json`). |
 | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer retained alongside `json_serializer` (defaults to `from_json`). |
 | `on_connection_create` | `Callable[[PsqlpyConnection], Awaitable[None]]` | - | Async callback invoked once per physical `psqlpy` connection acquired from the pool. |
+| `reset_session_on_release` | `bool` | `False` | Clear cursors, session authorization, settings, listeners, session-level locks, plans, temp objects, and sequences when a connection is released (defaults to `False`). |
 | `enable_events` | `bool` | `True` | Enable SQLSpec event channel pub/sub support (defaults to `True` when `events` is configured). |
 | `enable_pgcopy_binary` | `bool` | - | Enable binary wire format for PostgreSQL COPY operations. |
 | `events_backend` | `Literal['notify', 'notify_queue', 'poll_queue']` | - | Event transport backend (`notify` for LISTEN/NOTIFY, `notify_queue`, or `poll_queue`). |

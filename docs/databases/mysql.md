@@ -181,6 +181,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to bound JSON parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer applied to JSON result columns (defaults to `from_json`). |
     | `on_connection_create` | `Callable[[AsyncmyConnection], Awaitable[None]]` | - | Async callback invoked once per physical `asyncmy` connection acquired from the pool. |
+    | `reset_session_on_release` | `bool` | `False` | Send `COM_RESET_CONNECTION` and re-initialize each connection when it is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable table-backed SQLSpec event queue support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` is the sole MySQL/MariaDB backend). |
     <!-- GENERATED:END config-table:sqlspec.adapters.asyncmy.config.AsyncmyDriverFeatures -->
@@ -237,6 +238,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to bound JSON parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer applied to JSON result columns (defaults to `from_json`). |
     | `on_connection_create` | `Callable[[AiomysqlConnection], Awaitable[None]]` | - | Async callback invoked once per physical `aiomysql` connection acquired from the pool. |
+    | `reset_session_on_release` | `bool` | `False` | Send `COM_RESET_CONNECTION` and re-initialize each connection when it is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable table-backed SQLSpec event queue support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` is the sole MySQL/MariaDB backend). |
     | `enable_local_infile_bulk_load` | `bool` | - | Use `LOAD DATA LOCAL INFILE` for `load_from_arrow` when local infile is enabled. |
@@ -307,6 +309,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to bound JSON parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer applied to JSON result columns (defaults to `from_json`). |
     | `on_connection_create` | `Callable[[PyMysqlConnection], None]` | - | Synchronous hook invoked with each raw `pymysql.Connection` upon creation. |
+    | `reset_session_on_release` | `bool` | `False` | Send `COM_RESET_CONNECTION` and re-initialize each connection when it is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable table-backed SQLSpec event queue support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` is the sole MySQL/MariaDB backend). |
     | `enable_local_infile_bulk_load` | `bool` | - | Route `load_from_arrow` through `LOAD DATA LOCAL INFILE` when local infile is enabled. |

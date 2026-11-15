@@ -156,6 +156,7 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `enable_json_codecs` | `bool` | `True` | Register automatic `json` and `jsonb` codecs on new connections (defaults to `True`). |
     | `enable_pgvector` | `bool` | - | Register `pgvector` codecs for CockroachDB `VECTOR` columns when `pgvector` is installed. |
     | `on_connection_create` | `Callable[[CockroachAsyncpgConnection], Awaitable[None]]` | - | Async callback invoked with each raw `asyncpg` connection after codec initialization. |
+    | `reset_session_on_release` | `bool` | `False` | Clear cursors, session authorization, and session settings when a connection is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable queue-backed SQLSpec event channel support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` for CockroachDB table-backed polling). |
     <!-- GENERATED:END config-table:sqlspec.adapters.cockroach_asyncpg.config.CockroachAsyncpgDriverFeatures -->
@@ -228,6 +229,7 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to statement parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer retained alongside `json_serializer` (defaults to `from_json`). |
     | `on_connection_create` | `Callable[..., Any]` | - | Sync or async callback invoked with each raw Psycopg connection after internal setup. |
+    | `reset_session_on_release` | `bool` | `False` | Run `DISCARD ALL` on each connection before it returns to the pool (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable queue-backed SQLSpec event channel support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` for CockroachDB table-backed polling). |
     <!-- GENERATED:END config-table:sqlspec.adapters.cockroach_psycopg.config.CockroachPsycopgDriverFeatures -->

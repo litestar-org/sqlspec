@@ -137,6 +137,7 @@ Pass `PsycopgDriverFeatures` keys inside `driver_features={...}` on `PsycopgSync
 | `json_serializer` | `Callable[[Any], str]` | - | Custom JSON serializer applied to statement parameters and Psycopg JSON dumpers. |
 | `json_deserializer` | `Callable[[str], Any]` | - | Custom JSON deserializer applied to Psycopg JSON/JSONB loaders. |
 | `on_connection_create` | `Callable[..., Any]` | - | Sync or async callback invoked with each raw Psycopg connection after internal setup. |
+| `reset_session_on_release` | `bool` | `False` | Run `DISCARD ALL` on each connection before it returns to the pool (defaults to `False`). |
 | `enable_events` | `bool` | `True` | Enable SQLSpec event channel pub/sub support (defaults to `True` when `events` is configured). |
 | `events_backend` | `Literal['notify', 'notify_queue', 'poll_queue']` | - | Event transport backend (`notify` for LISTEN/NOTIFY, `notify_queue`, or `poll_queue`). |
 | `enable_alloydb` | `bool` | `False` | Route sync connections through `google-cloud-alloydb-connector` (defaults to `False`). |
