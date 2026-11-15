@@ -257,19 +257,93 @@ def _expression_cache_fingerprint(
     schema: Any = None,
     settings: Any = None,
 ) -> str:
-    try:
-        expression_sql = expr.sql(dialect=str(dialect) if dialect is not None else None)
-    except Exception:
-        expression_sql = repr(expr)
     components = (
-        expression_sql,
-        hash_expression(expr),
+        _expression_digest(expr),
         parameter_signature,
         str(dialect) if dialect is not None else "default",
         None if schema is None else _freeze_cache_value(schema),
         None if settings is None else _freeze_cache_value(settings),
     )
     return hashlib.blake2b(repr(components).encode(), digest_size=16).hexdigest()
+
+
+class _ArgKey:
+    """Marks an argument name on the digest work stack."""
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def _expression_digest(expr: "exp.Expr") -> str:
+    """Return a 128-bit digest of an expression tree's full content.
+
+    The walk is iterative, so nesting depth is bounded by memory, not by the interpreter's recursion
+    limit. Every node contributes its type, comments, NULL-ordering markers, and each set argument in
+    name order; leaf values are length-prefixed so adjacent values cannot run together. A node reached
+    a second time contributes a reference to its first visit, which also ends cyclic trees.
+    """
+    hasher = hashlib.blake2b(digest_size=16)
+    update = hasher.update
+    ordinals: dict[int, int] = {}
+    stack: list[Any] = [expr]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, exp.Expr):
+            node_id = id(node)
+            first_visit = ordinals.get(node_id)
+            if first_visit is not None:
+                update(b"R%d;" % first_visit)
+                continue
+            ordinals[node_id] = len(ordinals)
+            update(b"E")
+            update(type(node).__name__.encode())
+            update(b";")
+            if not isinstance(node, exp.Expression):
+                _update_digest_text(update, node.sql(copy=False))
+                continue
+            if has_default_nulls(node):
+                update(b"d")
+            if has_explicit_nulls(node):
+                update(b"x")
+            comments = node.comments
+            if comments:
+                stack.append(comments)
+                stack.append(_ArgKey("comments"))
+            args = node.args
+            for name in sorted(args, reverse=True):
+                value = args[name]
+                if value is None:
+                    continue
+                stack.append(value)
+                stack.append(_ArgKey(name))
+        elif type(node) is _ArgKey:
+            update(b"K")
+            update(node.name.encode())
+            update(b";")
+        elif type(node) is str:
+            _update_digest_text(update, node)
+        elif type(node) is list or type(node) is tuple:
+            update(b"L%d;" % len(node))
+            stack.extend(reversed(node))
+        elif isinstance(node, dict):
+            update(b"M%d;" % len(node))
+            for key in sorted(node, key=repr, reverse=True):
+                stack.append(node[key])
+                stack.append(_ArgKey(repr(key)))
+        else:
+            update(b"V")
+            update(type(node).__name__.encode())
+            update(b":")
+            _update_digest_text(update, repr(node))
+    return hasher.hexdigest()
+
+
+def _update_digest_text(update: Any, text: str) -> None:
+    encoded = text.encode("utf-8", "surrogatepass")
+    update(b"S%d:" % len(encoded))
+    update(encoded)
 
 
 def _freeze_cache_value(value: Any) -> Any:

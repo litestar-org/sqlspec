@@ -429,6 +429,48 @@ def test_hash_optimized_expression_consistency() -> None:
     assert hash1 == hash2
 
 
+def test_hash_optimized_expression_matches_equal_trees_built_separately() -> None:
+    """Two separately parsed copies of one statement share a key."""
+    first = parse_one("SELECT id, name FROM users WHERE active = TRUE ORDER BY id")
+    second = parse_one("SELECT id, name FROM users WHERE active = TRUE ORDER BY id")
+
+    assert hash_optimized_expression(first, None) == hash_optimized_expression(second, None)
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("SELECT id FROM users", "SELECT id FROM accounts"),
+        ("SELECT id FROM users WHERE a = 1", "SELECT id FROM users WHERE a = '1'"),
+        ("SELECT id FROM users /* primary */", "SELECT id FROM users /* replica */"),
+        ("SELECT id FROM job FOR UPDATE NOWAIT", "SELECT id FROM job FOR UPDATE SKIP LOCKED"),
+        ("SELECT id FROM job FOR UPDATE", "SELECT id FROM job FOR SHARE"),
+        ('SELECT "Id" FROM users', "SELECT Id FROM users"),
+        ("SELECT a FROM t WHERE x = 1 AND y = 2", "SELECT a FROM t WHERE (x = 1 AND y = 2)"),
+    ],
+    ids=["table", "literal-type", "comment", "lock-wait", "lock-mode", "quoting", "parentheses"],
+)
+def test_hash_optimized_expression_separates_statements_that_render_differently(left: str, right: str) -> None:
+    """Statements that differ in any rendered detail get different optimizer cache keys."""
+    assert hash_optimized_expression(parse_one(left), None) != hash_optimized_expression(parse_one(right), None)
+
+
+def test_hash_optimized_expression_handles_nesting_beyond_the_recursion_limit() -> None:
+    """Key generation walks the tree iteratively, so nesting depth does not raise ``RecursionError``."""
+    condition: exp.Expr = exp.column("c0").eq(0)
+    for index in range(1, 3000):
+        condition = exp.And(this=exp.Paren(this=condition), expression=exp.column(f"c{index}").eq(index))
+    deep = exp.select("*").from_("t").where(condition, copy=False)
+    deeper = (
+        exp
+        .select("*")
+        .from_("t")
+        .where(exp.And(this=exp.Paren(this=condition), expression=exp.column("extra").eq(1)), copy=False)
+    )
+
+    assert hash_optimized_expression(deep, None) != hash_optimized_expression(deeper, None)
+
+
 def test_hash_optimized_expression_different_contexts() -> None:
     """Test hash_optimized_expression produces different hashes for different contexts."""
     expr = parse_one("SELECT * FROM users")

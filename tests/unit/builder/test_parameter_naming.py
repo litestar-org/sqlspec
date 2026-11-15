@@ -14,7 +14,7 @@ Tests cover:
 """
 
 import string
-import sys
+from typing import Any
 
 import pytest
 from sqlglot import exp
@@ -532,29 +532,21 @@ def test_load_parameters_rejects_non_identifier_key() -> None:
         query.load_parameters({"a b": 1})
 
 
-def _stack_depth() -> int:
-    frame, depth = sys._getframe(), 0
-    while frame is not None:
-        frame, depth = frame.f_back, depth + 1
-    return depth
+def test_build_reports_generation_recursion_as_builder_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recursion overflow while generating SQL raises ``SQLBuilderError``, not ``RecursionError``.
 
-
-def test_deep_builder_chain_keeps_builder_error() -> None:
-    """A build that exhausts the recursion limit raises ``SQLBuilderError``, not ``RecursionError``.
-
-    The limit is lowered relative to the current stack so the chain overflows on every interpreter,
-    including Python 3.12+ where inlined comprehensions roughly halve the frames per nesting level.
+    Whether a given chain overflows depends on the interpreter and on whether sqlglot's generator is
+    compiled, so the generation step raises the overflow directly.
     """
-    query = sql.select("*").from_("t")
-    for index in range(400):
-        query = query.where_eq(f"c{index}", index)
-    default_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(_stack_depth() + 300)
-    try:
-        with pytest.raises(SQLBuilderError, match="recursion"):
-            query.build()
-    finally:
-        sys.setrecursionlimit(default_limit)
+
+    def overflow(self: Any, sql_string: str, dialect: object = None) -> str:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    query = sql.select("*").from_("t").where_eq("a", 1)
+    monkeypatch.setattr(type(query), "_postprocess_built_sql", overflow)
+
+    with pytest.raises(SQLBuilderError, match="recursion"):
+        query.build()
 
 
 def test_build_rejects_hand_built_placeholder_with_sql_text() -> None:
