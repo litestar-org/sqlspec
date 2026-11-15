@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 from flask import Flask, Response
 
-from sqlspec import sign_write_pin
+from sqlspec import sign_primary_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -33,7 +33,7 @@ def portal() -> Iterator[Portal]:
 
 
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
-def test_portal_receipts_preserve_identity_and_write_pins(portal: Portal, outcome: str) -> None:
+def test_portal_receipts_preserve_identity_and_primary_pins(portal: Portal, outcome: str) -> None:
     async def operation() -> str:
         assert TenantContext.get_tenant_id() == "acme"
         assert cast(RoutingEntry, RoutingContext.get_entry("shop")).mode == "replica"
@@ -162,8 +162,8 @@ def test_flask_signed_cookie_and_redirect_commit_policy_on_routing_session(tmp_p
             "flask": {
                 "routing_session_key": "router",
                 "commit_mode": "autocommit_include_redirect",
-                "write_pin_cookie": "wp",
-                "routing_secret": "flask-secret",
+                "primary_pin_cookie": "wp",
+                "primary_pin_secret": "flask-secret",
             }
         },
     )
@@ -196,7 +196,7 @@ def test_flask_signed_cookie_and_redirect_commit_policy_on_routing_session(tmp_p
         }
         client.set_cookie("wp", "1")
         assert client.get("/inspect").json == {"origin": "replica", "token": None}
-        signed = sign_write_pin("flask-secret", bind_key="shop", causal_token="lsn-flask")
+        signed = sign_primary_pin("flask-secret", bind_key="shop", causal_token="lsn-flask")
         client.set_cookie("wp", signed)
         assert client.get("/inspect").json == {"origin": "primary", "token": "lsn-flask"}
         assert client.post("/redirect-write").status_code == 302

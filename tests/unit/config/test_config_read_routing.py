@@ -25,7 +25,7 @@ from sqlspec.utils.routing import (
     RoutingContextPayload,
     apply_request_routing_hints,
     extract_asgi_routing_headers,
-    sign_write_pin,
+    sign_primary_pin,
 )
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding
 
@@ -117,8 +117,8 @@ def test_extension_routing_options_are_documented_optional_fields() -> None:
         "default_routing_mode",
         "enable_routing_middleware",
         "routing_header",
-        "write_pin_cookie",
-        "routing_secret",
+        "primary_pin_cookie",
+        "primary_pin_secret",
     }
     for schema in (FlaskConfig, LitestarConfig, StarletteConfig, FastAPIConfig, SanicConfig):
         assert fields <= schema.__optional_keys__
@@ -160,7 +160,7 @@ async def test_async_request_tenant_resolution_is_lazy_and_shared_with_replicas(
 
 
 @pytest.mark.parametrize(
-    ("headers", "routing_secret", "expect_pinned"),
+    ("headers", "primary_pin_secret", "expect_pinned"),
     [
         ([(b"cookie", b"bad[cookie]=1; wp={token}")], "cookie-secret", True),
         ([(b"cookie", b"other=1; bad cookie=2; wp={token}")], "cookie-secret", True),
@@ -171,9 +171,9 @@ async def test_async_request_tenant_resolution_is_lazy_and_shared_with_replicas(
     ],
 )
 def test_request_routing_hints_extracts_pin_with_sibling_or_split_cookies(
-    headers: list[tuple[bytes, bytes]], routing_secret: str | None, expect_pinned: bool
+    headers: list[tuple[bytes, bytes]], primary_pin_secret: str | None, expect_pinned: bool
 ) -> None:
-    token = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-99")
+    token = sign_primary_pin("cookie-secret", bind_key="orders", causal_token="lsn-99")
     rendered_headers = [(key, value.replace(b"{token}", token.encode("ascii"))) for key, value in headers]
     cookie_header, routing_header_value = extract_asgi_routing_headers(
         {"headers": rendered_headers}, routing_header_bytes=None, include_cookies=True
@@ -183,8 +183,8 @@ def test_request_routing_hints_extracts_pin_with_sibling_or_split_cookies(
         bind_key="orders",
         routing_header_value=routing_header_value,
         cookie_header=cookie_header,
-        write_pin_cookie="wp",
-        routing_secret=routing_secret,
+        primary_pin_cookie="wp",
+        primary_pin_secret=primary_pin_secret,
     )
     if expect_pinned:
         entry = payload.entries["orders"]

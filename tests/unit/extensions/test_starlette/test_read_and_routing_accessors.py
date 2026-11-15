@@ -13,7 +13,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from sqlspec import sign_write_pin
+from sqlspec import sign_primary_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.driver import SqliteDriver
@@ -144,8 +144,8 @@ def test_starlette_safe_routing_defaults_signed_cookie_and_deferred_error(tmp_pa
         extension_config={
             "starlette": {
                 "routing_session_key": "router",
-                "write_pin_cookie": "wp",
-                "routing_secret": "starlette-secret",
+                "primary_pin_cookie": "wp",
+                "primary_pin_secret": "starlette-secret",
             }
         },
     )
@@ -173,7 +173,7 @@ def test_starlette_safe_routing_defaults_signed_cookie_and_deferred_error(tmp_pa
             "token": None,
             "owner": True,
         }
-        signed = sign_write_pin("starlette-secret", bind_key="shop", causal_token="lsn-12")
+        signed = sign_primary_pin("starlette-secret", bind_key="shop", causal_token="lsn-12")
         assert client.get("/inspect", headers={"cookie": f"wp={signed}"}).json() == {
             "origin": "primary",
             "token": "lsn-12",

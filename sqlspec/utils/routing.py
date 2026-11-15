@@ -27,9 +27,9 @@ __all__ = (
     "apply_request_routing_hints",
     "extract_asgi_routing_headers",
     "is_valid_routing_token",
-    "sign_write_pin",
+    "sign_primary_pin",
     "validate_routing_middleware_settings",
-    "verify_write_pin",
+    "verify_primary_pin",
 )
 
 RoutingMode: TypeAlias = Literal["auto", "primary", "replica"]
@@ -107,7 +107,7 @@ class RoutingContextPayload:
         """Return a new payload replacing only the selected bind directive."""
         return RoutingContextPayload({**self._entries, _normalize_bind_key(bind_key): entry})
 
-    def with_write_pin(
+    def with_primary_pin(
         self, bind_key: str | None = None, *, causal_token: str | None = None
     ) -> "RoutingContextPayload":
         """Return a primary-pinned snapshot retaining the bind's causal metadata."""
@@ -189,7 +189,7 @@ class RoutingContext:
         payload = cls.current()
         if payload is None:
             return False
-        updated = payload.with_write_pin(bind_key, causal_token=causal_token)
+        updated = payload.with_primary_pin(bind_key, causal_token=causal_token)
         if updated is not payload:
             cls.set(updated)
         return True
@@ -272,10 +272,10 @@ class SQLSpecRoutingMiddleware:
         "_app",
         "_bind_key",
         "_extractor",
+        "_primary_pin_cookie",
+        "_primary_pin_secret",
         "_routing_header",
-        "_routing_secret",
         "_strict_headers",
-        "_write_pin_cookie",
     )
 
     def __init__(
@@ -284,8 +284,8 @@ class SQLSpecRoutingMiddleware:
         *,
         bind_key: str | None = None,
         routing_header: str | None = "x-sqlspec-routing",
-        write_pin_cookie: str | None = None,
-        routing_secret: str | bytes | None = None,
+        primary_pin_cookie: str | None = None,
+        primary_pin_secret: str | bytes | None = None,
         strict_headers: bool = False,
         extractor: Callable[
             [MutableMapping[str, Any]],
@@ -297,15 +297,15 @@ class SQLSpecRoutingMiddleware:
         _, normalized_header, normalized_cookie, normalized_secret = validate_routing_middleware_settings(
             enable_routing_middleware=True,
             routing_header=routing_header,
-            write_pin_cookie=write_pin_cookie,
-            routing_secret=routing_secret,
+            primary_pin_cookie=primary_pin_cookie,
+            primary_pin_secret=primary_pin_secret,
         )
         self._app = app
         self._bind_key = bind_key
         self._extractor = extractor
         self._routing_header = normalized_header.lower().encode("ascii") if normalized_header is not None else None
-        self._write_pin_cookie = normalized_cookie
-        self._routing_secret = normalized_secret
+        self._primary_pin_cookie = normalized_cookie
+        self._primary_pin_secret = normalized_secret
         self._strict_headers = strict_headers
 
     async def __call__(
@@ -319,15 +319,15 @@ class SQLSpecRoutingMiddleware:
             return
         payload = RoutingContext.current() or RoutingContextPayload()
         cookie_header, routing_header_value = extract_asgi_routing_headers(
-            scope, self._routing_header, include_cookies=self._write_pin_cookie is not None
+            scope, self._routing_header, include_cookies=self._primary_pin_cookie is not None
         )
         payload = apply_request_routing_hints(
             payload,
             bind_key=self._bind_key,
             routing_header_value=routing_header_value,
             cookie_header=cookie_header,
-            write_pin_cookie=self._write_pin_cookie,
-            routing_secret=self._routing_secret,
+            primary_pin_cookie=self._primary_pin_cookie,
+            primary_pin_secret=self._primary_pin_secret,
             strict_headers=self._strict_headers,
         )
         if self._extractor is not None:
@@ -345,7 +345,7 @@ class SQLSpecRoutingMiddleware:
             RoutingContext.reset(token)
 
 
-def sign_write_pin(
+def sign_primary_pin(
     secret: str | bytes,
     *,
     ttl_seconds: float = 5.0,
@@ -353,7 +353,7 @@ def sign_write_pin(
     causal_token: str | None = None,
     clock: Callable[[], float] = time.time,
 ) -> str:
-    """Create an expiring HMAC-SHA256 write-pin cookie value bound to ``bind_key``.
+    """Create an expiring HMAC-SHA256 primary pin cookie value bound to ``bind_key``.
 
     Args:
         secret: Shared HMAC secret key (non-empty ``str`` or ``bytes``).
@@ -363,7 +363,7 @@ def sign_write_pin(
         clock: Wall-clock epoch provider in seconds.
 
     Returns:
-        Cookie-safe ASCII token verifiable with :func:`verify_write_pin`.
+        Cookie-safe ASCII token verifiable with :func:`verify_primary_pin`.
     """
     secret_bytes = _normalize_secret(secret)
     if (
@@ -388,10 +388,10 @@ def sign_write_pin(
     return f"{body}.{signature}"
 
 
-def verify_write_pin(
+def verify_primary_pin(
     token: str, secret: str | bytes, *, bind_key: str | None = None, clock: Callable[[], float] = time.time
 ) -> tuple[bool, str | None]:
-    """Verify an HMAC-signed write-pin cookie value and check expiration and bind key.
+    """Verify an HMAC-signed primary pin cookie value and check expiration and bind key.
 
     Args:
         token: Raw cookie value supplied by the client.
@@ -445,8 +445,8 @@ def validate_routing_middleware_settings(
     *,
     enable_routing_middleware: Any = True,
     routing_header: Any = None,
-    write_pin_cookie: Any = None,
-    routing_secret: Any = None,
+    primary_pin_cookie: Any = None,
+    primary_pin_secret: Any = None,
 ) -> tuple[bool, str | None, str | None, bytes | None]:
     """Validate framework routing middleware options and normalize header, cookie, and secret values."""
     if not isinstance(enable_routing_middleware, bool):
@@ -465,15 +465,15 @@ def validate_routing_middleware_settings(
         except UnicodeEncodeError as exc:
             msg = "routing_header must be None or a non-empty printable ASCII header name"
             raise ImproperConfigurationError(msg) from exc
-    if write_pin_cookie is not None and (
-        not isinstance(write_pin_cookie, str)
-        or not write_pin_cookie.strip()
-        or not is_valid_routing_token(write_pin_cookie)
+    if primary_pin_cookie is not None and (
+        not isinstance(primary_pin_cookie, str)
+        or not primary_pin_cookie.strip()
+        or not is_valid_routing_token(primary_pin_cookie)
     ):
-        msg = "write_pin_cookie must be None or a non-empty printable token"
+        msg = "primary_pin_cookie must be None or a non-empty printable token"
         raise ImproperConfigurationError(msg)
-    normalized_secret = _normalize_secret(routing_secret) if routing_secret is not None else None
-    return enable_routing_middleware, routing_header, write_pin_cookie, normalized_secret
+    normalized_secret = _normalize_secret(primary_pin_secret) if primary_pin_secret is not None else None
+    return enable_routing_middleware, routing_header, primary_pin_cookie, normalized_secret
 
 
 def apply_request_routing_hints(
@@ -483,28 +483,28 @@ def apply_request_routing_hints(
     routing_header_value: str | None = None,
     cookie_header: str | None = None,
     cookie_value: str | None = None,
-    write_pin_cookie: str | None = None,
-    routing_secret: str | bytes | None = None,
+    primary_pin_cookie: str | None = None,
+    primary_pin_secret: str | bytes | None = None,
     strict_headers: bool = False,
 ) -> RoutingContextPayload:
-    """Apply write-pin cookie and routing header hints onto a routing snapshot."""
-    if write_pin_cookie is not None:
+    """Apply primary pin cookie and routing header hints onto a routing snapshot."""
+    if primary_pin_cookie is not None:
         resolved_cookie = cookie_value
         if resolved_cookie is None and cookie_header is not None:
-            resolved_cookie = _extract_cookie_value(cookie_header, write_pin_cookie)
+            resolved_cookie = _extract_cookie_value(cookie_header, primary_pin_cookie)
         if resolved_cookie:
-            if routing_secret is not None:
-                verified, signed_causal = verify_write_pin(resolved_cookie, routing_secret, bind_key=bind_key)
+            if primary_pin_secret is not None:
+                verified, signed_causal = verify_primary_pin(resolved_cookie, primary_pin_secret, bind_key=bind_key)
                 if verified:
-                    payload = payload.with_write_pin(bind_key, causal_token=signed_causal)
+                    payload = payload.with_primary_pin(bind_key, causal_token=signed_causal)
                 else:
-                    get_logger("sqlspec.routing").debug("Ignoring unverified write-pin cookie")
+                    get_logger("sqlspec.routing").debug("Ignoring unverified primary pin cookie")
             elif resolved_cookie in {"1", "true", "True"}:
-                payload = payload.with_write_pin(bind_key, causal_token=None)
+                payload = payload.with_primary_pin(bind_key, causal_token=None)
             elif is_valid_routing_token(resolved_cookie):
-                payload = payload.with_write_pin(bind_key, causal_token=resolved_cookie)
+                payload = payload.with_primary_pin(bind_key, causal_token=resolved_cookie)
             else:
-                get_logger("sqlspec.routing").debug("Ignoring invalid write-pin cookie %r", resolved_cookie)
+                get_logger("sqlspec.routing").debug("Ignoring invalid primary pin cookie %r", resolved_cookie)
     cleaned_header = routing_header_value.strip() if routing_header_value is not None else ""
     if cleaned_header:
         if cleaned_header == "primary":
@@ -554,10 +554,10 @@ def _normalize_secret(secret: Any) -> bytes:
     elif isinstance(secret, bytes):
         encoded = secret
     else:
-        msg = "routing_secret must be a non-empty str or bytes"
+        msg = "primary_pin_secret must be a non-empty str or bytes"
         raise ImproperConfigurationError(msg)
     if not encoded:
-        msg = "routing_secret must be a non-empty str or bytes"
+        msg = "primary_pin_secret must be a non-empty str or bytes"
         raise ImproperConfigurationError(msg)
     return encoded
 

@@ -341,15 +341,15 @@ class ConnectionCleanupMiddleware:
             if target.default_routing_mode == "primary" and payload.get(target.bind_key) is None:
                 payload = payload.with_entry(target.bind_key, RoutingEntry("primary"))
             cookie_header, routing_header_value = extract_asgi_routing_headers(
-                scope, target.routing_header_bytes, include_cookies=target.write_pin_cookie is not None
+                scope, target.routing_header_bytes, include_cookies=target.primary_pin_cookie is not None
             )
             payload = apply_request_routing_hints(
                 payload,
                 bind_key=target.bind_key,
                 routing_header_value=routing_header_value,
                 cookie_header=cookie_header,
-                write_pin_cookie=target.write_pin_cookie,
-                routing_secret=target.routing_secret,
+                primary_pin_cookie=target.primary_pin_cookie,
+                primary_pin_secret=target.primary_pin_secret,
             )
         async with RoutingContext.scope(payload):
             await self._run_request(scope, receive, send)
@@ -502,8 +502,8 @@ class PluginConfigState:
     default_routing_mode: str = "auto"
     enable_routing_middleware: bool = True
     routing_header: str | None = None
-    write_pin_cookie: str | None = None
-    routing_secret: bytes | None = None
+    primary_pin_cookie: str | None = None
+    primary_pin_secret: bytes | None = None
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
     pool_provider: "Callable[[State, Scope], Any] | None" = field(default=None, init=False)
     session_provider: "Callable[..., AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
@@ -766,8 +766,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 routing_header_bytes=state.routing_header.lower().encode("ascii")
                 if state.routing_header is not None
                 else None,
-                write_pin_cookie=state.write_pin_cookie,
-                routing_secret=state.routing_secret,
+                primary_pin_cookie=state.primary_pin_cookie,
+                primary_pin_secret=state.primary_pin_secret,
                 extra_commit_statuses=frozenset(state.extra_commit_statuses or ()),
                 extra_rollback_statuses=frozenset(state.extra_rollback_statuses or ()),
             )
@@ -1364,11 +1364,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         disable_di = litestar_config.get("disable_di", False)
 
-        enable_routing, routing_header, write_pin_cookie, routing_secret = validate_routing_middleware_settings(
+        enable_routing, routing_header, primary_pin_cookie, primary_pin_secret = validate_routing_middleware_settings(
             enable_routing_middleware=litestar_config.get("enable_routing_middleware", True),
             routing_header=litestar_config.get("routing_header"),
-            write_pin_cookie=litestar_config.get("write_pin_cookie"),
-            routing_secret=litestar_config.get("routing_secret"),
+            primary_pin_cookie=litestar_config.get("primary_pin_cookie"),
+            primary_pin_secret=litestar_config.get("primary_pin_secret"),
         )
 
         return {
@@ -1390,8 +1390,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "default_routing_mode": litestar_config.get("default_routing_mode", "auto"),
             "enable_routing_middleware": enable_routing,
             "routing_header": routing_header,
-            "write_pin_cookie": write_pin_cookie,
-            "routing_secret": routing_secret,
+            "primary_pin_cookie": primary_pin_cookie,
+            "primary_pin_secret": primary_pin_secret,
             "commit_mode": commit_mode,
             "extra_commit_statuses": litestar_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": litestar_config.get("extra_rollback_statuses"),
@@ -1431,8 +1431,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             default_routing_mode=settings["default_routing_mode"],
             enable_routing_middleware=settings["enable_routing_middleware"],
             routing_header=settings["routing_header"],
-            write_pin_cookie=settings["write_pin_cookie"],
-            routing_secret=settings["routing_secret"],
+            primary_pin_cookie=settings["primary_pin_cookie"],
+            primary_pin_secret=settings["primary_pin_secret"],
         )
         state.correlation_headers = tuple(settings["correlation_headers"])
 
@@ -1783,8 +1783,8 @@ class _ConnectionCleanupTarget:
     default_routing_mode: str = "auto"
     enable_routing_middleware: bool = False
     routing_header_bytes: bytes | None = None
-    write_pin_cookie: str | None = None
-    routing_secret: bytes | None = None
+    primary_pin_cookie: str | None = None
+    primary_pin_secret: bytes | None = None
 
 
 class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
@@ -2058,7 +2058,7 @@ def _is_routing_state_active(state: PluginConfigState) -> bool:
             getattr(state.config, "has_replicas", False)
             or getattr(state.config, "supports_read_routing", False)
             or state.routing_header is not None
-            or state.write_pin_cookie is not None
+            or state.primary_pin_cookie is not None
             or state.default_routing_mode != "auto"
         )
     )

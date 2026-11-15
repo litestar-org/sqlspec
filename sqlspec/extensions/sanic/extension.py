@@ -506,8 +506,8 @@ class SQLSpecPlugin:
             "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
             "enable_routing_middleware": framework_config.get("enable_routing_middleware", True),
             "routing_header": framework_config.get("routing_header"),
-            "write_pin_cookie": framework_config.get("write_pin_cookie"),
-            "routing_secret": framework_config.get("routing_secret"),
+            "primary_pin_cookie": framework_config.get("primary_pin_cookie"),
+            "primary_pin_secret": framework_config.get("primary_pin_secret"),
             "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
@@ -560,8 +560,8 @@ class SQLSpecPlugin:
             default_routing_mode=settings["default_routing_mode"],
             enable_routing_middleware=settings["enable_routing_middleware"],
             routing_header=settings["routing_header"],
-            write_pin_cookie=settings["write_pin_cookie"],
-            routing_secret=settings["routing_secret"],
+            primary_pin_cookie=settings["primary_pin_cookie"],
+            primary_pin_secret=settings["primary_pin_secret"],
         )
 
     def _tenant_state_for(self, key: Any) -> Any:
@@ -800,11 +800,11 @@ class SQLSpecPlugin:
                     routing_header_value=request.headers.get(state.routing_header)
                     if state.routing_header is not None
                     else None,
-                    cookie_value=request.cookies.get(state.write_pin_cookie)
-                    if state.write_pin_cookie is not None
+                    cookie_value=request.cookies.get(state.primary_pin_cookie)
+                    if state.primary_pin_cookie is not None
                     else None,
-                    write_pin_cookie=state.write_pin_cookie,
-                    routing_secret=state.routing_secret,
+                    primary_pin_cookie=state.primary_pin_cookie,
+                    primary_pin_secret=state.primary_pin_secret,
                 )
             set_context_value(request.ctx, _ROUTING_SCOPE_KEY, RoutingContext.set(payload))
         self._set_observability_contexts(request)
@@ -1445,7 +1445,7 @@ def _is_routing_state_active(state: SanicConfigState) -> bool:
             getattr(state.config, "has_replicas", False)
             or getattr(state.config, "supports_read_routing", False)
             or state.routing_header is not None
-            or state.write_pin_cookie is not None
+            or state.primary_pin_cookie is not None
             or state.default_routing_mode != "auto"
         )
     )

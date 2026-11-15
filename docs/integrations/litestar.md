@@ -85,8 +85,8 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
 | `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
 | `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
-| `write_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
-| `routing_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
+| `primary_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
+| `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 | `read_pool_key` | `str` | - | Request key for the selected read pool. |
 | `cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
 | `cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |

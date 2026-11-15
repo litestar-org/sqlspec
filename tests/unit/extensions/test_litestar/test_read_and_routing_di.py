@@ -7,7 +7,7 @@ from litestar import Request, get, post
 from litestar.di import NamedDependency
 from litestar.testing import create_test_client
 
-from sqlspec import sign_write_pin
+from sqlspec import sign_primary_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -155,11 +155,11 @@ def test_autocommit_skips_commit_and_rollback_on_unpinned_routing_session(
         return {"origin": cast(str, router.select_value("SELECT origin FROM notes WHERE id=1"))}
 
     @post("/write", sync_to_thread=False)
-    def write_pin(router: NamedDependency[Any]) -> dict[str, str]:
+    def primary_pin(router: NamedDependency[Any]) -> dict[str, str]:
         router.execute("INSERT INTO notes VALUES (4,'autocommit')")
         return {"status": "ok"}
 
-    with create_test_client([read_only, write_pin], plugins=[SQLSpecPlugin(config)]) as client:
+    with create_test_client([read_only, primary_pin], plugins=[SQLSpecPlugin(config)]) as client:
         assert client.get("/read-only").json() == {"origin": "replica"}
         assert commits == []
         assert rollbacks == []
@@ -175,7 +175,11 @@ def test_litestar_safe_default_routing_signed_cookie_and_deferred_cache(tmp_path
         replicas=[{"database": replica}],
         bind_key="shop",
         extension_config={
-            "litestar": {"routing_session_key": "router", "write_pin_cookie": "wp", "routing_secret": "litestar-secret"}
+            "litestar": {
+                "routing_session_key": "router",
+                "primary_pin_cookie": "wp",
+                "primary_pin_secret": "litestar-secret",
+            }
         },
     )
     plugin = SQLSpecPlugin(config)
@@ -198,7 +202,7 @@ def test_litestar_safe_default_routing_signed_cookie_and_deferred_cache(tmp_path
             "token": None,
         }
         assert client.get("/inspect", headers={"cookie": "wp=1"}).json() == {"origin": "replica", "token": None}
-        signed = sign_write_pin("litestar-secret", bind_key="shop", causal_token="lsn-9")
+        signed = sign_primary_pin("litestar-secret", bind_key="shop", causal_token="lsn-9")
         assert client.get("/inspect", headers={"cookie": f"wp={signed}"}).json() == {
             "origin": "primary",
             "token": "lsn-9",

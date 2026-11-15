@@ -75,8 +75,8 @@ Configure `commit_mode` inside `extension_config["flask"]` (`"autocommit"` by de
 | `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
 | `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
 | `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
-| `write_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
-| `routing_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
+| `primary_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
+| `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 <!-- GENERATED:END config-table:sqlspec.config.FlaskConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.

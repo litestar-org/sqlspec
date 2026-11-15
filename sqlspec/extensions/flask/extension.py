@@ -459,8 +459,8 @@ class SQLSpecPlugin:
             default_routing_mode=flask_config.get("default_routing_mode", "auto"),
             enable_routing_middleware=flask_config.get("enable_routing_middleware", True),
             routing_header=flask_config.get("routing_header"),
-            write_pin_cookie=flask_config.get("write_pin_cookie"),
-            routing_secret=flask_config.get("routing_secret"),
+            primary_pin_cookie=flask_config.get("primary_pin_cookie"),
+            primary_pin_secret=flask_config.get("primary_pin_secret"),
         )
 
     def _ensure_unique_keys(self) -> None:
@@ -519,11 +519,11 @@ class SQLSpecPlugin:
                     routing_header_value=request.headers.get(state.routing_header)
                     if state.routing_header is not None
                     else None,
-                    cookie_value=request.cookies.get(state.write_pin_cookie)
-                    if state.write_pin_cookie is not None
+                    cookie_value=request.cookies.get(state.primary_pin_cookie)
+                    if state.primary_pin_cookie is not None
                     else None,
-                    write_pin_cookie=state.write_pin_cookie,
-                    routing_secret=state.routing_secret,
+                    primary_pin_cookie=state.primary_pin_cookie,
+                    primary_pin_secret=state.primary_pin_secret,
                 )
             set_context_value(g, _ROUTING_SCOPE_KEY, RoutingContext.set(payload))
 
@@ -1208,7 +1208,7 @@ def _is_routing_state_active(state: FlaskConfigState) -> bool:
             getattr(state.config, "has_replicas", False)
             or getattr(state.config, "supports_read_routing", False)
             or state.routing_header is not None
-            or state.write_pin_cookie is not None
+            or state.primary_pin_cookie is not None
             or state.default_routing_mode != "auto"
         )
     )

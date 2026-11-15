@@ -29,7 +29,7 @@ async def async_routing_config(tmp_path: Path) -> AsyncIterator[AiosqliteConfig]
         await config.close_pool()
 
 
-async def test_async_idle_read_write_pin_and_closed(async_routing_config: AiosqliteConfig) -> None:
+async def test_async_idle_read_primary_pin_and_closed(async_routing_config: AiosqliteConfig) -> None:
     async with RoutingContext.scope(), async_routing_config.provide_routing_session() as session:
         assert session.primary_session is None
         assert session.replica_session is None

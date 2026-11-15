@@ -479,8 +479,8 @@ class SQLSpecPlugin:
             "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
             "enable_routing_middleware": framework_config.get("enable_routing_middleware", True),
             "routing_header": framework_config.get("routing_header"),
-            "write_pin_cookie": framework_config.get("write_pin_cookie"),
-            "routing_secret": framework_config.get("routing_secret"),
+            "primary_pin_cookie": framework_config.get("primary_pin_cookie"),
+            "primary_pin_secret": framework_config.get("primary_pin_secret"),
             "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
@@ -547,8 +547,8 @@ class SQLSpecPlugin:
             default_routing_mode=settings.get("default_routing_mode", "auto"),
             enable_routing_middleware=settings.get("enable_routing_middleware", True),
             routing_header=settings.get("routing_header"),
-            write_pin_cookie=settings.get("write_pin_cookie"),
-            routing_secret=settings.get("routing_secret"),
+            primary_pin_cookie=settings.get("primary_pin_cookie"),
+            primary_pin_secret=settings.get("primary_pin_secret"),
         )
 
     def _ensure_unique_keys(self) -> None:

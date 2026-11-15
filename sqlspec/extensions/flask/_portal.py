@@ -30,7 +30,7 @@ def call_portal_with_context(
     routing_bind_key: str | None = None,
     **kwargs: Any,
 ) -> Any:
-    """Run a portal operation with caller identity and monotonic write-pin receipts.
+    """Run a portal operation with caller identity and monotonic primary pin receipts.
 
     Args:
         portal: Running background event-loop portal.
@@ -99,7 +99,7 @@ class PortalSession:
         Args:
             session: Asynchronous driver session bound to the request connection.
             portal: Portal whose event loop owns the session's connection.
-            routing_bind_key: Owning database bind for conservative write pinning.
+            routing_bind_key: Owning database bind for conservative primary pinning.
         """
         self._session = session
         self._portal = portal

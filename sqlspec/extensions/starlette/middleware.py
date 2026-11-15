@@ -95,15 +95,15 @@ class SQLSpecTransactionMiddleware:
                 if state.default_routing_mode == "primary" and payload.get(bind_key) is None:
                     payload = payload.with_entry(bind_key, RoutingEntry("primary"))
                 cookie_header, routing_header_value = extract_asgi_routing_headers(
-                    scope, state.routing_header_bytes, include_cookies=state.write_pin_cookie is not None
+                    scope, state.routing_header_bytes, include_cookies=state.primary_pin_cookie is not None
                 )
                 payload = apply_request_routing_hints(
                     payload,
                     bind_key=bind_key,
                     routing_header_value=routing_header_value,
                     cookie_header=cookie_header,
-                    write_pin_cookie=state.write_pin_cookie,
-                    routing_secret=state.routing_secret,
+                    primary_pin_cookie=state.primary_pin_cookie,
+                    primary_pin_secret=state.primary_pin_secret,
                 )
             routing_scope = RoutingContext.scope(payload)
         else:
@@ -828,7 +828,7 @@ def _is_routing_state_active(state: "SQLSpecConfigState") -> bool:
             getattr(state.config, "has_replicas", False)
             or getattr(state.config, "supports_read_routing", False)
             or state.routing_header is not None
-            or state.write_pin_cookie is not None
+            or state.primary_pin_cookie is not None
             or state.default_routing_mode != "auto"
         )
     )

@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec import sign_write_pin, verify_write_pin
+from sqlspec import sign_primary_pin, verify_primary_pin
 from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError
 from sqlspec.utils.routing import (
     RoutingContext,
@@ -37,7 +37,7 @@ def test_invalid_routing_directives(kwargs: dict[str, Any]) -> None:
         RoutingEntry(**kwargs)
 
 
-def test_nested_scopes_and_write_pin_preserve_metadata() -> None:
+def test_nested_scopes_and_primary_pin_preserve_metadata() -> None:
     assert RoutingContext.mark_write("billing") is False
     assert RoutingContext.current() is None
     with RoutingContext.replica(bind_group="reporting", causal_token="a", max_staleness_seconds=2):
@@ -117,7 +117,7 @@ async def test_middleware_hints_and_reset(
     async def send(message: Any) -> None:
         pass
 
-    await SQLSpecRoutingMiddleware(app, write_pin_cookie="wp")({"type": "http", "headers": headers}, receive, send)
+    await SQLSpecRoutingMiddleware(app, primary_pin_cookie="wp")({"type": "http", "headers": headers}, receive, send)
     assert observed == [expected]
     assert RoutingContext.current() is None
 
@@ -151,19 +151,21 @@ async def test_middleware_async_extractor_exception_reset_and_lifespan() -> None
     assert seen[1] is None
 
 
-def test_signed_write_pin_roundtrip_expiry_and_bind_isolation() -> None:
+def test_signed_primary_pin_roundtrip_expiry_and_bind_isolation() -> None:
     now = 1_700_000_000.0
-    signed = sign_write_pin("top-secret", ttl_seconds=5.0, bind_key="orders", causal_token="lsn-42", clock=lambda: now)
-    assert verify_write_pin(signed, "top-secret", bind_key="orders", clock=lambda: now + 4.9) == (True, "lsn-42")
-    assert verify_write_pin(signed, "top-secret", bind_key="orders", clock=lambda: now + 5.1) == (False, None)
-    assert verify_write_pin(signed, "wrong-secret", bind_key="orders", clock=lambda: now) == (False, None)
-    assert verify_write_pin(signed, "top-secret", bind_key="billing", clock=lambda: now) == (False, None)
-    assert verify_write_pin(signed, "top-secret", bind_key=None, clock=lambda: now) == (False, None)
+    signed = sign_primary_pin(
+        "top-secret", ttl_seconds=5.0, bind_key="orders", causal_token="lsn-42", clock=lambda: now
+    )
+    assert verify_primary_pin(signed, "top-secret", bind_key="orders", clock=lambda: now + 4.9) == (True, "lsn-42")
+    assert verify_primary_pin(signed, "top-secret", bind_key="orders", clock=lambda: now + 5.1) == (False, None)
+    assert verify_primary_pin(signed, "wrong-secret", bind_key="orders", clock=lambda: now) == (False, None)
+    assert verify_primary_pin(signed, "top-secret", bind_key="billing", clock=lambda: now) == (False, None)
+    assert verify_primary_pin(signed, "top-secret", bind_key=None, clock=lambda: now) == (False, None)
 
-    plain_pin = sign_write_pin(b"bytes-secret", ttl_seconds=2.0, clock=lambda: now)
-    assert verify_write_pin(plain_pin, b"bytes-secret", clock=lambda: now + 1.0) == (True, None)
-    assert verify_write_pin("1", "top-secret", clock=lambda: now) == (False, None)
-    assert verify_write_pin("x" * 1025, "top-secret", clock=lambda: now) == (False, None)
+    plain_pin = sign_primary_pin(b"bytes-secret", ttl_seconds=2.0, clock=lambda: now)
+    assert verify_primary_pin(plain_pin, b"bytes-secret", clock=lambda: now + 1.0) == (True, None)
+    assert verify_primary_pin("1", "top-secret", clock=lambda: now) == (False, None)
+    assert verify_primary_pin("x" * 1025, "top-secret", clock=lambda: now) == (False, None)
 
 
 @pytest.mark.parametrize(
@@ -176,9 +178,11 @@ def test_signed_write_pin_roundtrip_expiry_and_bind_isolation() -> None:
         ("ok", {"bind_key": "bad\x00bind"}, RoutingContextError),
     ],
 )
-def test_sign_write_pin_rejects_invalid_inputs(secret: str, kwargs: dict[str, Any], exc_type: type[Exception]) -> None:
+def test_sign_primary_pin_rejects_invalid_inputs(
+    secret: str, kwargs: dict[str, Any], exc_type: type[Exception]
+) -> None:
     with pytest.raises(exc_type):
-        sign_write_pin(secret, **kwargs)
+        sign_primary_pin(secret, **kwargs)
 
 
 @pytest.mark.parametrize(
@@ -206,12 +210,16 @@ async def test_middleware_signed_cookie_and_disabled_header(
         pass
 
     middleware = SQLSpecRoutingMiddleware(
-        app, bind_key="orders", routing_header=routing_header, write_pin_cookie="wp", routing_secret="cookie-secret"
+        app,
+        bind_key="orders",
+        routing_header=routing_header,
+        primary_pin_cookie="wp",
+        primary_pin_secret="cookie-secret",
     )
     await middleware({"type": "http", "headers": headers}, receive, send)
     assert observed == [expected]
 
-    signed = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-77")
+    signed = sign_primary_pin("cookie-secret", bind_key="orders", causal_token="lsn-77")
     observed.clear()
     await middleware({"type": "http", "headers": [(b"cookie", f"wp={signed}".encode("ascii"))]}, receive, send)
     assert observed == [("primary", None, "lsn-77")]
@@ -226,17 +234,17 @@ async def test_middleware_signed_cookie_and_disabled_header(
         ("replica:reporting", ("primary", None, "lsn-77", True)),
     ],
 )
-def test_apply_request_routing_hints_auto_header_preserves_verified_write_pin(
+def test_apply_request_routing_hints_auto_header_preserves_verified_primary_pin(
     header_value: str, expected: tuple[str, str | None, str | None, bool]
 ) -> None:
-    signed = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-77")
+    signed = sign_primary_pin("cookie-secret", bind_key="orders", causal_token="lsn-77")
     payload = apply_request_routing_hints(
         RoutingContextPayload(),
         bind_key="orders",
         routing_header_value=header_value,
         cookie_value=signed,
-        write_pin_cookie="wp",
-        routing_secret="cookie-secret",
+        primary_pin_cookie="wp",
+        primary_pin_secret="cookie-secret",
     )
     entry = payload.get("orders")
     assert entry is not None
@@ -244,36 +252,36 @@ def test_apply_request_routing_hints_auto_header_preserves_verified_write_pin(
 
 
 @pytest.mark.parametrize("cookie_value", ["1", "lsn-10"])
-def test_apply_request_routing_hints_auto_header_preserves_unsigned_write_pin(cookie_value: str) -> None:
+def test_apply_request_routing_hints_auto_header_preserves_unsigned_primary_pin(cookie_value: str) -> None:
     expected_causal = None if cookie_value == "1" else cookie_value
     payload = apply_request_routing_hints(
         RoutingContextPayload(),
         bind_key="orders",
         routing_header_value="auto",
         cookie_value=cookie_value,
-        write_pin_cookie="wp",
+        primary_pin_cookie="wp",
     )
     entry = payload.get("orders")
     assert entry is not None
     assert (entry.mode, entry.causal_token, entry.pinned_by_write) == ("primary", expected_causal, True)
 
 
-def test_apply_request_routing_hints_auto_header_applies_without_active_write_pin() -> None:
+def test_apply_request_routing_hints_auto_header_applies_without_active_primary_pin() -> None:
     unpinned_primary = RoutingContextPayload().with_entry("orders", RoutingEntry("primary"))
     cleared = apply_request_routing_hints(
         unpinned_primary,
         bind_key="orders",
         routing_header_value="auto",
         cookie_value="tampered",
-        write_pin_cookie="wp",
-        routing_secret="cookie-secret",
+        primary_pin_cookie="wp",
+        primary_pin_secret="cookie-secret",
     )
     entry = cleared.get("orders")
     assert entry is not None
     assert (entry.mode, entry.causal_token, entry.pinned_by_write) == ("auto", None, False)
 
 
-async def test_middleware_auto_header_preserves_signed_write_pin() -> None:
+async def test_middleware_auto_header_preserves_signed_primary_pin() -> None:
     observed: list[tuple[str, str | None, str | None, bool]] = []
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
@@ -286,13 +294,13 @@ async def test_middleware_auto_header_preserves_signed_write_pin() -> None:
     async def send(message: Any) -> None:
         pass
 
-    signed = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-88")
+    signed = sign_primary_pin("cookie-secret", bind_key="orders", causal_token="lsn-88")
     middleware = SQLSpecRoutingMiddleware(
         app,
         bind_key="orders",
         routing_header="x-sqlspec-routing",
-        write_pin_cookie="wp",
-        routing_secret="cookie-secret",
+        primary_pin_cookie="wp",
+        primary_pin_secret="cookie-secret",
     )
     await middleware(
         {"type": "http", "headers": [(b"cookie", f"wp={signed}".encode("ascii")), (b"x-sqlspec-routing", b"auto")]},
@@ -306,7 +314,7 @@ async def test_middleware_auto_header_preserves_signed_write_pin() -> None:
     ("header_value", "expected"),
     [("replica", ("replica", None, None, False)), ("replica:reporting", ("replica", "reporting", None, False))],
 )
-def test_apply_request_routing_hints_replica_applies_without_active_write_pin(
+def test_apply_request_routing_hints_replica_applies_without_active_primary_pin(
     header_value: str, expected: tuple[str, str | None, str | None, bool]
 ) -> None:
     payload = apply_request_routing_hints(
@@ -314,19 +322,19 @@ def test_apply_request_routing_hints_replica_applies_without_active_write_pin(
         bind_key="orders",
         routing_header_value=header_value,
         cookie_value=None,
-        write_pin_cookie="wp",
-        routing_secret="cookie-secret",
+        primary_pin_cookie="wp",
+        primary_pin_secret="cookie-secret",
     )
     entry = payload.get("orders")
     assert entry is not None
     assert (entry.mode, entry.bind_group, entry.causal_token, entry.pinned_by_write) == expected
 
 
-def test_with_write_pin_and_mark_write_short_circuit_when_already_pinned() -> None:
-    initial = RoutingContextPayload().with_write_pin("orders", causal_token="lsn-5")
-    assert initial.with_write_pin("orders") is initial
-    assert initial.with_write_pin("orders", causal_token="lsn-5") is initial
-    updated = initial.with_write_pin("orders", causal_token="lsn-6")
+def test_with_primary_pin_and_mark_write_short_circuit_when_already_pinned() -> None:
+    initial = RoutingContextPayload().with_primary_pin("orders", causal_token="lsn-5")
+    assert initial.with_primary_pin("orders") is initial
+    assert initial.with_primary_pin("orders", causal_token="lsn-5") is initial
+    updated = initial.with_primary_pin("orders", causal_token="lsn-6")
     assert updated is not initial
     assert updated.get("orders") == RoutingEntry("primary", causal_token="lsn-6", pinned_by_write=True)
 

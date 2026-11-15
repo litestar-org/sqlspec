@@ -54,8 +54,8 @@ class SQLSpecConfigState:
     default_routing_mode: str = "auto"
     enable_routing_middleware: bool = True
     routing_header: str | None = None
-    write_pin_cookie: str | None = None
-    routing_secret: str | bytes | None = None
+    primary_pin_cookie: str | None = None
+    primary_pin_secret: str | bytes | None = None
     routing_header_bytes: bytes | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -63,13 +63,13 @@ class SQLSpecConfigState:
         enable_routing, normalized_header, normalized_cookie, normalized_secret = validate_routing_middleware_settings(
             enable_routing_middleware=self.enable_routing_middleware,
             routing_header=self.routing_header,
-            write_pin_cookie=self.write_pin_cookie,
-            routing_secret=self.routing_secret,
+            primary_pin_cookie=self.primary_pin_cookie,
+            primary_pin_secret=self.primary_pin_secret,
         )
         self.enable_routing_middleware = enable_routing
         self.routing_header = normalized_header
-        self.write_pin_cookie = normalized_cookie
-        self.routing_secret = normalized_secret
+        self.primary_pin_cookie = normalized_cookie
+        self.primary_pin_secret = normalized_secret
         self.routing_header_bytes = normalized_header.lower().encode("ascii") if normalized_header is not None else None
         bind_key = getattr(self.config, "bind_key", None)
         keys = [tenant_receipt_key(self.session_key), tenant_receipt_key(self.connection_key)]

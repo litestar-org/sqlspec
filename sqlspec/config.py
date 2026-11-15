@@ -417,10 +417,10 @@ class FlaskConfig(TypedDict):
     """Install request-scoped routing middleware. Default: True."""
     routing_header: NotRequired[str | None]
     """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
-    write_pin_cookie: NotRequired[str | None]
-    """Optional application write-pin cookie name. Default: None."""
-    routing_secret: NotRequired[str | bytes | None]
-    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
+    primary_pin_cookie: NotRequired[str | None]
+    """Optional application primary pin cookie name. Default: None."""
+    primary_pin_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
 
 
 class LitestarConfig(TypedDict):
@@ -548,10 +548,10 @@ class LitestarConfig(TypedDict):
     """Install request-scoped routing middleware. Default: True."""
     routing_header: NotRequired[str | None]
     """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
-    write_pin_cookie: NotRequired[str | None]
-    """Optional application write-pin cookie name. Default: None."""
-    routing_secret: NotRequired[str | bytes | None]
-    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
+    primary_pin_cookie: NotRequired[str | None]
+    """Optional application primary pin cookie name. Default: None."""
+    primary_pin_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
     cursor_secret: NotRequired[str | bytes]
@@ -637,10 +637,10 @@ class StarletteConfig(TypedDict):
     """Install request-scoped routing middleware. Default: True."""
     routing_header: NotRequired[str | None]
     """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
-    write_pin_cookie: NotRequired[str | None]
-    """Optional application write-pin cookie name. Default: None."""
-    routing_secret: NotRequired[str | bytes | None]
-    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
+    primary_pin_cookie: NotRequired[str | None]
+    """Optional application primary pin cookie name. Default: None."""
+    primary_pin_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
     cursor_secret: NotRequired[str | bytes]
@@ -732,10 +732,10 @@ class SanicConfig(TypedDict):
     """Install request-scoped routing middleware. Default: True."""
     routing_header: NotRequired[str | None]
     """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
-    write_pin_cookie: NotRequired[str | None]
-    """Optional application write-pin cookie name. Default: None."""
-    routing_secret: NotRequired[str | bytes | None]
-    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
+    primary_pin_cookie: NotRequired[str | None]
+    """Optional application primary pin cookie name. Default: None."""
+    primary_pin_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
 

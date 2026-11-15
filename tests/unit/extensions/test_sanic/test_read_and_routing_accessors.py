@@ -10,7 +10,7 @@ import pytest
 from sanic import Sanic
 from sanic.response import json
 
-from sqlspec import sign_write_pin
+from sqlspec import sign_primary_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.driver._routing import AsyncRoutingSession
@@ -105,7 +105,7 @@ def test_sanic_safe_routing_defaults_and_deferred_routing_error(tmp_path: Path) 
         replicas=[{"database": replica}],
         bind_key="shop",
         extension_config={
-            "sanic": {"routing_session_key": "router", "write_pin_cookie": "wp", "routing_secret": "sanic-secret"}
+            "sanic": {"routing_session_key": "router", "primary_pin_cookie": "wp", "primary_pin_secret": "sanic-secret"}
         },
     )
     app: Sanic[Any, Any] = Sanic("safe_routing_" + uuid4().hex)
@@ -126,7 +126,7 @@ def test_sanic_safe_routing_defaults_and_deferred_routing_error(tmp_path: Path) 
         "token": None,
     }
     assert app.test_client.get("/inspect", headers={"cookie": "wp=1"})[1].json == {"origin": "replica", "token": None}
-    signed = sign_write_pin("sanic-secret", bind_key="shop", causal_token="lsn-sanic")
+    signed = sign_primary_pin("sanic-secret", bind_key="shop", causal_token="lsn-sanic")
     assert app.test_client.get("/inspect", headers={"cookie": f"wp={signed}"})[1].json == {
         "origin": "primary",
         "token": "lsn-sanic",

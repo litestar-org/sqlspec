@@ -69,7 +69,7 @@ def test_idle_facade_and_closed_session(routing_config: SqliteConfig) -> None:
     assert leaked_primary.connection is _CLOSED_CONNECTION
 
 
-def test_reads_replica_then_write_pins_primary(routing_config: SqliteConfig) -> None:
+def test_reads_replica_then_pins_primary(routing_config: SqliteConfig) -> None:
     with RoutingContext.scope(), routing_config.provide_routing_session() as session:
         assert session.select_value("SELECT origin FROM notes WHERE id=:id", id=1) == "replica"
         assert session.primary_session is None

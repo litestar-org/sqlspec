@@ -100,8 +100,8 @@ def test_starlette_config_state_field_order() -> None:
         "default_routing_mode",
         "enable_routing_middleware",
         "routing_header",
-        "write_pin_cookie",
-        "routing_secret",
+        "primary_pin_cookie",
+        "primary_pin_secret",
         "routing_header_bytes",
     ]
 
@@ -121,8 +121,8 @@ def test_sanic_config_state_field_order() -> None:
         "default_routing_mode",
         "enable_routing_middleware",
         "routing_header",
-        "write_pin_cookie",
-        "routing_secret",
+        "primary_pin_cookie",
+        "primary_pin_secret",
     ]
 
 
@@ -151,8 +151,8 @@ def test_flask_config_state_field_order() -> None:
         "default_routing_mode",
         "enable_routing_middleware",
         "routing_header",
-        "write_pin_cookie",
-        "routing_secret",
+        "primary_pin_cookie",
+        "primary_pin_secret",
     ]
 
 
