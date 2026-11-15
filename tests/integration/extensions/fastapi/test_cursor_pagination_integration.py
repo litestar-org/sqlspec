@@ -40,6 +40,7 @@ def cursor_client(tmp_path: Path) -> Generator[TestClient, None, None]:
     filters_dependency = plugin.provide_filters({
         "pagination_type": "cursor",
         "pagination_cursor_keys": [CursorKey("id")],
+        "pagination_cursor_secret": "integration-test-secret",
         "pagination_size": 2,
     })
 

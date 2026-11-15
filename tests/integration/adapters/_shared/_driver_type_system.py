@@ -104,6 +104,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_statement_profiling",
     ),
     "aiomysql": (
+        "reset_session_on_release",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",
@@ -112,6 +113,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_local_infile_bulk_load",
     ),
     "aiosqlite": (
+        "reset_session_on_release",
         "enable_custom_adapters",
         "json_serializer",
         "json_deserializer",
@@ -152,6 +154,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "on_connection_create",
     ),
     "asyncmy": (
+        "reset_session_on_release",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",
@@ -160,6 +163,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_local_infile_bulk_load",
     ),
     "asyncpg": (
+        "reset_session_on_release",
         "tenant_strategy",
         "tenant_session_baseline",
         "enable_pgcopy_binary",
@@ -206,6 +210,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "native_export_connection",
     ),
     "cockroach_asyncpg": (
+        "reset_session_on_release",
         "tenant_strategy",
         "tenant_session_baseline",
         "pooler_mode",
@@ -227,6 +232,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "events_backend",
     ),
     "cockroach_psycopg": (
+        "reset_session_on_release",
         "tenant_strategy",
         "pooler_mode",
         "enable_native_storage",
@@ -254,6 +260,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_lowercase_column_names",
     ),
     "duckdb": (
+        "reset_session_on_release",
         "extensions",
         "secrets",
         "on_connection_create",
@@ -312,6 +319,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "use_tenant_id_as_sharding_key",
     ),
     "psqlpy": (
+        "reset_session_on_release",
         "tenant_strategy",
         "enable_pgcopy_binary",
         "enable_cast_detection",
@@ -328,6 +336,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "direct_dsn",
     ),
     "psycopg": (
+        "reset_session_on_release",
         "tenant_strategy",
         "enable_pgcopy_binary",
         "enable_pgvector",
@@ -358,6 +367,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "events_backend",
     ),
     "pymysql": (
+        "reset_session_on_release",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",
@@ -386,6 +396,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_batch_write_api",
     ),
     "sqlite": (
+        "reset_session_on_release",
         "enable_custom_adapters",
         "json_serializer",
         "json_deserializer",

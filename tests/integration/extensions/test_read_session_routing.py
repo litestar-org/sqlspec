@@ -116,16 +116,16 @@ async def test_asgi_lazy_read_di_isolates_native_rls_and_checkout_ownership(
     if framework == "litestar":
 
         @get("/")
-        async def read(replica_session: NamedDependency[AsyncpgDriver]) -> dict[str, Any]:
-            return await _read_rows(replica_session, table)
+        async def read(db_replica_session: NamedDependency[AsyncpgDriver]) -> dict[str, Any]:
+            return await _read_rows(db_replica_session, table)
 
         @post("/", status_code=200)
         async def write(db_session: NamedDependency[AsyncpgDriver]) -> dict[str, bool]:
             return await _write_row(db_session, table)
 
         @get("/blocked")
-        async def blocked(replica_session: NamedDependency[AsyncpgDriver]) -> dict[str, bool]:
-            return await _refuse_write(replica_session, table)
+        async def blocked(db_replica_session: NamedDependency[AsyncpgDriver]) -> dict[str, bool]:
+            return await _refuse_write(db_replica_session, table)
 
         app = Litestar([read, write, blocked], plugins=[LitestarPlugin(config)])
         async with AsyncTestClient(app=app) as client:
