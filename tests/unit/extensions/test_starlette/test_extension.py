@@ -1065,3 +1065,39 @@ def test_starlette_middleware_skips_inactive_routing_states() -> None:
     SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}), plain_route_app)
     with TestClient(plain_route_app) as client:
         assert client.get("/index").json() == {"has_scope": False}
+
+
+@pytest.mark.parametrize(("path", "expected_error"), [("/ok", False), ("/fail", True)])
+def test_deferred_session_streams_close_with_request_outcome(
+    monkeypatch: pytest.MonkeyPatch, path: str, expected_error: bool
+) -> None:
+    """Deferred request sessions close their streams with the request's own error outcome."""
+    from sqlspec.utils.deferred_session import DeferredAsyncSession
+
+    recorded: list[bool] = []
+
+    async def record_close(self: Any, *, error: bool = False) -> None:
+        recorded.append(error)
+
+    monkeypatch.setattr(DeferredAsyncSession, "_close_open_streams", record_close)
+
+    async def ok_route(request: Request) -> JSONResponse:
+        plugin.get_session(request)
+        return JSONResponse({"ok": True})
+
+    async def fail_route(request: Request) -> JSONResponse:
+        plugin.get_session(request)
+        raise RuntimeError("boom")
+
+    app = Starlette(routes=[Route("/ok", ok_route), Route("/fail", fail_route)])
+    plugin = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}), app)
+
+    async def dispatch_while_handling_error(scope: Any, receive: Any, send: Any) -> None:
+        try:
+            raise LookupError("handled by an outer layer")
+        except LookupError:
+            await app(scope, receive, send)
+
+    with TestClient(dispatch_while_handling_error, raise_server_exceptions=False) as client:
+        client.get(path)
+    assert recorded == [expected_error]

@@ -144,10 +144,12 @@ class SQLSpecTransactionMiddleware:
                                 _resource_slot_key(resource_key),
                                 _RequestResourceSlot(stack, sync_stack, state, resource_key, kind),
                             )
+                request_error: BaseException | None = None
                 try:
                     try:
                         await self.app(scope, receive, tracked_send)
                     except BaseException as body_error:
+                        request_error = body_error
                         for state in self.config_states:
                             try:
                                 with CancelScope(shield=True):
@@ -168,12 +170,15 @@ class SQLSpecTransactionMiddleware:
                                 if finalize_error is None:
                                     finalize_error = exc
                         if finalize_error is not None:
+                            request_error = finalize_error
                             raise finalize_error
                 finally:
                     for state in self.config_states:
                         pop_state_value(request.state, _response_completion_key(state.connection_key))
                         pop_state_value(request.state, _deferred_connection_key(state.connection_key))
-                        await _pop_and_close_session(request, deferred_session_key(state))
+                        await _pop_and_close_session(
+                            request, deferred_session_key(state), error=request_error is not None
+                        )
                         for resource_key in (
                             state.replica_connection_key,
                             state.replica_session_key,
@@ -182,7 +187,9 @@ class SQLSpecTransactionMiddleware:
                             if resource_key is not None:
                                 pop_state_value(request.state, _resource_slot_key(resource_key))
                                 pop_state_value(request.state, resource_key)
-                                await _pop_and_close_session(request, f"{resource_key}_deferred")
+                                await _pop_and_close_session(
+                                    request, f"{resource_key}_deferred", error=request_error is not None
+                                )
 
     async def _finalize(self, request: "Request", state: "SQLSpecConfigState", commit: bool) -> None:
         should_commit = commit and state.commit_mode != "manual"
@@ -811,12 +818,18 @@ def _reject_missing_tenant(scope: "Scope") -> NoReturn:
     raise HTTPException(status_code=401, detail="Authentication required")
 
 
-async def _pop_and_close_session(request: "Request", key: str) -> None:
-    """Pop one deferred session key from request state, closing its open streams and detaching it."""
+async def _pop_and_close_session(request: "Request", key: str, *, error: bool) -> None:
+    """Pop one deferred session key from request state, closing its open streams and detaching it.
+
+    Args:
+        request: The Starlette request.
+        key: Request-state key holding the deferred session.
+        error: Whether the request ended with an error.
+    """
     deferred = pop_state_value(request.state, key)
     if deferred is not None:
         try:
-            await deferred._close_open_streams(error=sys.exc_info()[1] is not None)
+            await deferred._close_open_streams(error=error)
         finally:
             deferred._mark_closed()
 
