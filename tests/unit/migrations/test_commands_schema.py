@@ -685,7 +685,7 @@ async def test_postgres_rls_guard_blocks_schema_dump_revision_and_squash(tmp_pat
         cmds_async.tracker.get_applied_migrations = AsyncMock(
             return_value=[{"version_num": "0001"}, {"version_num": "0002"}, {"version_num": "0003"}]
         )
-        cmds_async.tracker._lock_backend_kind = MagicMock(return_value="")  # pyright: ignore[reportPrivateUsage]
+        cmds_async.tracker._resolve_lock_backend = MagicMock(return_value="")  # pyright: ignore[reportPrivateUsage]
         cmds_async.tracker.acquire_lock = MagicMock(
             return_value=AsyncMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False))
         )

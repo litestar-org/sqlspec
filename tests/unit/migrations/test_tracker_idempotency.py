@@ -812,7 +812,7 @@ async def test_tracker_acquire_lock_skips_cockroachdb_and_raises_on_lock_timeout
 ) -> None:
     """CockroachDB drivers take a lease, not an advisory lock; MySQL and SQL Server timeouts raise MigrationError."""
     cockroach_driver: Any = CockroachAsyncpgDriver(MagicMock()) if is_async else CockroachPsycopgSyncDriver(MagicMock())
-    assert SyncMigrationTracker()._lock_backend_kind(cockroach_driver) == "lease"  # pyright: ignore[reportPrivateUsage]
+    assert SyncMigrationTracker()._resolve_lock_backend(cockroach_driver) == "lease"  # pyright: ignore[reportPrivateUsage]
 
     async def _mysql_timeout_async(_self: Any, stmt: Any, params: Any = None) -> int:
         return 0
@@ -1308,8 +1308,8 @@ def test_tracker_lock_backend_kind_skips_instance_slots_and_preserves_unique_lon
         def __init__(self, dialect: str) -> None:
             self.dialect = dialect
 
-    assert SyncMigrationTracker._lock_backend_kind(_InstanceDialectDriver("sqlite")) == ""  # pyright: ignore[reportPrivateUsage]
-    assert SyncMigrationTracker._lock_backend_kind(MagicMock()) == ""  # pyright: ignore[reportPrivateUsage]
+    assert SyncMigrationTracker._resolve_lock_backend(_InstanceDialectDriver("sqlite")) == ""  # pyright: ignore[reportPrivateUsage]
+    assert SyncMigrationTracker._resolve_lock_backend(MagicMock()) == ""  # pyright: ignore[reportPrivateUsage]
 
     prefix = "tenant_organization_billing_schema.custom_ddl_migrations_"
     tracker_a = SyncMigrationTracker(version_table_name=f"{prefix}v1")
@@ -1442,7 +1442,7 @@ async def test_async_acquire_lock_uses_transaction_open_and_unlocks_on_cancellat
         async with tracker.acquire_lock(driver):
             raise asyncio.CancelledError
 
-    assert tracker.holds_transaction_lock(driver) is False
+    assert tracker.holds_transaction_scoped_lock(driver) is False
     if dialect == "postgres":
         assert "tx_open" in events
         assert "rollback" in events
@@ -1495,7 +1495,7 @@ async def test_lock_context_chains_commit_error_over_step_error(tmp_path: Path, 
         driver_async: Any = _AsyncCommitFailDriver()
         try:
             with pytest.raises(OSError, match="commit failure") as exc_info:
-                async with cmds_async._lock_context(driver_async):  # pyright: ignore[reportPrivateUsage]
+                async with cmds_async._hold_migration_lock(driver_async):  # pyright: ignore[reportPrivateUsage]
                     cmds_async.runner._savepoint_recovered_drivers.add(id(driver_async))  # pyright: ignore[reportPrivateUsage]
                     raise step_error
             assert exc_info.value.__cause__ is step_error
@@ -1529,7 +1529,7 @@ async def test_lock_context_chains_commit_error_over_step_error(tmp_path: Path, 
     driver_sync: Any = _SyncCommitFailDriver()
     try:
         with pytest.raises(OSError, match="commit failure") as exc_info:
-            with cmds_sync._lock_context(driver_sync):  # pyright: ignore[reportPrivateUsage]
+            with cmds_sync._hold_migration_lock(driver_sync):  # pyright: ignore[reportPrivateUsage]
                 cmds_sync.runner._savepoint_recovered_drivers.add(id(driver_sync))  # pyright: ignore[reportPrivateUsage]
                 raise step_error
         assert exc_info.value.__cause__ is step_error
@@ -1576,7 +1576,7 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
         if backend == "postgres":
             assert any("pg_advisory_unlock" in sql for sql in executed)
         else:
-            assert not async_tracker.holds_transaction_lock(driver_async)
+            assert not async_tracker.holds_transaction_scoped_lock(driver_async)
         return
 
     sync_tracker = SyncMigrationTracker()
@@ -1609,7 +1609,7 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
     if backend == "postgres":
         assert any("pg_advisory_unlock" in sql for sql in executed)
     else:
-        assert not sync_tracker.holds_transaction_lock(driver_sync)
+        assert not sync_tracker.holds_transaction_scoped_lock(driver_sync)
 
 
 @pytest.mark.anyio
@@ -1674,7 +1674,7 @@ async def test_sqlite_nontransactional_failure_rolls_back_via_savepoint_and_pres
 async def test_sqlite_unrecovered_savepoint_failure_rolls_back_outer_transaction(
     tmp_path: Path, is_async: bool
 ) -> None:
-    """When step savepoint rollback fails under SQLite outer lock, _lock_context rolls back the outer tx."""
+    """When step savepoint rollback fails under SQLite outer lock, _hold_migration_lock rolls back the outer tx."""
     db_path = tmp_path / f"unrecovered_{is_async}.db"
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
@@ -1693,7 +1693,7 @@ async def test_sqlite_unrecovered_savepoint_failure_rolls_back_outer_transaction
         cmds_async = AsyncMigrationCommands(cfg_async)
 
         async def _broken_savepoint_rollback_async(_driver: Any, _savepoint: str, *, schema_active: bool) -> None:
-            cmds_async.runner._outer_lock_unrecovered_drivers.add(id(_driver))  # pyright: ignore[reportPrivateUsage]
+            cmds_async.runner._unrecovered_step_drivers.add(id(_driver))  # pyright: ignore[reportPrivateUsage]
 
         cmds_async.runner._recover_failed_savepoint = _broken_savepoint_rollback_async  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
         try:
@@ -1713,7 +1713,7 @@ async def test_sqlite_unrecovered_savepoint_failure_rolls_back_outer_transaction
         cmds_sync = SyncMigrationCommands(cfg_sync)
 
         def _broken_savepoint_rollback_sync(_driver: Any, _savepoint: str, *, schema_active: bool) -> None:
-            cmds_sync.runner._outer_lock_unrecovered_drivers.add(id(_driver))  # pyright: ignore[reportPrivateUsage]
+            cmds_sync.runner._unrecovered_step_drivers.add(id(_driver))  # pyright: ignore[reportPrivateUsage]
 
         cmds_sync.runner._recover_failed_savepoint = _broken_savepoint_rollback_sync  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
         try:
@@ -1764,7 +1764,7 @@ def test_bridge_driver_migration_advisory_lock_classification_and_sqlite_exclusi
             conn, statement_config=StatementConfig(dialect=dialect), driver_features={"dbms_name": dbms_names[dialect]}
         )
 
-    assert tracker._lock_backend_kind(driver) == expected_backend  # pyright: ignore[reportPrivateUsage]
+    assert tracker._resolve_lock_backend(driver) == expected_backend  # pyright: ignore[reportPrivateUsage]
     if expected_backend == "lease":
         return
 
@@ -1793,7 +1793,7 @@ def test_bridge_driver_migration_advisory_lock_classification_and_sqlite_exclusi
 
     if expected_lock_sql is None:
         assert executed == []
-        assert not tracker.holds_transaction_lock(driver)
+        assert not tracker.holds_transaction_scoped_lock(driver)
     else:
         assert any(expected_lock_sql in sql for sql in executed)
 

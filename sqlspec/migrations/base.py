@@ -315,7 +315,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         """Set output policy for tracker console/logging behavior."""
         self._output_policy = {"use_logger": use_logger, "echo": echo, "summary_only": summary_only}
 
-    def holds_transaction_lock(self, driver: Any) -> bool:
+    def holds_transaction_scoped_lock(self, driver: Any) -> bool:
         """Return True while this tracker owns an outer SQLite transaction lock on ``driver``."""
         return id(driver) in self._sqlite_lock_owners
 
@@ -620,7 +620,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             )
         )
 
-    def _record_migration_sequenced_statement(
+    def _record_sequenced_migration_statement(
         self,
         version: str,
         version_type: str,
@@ -751,7 +751,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         return lock_name, lock_id
 
     @classmethod
-    def _lock_backend_kind(cls, driver: Any) -> str:
+    def _resolve_lock_backend(cls, driver: Any) -> str:
         """Classify ``driver`` into its migration lock backend family.
 
         Returns:
@@ -1512,7 +1512,7 @@ def _is_cockroach_driver(driver: Any) -> bool:
     return False
 
 
-def _is_postgres_non_cockroach_driver(driver: Any) -> bool:
+def _supports_postgres_row_security(driver: Any) -> bool:
     """Return True when ``driver`` targets PostgreSQL-family backends excluding CockroachDB."""
     raw_dialect = getattr(driver, "dialect", None)
     dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
@@ -1618,7 +1618,7 @@ def _validate_schema_extraction_rows(
 
 def _schema_extraction_plan(driver: Any) -> "tuple[str, str, str | None, bool] | None":
     """Return ``(backend_label, refusal_sql, omissions_sql, takes_schema)`` for backends with catalog checks."""
-    if _is_postgres_non_cockroach_driver(driver):
+    if _supports_postgres_row_security(driver):
         return "PostgreSQL", _PG_RLS_SCHEMA_CHECK_SQL, _PG_SCHEMA_OMISSIONS_SQL, True
     raw_dialect = getattr(driver, "dialect", None)
     dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""

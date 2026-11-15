@@ -68,15 +68,15 @@ def _lock_rows(db_path: Path, table: str = "ddl_migrations_lock") -> list[tuple[
     ],
 )
 def test_lock_backend_kind_matrix(dialect: str, expected: str) -> None:
-    assert SyncMigrationTracker._lock_backend_kind(_driver_with_dialect(dialect)) == expected  # pyright: ignore[reportPrivateUsage]
+    assert SyncMigrationTracker._resolve_lock_backend(_driver_with_dialect(dialect)) == expected  # pyright: ignore[reportPrivateUsage]
 
 
 def test_lock_backend_kind_cockroach_and_bridge_sqlite() -> None:
     cockroach = CockroachPsycopgSyncDriver(MagicMock())
     bridge_sqlite = AdbcDriver(MagicMock(), dialect="sqlite")
 
-    assert SyncMigrationTracker._lock_backend_kind(cockroach) == "lease"  # pyright: ignore[reportPrivateUsage]
-    assert SyncMigrationTracker._lock_backend_kind(bridge_sqlite) == "lease"  # pyright: ignore[reportPrivateUsage]
+    assert SyncMigrationTracker._resolve_lock_backend(cockroach) == "lease"  # pyright: ignore[reportPrivateUsage]
+    assert SyncMigrationTracker._resolve_lock_backend(bridge_sqlite) == "lease"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_lease_lock_blocks_second_migrator_duckdb(tmp_path: Path) -> None:

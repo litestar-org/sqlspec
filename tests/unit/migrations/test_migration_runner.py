@@ -2706,10 +2706,10 @@ async def test_nontransactional_failure_rolls_back_active_implicit_transaction(
 
 
 @pytest.mark.anyio
-async def test_outer_lock_isolates_nontransactional_reconciler_with_savepoint(
+async def test_step_savepoints_isolate_nontransactional_reconciler_with_savepoint(
     tmp_path: Path, runner_mode: _RunnerMode
 ) -> None:
-    """Non-transactional reconcilers under outer_lock use savepoints and do not commit the outer transaction."""
+    """Non-transactional reconcilers under use_step_savepoints use savepoints and do not commit the outer transaction."""
     runner = runner_mode.runner(tmp_path, {"transactional": False})
     ok_path = tmp_path / "ok_outer_rec.py"
     ok_path.write_text('def reconcile(context):\n    context.driver.record_event("ok")\n', encoding="utf-8")
@@ -2721,7 +2721,7 @@ async def test_outer_lock_isolates_nontransactional_reconciler_with_savepoint(
 
     driver = runner_mode.driver()
     driver.record_event = Mock()
-    with runner.outer_lock(driver):
+    with runner.use_step_savepoints(driver):
         await runner_mode.call(
             runner.execute_reconciliation, driver, ExtensionReconcilerDescriptor(name="adk", module_path=ok_path)
         )
@@ -2731,7 +2731,7 @@ async def test_outer_lock_isolates_nontransactional_reconciler_with_savepoint(
                 runner.execute_reconciliation, driver, ExtensionReconcilerDescriptor(name="adk", module_path=fail_path)
             )
     driver.rollback.assert_not_called()
-    assert runner.consume_savepoint_recovery(driver) is True
+    assert runner.pop_savepoint_recovered(driver) is True
     assert call.create_savepoint("sqlspec_reconcile_step") in driver.mock_calls
     assert call.rollback_to_savepoint("sqlspec_reconcile_step") in driver.mock_calls
     assert call.release_savepoint("sqlspec_reconcile_step") in driver.mock_calls

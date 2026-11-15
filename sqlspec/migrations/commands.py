@@ -1395,7 +1395,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     rich_message="[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n",
                 )
 
-            with self.config.provide_session() as driver, self._lock_context(driver, dry_run=dry_run):
+            with self.config.provide_session() as driver, self._hold_migration_lock(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
                 self._validate_migration_schema(driver)
@@ -1505,7 +1505,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
 
         recorded_error = self._last_command_error
         if recorded_error is not None:
-            _raise_recorded_command_error(recorded_error)
+            _raise_as_migration_error(recorded_error)
 
         if dry_run:
             output_info(
@@ -1565,7 +1565,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     rich_message="[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n",
                 )
 
-            with self.config.provide_session() as driver, self._lock_context(driver, dry_run=dry_run):
+            with self.config.provide_session() as driver, self._hold_migration_lock(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
                 self._validate_migration_schema(driver)
@@ -1688,7 +1688,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
 
         recorded_error = self._last_command_error
         if recorded_error is not None:
-            _raise_recorded_command_error(recorded_error)
+            _raise_as_migration_error(recorded_error)
 
         if dry_run:
             output_info(
@@ -1702,7 +1702,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         Args:
             revision: The revision to stamp.
         """
-        with self.config.provide_session() as driver, self._lock_context(driver):
+        with self.config.provide_session() as driver, self._hold_migration_lock(driver):
             self.tracker.ensure_tracking_table(driver)
             applied = self.tracker.get_applied_migrations(driver) if self.extension_reconcilers else []
             retained = self._retained_reconcile_versions(applied)
@@ -1910,7 +1910,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         if not report["checksum_mismatches"]:
             _, rerecord = self._applied_checksum_audit(applied_migrations, migration_files)
             if rerecord:
-                with self.config.provide_session() as driver, self._lock_context(driver):
+                with self.config.provide_session() as driver, self._hold_migration_lock(driver):
                     self._rerecord_legacy_checksums(
                         driver, rerecord, dry_run=False, use_logger=ul, echo=echo_value, summary_only=summary_value
                     )
@@ -2008,7 +2008,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
 
         try:
             if update_database:
-                with self.config.provide_session() as driver, self._lock_context(driver):
+                with self.config.provide_session() as driver, self._hold_migration_lock(driver):
                     self.tracker.ensure_tracking_table(driver)
                     applied_plans = [
                         plan
@@ -2086,7 +2086,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
 
             if update_database:
-                with self.config.provide_session() as driver, self._lock_context(driver):
+                with self.config.provide_session() as driver, self._hold_migration_lock(driver):
                     self.tracker.ensure_tracking_table(driver)
                     applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                     applied_versions = {m["version_num"] for m in applied_migrations}
@@ -2193,7 +2193,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             self.tracker.remove_migration(driver, version_num)
 
     @contextmanager
-    def _lock_context(self, driver: Any, *, dry_run: bool = False) -> "Iterator[None]":
+    def _hold_migration_lock(self, driver: Any, *, dry_run: bool = False) -> "Iterator[None]":
         """Hold a tracker lock and preserve outer SQLite transactions across step commits.
 
         Yields:
@@ -2208,15 +2208,15 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             return
         lock_cm = cast("Any", acquire_lock(driver))
         with lock_cm:
-            if isinstance(self.tracker, BaseMigrationTracker) and self.tracker.holds_transaction_lock(driver):
-                with self.runner.outer_lock(driver):
+            if isinstance(self.tracker, BaseMigrationTracker) and self.tracker.holds_transaction_scoped_lock(driver):
+                with self.runner.use_step_savepoints(driver):
                     step_error: BaseException | None = None
                     try:
                         yield
                     except BaseException as exc:
                         step_error = exc
                     if step_error is not None:
-                        if self.runner.consume_savepoint_recovery(driver) and driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                        if self.runner.pop_savepoint_recovered(driver) and driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                             try:
                                 driver.commit()
                             except Exception as commit_exc:
@@ -2224,9 +2224,9 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                         raise step_error
                     recorded_error = self._last_command_error
                     if recorded_error is not None:
-                        self.runner.consume_savepoint_recovery(driver)
-                        if self.runner.consume_unrecovered_outer_lock_failure(driver):
-                            _raise_recorded_command_error(recorded_error)
+                        self.runner.pop_savepoint_recovered(driver)
+                        if self.runner.pop_unrecovered_step_failure(driver):
+                            _raise_as_migration_error(recorded_error)
             else:
                 yield
 
@@ -2688,7 +2688,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     rich_message="[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n",
                 )
 
-            async with self.config.provide_session() as driver, self._lock_context(driver, dry_run=dry_run):
+            async with self.config.provide_session() as driver, self._hold_migration_lock(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
                 await self._validate_migration_schema(driver)
@@ -2800,7 +2800,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
 
         recorded_error = self._last_command_error
         if recorded_error is not None:
-            _raise_recorded_command_error(recorded_error)
+            _raise_as_migration_error(recorded_error)
 
         if dry_run:
             output_info(
@@ -2860,7 +2860,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     rich_message="[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n",
                 )
 
-            async with self.config.provide_session() as driver, self._lock_context(driver, dry_run=dry_run):
+            async with self.config.provide_session() as driver, self._hold_migration_lock(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
                 await self._validate_migration_schema(driver)
@@ -2984,7 +2984,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
 
         recorded_error = self._last_command_error
         if recorded_error is not None:
-            _raise_recorded_command_error(recorded_error)
+            _raise_as_migration_error(recorded_error)
 
         if dry_run:
             output_info(
@@ -2998,7 +2998,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         Args:
             revision: The revision to stamp.
         """
-        async with self.config.provide_session() as driver, self._lock_context(driver):
+        async with self.config.provide_session() as driver, self._hold_migration_lock(driver):
             await self.tracker.ensure_tracking_table(driver)
             applied = await self.tracker.get_applied_migrations(driver) if self.extension_reconcilers else []
             retained = self._retained_reconcile_versions(applied)
@@ -3207,7 +3207,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         if not report["checksum_mismatches"]:
             _, rerecord = self._applied_checksum_audit(applied_migrations, migration_files)
             if rerecord:
-                async with self.config.provide_session() as driver, self._lock_context(driver):
+                async with self.config.provide_session() as driver, self._hold_migration_lock(driver):
                     await self._rerecord_legacy_checksums(
                         driver, rerecord, dry_run=False, use_logger=ul, echo=echo_value, summary_only=summary_value
                     )
@@ -3308,7 +3308,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
 
         try:
             if update_database:
-                async with self.config.provide_session() as driver, self._lock_context(driver):
+                async with self.config.provide_session() as driver, self._hold_migration_lock(driver):
                     await self.tracker.ensure_tracking_table(driver)
                     applied_plans = [
                         plan
@@ -3388,7 +3388,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
 
             if update_database:
-                async with self.config.provide_session() as driver, self._lock_context(driver):
+                async with self.config.provide_session() as driver, self._hold_migration_lock(driver):
                     await self.tracker.ensure_tracking_table(driver)
                     applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
                     applied_versions = {m["version_num"] for m in applied_migrations}
@@ -3495,7 +3495,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             await self.tracker.remove_migration(driver, version_num)
 
     @asynccontextmanager
-    async def _lock_context(self, driver: Any, *, dry_run: bool = False) -> "AsyncIterator[None]":
+    async def _hold_migration_lock(self, driver: Any, *, dry_run: bool = False) -> "AsyncIterator[None]":
         """Hold an async tracker lock and preserve outer SQLite transactions across step commits.
 
         Yields:
@@ -3510,17 +3510,15 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             return
         lock_cm = cast("Any", acquire_lock(driver))
         async with lock_cm:
-            if isinstance(self.tracker, BaseMigrationTracker) and self.tracker.holds_transaction_lock(driver):
-                with self.runner.outer_lock(driver):
+            if isinstance(self.tracker, BaseMigrationTracker) and self.tracker.holds_transaction_scoped_lock(driver):
+                with self.runner.use_step_savepoints(driver):
                     step_error: BaseException | None = None
                     try:
                         yield
                     except BaseException as exc:
                         step_error = exc
                     if step_error is not None:
-                        if self.runner.consume_savepoint_recovery(driver) and await _driver_in_transaction_async(
-                            driver
-                        ):
+                        if self.runner.pop_savepoint_recovered(driver) and await _driver_in_transaction_async(driver):
                             try:
                                 await driver.commit()
                             except Exception as commit_exc:
@@ -3528,9 +3526,9 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                         raise step_error
                     recorded_error = self._last_command_error
                     if recorded_error is not None:
-                        self.runner.consume_savepoint_recovery(driver)
-                        if self.runner.consume_unrecovered_outer_lock_failure(driver):
-                            _raise_recorded_command_error(recorded_error)
+                        self.runner.pop_savepoint_recovered(driver)
+                        if self.runner.pop_unrecovered_step_failure(driver):
+                            _raise_as_migration_error(recorded_error)
             else:
                 yield
 
@@ -3986,7 +3984,7 @@ def _bind_arguments(signature: inspect.Signature, args: tuple[Any, ...], kwargs:
     return arguments
 
 
-def _raise_recorded_command_error(error: Exception) -> NoReturn:
+def _raise_as_migration_error(error: Exception) -> NoReturn:
     """Raise a recorded command error directly when already a ``MigrationError``."""
     if isinstance(error, MigrationError):
         raise error

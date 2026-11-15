@@ -878,7 +878,7 @@ async def test_reconciler_savepoint_start_discards_stale_recovery_marker(
         monkeypatch.setattr(runner_async, "_resolve_use_transaction", lambda _meta, _default: True)
         monkeypatch.setattr(runner_async, "_invoke_reconciler", _noop_async)
         driver_async: Any = _AsyncSavepointDriver()
-        with runner_async.outer_lock(driver_async):
+        with runner_async.use_step_savepoints(driver_async):
             runner_async._savepoint_recovered_drivers.add(id(driver_async))  # pyright: ignore[reportPrivateUsage]
             await runner_async._execute_reconciler_step(driver_async, descriptor, direction="up")  # pyright: ignore[reportPrivateUsage]
         assert observed_before_body == [False]
@@ -904,7 +904,7 @@ async def test_reconciler_savepoint_start_discards_stale_recovery_marker(
     monkeypatch.setattr(runner_sync, "_resolve_use_transaction", lambda _meta, _default: True)
     monkeypatch.setattr(runner_sync, "_invoke_reconciler", _noop_sync)
     driver_sync: Any = _SyncSavepointDriver()
-    with runner_sync.outer_lock(driver_sync):
+    with runner_sync.use_step_savepoints(driver_sync):
         runner_sync._savepoint_recovered_drivers.add(id(driver_sync))  # pyright: ignore[reportPrivateUsage]
         runner_sync._execute_reconciler_step(driver_sync, descriptor, direction="up")  # pyright: ignore[reportPrivateUsage]
     assert observed_sync == [False]
