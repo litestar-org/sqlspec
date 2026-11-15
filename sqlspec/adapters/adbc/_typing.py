@@ -15,7 +15,6 @@ from adbc_driver_manager import ProgrammingError as AdbcProgrammingError
 from adbc_driver_manager.dbapi import Connection
 from adbc_driver_manager.dbapi import Cursor as _AdbcRawCursor
 
-from sqlspec.adapters.adbc.core import resolve_dialect_name
 from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
@@ -115,6 +114,7 @@ class AdbcSessionContext:
             from sqlspec.adapters.adbc.driver import AdbcDriver
 
             driver_class = AdbcDriver
+        from sqlspec.adapters.adbc.core import resolve_dialect_name
 
         self._connection = self._acquire_connection()
         try:
