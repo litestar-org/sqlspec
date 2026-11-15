@@ -894,6 +894,9 @@ def test_bigquery_session_context_rolls_back_on_exception_when_in_transaction() 
         def _connection_in_transaction(self) -> bool:
             return True
 
+        def _close_open_streams(self, *, error: bool = False) -> None:
+            return None
+
         def _detach_connection(self) -> None:
             detached.append(True)
 

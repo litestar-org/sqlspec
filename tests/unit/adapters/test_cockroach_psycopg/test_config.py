@@ -404,6 +404,7 @@ async def test_cockroach_psycopg_async_session_context_resolves_callable_stateme
         driver_type = resolver.return_value
         driver_type.return_value._transaction_active = False
         driver_type.return_value._connection_in_transaction.return_value = False
+        driver_type.return_value._close_open_streams = AsyncMock()
         async with ctx:
             pass
 
