@@ -45,6 +45,8 @@ Configure the `events` extension on your database config (`EventsConfig`). When 
 | `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
 <!-- GENERATED:END config-table:sqlspec.config.EventsConfig -->
 
+`ack` and `nack` on the table-backed queues apply only to events the same channel instance received and still leases. An `ack` or `nack` for any other event is ignored and returns `False`; the event is redelivered after its lease expires.
+
 ```python
 import asyncio
 from sqlspec import SQLSpec

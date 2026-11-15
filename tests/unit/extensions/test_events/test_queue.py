@@ -456,9 +456,14 @@ async def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false(
     assert built_async._cleanup_on_ack is False
     assert built_async._use_run_in_transaction is True
 
+    leased_until = datetime(2026, 11, 13, 12, 0, 30, tzinfo=UTC)
+    owned_row = {"event_id": "event-1", "channel": "alerts", "attempts": 1, "lease_expires_at": leased_until}
     sync_statements: list[str] = []
 
     class FakeSyncSessionDriver:
+        def select_one_or_none(self, *_args: Any, **_kwargs: Any) -> Any:
+            return owned_row
+
         def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
             sync_statements.append(str(statement))
             return SimpleNamespace(rows_affected=1)
@@ -480,13 +485,17 @@ async def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false(
             yield FakeSyncSessionDriver()
 
     sync_queue = SyncTableEventQueue(cast("Any", SyncConfigStub()), cleanup_on_ack=False)
-    sync_queue.ack("event-1")
+    sync_queue._record_lease("event-1", "alerts", leased_until)
+    assert sync_queue.ack("event-1") is True
     assert len(sync_statements) == 1
     assert "DELETE FROM" not in sync_statements[0]
 
     async_statements: list[str] = []
 
     class FakeAsyncSessionDriver:
+        async def select_one_or_none(self, *_args: Any, **_kwargs: Any) -> Any:
+            return owned_row
+
         async def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
             async_statements.append(str(statement))
             return SimpleNamespace(rows_affected=1)
@@ -508,7 +517,8 @@ async def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false(
             yield FakeAsyncSessionDriver()
 
     async_queue = AsyncTableEventQueue(cast("Any", AsyncConfigStub()), cleanup_on_ack=False)
-    await async_queue.ack("event-1")
+    async_queue._record_lease("event-1", "alerts", leased_until)
+    assert await async_queue.ack("event-1") is True
     assert len(async_statements) == 1
     assert "DELETE FROM" not in async_statements[0]
 
@@ -756,9 +766,10 @@ async def test_nack_applies_exponential_backoff_and_fails_at_max_attempts(
         async_queue = AsyncTableEventQueue(async_cfg, max_attempts=5, retry_backoff_seconds=1.0)
         try:
             event_id = await async_queue.publish("orders", {"order": 1})
+            assert await async_queue.dequeue("orders") is not None
             async with async_cfg.provide_session(transaction=True) as driver:
                 await driver.execute(
-                    "UPDATE sqlspec_event_queue SET status = 'leased', attempts = :attempts, available_at = :now WHERE event_id = :event_id",
+                    "UPDATE sqlspec_event_queue SET attempts = :attempts, available_at = :now WHERE event_id = :event_id",
                     {"attempts": attempts, "now": fixed_now, "event_id": event_id},
                 )
                 await driver.commit()
@@ -783,9 +794,10 @@ async def test_nack_applies_exponential_backoff_and_fails_at_max_attempts(
         sync_queue = SyncTableEventQueue(sync_cfg, max_attempts=5, retry_backoff_seconds=1.0)
         try:
             event_id = sync_queue.publish("orders", {"order": 1})
+            assert sync_queue.dequeue("orders") is not None
             with sync_cfg.provide_session(transaction=True) as driver:
                 driver.execute(
-                    "UPDATE sqlspec_event_queue SET status = 'leased', attempts = :attempts, available_at = :now WHERE event_id = :event_id",
+                    "UPDATE sqlspec_event_queue SET attempts = :attempts, available_at = :now WHERE event_id = :event_id",
                     {"attempts": attempts, "now": fixed_now, "event_id": event_id},
                 )
                 driver.commit()

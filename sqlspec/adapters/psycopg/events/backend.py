@@ -382,12 +382,16 @@ class PsycopgSyncHybridEventsBackend:
             return self._dequeue_hinted(channel)
 
     def ack(self, event_id: str) -> None:
-        self._queue.ack(event_id)
-        self._runtime.increment_metric("events.ack")
+        if self._queue.ack(event_id):
+            self._runtime.increment_metric("events.ack")
+        else:
+            self._runtime.increment_metric("events.ack.unowned")
 
     def nack(self, event_id: str) -> None:
-        self._queue.nack(event_id)
-        self._runtime.increment_metric("events.nack")
+        if self._queue.nack(event_id):
+            self._runtime.increment_metric("events.nack")
+        else:
+            self._runtime.increment_metric("events.nack.unowned")
 
     def shutdown(self) -> None:
         hub = self._hub
@@ -554,12 +558,16 @@ class PsycopgAsyncHybridEventsBackend:
             return await self._dequeue_hinted(channel)
 
     async def ack(self, event_id: str) -> None:
-        await self._queue.ack(event_id)
-        self._runtime.increment_metric("events.ack")
+        if await self._queue.ack(event_id):
+            self._runtime.increment_metric("events.ack")
+        else:
+            self._runtime.increment_metric("events.ack.unowned")
 
     async def nack(self, event_id: str) -> None:
-        await self._queue.nack(event_id)
-        self._runtime.increment_metric("events.nack")
+        if await self._queue.nack(event_id):
+            self._runtime.increment_metric("events.nack")
+        else:
+            self._runtime.increment_metric("events.nack.unowned")
 
     async def shutdown(self) -> None:
         hub = self._hub

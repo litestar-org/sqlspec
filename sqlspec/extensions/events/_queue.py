@@ -39,6 +39,7 @@ _ACKED_STATUS = "acked"
 _FAILED_STATUS = "failed"
 _DEFAULT_TABLE = "sqlspec_event_queue"
 _MAX_EMPTY_POLL_CHANNELS = 1_024
+_MAX_TRACKED_LEASES = 10_000
 
 
 class _BaseTableEventQueue:
@@ -56,7 +57,9 @@ class _BaseTableEventQueue:
         "_empty_poll_lock",
         "_fail_statement",
         "_insert_statement",
+        "_lease_lock",
         "_lease_seconds",
+        "_leases",
         "_max_attempts",
         "_max_claim_attempts",
         "_nack_statement",
@@ -102,6 +105,8 @@ class _BaseTableEventQueue:
         self._dialect = str(self._statement_config.dialect or "").lower() if self._statement_config else ""
         self._empty_poll_delays: dict[str, float] = {}
         self._empty_poll_lock = threading.Lock()
+        self._lease_lock = threading.Lock()
+        self._leases: dict[str, tuple[str, datetime]] = {}
         self._table_name = normalize_queue_table_name(queue_table or _DEFAULT_TABLE)
         self._lease_seconds = 30 if lease_seconds is None else lease_seconds
         self._retention_seconds = 86_400 if retention_seconds is None else retention_seconds
@@ -207,25 +212,68 @@ class _BaseTableEventQueue:
         )
 
     def _ack_sql(self) -> str:
-        return f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at WHERE event_id = :event_id"
+        return (
+            f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at "
+            f"WHERE {self._owned_lease_predicate()}"
+        )
 
     def _nack_sql(self) -> str:
         return (
             f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL, "
-            "available_at = :available_at WHERE event_id = :event_id AND status = :leased_status"
+            f"available_at = :available_at WHERE {self._owned_lease_predicate()}"
         )
 
     def _fail_sql(self) -> str:
         return (
             f"UPDATE {self._table_name} SET status = :failed_status, lease_expires_at = NULL "
-            "WHERE event_id = :event_id AND status = :leased_status"
+            f"WHERE {self._owned_lease_predicate()}"
         )
 
     def _cleanup_sql(self) -> str:
         return f"DELETE FROM {self._table_name} WHERE status = :acked AND acknowledged_at IS NOT NULL AND acknowledged_at <= :cutoff"
 
     def _delete_by_id_sql(self) -> str:
-        return f"DELETE FROM {self._table_name} WHERE event_id = :event_id"
+        return f"DELETE FROM {self._table_name} WHERE {self._owned_lease_predicate()}"
+
+    @staticmethod
+    def _owned_lease_predicate() -> str:
+        return (
+            "event_id = :event_id AND channel = :channel AND status = :leased_status "
+            "AND lease_expires_at = :lease_expires_at"
+        )
+
+    def _record_lease(self, event_id: str, channel: str, leased_until: "datetime") -> None:
+        """Remember the lease this queue instance holds for a claimed event."""
+        with self._lease_lock:
+            self._leases.pop(event_id, None)
+            if len(self._leases) >= _MAX_TRACKED_LEASES:
+                self._leases.pop(next(iter(self._leases)))
+            self._leases[event_id] = (channel, leased_until)
+
+    def _claimed_event(self, row: "dict[str, Any]", leased_until: "datetime") -> EventMessage:
+        event = self._hydrate_event(row, leased_until, increment_attempts=True)
+        self._record_lease(event.event_id, event.channel, leased_until)
+        return event
+
+    def _take_lease(self, event_id: str) -> "tuple[str, datetime] | None":
+        with self._lease_lock:
+            return self._leases.pop(event_id, None)
+
+    def _owned_row(self, row: "dict[str, Any] | None", lease: "tuple[str, datetime]") -> "dict[str, Any] | None":
+        """Return the row when it still carries the lease this instance claimed."""
+        channel, leased_until = lease
+        if row is None or row.get("channel") != channel or not self._claim_verified(row, leased_until):
+            return None
+        return row
+
+    @staticmethod
+    def _owned_parameters(row: "dict[str, Any]") -> "dict[str, Any]":
+        return {
+            "event_id": row["event_id"],
+            "channel": row["channel"],
+            "leased_status": _LEASED_STATUS,
+            "lease_expires_at": row["lease_expires_at"],
+        }
 
     def _candidate_parameters(self, channel: str, current_time: "datetime") -> "dict[str, Any]":
         return {
@@ -422,7 +470,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 self._reset_empty_poll_delay(channel)
-                return self._hydrate_event(row, leased_until, increment_attempts=True)
+                return self._claimed_event(row, leased_until)
         return None
 
     def dequeue_by_event_id(self, event_id: str, channel: str) -> "EventMessage | None":
@@ -436,46 +484,48 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            event = self._hydrate_event(row, leased_until, increment_attempts=True)
+            event = self._claimed_event(row, leased_until)
             self._reset_empty_poll_delay(event.channel)
             return event
         return None
 
-    def ack(self, event_id: str) -> None:
+    def ack(self, event_id: str) -> bool:
+        lease = self._take_lease(event_id)
+        row = self._owned_row(self._fetch_by_event_id(event_id), lease) if lease is not None else None
+        if row is None:
+            self._runtime.increment_metric("events.ack.unowned")
+            return False
+        owned = self._owned_parameters(row)
         if self._cleanup_on_ack and self._retention_seconds <= 0:
-            self._execute(self._delete_by_id_statement, {"event_id": event_id})
+            self._execute(self._delete_by_id_statement, owned)
             self._runtime.increment_metric("events.ack")
-            return
+            return True
         now = self._utcnow()
-        self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
+        self._execute(self._ack_statement, {**owned, "acked": _ACKED_STATUS, "acked_at": now})
         if self._cleanup_on_ack:
             self._cleanup(now)
         self._runtime.increment_metric("events.ack")
+        return True
 
-    def nack(self, event_id: str) -> None:
-        row = self._fetch_by_event_id(event_id)
+    def nack(self, event_id: str) -> bool:
+        lease = self._take_lease(event_id)
+        row = self._owned_row(self._fetch_by_event_id(event_id), lease) if lease is not None else None
         if row is None:
-            self._runtime.increment_metric("events.nack")
-            return
+            self._runtime.increment_metric("events.nack.unowned")
+            return False
+        owned = self._owned_parameters(row)
         attempts = int(row["attempts"])
         if attempts >= self._max_attempts:
-            self._execute(
-                self._fail_statement,
-                {"failed_status": _FAILED_STATUS, "event_id": event_id, "leased_status": _LEASED_STATUS},
-            )
+            self._execute(self._fail_statement, {**owned, "failed_status": _FAILED_STATUS})
         else:
             now = self._utcnow()
             delay = self._retry_backoff_seconds * (2 ** max(0, attempts - 1))
             self._execute(
                 self._nack_statement,
-                {
-                    "pending": _PENDING_STATUS,
-                    "available_at": now + timedelta(seconds=delay),
-                    "event_id": event_id,
-                    "leased_status": _LEASED_STATUS,
-                },
+                {**owned, "pending": _PENDING_STATUS, "available_at": now + timedelta(seconds=delay)},
             )
         self._runtime.increment_metric("events.nack")
+        return True
 
     def shutdown(self) -> None:
         """Shutdown the backend (no-op for table queue)."""
@@ -565,7 +615,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                     driver.rollback()
                     return None
                 driver.commit()
-                return self._hydrate_event(row, leased_until, increment_attempts=True)
+                return self._claimed_event(row, leased_until)
             except Exception:
                 with suppress(Exception):
                     driver.rollback()
@@ -699,7 +749,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 self._reset_empty_poll_delay(channel)
-                return self._hydrate_event(row, leased_until, increment_attempts=True)
+                return self._claimed_event(row, leased_until)
         return None
 
     async def dequeue_by_event_id(self, event_id: str, channel: str) -> "EventMessage | None":
@@ -713,46 +763,48 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            event = self._hydrate_event(row, leased_until, increment_attempts=True)
+            event = self._claimed_event(row, leased_until)
             self._reset_empty_poll_delay(event.channel)
             return event
         return None
 
-    async def ack(self, event_id: str) -> None:
+    async def ack(self, event_id: str) -> bool:
+        lease = self._take_lease(event_id)
+        row = self._owned_row(await self._fetch_by_event_id(event_id), lease) if lease is not None else None
+        if row is None:
+            self._runtime.increment_metric("events.ack.unowned")
+            return False
+        owned = self._owned_parameters(row)
         if self._cleanup_on_ack and self._retention_seconds <= 0:
-            await self._execute(self._delete_by_id_statement, {"event_id": event_id})
+            await self._execute(self._delete_by_id_statement, owned)
             self._runtime.increment_metric("events.ack")
-            return
+            return True
         now = self._utcnow()
-        await self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
+        await self._execute(self._ack_statement, {**owned, "acked": _ACKED_STATUS, "acked_at": now})
         if self._cleanup_on_ack:
             await self._cleanup(now)
         self._runtime.increment_metric("events.ack")
+        return True
 
-    async def nack(self, event_id: str) -> None:
-        row = await self._fetch_by_event_id(event_id)
+    async def nack(self, event_id: str) -> bool:
+        lease = self._take_lease(event_id)
+        row = self._owned_row(await self._fetch_by_event_id(event_id), lease) if lease is not None else None
         if row is None:
-            self._runtime.increment_metric("events.nack")
-            return
+            self._runtime.increment_metric("events.nack.unowned")
+            return False
+        owned = self._owned_parameters(row)
         attempts = int(row["attempts"])
         if attempts >= self._max_attempts:
-            await self._execute(
-                self._fail_statement,
-                {"failed_status": _FAILED_STATUS, "event_id": event_id, "leased_status": _LEASED_STATUS},
-            )
+            await self._execute(self._fail_statement, {**owned, "failed_status": _FAILED_STATUS})
         else:
             now = self._utcnow()
             delay = self._retry_backoff_seconds * (2 ** max(0, attempts - 1))
             await self._execute(
                 self._nack_statement,
-                {
-                    "pending": _PENDING_STATUS,
-                    "available_at": now + timedelta(seconds=delay),
-                    "event_id": event_id,
-                    "leased_status": _LEASED_STATUS,
-                },
+                {**owned, "pending": _PENDING_STATUS, "available_at": now + timedelta(seconds=delay)},
             )
         self._runtime.increment_metric("events.nack")
+        return True
 
     async def shutdown(self) -> None:
         """Shutdown the backend (no-op for table queue)."""
@@ -849,7 +901,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                     await driver.rollback()
                     return None
                 await driver.commit()
-                return self._hydrate_event(row, leased_until, increment_attempts=True)
+                return self._claimed_event(row, leased_until)
             except Exception:
                 with suppress(Exception):
                     await driver.rollback()

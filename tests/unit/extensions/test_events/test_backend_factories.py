@@ -887,3 +887,68 @@ def test_all_postgres_backends_have_shutdown() -> None:
 
     for backend_class in backend_classes:
         assert hasattr(backend_class, "shutdown"), f"{backend_class.__name__} missing shutdown"
+
+
+class _RecordingRuntime:
+    def __init__(self) -> None:
+        self.metrics: list[str] = []
+
+    def increment_metric(self, name: str, value: float = 1.0) -> None:
+        del value
+        self.metrics.append(name)
+
+
+class _ScriptedQueue:
+    def __init__(self, results: "list[bool]") -> None:
+        self._results = results
+
+    def ack(self, event_id: str) -> Any:
+        del event_id
+        return self._result()
+
+    def nack(self, event_id: str) -> Any:
+        del event_id
+        return self._result()
+
+    def _result(self) -> bool:
+        return self._results.pop(0)
+
+
+class _AsyncScriptedQueue(_ScriptedQueue):
+    async def ack(self, event_id: str) -> bool:
+        return super().ack(event_id)
+
+    async def nack(self, event_id: str) -> bool:
+        return super().nack(event_id)
+
+
+@pytest.mark.parametrize("operation", ["ack", "nack"])
+@pytest.mark.parametrize(
+    "backend_path",
+    [
+        "sqlspec.adapters.asyncpg.events.backend:AsyncpgHybridEventsBackend",
+        "sqlspec.adapters.psqlpy.events.backend:PsqlpyHybridEventsBackend",
+        "sqlspec.adapters.psycopg.events.backend:PsycopgAsyncHybridEventsBackend",
+        "sqlspec.adapters.psycopg.events.backend:PsycopgSyncHybridEventsBackend",
+    ],
+)
+async def test_backend_counts_only_owned_settlements(backend_path: str, operation: str) -> None:
+    """Table-queue backends count ack and nack only when the queue owned the lease."""
+    pytest.importorskip("asyncpg")
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psqlpy")
+    import importlib
+
+    module_name, class_name = backend_path.split(":")
+    backend_class = getattr(importlib.import_module(module_name), class_name)
+    backend = object.__new__(backend_class)
+    runtime = _RecordingRuntime()
+    backend._runtime = runtime
+    backend._queue = (_AsyncScriptedQueue if backend_class.supports_async else _ScriptedQueue)([False, True])
+
+    for _ in range(2):
+        result = getattr(backend, operation)("event-1")
+        if isawaitable(result):
+            await result
+
+    assert runtime.metrics == [f"events.{operation}.unowned", f"events.{operation}"]
