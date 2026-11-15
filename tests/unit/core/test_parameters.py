@@ -2861,6 +2861,11 @@ def test_static_literal_escapes_per_dialect(dialect: str) -> None:
     literal = ParameterConverter._format_literal(value, dialect)
     if dialect in {"postgres", "redshift"}:
         assert literal == "E'x\\\\'' OR 1=1 -- '"
+    elif dialect == "mysql":
+        assert literal == "_utf8mb4 X'785C27204F5220313D31202D2D20'"
+        return
+    elif dialect in {"bigquery", "spanner"}:
+        assert literal == "'x\\\\\\' OR 1=1 -- '"
     else:
         assert literal == sqlglot.exp.Literal.string(value).sql(dialect=dialect)
     statement = sqlglot.parse_one(f"SELECT * FROM t WHERE name = {literal}", dialect=dialect)
@@ -2937,7 +2942,7 @@ def test_static_cache_is_dialect_specific() -> None:
     from sqlspec import StatementConfig
 
     value = "back\\slash"
-    expected_by_dialect = {"mysql": "select 'back\\\\slash'", "postgres": "select E'back\\\\slash'"}
+    expected_by_dialect = {"mysql": "select _utf8mb4 X'6261636B5C736C617368'", "postgres": "select E'back\\\\slash'"}
     for dialect in ("mysql", "postgres", "mysql"):
         sql, parameters = (
             SQL("select :x", {"x": value}, statement_config=StatementConfig(dialect=dialect)).as_script().compile()
@@ -3449,8 +3454,8 @@ def test_static_literal_separates_negative_numbers_after_minus(sql_template: str
 @pytest.mark.parametrize(
     ("dialect", "expected"),
     [
-        ("mysql", "'a\\\\''b'"),
-        ("mariadb", "'a\\\\''b'"),
+        ("mysql", "_utf8mb4 X'615C2762'"),
+        ("mariadb", "_utf8mb4 X'615C2762'"),
         ("postgres", "E'a\\\\''b'"),
         ("postgresql", "E'a\\\\''b'"),
         ("cockroach", "E'a\\\\''b'"),

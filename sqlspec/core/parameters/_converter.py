@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal
+from enum import Enum
 from math import isfinite
 from typing import Any, Final
 
@@ -76,6 +77,10 @@ _POSTGRES_ESCAPE_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
     "redshift",
 })
 
+_FIRST_PRINTABLE_ORDINAL: Final = 0x20
+_GOOGLESQL_LITERAL_DIALECTS: Final[frozenset[str]] = frozenset({"spanner", "bigquery"})
+_GOOGLESQL_ESCAPES: Final[dict[str, str]] = {"\\": "\\\\", "'": "\\'", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
 _ORDERED_PARAM_INFO_MIN_SIZE = 2
 _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
     ParameterStyle.QMARK,
@@ -85,6 +90,20 @@ _INDEX_STYLES: Final[frozenset[ParameterStyle]] = frozenset({ParameterStyle.NUME
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
+def _googlesql_string_literal(text: str) -> str:
+    """Render a GoogleSQL single-quoted string literal using backslash escapes."""
+    pieces: list[str] = []
+    for char in text:
+        escaped = _GOOGLESQL_ESCAPES.get(char)
+        if escaped is not None:
+            pieces.append(escaped)
+        elif ord(char) < _FIRST_PRINTABLE_ORDINAL:
+            pieces.append(f"\\x{ord(char):02x}")
+        else:
+            pieces.append(char)
+    return "'" + "".join(pieces) + "'"
+
+
 class ParameterConverter:
     """Parameter style conversion helper."""
 
@@ -580,6 +599,8 @@ class ParameterConverter:
         emit explicit ``E'...'`` escape strings so literals remain safe even when
         ``standard_conforming_strings`` is disabled.
         """
+        while isinstance(param_value, Enum):
+            param_value = param_value.value
         if param_value is None:
             return "NULL"
         if isinstance(param_value, bool):
@@ -614,6 +635,13 @@ class ParameterConverter:
                 msg = "Cannot embed a string containing a backslash in statically compiled SQL without a dialect"
                 raise SQLSpecError(msg)
             return "'" + text.replace("'", "''") + "'"
+        if literal_dialect in _GOOGLESQL_LITERAL_DIALECTS:
+            return _googlesql_string_literal(text)
+        if literal_dialect == "mysql" and "\\" in text:
+            if "\x00" in text:
+                msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+                raise SQLSpecError(msg)
+            return f"_utf8mb4 X'{text.encode('utf-8').hex().upper()}'"
         if literal_dialect in _POSTGRES_ESCAPE_STRING_DIALECTS:
             if "\x00" in text:
                 msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
