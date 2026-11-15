@@ -176,6 +176,7 @@ async def test_stream_closes_portal_before_owned_transaction(owns_transaction: b
     cursor._portal_name = "portal"
     cursor._close_portal = AsyncMock(side_effect=lambda _: calls.append("portal"))
     source._cursor = cursor  # pyright: ignore[reportPrivateUsage]
+    source._connection = connection  # pyright: ignore[reportPrivateUsage]
     if owns_transaction:
         source._transaction = MagicMock(  # pyright: ignore[reportPrivateUsage]
             commit=AsyncMock(side_effect=lambda: calls.append("commit")),
@@ -197,6 +198,7 @@ async def test_stream_cleanup_failure_retires_connection(failure: BaseException)
     source._cursor = MagicMock(  # pyright: ignore[reportPrivateUsage]
         _portal_name="portal", _close_portal=AsyncMock(side_effect=failure)
     )
+    source._connection = connection  # pyright: ignore[reportPrivateUsage]
 
     with pytest.raises(type(failure)):
         await source.close(error=True)

@@ -437,7 +437,9 @@ async def test_psycopg_async_stream_source_and_cockroach_delegation() -> None:
     await with_resolver_async.close()
 
     underlying_double = SimpleNamespace(column_types={"a": "int64"})
-    sync_wrapper = CockroachPsycopgSyncStreamSource(cast("Any", object()), cast("Any", underlying_double), False)
+    sync_wrapper = CockroachPsycopgSyncStreamSource(
+        cast("Any", SimpleNamespace(connection=None)), cast("Any", underlying_double), False
+    )
     async_wrapper = CockroachPsycopgAsyncStreamSource(
         cast("Any", object()), cast("Any", object()), cast("Any", underlying_double)
     )
