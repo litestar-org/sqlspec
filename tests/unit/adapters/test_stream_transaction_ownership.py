@@ -37,6 +37,9 @@ class FakeTransaction:
     async def start(self) -> None:
         return None
 
+    def cursor(self, *args: Any, **kwargs: Any) -> Any:
+        return FakeCursor(self.calls, self.label)
+
     async def begin(self) -> None:
         return None
 
