@@ -2310,7 +2310,12 @@ class CommonDriverAttributesMixin:
         return stream
 
     def _mark_closed(self) -> None:
-        """Invalidate open streams and replace driver.connection with the closed sentinel."""
+        """Replace driver.connection with the closed sentinel, then invalidate open streams.
+
+        The sentinel is installed first so a stream closing here sees that the session no longer owns its
+        connection and leaves the released connection untouched.
+        """
+        self.connection = _CLOSED_CONNECTION
         open_streams = self._open_streams
         self._open_streams = []
         for open_stream in open_streams:
@@ -2318,7 +2323,6 @@ class CommonDriverAttributesMixin:
                 open_stream._close_for_session_exit(error=True)
             else:
                 open_stream._mark_session_closed()
-        self.connection = _CLOSED_CONNECTION
         self._auto_begin_on_write = False
         self._stmt_cache_enabled = False
         self._transaction_depth = 0

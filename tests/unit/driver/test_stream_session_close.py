@@ -11,7 +11,9 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.driver._routing import SyncRoutingSession
+from sqlspec.driver._stream import SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError
 
 _QUERY = "select x from t order by x"
@@ -170,3 +172,32 @@ async def test_second_session_never_sees_first_stream_rows(mode: str, database: 
             seen.extend(await drain(stream))
         await resolve(second.rollback())
     assert seen == [{"x": "A0"}]
+
+
+class ConnectionProbeSource:
+    """Sync stream source that records which connection its driver holds when it closes."""
+
+    def __init__(self, driver: Any) -> None:
+        self._driver = driver
+        self.connection_at_close: Any = None
+
+    def start(self) -> None:
+        return None
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        return []
+
+    def close(self, error: bool = False) -> None:
+        self.connection_at_close = self._driver.connection
+
+
+def test_mark_closed_installs_closed_sentinel_before_closing_streams(database: str) -> None:
+    config = SqliteConfig(connection_config={"database": database})
+    try:
+        with config.provide_session() as session:
+            source = ConnectionProbeSource(session)
+            session._register_open_stream(SyncRowStream(source))
+            session._mark_closed()
+            assert source.connection_at_close is _CLOSED_CONNECTION
+    finally:
+        config.close_pool()

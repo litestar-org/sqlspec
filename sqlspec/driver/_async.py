@@ -1357,13 +1357,22 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
     async def _close_open_streams(self, *, error: bool = False) -> None:
         """Close every registered row stream before the session releases its connection.
 
+        Every stream is closed even when an earlier close raises; the first such error is then re-raised.
+
         Args:
             error: Whether the session is ending because of an error.
         """
         open_streams = self._open_streams
         self._open_streams = []
+        first_error: BaseException | None = None
         for open_stream in open_streams:
-            await open_stream._aclose_for_session_exit(error=error)
+            try:
+                await open_stream._aclose_for_session_exit(error=error)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
         """Adapter hook returning a native row stream, or None when unsupported."""

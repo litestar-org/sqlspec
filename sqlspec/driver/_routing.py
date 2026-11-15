@@ -351,8 +351,15 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         Args:
             error: Whether the session is ending because of an error.
         """
+        first_error: BaseException | None = None
         for driver in self._open_drivers():
-            driver._close_open_streams(error=error)
+            try:
+                driver._close_open_streams(error=error)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def close(self) -> None:
         """Release all physical checkouts and prevent further execution."""
@@ -1077,8 +1084,15 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         Args:
             error: Whether the session is ending because of an error.
         """
+        first_error: BaseException | None = None
         for driver in self._open_drivers():
-            await driver._close_open_streams(error=error)
+            try:
+                await driver._close_open_streams(error=error)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     async def aclose(self) -> None:
         """Release all physical checkouts and prevent further execution."""
