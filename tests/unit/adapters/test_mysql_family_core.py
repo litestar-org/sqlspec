@@ -146,3 +146,7 @@ def test_mysql_replica_readonly_is_internal_and_preserves_init_command(
     assert "_replica_read_only" not in rw_replica.driver_features
     assert ro_replica._read_only is True
     assert rw_replica._read_only is False
+
+    undocumented = config_cls(connection_config={"host": "writer", "read_only": True})
+    assert undocumented._read_only is False
+    assert undocumented.connection_config["read_only"] is True

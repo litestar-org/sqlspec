@@ -337,12 +337,18 @@ def _apply_deq_options(
     Oracle AQ ``deqoptions.correlation`` interprets ``_`` and ``%`` as SQL ``LIKE``
     wildcards, so classic AQ channel names containing either character filter on
     exact ``corrid`` equality via ``deqoptions.condition`` instead. Transactional
-    Event Queues (``txeventq``) reject SQL ``condition`` filters and use
-    ``deqoptions.correlation`` directly.
+    Event Queues (``txeventq``) reject SQL ``condition`` filters and must reject
+    channel names containing ``_`` or ``%`` rather than silently matching wildcards.
     """
     options = queue.deqoptions
     options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
-    if allow_condition and ("_" in correlation or "%" in correlation):
+    if "_" in correlation or "%" in correlation:
+        if not allow_condition:
+            msg = (
+                f"TxEventQ channel name {correlation!r} cannot contain '_' or '%' because "
+                "Oracle deqoptions.correlation interprets them as LIKE wildcards"
+            )
+            raise EventChannelError(msg)
         escaped = correlation.replace("'", "''")
         options.condition = f"corrid = '{escaped}'"
     else:

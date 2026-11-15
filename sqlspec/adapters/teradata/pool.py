@@ -34,10 +34,12 @@ class TeradataConnectionPool:
 
     __slots__ = (
         "_autocommit_baseline",
+        "_clean_release_ids",
         "_closed",
         "_condition",
         "_connection_config",
         "_creating",
+        "_dirty_query_band_ids",
         "_generation",
         "_health_check_interval",
         "_in_use",
@@ -91,9 +93,11 @@ class TeradataConnectionPool:
         health_interval_seconds = float(health_check_interval)
         self._connection_config = build_connection_config(connection_config)
         self._autocommit_baseline = self._connection_config.pop("autocommit", True)
+        self._clean_release_ids: set[int] = set()
         self._closed = False
         self._condition = threading.Condition()
         self._creating = 0
+        self._dirty_query_band_ids: set[int] = set()
         self._generation = 0
         self._health_check_interval = health_interval_seconds
         self._in_use: dict[int, tuple[Any, float, float]] = {}
@@ -206,7 +210,10 @@ class TeradataConnectionPool:
                         connection.close()
                         msg = "Teradata pool closed during checkout"
                         raise DatabaseConnectionError(msg)
-                    self._in_use[id(connection)] = (connection, created, now)
+                    conn_id = id(connection)
+                    self._in_use[conn_id] = (connection, created, now)
+                    self._clean_release_ids.discard(conn_id)
+                    self._dirty_query_band_ids.discard(conn_id)
                 return connection
             finally:
                 with self._condition:
@@ -216,8 +223,12 @@ class TeradataConnectionPool:
     def release(self, connection: Any, *, discard: bool = False) -> None:
         """Sanitize a lease and return it to the idle pool."""
         self.check_pid()
+        conn_id = id(connection)
         with self._condition:
-            entry = self._in_use.get(id(connection))
+            entry = self._in_use.get(conn_id)
+            clean_release = conn_id in self._clean_release_ids and conn_id not in self._dirty_query_band_ids
+            self._clean_release_ids.discard(conn_id)
+            self._dirty_query_band_ids.discard(conn_id)
         if entry is None:
             return
         if not discard:
@@ -225,7 +236,8 @@ class TeradataConnectionPool:
                 if connection.autocommit is False:
                     connection.rollback()
                 connection.autocommit = self._autocommit_baseline
-                self._reset_session_query_band(connection)
+                if not clean_release:
+                    self._reset_session_query_band(connection)
             except Exception:
                 discard = True
         with self._condition:
@@ -295,6 +307,27 @@ class TeradataConnectionPool:
         self.check_pid()
         with self._condition:
             return len(self._in_use)
+
+    def mark_query_band_clean(self, connection: Any) -> None:
+        """Mark a checked-out connection clean for release unless a nested lease dirtied it."""
+        conn_id = id(connection)
+        with self._condition:
+            if conn_id not in self._in_use or conn_id in self._dirty_query_band_ids:
+                return
+            if (
+                getattr(self._thread_local, "connection", None) is connection
+                and getattr(self._thread_local, "depth", 0) > 1
+            ):
+                return
+            self._clean_release_ids.add(conn_id)
+
+    def mark_query_band_dirty(self, connection: Any) -> None:
+        """Record that a checked-out connection modified its session query band."""
+        conn_id = id(connection)
+        with self._condition:
+            if conn_id in self._in_use:
+                self._dirty_query_band_ids.add(conn_id)
+                self._clean_release_ids.discard(conn_id)
 
     def _reset_session_query_band(self, connection: Any) -> None:
         """Reset the session query band to the configured baseline or NONE."""

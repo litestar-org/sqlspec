@@ -824,12 +824,33 @@ async def _disconnect_raw_async(raw_cnx: Any) -> None:
                 await close_res
 
 
+def _sync_autocommit_enabled(conn: Any) -> bool:
+    """Return whether autocommit is active on a sync mysql-connector connection without querying the server."""
+    if getattr(conn, "in_transaction", False):
+        return False
+    conn_dict = getattr(conn, "__dict__", None)
+    if isinstance(conn_dict, dict):
+        direct = conn_dict.get("autocommit")
+        if isinstance(direct, bool):
+            return direct
+    raw_cnx = getattr(conn, "_cnx", None)
+    if raw_cnx is not None:
+        raw_autocommit = getattr(raw_cnx, "_autocommit", None)
+        if isinstance(raw_autocommit, bool):
+            return raw_autocommit
+    local_autocommit = getattr(conn, "_autocommit", None)
+    if isinstance(local_autocommit, bool):
+        return local_autocommit
+    autocommit = getattr(conn, "autocommit", False)
+    return autocommit if isinstance(autocommit, bool) else False
+
+
 def _rollback_and_close_sync(conn: Any, exc_type: "type[BaseException] | None") -> None:
     """Roll back open work, return the pooled wrapper, and disconnect the socket when either step fails."""
     raw_cnx = getattr(conn, "_cnx", None)
     failure: BaseException | None = None
     try:
-        if not getattr(conn, "autocommit", False):
+        if not _sync_autocommit_enabled(conn):
             conn.rollback()
     except BaseException as exc:
         failure = exc

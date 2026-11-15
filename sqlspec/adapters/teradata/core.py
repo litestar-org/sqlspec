@@ -198,14 +198,6 @@ def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, A
     return {k: v for k, v in result.items() if v is not None}
 
 
-def _validate_query_band_pair(key: str, value: str) -> str:
-    """Validate a single query-band key/value pair and escape SQL single quotes."""
-    if not _QUERY_BAND_KEY_PATTERN.fullmatch(key) or any(c in value for c in ";\r\n\x00"):
-        msg = "Invalid query band key or value"
-        raise ImproperConfigurationError(msg)
-    return f"{key}={value.replace(chr(39), chr(39) * 2)}"
-
-
 def format_query_band(query_band: Mapping[str, str] | str) -> str:
     """Validate query-band values and escape SQL literals."""
     if isinstance(query_band, str):
@@ -432,3 +424,11 @@ def parse_teradata_replica_endpoint(endpoint: str) -> dict[str, Any]:
     if parsed.path.strip("/"):
         config["database"] = unquote(parsed.path.strip("/"))
     return config
+
+
+def _validate_query_band_pair(key: str, value: str) -> str:
+    """Validate a single query-band key/value pair and escape SQL single quotes."""
+    if not _QUERY_BAND_KEY_PATTERN.fullmatch(key) or any(c in value for c in ";\r\n\x00"):
+        msg = "Invalid query band key or value"
+        raise ImproperConfigurationError(msg)
+    return f"{key}={value.replace(chr(39), chr(39) * 2)}"

@@ -351,7 +351,6 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         **kwargs: Any,
     ) -> None:
         connection_config = build_connection_config(connection_config)
-        explicit_read_only = connection_config.pop("read_only", None)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -361,10 +360,9 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
             "on_connection_create", None
         )
         replica_read_only = features_dict.pop("_replica_read_only", None)
-        is_replica_read_only = (
+        self._read_only: bool = (
             bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
         )
-        self._read_only: bool = bool(explicit_read_only) if explicit_read_only is not None else is_replica_read_only
 
         features_dict.setdefault("enable_local_infile_bulk_load", connection_config["local_infile"])
         if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
@@ -492,7 +490,6 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
-        read_only = bool(config.pop("read_only", False)) or self._read_only
         connection_factory = None
         if self.driver_features.get("enable_cloud_sql", False):
             connection_factory = self._setup_cloud_sql_connector(config)
@@ -503,7 +500,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
                 health_check_interval=health_check,
                 on_connection_create=self._user_connection_hook,
                 connection_factory=connection_factory,
-                read_only=read_only,
+                read_only=self._read_only,
             )
         except BaseException as exc:
             if self._cloud_sql_connector is not None:

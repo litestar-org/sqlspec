@@ -236,3 +236,45 @@ def test_pymysql_nested_acquire_rolls_back_only_on_outermost_release() -> None:
         conn.rollback.assert_called_once()
     finally:
         pool.close()
+
+
+@pytest.mark.parametrize(
+    ("raw_autocommit", "in_transaction", "expected_rollbacks"),
+    [
+        pytest.param(True, False, 0, id="autocommit-on-idle"),
+        pytest.param(False, False, 1, id="autocommit-off-idle"),
+        pytest.param(True, True, 1, id="autocommit-on-in-tx"),
+    ],
+)
+def test_mysqlconnector_sync_release_reads_local_autocommit_without_server_query(
+    raw_autocommit: bool, in_transaction: bool, expected_rollbacks: int
+) -> None:
+    """Sync pool release inspects _cnx._autocommit and in_transaction without triggering .autocommit SQL."""
+    from types import SimpleNamespace
+
+    class _PooledConn:
+        def __init__(self) -> None:
+            self._cnx = SimpleNamespace(_autocommit=raw_autocommit)
+            self.in_transaction = in_transaction
+            self.rollbacks = 0
+            self.closed = 0
+
+        @property
+        def autocommit(self) -> bool:
+            msg = ".autocommit property must not be queried on pooled release"
+            raise AssertionError(msg)
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+        def close(self) -> None:
+            self.closed += 1
+
+    conn = _PooledConn()
+    pool_mock = MagicMock(get_connection=MagicMock(return_value=conn))
+    config = MysqlConnectorSyncConfig(connection_config={"pool_reset_session": True}, connection_instance=pool_mock)
+    with config.provide_connection() as acquired:
+        assert acquired is conn
+
+    assert conn.rollbacks == expected_rollbacks
+    assert conn.closed == 1

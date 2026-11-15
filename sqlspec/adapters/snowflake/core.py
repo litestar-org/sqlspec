@@ -117,35 +117,6 @@ _TYPED_BINDING_TYPE_NAMES: Final[frozenset[str]] = frozenset({
 })
 
 
-class _SnowflakeTupleConverter:
-    __slots__ = ("_serializer",)
-
-    def __init__(self, serializer: Callable[[Any], str]) -> None:
-        self._serializer = serializer
-
-    def __call__(self, value: Any) -> Any:
-        if (
-            len(value) == _TYPED_BINDING_SIZE
-            and isinstance(value[0], str)
-            and value[0].upper() in _TYPED_BINDING_TYPE_NAMES
-        ):
-            return value
-        return self._serializer(list(value))
-
-
-def _with_server_tuple_bindings(statement_config: StatementConfig, serializer: Callable[[Any], str]) -> StatementConfig:
-    if statement_config.parameter_config.default_execution_parameter_style not in {
-        ParameterStyle.QMARK,
-        ParameterStyle.POSITIONAL_COLON,
-    }:
-        return statement_config
-    type_map = dict(statement_config.parameter_config.type_coercion_map)
-    type_map[tuple] = _SnowflakeTupleConverter(serializer)
-    return statement_config.replace(
-        parameter_config=statement_config.parameter_config.replace(type_coercion_map=type_map)
-    )
-
-
 def build_profile(*, paramstyle: str = "qmark") -> DriverParameterProfile:
     """Build a Snowflake parameter profile for the connector binding mode."""
     if paramstyle == "qmark":
@@ -228,73 +199,6 @@ def apply_driver_features(
         parameter_config=statement_config.parameter_config.with_json_serializers(serializer, deserializer=deserializer)
     )
     return _with_server_tuple_bindings(statement_config, serializer), features
-
-
-def _normalize_authenticator(value: str) -> str:
-    parsed = urlsplit(value)
-    host = parsed.hostname or ""
-    if parsed.scheme == "https" and any(
-        host.endswith(suffix) for suffix in (".okta.com", ".oktapreview.com", ".okta-emea.com")
-    ):
-        return value
-    result = _AUTH_ALIASES.get(value.lower())
-    if result is None:
-        msg = "Unsupported Snowflake authentication type"
-        raise ImproperConfigurationError(msg)
-    return result
-
-
-def _normalize_authentication(params: dict[str, Any]) -> None:
-    """Resolve authenticator aliases and reject conflicting login modes."""
-    auth_type = params.pop("auth_type", None)
-    authenticator = params.get("authenticator")
-    if auth_type is not None:
-        if str(auth_type).lower() == "okta":
-            if authenticator is None or not str(authenticator).startswith("https://"):
-                msg = "Snowflake Okta authentication requires an HTTPS authenticator URL"
-                raise ImproperConfigurationError(msg)
-            params["authenticator"] = _normalize_authenticator(str(authenticator))
-        else:
-            selected = _normalize_authenticator(str(auth_type))
-            if authenticator is not None and selected != _normalize_authenticator(str(authenticator)):
-                msg = "Snowflake auth_type and authenticator conflict"
-                raise ImproperConfigurationError(msg)
-            params["authenticator"] = selected
-    elif authenticator is not None:
-        params["authenticator"] = _normalize_authenticator(str(authenticator))
-
-
-def _normalize_private_key(params: dict[str, Any]) -> None:
-    """Normalize key objects, file paths, and encrypted key passphrases."""
-    passphrase = params.pop("private_key_passphrase", None)
-    password = passphrase.encode("utf-8") if isinstance(passphrase, str) else passphrase
-    key = params.pop("private_key", None)
-    if isinstance(key, Path) or (isinstance(key, str) and not key.lstrip().startswith("-----BEGIN")):
-        params["private_key_file"] = str(key)
-    elif isinstance(key, bytes):
-        params["private_key"] = key
-    elif key is not None:
-        serialization = import_optional("cryptography.hazmat.primitives.serialization")
-        if serialization is None:
-            raise MissingDependencyError(package="cryptography", install_package="snowflake")
-        if isinstance(key, str):
-            key = serialization.load_pem_private_key(key.encode("utf-8"), password=password)
-        if not callable(getattr(key, "private_bytes", None)):
-            msg = "Snowflake private_key must be DER bytes, PEM text, a path, or a private key object"
-            raise ImproperConfigurationError(msg)
-        params["private_key"] = key.private_bytes(
-            serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        )
-    if params.get("private_key_file") is not None:
-        params["private_key_file"] = str(params["private_key_file"])
-        if password is not None:
-            file_password = password
-            if isinstance(password, bytes):
-                with contextlib.suppress(UnicodeDecodeError):
-                    file_password = password.decode("utf-8")
-            params.setdefault("private_key_file_pwd", file_password)
-    if "private_key" in params or "private_key_file" in params:
-        params.setdefault("authenticator", "SNOWFLAKE_JWT")
 
 
 def normalize_connection_params(connection_config: Mapping[str, Any]) -> dict[str, Any]:
@@ -495,22 +399,6 @@ def resolve_rowcount(cursor: Any) -> int:
     return int(count) if count is not None and count >= 0 else -1
 
 
-def _normalize_server_binding(value: Any) -> Any:
-    if isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None:
-        return ("TIMESTAMP_TZ", value)
-    return value
-
-
-def _normalize_server_parameters(parameters: Any) -> Any:
-    if isinstance(parameters, Mapping):
-        return {key: _normalize_server_binding(value) for key, value in parameters.items()}
-    if isinstance(parameters, tuple):
-        return tuple(_normalize_server_binding(value) for value in parameters)
-    if isinstance(parameters, list):
-        return [_normalize_server_binding(value) for value in parameters]
-    return _normalize_server_binding(parameters)
-
-
 def normalize_execute_parameters(parameters: Any, *, paramstyle: str = "qmark") -> Any:
     """Preserve aware datetime offsets for server bindings and omit empty bindings."""
     if parameters is None or (isinstance(parameters, (list, tuple, dict)) and not parameters):
@@ -634,10 +522,6 @@ def build_empty_arrow_table_from_description(
     return pa.Table.from_batches([], schema=pa.schema(fields))
 
 
-driver_profile = build_profile()
-default_statement_config = build_statement_config()
-
-
 def format_snowflake_identifier(identifier: str) -> str:
     """Validate a 1- to 3-part identifier and quote each part under Snowflake folding.
 
@@ -679,3 +563,119 @@ def connection_paramstyle(connection: Any) -> str:
     """
     style = str(getattr(connection, "paramstyle", None) or getattr(connection, "_paramstyle", None) or "qmark").lower()
     return style if style in {"qmark", "numeric", "pyformat", "format"} else "qmark"
+
+
+def _normalize_authenticator(value: str) -> str:
+    parsed = urlsplit(value)
+    host = parsed.hostname or ""
+    if parsed.scheme == "https" and any(
+        host.endswith(suffix) for suffix in (".okta.com", ".oktapreview.com", ".okta-emea.com")
+    ):
+        return value
+    result = _AUTH_ALIASES.get(value.lower())
+    if result is None:
+        msg = "Unsupported Snowflake authentication type"
+        raise ImproperConfigurationError(msg)
+    return result
+
+
+def _normalize_authentication(params: dict[str, Any]) -> None:
+    """Resolve authenticator aliases and reject conflicting login modes."""
+    auth_type = params.pop("auth_type", None)
+    authenticator = params.get("authenticator")
+    if auth_type is not None:
+        if str(auth_type).lower() == "okta":
+            if authenticator is None or not str(authenticator).startswith("https://"):
+                msg = "Snowflake Okta authentication requires an HTTPS authenticator URL"
+                raise ImproperConfigurationError(msg)
+            params["authenticator"] = _normalize_authenticator(str(authenticator))
+        else:
+            selected = _normalize_authenticator(str(auth_type))
+            if authenticator is not None and selected != _normalize_authenticator(str(authenticator)):
+                msg = "Snowflake auth_type and authenticator conflict"
+                raise ImproperConfigurationError(msg)
+            params["authenticator"] = selected
+    elif authenticator is not None:
+        params["authenticator"] = _normalize_authenticator(str(authenticator))
+
+
+def _normalize_private_key(params: dict[str, Any]) -> None:
+    """Normalize key objects, file paths, and encrypted key passphrases."""
+    passphrase = params.pop("private_key_passphrase", None)
+    password = passphrase.encode("utf-8") if isinstance(passphrase, str) else passphrase
+    key = params.pop("private_key", None)
+    if isinstance(key, Path) or (isinstance(key, str) and not key.lstrip().startswith("-----BEGIN")):
+        params["private_key_file"] = str(key)
+    elif isinstance(key, bytes):
+        params["private_key"] = key
+    elif key is not None:
+        serialization = import_optional("cryptography.hazmat.primitives.serialization")
+        if serialization is None:
+            raise MissingDependencyError(package="cryptography", install_package="snowflake")
+        if isinstance(key, str):
+            key = serialization.load_pem_private_key(key.encode("utf-8"), password=password)
+        if not callable(getattr(key, "private_bytes", None)):
+            msg = "Snowflake private_key must be DER bytes, PEM text, a path, or a private key object"
+            raise ImproperConfigurationError(msg)
+        params["private_key"] = key.private_bytes(
+            serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    if params.get("private_key_file") is not None:
+        params["private_key_file"] = str(params["private_key_file"])
+        if password is not None:
+            file_password = password
+            if isinstance(password, bytes):
+                with contextlib.suppress(UnicodeDecodeError):
+                    file_password = password.decode("utf-8")
+            params.setdefault("private_key_file_pwd", file_password)
+    if "private_key" in params or "private_key_file" in params:
+        params.setdefault("authenticator", "SNOWFLAKE_JWT")
+
+
+def _normalize_server_binding(value: Any) -> Any:
+    if isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None:
+        return ("TIMESTAMP_TZ", value)
+    return value
+
+
+def _normalize_server_parameters(parameters: Any) -> Any:
+    if isinstance(parameters, Mapping):
+        return {key: _normalize_server_binding(value) for key, value in parameters.items()}
+    if isinstance(parameters, tuple):
+        return tuple(_normalize_server_binding(value) for value in parameters)
+    if isinstance(parameters, list):
+        return [_normalize_server_binding(value) for value in parameters]
+    return _normalize_server_binding(parameters)
+
+
+class _SnowflakeTupleConverter:
+    __slots__ = ("_serializer",)
+
+    def __init__(self, serializer: Callable[[Any], str]) -> None:
+        self._serializer = serializer
+
+    def __call__(self, value: Any) -> Any:
+        if (
+            len(value) == _TYPED_BINDING_SIZE
+            and isinstance(value[0], str)
+            and value[0].upper() in _TYPED_BINDING_TYPE_NAMES
+        ):
+            return value
+        return self._serializer(list(value))
+
+
+def _with_server_tuple_bindings(statement_config: StatementConfig, serializer: Callable[[Any], str]) -> StatementConfig:
+    if statement_config.parameter_config.default_execution_parameter_style not in {
+        ParameterStyle.QMARK,
+        ParameterStyle.POSITIONAL_COLON,
+    }:
+        return statement_config
+    type_map = dict(statement_config.parameter_config.type_coercion_map)
+    type_map[tuple] = _SnowflakeTupleConverter(serializer)
+    return statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(type_coercion_map=type_map)
+    )
+
+
+driver_profile = build_profile()
+default_statement_config = build_statement_config()

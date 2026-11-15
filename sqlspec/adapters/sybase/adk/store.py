@@ -1,6 +1,8 @@
 """Sybase ASE ADK stores for Google Agent Development Kit session storage."""
 
 import contextlib
+import secrets
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NoReturn, cast
 
@@ -13,7 +15,7 @@ from sqlspec.adapters.sybase.core import (
     resolve_rowcount,
     split_schema_and_table,
 )
-from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.exceptions import DeadlockError, NotFoundError, SQLSpecError, UniqueViolationError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -21,7 +23,7 @@ from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from datetime import timedelta
 
     from sqlspec.adapters.sybase.config import SybaseConfig
@@ -34,6 +36,9 @@ __all__ = ("SybaseADKMemoryStore", "SybaseADKStore")
 SYBASE_TABLE_NOT_FOUND_ERROR: Final[int] = 208
 SYBASE_SCHEMA: Final[str] = "dbo"
 JSON_COLUMN_TYPE: Final[str] = "TEXT"
+_SYBASE_RETRY_MAX_ATTEMPTS: Final[int] = 5
+_SYBASE_RETRY_BASE_SECONDS: Final[float] = 0.002
+_SYBASE_RETRY_MAX_SECONDS: Final[float] = 0.05
 
 
 class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
@@ -98,7 +103,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         else:
             params = (session_id, app_name, user_id, to_json(state))
 
-        app_lock_sql = f"SELECT state FROM {_table_ref(self._app_state_table)} HOLDLOCK WHERE app_name = %s"
+        app_lock_sql = f"UPDATE {_table_ref(self._app_state_table)} SET state = state WHERE app_name = %s"
         app_read_sql = f"SELECT state FROM {_table_ref(self._app_state_table)} WHERE app_name = %s"
         app_update_sql = f"""
         UPDATE {_table_ref(self._app_state_table)}
@@ -111,7 +116,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         """
 
         user_lock_sql = (
-            f"SELECT state FROM {_table_ref(self._user_state_table)} HOLDLOCK WHERE app_name = %s AND user_id = %s"
+            f"UPDATE {_table_ref(self._user_state_table)} SET state = state WHERE app_name = %s AND user_id = %s"
         )
         user_read_sql = f"SELECT state FROM {_table_ref(self._user_state_table)} WHERE app_name = %s AND user_id = %s"
         user_update_sql = f"""
@@ -124,59 +129,43 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         VALUES (%s, %s, %s, GETUTCDATE())
         """
 
-        merged_app_state: dict[str, Any] | None = None
-        merged_user_state: dict[str, Any] | None = None
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
-            explicit_tx = getattr(conn, "autocommit_state", None) is True
-            if explicit_tx:
-                cursor.execute("BEGIN TRANSACTION")
-            try:
-                cursor.execute(insert_sql, params)
-                cursor.execute(select_sql, (app_name, user_id, session_id))
-                row = cursor.fetchone()
-                row = _require_created_session_row(row)
+        def _operation(cursor: Any, mark_scoped: "Callable[[], None]") -> StoredSession:
+            cursor.execute(insert_sql, params)
+            cursor.execute(select_sql, (app_name, user_id, session_id))
+            row = _require_created_session_row(cursor.fetchone())
+            mark_scoped()
 
-                if app_state_delta:
-                    cursor.execute(app_lock_sql, (app_name,))
-                    app_row = cursor.fetchone()
-                    if app_row is not None:
-                        merged_app_state = {**_json_dict(_row_value(app_row, "state", 0)), **app_state_delta}
-                        cursor.execute(app_update_sql, (to_json(merged_app_state), app_name))
-                    else:
-                        merged_app_state = dict(app_state_delta)
-                        cursor.execute(app_insert_sql, (app_name, to_json(merged_app_state)))
-                else:
-                    cursor.execute(app_read_sql, (app_name,))
-                    app_row = cursor.fetchone()
-                    merged_app_state = _json_dict(_row_value(app_row, "state", 0)) if app_row is not None else None
-
-                if user_state_delta:
-                    cursor.execute(user_lock_sql, (app_name, user_id))
-                    user_row = cursor.fetchone()
-                    if user_row is not None:
-                        merged_user_state = {**_json_dict(_row_value(user_row, "state", 0)), **user_state_delta}
-                        cursor.execute(user_update_sql, (to_json(merged_user_state), app_name, user_id))
-                    else:
-                        merged_user_state = dict(user_state_delta)
-                        cursor.execute(user_insert_sql, (app_name, user_id, to_json(merged_user_state)))
-                else:
-                    cursor.execute(user_read_sql, (app_name, user_id))
-                    user_row = cursor.fetchone()
-                    merged_user_state = _json_dict(_row_value(user_row, "state", 0)) if user_row is not None else None
-            except Exception:
-                if explicit_tx:
-                    cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
-                else:
-                    conn.rollback()
-                raise
-            if explicit_tx:
-                cursor.execute("IF @@TRANCOUNT > 0 COMMIT TRANSACTION")
+            merged_app_state: dict[str, Any] | None
+            if app_state_delta:
+                merged_app_state = _merge_sybase_state_locked(
+                    cursor, app_lock_sql, app_read_sql, app_update_sql, app_insert_sql, (app_name,), app_state_delta
+                )
             else:
-                conn.commit()
+                cursor.execute(app_read_sql, (app_name,))
+                app_row = cursor.fetchone()
+                merged_app_state = _json_dict(_row_value(app_row, "state", 0)) if app_row is not None else None
 
-        session = _session_record_from_row(row)
-        session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
-        return session
+            merged_user_state: dict[str, Any] | None
+            if user_state_delta:
+                merged_user_state = _merge_sybase_state_locked(
+                    cursor,
+                    user_lock_sql,
+                    user_read_sql,
+                    user_update_sql,
+                    user_insert_sql,
+                    (app_name, user_id),
+                    user_state_delta,
+                )
+            else:
+                cursor.execute(user_read_sql, (app_name, user_id))
+                user_row = cursor.fetchone()
+                merged_user_state = _json_dict(_row_value(user_row, "state", 0)) if user_row is not None else None
+
+            session = _session_record_from_row(row)
+            session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+            return session
+
+        return _run_sybase_tx_with_retry(self._config, _operation, has_deltas=bool(app_state_delta or user_state_delta))
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -311,7 +300,8 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         FROM {_table_ref(self._session_table)}
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
-        app_lock_sql = f"SELECT state FROM {_table_ref(self._app_state_table)} HOLDLOCK WHERE app_name = %s"
+        app_lock_sql = f"UPDATE {_table_ref(self._app_state_table)} SET state = state WHERE app_name = %s"
+        app_read_sql = f"SELECT state FROM {_table_ref(self._app_state_table)} WHERE app_name = %s"
         app_update_sql = f"""
         UPDATE {_table_ref(self._app_state_table)}
         SET state = %s, update_time = GETUTCDATE()
@@ -322,8 +312,9 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         VALUES (%s, %s, GETUTCDATE())
         """
         user_lock_sql = (
-            f"SELECT state FROM {_table_ref(self._user_state_table)} HOLDLOCK WHERE app_name = %s AND user_id = %s"
+            f"UPDATE {_table_ref(self._user_state_table)} SET state = state WHERE app_name = %s AND user_id = %s"
         )
+        user_read_sql = f"SELECT state FROM {_table_ref(self._user_state_table)} WHERE app_name = %s AND user_id = %s"
         user_update_sql = f"""
         UPDATE {_table_ref(self._user_state_table)}
         SET state = %s, update_time = GETUTCDATE()
@@ -334,52 +325,40 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         VALUES (%s, %s, %s, GETUTCDATE())
         """
 
-        merged_app_state: dict[str, Any] | None = None
-        merged_user_state: dict[str, Any] | None = None
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
-            explicit_tx = getattr(conn, "autocommit_state", None) is True
-            if explicit_tx:
-                cursor.execute("BEGIN TRANSACTION")
-            try:
-                cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
-                cursor.execute(select_sql, (app_name, user_id, session_id))
-                row = cursor.fetchone()
-                if row is None:
-                    _raise_session_not_found(session_id)
-                cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
-                if app_state_delta:
-                    cursor.execute(app_lock_sql, (app_name,))
-                    app_row = cursor.fetchone()
-                    if app_row is not None:
-                        merged_app_state = {**_json_dict(_row_value(app_row, "state", 0)), **app_state_delta}
-                        cursor.execute(app_update_sql, (to_json(merged_app_state), app_name))
-                    else:
-                        merged_app_state = dict(app_state_delta)
-                        cursor.execute(app_insert_sql, (app_name, to_json(merged_app_state)))
-                if user_state_delta:
-                    cursor.execute(user_lock_sql, (app_name, user_id))
-                    user_row = cursor.fetchone()
-                    if user_row is not None:
-                        merged_user_state = {**_json_dict(_row_value(user_row, "state", 0)), **user_state_delta}
-                        cursor.execute(user_update_sql, (to_json(merged_user_state), app_name, user_id))
-                    else:
-                        merged_user_state = dict(user_state_delta)
-                        cursor.execute(user_insert_sql, (app_name, user_id, to_json(merged_user_state)))
-            except Exception:
-                if explicit_tx:
-                    cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
-                else:
-                    conn.rollback()
-                raise
-            if explicit_tx:
-                cursor.execute("IF @@TRANCOUNT > 0 COMMIT TRANSACTION")
-            else:
-                conn.commit()
+        def _operation(cursor: Any, mark_scoped: "Callable[[], None]") -> StoredSession:
+            cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
+            cursor.execute(select_sql, (app_name, user_id, session_id))
+            row = cursor.fetchone()
+            if row is None:
+                _raise_session_not_found(session_id)
+            cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+            mark_scoped()
+            merged_app_state = (
+                _merge_sybase_state_locked(
+                    cursor, app_lock_sql, app_read_sql, app_update_sql, app_insert_sql, (app_name,), app_state_delta
+                )
+                if app_state_delta
+                else None
+            )
+            merged_user_state = (
+                _merge_sybase_state_locked(
+                    cursor,
+                    user_lock_sql,
+                    user_read_sql,
+                    user_update_sql,
+                    user_insert_sql,
+                    (app_name, user_id),
+                    user_state_delta,
+                )
+                if user_state_delta
+                else None
+            )
+            session = _session_record_from_row(row)
+            if merged_app_state is not None or merged_user_state is not None:
+                session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+            return session
 
-        session = _session_record_from_row(row)
-        if merged_app_state is not None or merged_user_state is not None:
-            session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
-        return session
+        return _run_sybase_tx_with_retry(self._config, _operation, has_deltas=bool(app_state_delta or user_state_delta))
 
     def get_events(
         self,
@@ -1284,3 +1263,80 @@ def _session_list_query(
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """
     return sql, tuple(params)
+
+
+def _merge_sybase_state_locked(
+    cursor: Any,
+    lock_sql: str,
+    read_sql: str,
+    update_sql: str,
+    insert_sql: str,
+    key_params: "tuple[Any, ...]",
+    delta: "dict[str, Any]",
+) -> "dict[str, Any]":
+    """Acquire an exclusive row lock via a no-op UPDATE, then read, merge, and persist scoped state."""
+    cursor.execute(lock_sql, key_params)
+    cursor.execute(read_sql, key_params)
+    row = cursor.fetchone()
+    if row is not None:
+        merged_state = {**_json_dict(_row_value(row, "state", 0)), **delta}
+        cursor.execute(update_sql, (to_json(merged_state), *key_params))
+        return merged_state
+    merged_state = dict(delta)
+    cursor.execute(insert_sql, (*key_params, to_json(merged_state)))
+    return merged_state
+
+
+def _rollback_sybase_tx(conn: Any, cursor: Any, explicit_tx: bool) -> None:
+    with contextlib.suppress(Exception):
+        if explicit_tx:
+            cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+        else:
+            conn.rollback()
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    base = min(_SYBASE_RETRY_MAX_SECONDS, _SYBASE_RETRY_BASE_SECONDS * (attempt + 1))
+    jitter = secrets.randbelow(80) / 10_000.0
+    return base + jitter
+
+
+def _run_sybase_tx_with_retry(
+    config: Any, operation: "Callable[[Any, Callable[[], None]], StoredSession]", *, has_deltas: bool
+) -> StoredSession:
+    """Run a Sybase ADK transaction with bounded retry on deadlock or scoped-insert race."""
+    for attempt in range(_SYBASE_RETRY_MAX_ATTEMPTS):
+        scoped_started = False
+
+        def _mark_scoped() -> None:
+            nonlocal scoped_started
+            scoped_started = True
+
+        try:
+            with config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+                explicit_tx = getattr(conn, "autocommit_state", None) is True
+                if explicit_tx:
+                    cursor.execute("BEGIN TRANSACTION")
+                try:
+                    result = operation(cursor, _mark_scoped)
+                    if explicit_tx:
+                        cursor.execute("IF @@TRANCOUNT > 0 COMMIT TRANSACTION")
+                    else:
+                        conn.commit()
+                except (ValueError, RuntimeError):
+                    _rollback_sybase_tx(conn, cursor, explicit_tx)
+                    raise
+                except Exception as exc:
+                    _rollback_sybase_tx(conn, cursor, explicit_tx)
+                    mapped = exc if isinstance(exc, SQLSpecError) else create_mapped_exception(exc)
+                    if mapped is exc:
+                        raise
+                    raise mapped from exc
+                return result
+        except (DeadlockError, UniqueViolationError) as exc:
+            retryable = isinstance(exc, DeadlockError) or (scoped_started and has_deltas)
+            if not retryable or attempt + 1 >= _SYBASE_RETRY_MAX_ATTEMPTS:
+                raise
+            time.sleep(_retry_delay_seconds(attempt))
+    msg = "Failed to complete Sybase ADK transaction after retries."
+    raise DeadlockError(msg)

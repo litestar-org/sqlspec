@@ -153,6 +153,16 @@ class TeradataConnectionContext(SyncPoolConnectionContext):
 class _TeradataSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
 
+    def mark_query_band_state(self, connection: Any, *, dirty: bool) -> None:
+        """Record whether the session altered its connection's session query band."""
+        pool = self._config.connection_instance
+        if not isinstance(pool, TeradataConnectionPool):
+            return
+        if dirty:
+            pool.mark_query_band_dirty(connection)
+        else:
+            pool.mark_query_band_clean(connection)
+
 
 class TeradataConfig(SyncDatabaseConfig[TeradataConnection, TeradataConnectionPool, TeradataDriver]):
     """Configuration for Teradata Vantage synchronous connections over teradatasql."""
@@ -229,16 +239,6 @@ class TeradataConfig(SyncDatabaseConfig[TeradataConnection, TeradataConnectionPo
             **kwargs,
         )
 
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        return merge_teradata_derive_overrides(config, overrides)
-
-    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
-        if isinstance(spec_input, str):
-            return {"connection_config_overrides": parse_teradata_replica_endpoint(spec_input)}
-        return super()._build_replica_spec_overrides(spec_input)
-
     def create_connection(self) -> "TeradataConnection":
         """Open a standalone Teradata Vantage connection owned by the caller."""
         return self.provide_pool().new_connection()
@@ -295,6 +295,16 @@ class TeradataConfig(SyncDatabaseConfig[TeradataConnection, TeradataConnectionPo
             bind_key=bind_key,
             **overrides,
         )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return merge_teradata_derive_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": parse_teradata_replica_endpoint(spec_input)}
+        return super()._build_replica_spec_overrides(spec_input)
 
     def _create_pool(self) -> "TeradataConnectionPool":
         return TeradataConnectionPool(

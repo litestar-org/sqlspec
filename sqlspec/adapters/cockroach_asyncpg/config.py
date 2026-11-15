@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast, overload
 
-from sqlspec.adapters.asyncpg.core import default_statement_config, register_json_codecs, register_pgvector_support
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
     CockroachAsyncpgInterfaceError,
@@ -21,6 +20,9 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
     apply_driver_features,
     build_connection_config,
     create_mapped_exception,
+    default_statement_config,
+    register_json_codecs,
+    register_pgvector_support,
     resolve_follower_read_options,
     validate_follower_read_staleness,
 )
@@ -143,10 +145,10 @@ class CockroachAsyncpgConnectionConfig(TypedDict):
     """Startup CockroachDB session variables passed at connection time."""
     target_session_attrs: NotRequired[CockroachAsyncpgTargetSessionAttrs]
     """Required node session attribute when connecting across multiple hosts."""
-    statement_timeout: NotRequired[float | int | None]
-    """Statement execution timeout in seconds forwarded via server_settings."""
-    idle_in_transaction_session_timeout: NotRequired[float | int | None]
-    """Idle in transaction timeout in seconds forwarded via server_settings."""
+    statement_timeout: NotRequired[int]
+    """Per-statement execution timeout in milliseconds forwarded via ``server_settings``."""
+    idle_in_transaction_session_timeout: NotRequired[int]
+    """Idle-in-transaction timeout in milliseconds before aborting open transactions."""
     krbsrvname: NotRequired[str]
     """Kerberos service principal name for GSSAPI authentication."""
     gsslib: NotRequired[CockroachAsyncpgGSSLib]

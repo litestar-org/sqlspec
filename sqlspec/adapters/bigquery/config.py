@@ -309,37 +309,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             **overrides,
         )
 
-    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
-        if isinstance(spec_input, bool):
-            msg = "BigQuery replicas require an explicit project or connection configuration"
-            raise ImproperConfigurationError(msg)
-        if isinstance(spec_input, str):
-            parsed = urlsplit(spec_input)
-            if parsed.scheme == "bigquery":
-                return {
-                    "connection_config_overrides": {
-                        "project": parsed.netloc,
-                        "dataset_id": unquote(parsed.path.lstrip("/")),
-                    }
-                }
-            return {"connection_config_overrides": {"project": spec_input}}
-        return dict(spec_input)
-
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        for alias, canonical in (
-            ("project_id", "project"),
-            ("dataset", "dataset_id"),
-            ("database", "dataset_id"),
-            ("db", "dataset_id"),
-        ):
-            if alias in overrides and canonical not in overrides:
-                config.pop(canonical, None)
-        if "default_query_job_config" in config:
-            config["default_query_job_config"] = copy.deepcopy(config["default_query_job_config"])
-        return build_connection_config(config)
-
     def __deepcopy__(self, memo: "dict[int, Any]") -> "BigQueryConfig":
         """Create a deep copy without attempting to copy threading locks or circular method bindings."""
         cls = self.__class__
@@ -365,23 +334,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     def close_pool(self) -> None:
         """Close owned primary and replica clients, preserving the first failure."""
         self._close_pools_sync(self._close_owned_clients)
-
-    def _close_owned_clients(self) -> None:
-        """Close the clients this configuration created.
-
-        A client supplied by the caller is left open, since its lifetime belongs
-        to whoever created it.
-        """
-        with self._storage_write_lock:
-            storage_write_client = self._storage_write_client
-            self._storage_write_client = None
-        if storage_write_client is not None:
-            transport = getattr(storage_write_client, "transport", None)
-            if transport is not None:
-                transport.close()
-        if self._owns_connection_instance and self._connection_instance is not None:
-            self._connection_instance.close()
-            self._connection_instance = None
 
     def create_connection(self) -> BigQueryConnection:
         """Create and return a new BigQuery Client instance.
@@ -498,6 +450,54 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """Return polling defaults tuned for BigQuery latency."""
 
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
+
+    def _close_owned_clients(self) -> None:
+        """Close the clients this configuration created.
+
+        A client supplied by the caller is left open, since its lifetime belongs
+        to whoever created it.
+        """
+        with self._storage_write_lock:
+            storage_write_client = self._storage_write_client
+            self._storage_write_client = None
+        if storage_write_client is not None:
+            transport = getattr(storage_write_client, "transport", None)
+            if transport is not None:
+                transport.close()
+        if self._owns_connection_instance and self._connection_instance is not None:
+            self._connection_instance.close()
+            self._connection_instance = None
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, bool):
+            msg = "BigQuery replicas require an explicit project or connection configuration"
+            raise ImproperConfigurationError(msg)
+        if isinstance(spec_input, str):
+            parsed = urlsplit(spec_input)
+            if parsed.scheme == "bigquery":
+                return {
+                    "connection_config_overrides": {
+                        "project": parsed.netloc,
+                        "dataset_id": unquote(parsed.path.lstrip("/")),
+                    }
+                }
+            return {"connection_config_overrides": {"project": spec_input}}
+        return dict(spec_input)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        for alias, canonical in (
+            ("project_id", "project"),
+            ("dataset", "dataset_id"),
+            ("database", "dataset_id"),
+            ("db", "dataset_id"),
+        ):
+            if alias in overrides and canonical not in overrides:
+                config.pop(canonical, None)
+        if "default_query_job_config" in config:
+            config["default_query_job_config"] = copy.deepcopy(config["default_query_job_config"])
+        return build_connection_config(config)
 
     def _provide_storage_write_client(self, connection: "BigQueryConnection") -> Any:
         """Return the shared BigQuery Storage Write client, creating it on first use.

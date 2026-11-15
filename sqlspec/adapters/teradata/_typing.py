@@ -120,6 +120,8 @@ class TeradataSessionContext:
             raise
         else:
             if self._connection is not None:
+                if exc_type is None and driver is not None:
+                    self._notify_query_band_state(self._connection, dirty=driver._session_query_band_dirty)
                 self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
         finally:
             self._connection = None
@@ -127,3 +129,9 @@ class TeradataSessionContext:
             if driver is not None:
                 driver._detach_connection()
         return None
+
+    def _notify_query_band_state(self, connection: Any, *, dirty: bool) -> None:
+        handler = getattr(self._release_connection, "__self__", None)
+        mark_fn = getattr(handler, "mark_query_band_state", None)
+        if callable(mark_fn):
+            mark_fn(connection, dirty=dirty)

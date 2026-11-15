@@ -361,3 +361,45 @@ def test_teradata_new_connection_maps_driver_error(monkeypatch: pytest.MonkeyPat
     finally:
         pool.close()
         reset_dependency_cache("teradatasql")
+
+
+def test_provide_session_skips_query_band_reset_unless_dirty(sdk_connections: list[Any]) -> None:
+    """provide_session() skips _reset_session_query_band on clean sessions and resets after session query-band changes."""
+    from sqlspec.adapters.teradata import TeradataConfig
+
+    config = TeradataConfig(connection_config={"host": "localhost", "pool_max_size": 1})
+    try:
+        pool = config.provide_pool()
+        with config.provide_session() as driver:
+            cursor = sdk_connections[0].cursor.return_value
+            cursor.description = [("VALUE", int, None, None, None, None, False)]
+            cursor.fetchmany.side_effect = [[(1,)], []]
+            driver.execute("SELECT 1")
+            cursor.execute.reset_mock()
+            sdk_connections[0].commit.reset_mock()
+
+        assert [call.args[0] for call in cursor.execute.call_args_list] == []
+
+        with config.provide_session() as driver:
+            driver.set_query_band({"app": "etl"})
+            cursor.execute.reset_mock()
+
+        assert [call.args[0] for call in cursor.execute.call_args_list] == ["SET QUERY_BAND = NONE FOR SESSION;"]
+
+        with config.provide_session() as outer:
+            with config.provide_session() as inner:
+                inner.set_query_band({"nested": "yes"})
+            assert outer._session_query_band_dirty is False
+            cursor.execute.reset_mock()
+
+        assert [call.args[0] for call in cursor.execute.call_args_list] == ["SET QUERY_BAND = NONE FOR SESSION;"]
+
+        with config.provide_connection():
+            with config.provide_session():
+                pass
+            cursor.execute.reset_mock()
+
+        assert [call.args[0] for call in cursor.execute.call_args_list] == ["SET QUERY_BAND = NONE FOR SESSION;"]
+        assert pool.checked_out() == 0
+    finally:
+        config.close_pool()

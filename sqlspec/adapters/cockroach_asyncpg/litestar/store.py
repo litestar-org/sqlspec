@@ -60,7 +60,7 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            row = await conn.fetchrow(sql, key)
+            row = await _fetch_one(conn, sql, key)
 
             if row is None:
                 return None
@@ -115,7 +115,7 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            row = await conn.fetchrow(sql, key)
+            row = await _fetch_one(conn, sql, key)
             return row is not None
 
     async def expires_in(self, key: str) -> "int | None":
@@ -125,7 +125,7 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            row = await conn.fetchrow(sql, key)
+            row = await _fetch_one(conn, sql, key)
 
             if row is None or row["expires_at"] is None:
                 return None
@@ -187,3 +187,10 @@ def _cockroach_storage_clauses(settings: "dict[str, Any]") -> "tuple[str, str]":
         msg = "extension_config['litestar']['hash_shard_bucket_count'] must be a positive integer"
         raise ValueError(msg)
     return table_options, f" USING HASH WITH (bucket_count = {bucket_count})"
+
+
+async def _fetch_one(conn: Any, sql: str, *params: Any) -> Any:
+    rows = await conn.fetch(sql, *params)
+    if not hasattr(rows, "__getitem__") and callable(getattr(rows, "result", None)):
+        rows = rows.result()
+    return rows[0] if rows else None

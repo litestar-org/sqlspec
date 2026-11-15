@@ -26,7 +26,7 @@ from sqlspec.adapters.oracledb.core import (
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub, _apply_deq_options
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, SQLSpecError
 from sqlspec.storage.pipeline import ResolvedStorageTarget
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.serializers import from_json
@@ -739,14 +739,21 @@ async def test_oracle_aq_hubs_avoid_wildcard_correlation_for_underscores(
     assert direct_queue.deqoptions.correlation is None
 
 
+@pytest.mark.anyio
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
-async def test_oracle_txeventq_hubs_use_correlation_for_underscores(is_async: bool) -> None:
-    """TxEventQ dequeue sets deqoptions.correlation directly without SQL condition filters."""
+@pytest.mark.parametrize("channel", ["meta_channel", "events%all"], ids=["underscore", "percent"])
+async def test_oracle_txeventq_hubs_reject_wildcard_correlation(is_async: bool, channel: str) -> None:
+    """TxEventQ dequeue rejects '_' and '%' channel names with EventChannelError instead of LIKE wildcard matching."""
     deqoptions = SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
     queue = MagicMock()
     queue.deqoptions = deqoptions
     config = MagicMock()
     config.get_observability_runtime.return_value = MagicMock()
+
+    with pytest.raises(EventChannelError, match="LIKE wildcards"):
+        _apply_deq_options(queue, None, None, 0.5, channel, allow_condition=False)
+
+    hub_match = "LIKE wildcards" if "_" in channel else "Invalid events channel name"
 
     if is_async:
         queue.deqone = AsyncMock(return_value=None)
@@ -761,8 +768,9 @@ async def test_oracle_txeventq_hubs_use_correlation_for_underscores(is_async: bo
             backend_name="txeventq",
         )
         hub._session_driver = driver
-        hub._queues["meta_channel"] = queue
-        assert await hub.dequeue("meta_channel", 0.5) is None
+        hub._queues[channel] = queue
+        with pytest.raises(EventChannelError, match=hub_match):
+            await hub.dequeue(channel, 0.5)
     else:
         queue.deqone.return_value = None
         driver = MagicMock()
@@ -775,8 +783,14 @@ async def test_oracle_txeventq_hubs_use_correlation_for_underscores(is_async: bo
             backend_name="txeventq",
         )
         hub._session_driver = driver
-        hub._queues["meta_channel"] = queue
-        assert hub.dequeue("meta_channel", 0.5) is None
+        hub._queues[channel] = queue
+        with pytest.raises(EventChannelError, match=hub_match):
+            hub.dequeue(channel, 0.5)
 
     assert deqoptions.condition is None
-    assert deqoptions.correlation == "meta_channel"
+    assert deqoptions.correlation is None
+
+    plain_queue = SimpleNamespace(deqoptions=SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None))
+    _apply_deq_options(plain_queue, None, None, 0.5, "notifications", allow_condition=False)
+    assert plain_queue.deqoptions.condition is None
+    assert plain_queue.deqoptions.correlation == "notifications"

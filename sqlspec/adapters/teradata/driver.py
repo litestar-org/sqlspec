@@ -1,6 +1,7 @@
 """Teradata Vantage database driver implementation over teradatasql."""
 
 import contextlib
+import re
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -73,6 +74,7 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.adapters.teradata")
+_SESSION_QUERY_BAND_SQL_PATTERN = re.compile(r"\bQUERY_BAND\b.*\bFOR\s+SESSION\b", re.IGNORECASE | re.DOTALL)
 
 
 class TeradataExceptionHandler(BaseSyncExceptionHandler):
@@ -191,6 +193,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_previous_autocommit",
+        "_session_query_band_dirty",
         "_stream_sources",
         "_transaction_active",
     )
@@ -213,6 +216,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         self._stream_sources: list[TeradataStreamSource] = []
         self._transaction_active = False
         self._previous_autocommit: bool | None = None
+        self._session_query_band_dirty = False
 
     @property
     def data_dictionary(self) -> "TeradataSyncDataDictionary":
@@ -229,6 +233,8 @@ class TeradataDriver(SyncDriverAdapterBase):
                 enable_fastexport=bool(self.driver_features.get("enable_fastexport", False)),
                 in_transaction=self._connection_in_transaction(),
             )
+        if _marks_session_query_band(sql):
+            self._session_query_band_dirty = True
         cursor.execute(sql, prepare_teradata_parameters(parameters))
         if statement.returns_rows():
             description = cursor.description or None
@@ -252,71 +258,6 @@ class TeradataDriver(SyncDriverAdapterBase):
         if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(sql):
             self.connection.commit()
         return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
-
-    def _execute_cache_hit_with_cursor(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
-    ) -> "SQLResult":
-        """Execute a compiled cache hit while preserving FastExport, row coercion, and DDL commit rules."""
-        _ = sql
-        compiled_sql = cached.compiled_sql
-        returns_rows = cached.operation_profile.returns_rows
-        exec_sql = (
-            maybe_prefix_fastexport(
-                compiled_sql,
-                enable_fastexport=bool(self.driver_features.get("enable_fastexport", False)),
-                in_transaction=self._connection_in_transaction(),
-            )
-            if returns_rows
-            else compiled_sql
-        )
-        prepared_params = prepare_teradata_parameters(params)
-        rows: list[tuple[Any, ...]] = []
-        names: list[str] = []
-        column_types: dict[str, str] = {}
-        affected = 0
-        exc_handler = self.handle_database_exceptions()
-
-        def _run(cursor: "TeradataRawCursor") -> None:
-            nonlocal names, column_types, affected
-            cursor.arraysize = int(self.driver_features.get("arraysize", 2048))
-            cursor.execute(exec_sql, prepared_params)
-            if returns_rows:
-                description = cursor.description or None
-                names = resolve_column_names(
-                    description,
-                    self._column_name_cache,
-                    enable_lowercase_column_names=bool(self.driver_features.get("enable_lowercase_column_names", True)),
-                )
-                while chunk := cursor.fetchmany(cursor.arraysize):
-                    rows.extend(coerce_teradata_row(row, description=description) for row in chunk)
-                column_types = extract_arrow_column_types(description, column_names=names)
-                return
-            if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(compiled_sql):
-                self.connection.commit()
-            affected = resolve_rowcount(cursor)
-
-        with self.with_cursor(self.connection) as cursor:
-            if sys.exc_info()[1] is None:
-                with exc_handler:
-                    _run(cursor)
-            else:
-                self._run_with_exception_handler(exc_handler, _run, cursor)
-        self._check_pending_exception(exc_handler)
-
-        if returns_rows:
-            return SQLResult(
-                statement=None,
-                data=rows,
-                rows_affected=len(rows),
-                operation_type=cached.operation_type,
-                column_names=names,
-                total_count=len(rows),
-                row_format="tuple",
-                metadata={"column_types": column_types},
-            )
-        return SQLResult(
-            statement=None, data=[], rows_affected=affected, operation_type=cached.operation_type, total_count=0
-        )
 
     def dispatch_execute_many(self, cursor: "TeradataRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, parameters = self._compiled_sql(statement, self.statement_config)
@@ -347,6 +288,8 @@ class TeradataDriver(SyncDriverAdapterBase):
         sql, parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         for text in statements:
+            if _marks_session_query_band(text):
+                self._session_query_band_dirty = True
             cursor.execute(text, prepare_teradata_parameters(parameters))
             if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(text):
                 self.connection.commit()
@@ -393,18 +336,15 @@ class TeradataDriver(SyncDriverAdapterBase):
             msg = "Failed to rollback Teradata transaction"
             raise TransactionError(msg) from exc
 
-    def _release_open_work(self) -> None:
-        for source in tuple(self._stream_sources):
-            source.close()
-        if self._connection_in_transaction():
-            self.rollback()
-
     def set_query_band(self, band: "Mapping[str, str] | str", *, transaction: bool = False) -> None:
         """Apply validated query-band metadata to the session or active transaction."""
         if transaction and not self._connection_in_transaction():
             msg = "FOR TRANSACTION query band requires an active transaction"
             raise TransactionError(msg)
-        self.execute_script(build_set_query_band_sql(band, transaction=transaction))
+        band_sql = build_set_query_band_sql(band, transaction=transaction)
+        if not transaction:
+            self._session_query_band_dirty = True
+        self.execute_script(band_sql)
 
     def with_cursor(self, connection: "TeradataConnection") -> "TeradataCursor":
         return TeradataCursor(connection)
@@ -677,9 +617,87 @@ class TeradataDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "TeradataRawCursor") -> int:
         return resolve_rowcount(cursor)
 
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute a compiled cache hit while preserving FastExport, row coercion, and DDL commit rules."""
+        _ = sql
+        compiled_sql = cached.compiled_sql
+        returns_rows = cached.operation_profile.returns_rows
+        exec_sql = (
+            maybe_prefix_fastexport(
+                compiled_sql,
+                enable_fastexport=bool(self.driver_features.get("enable_fastexport", False)),
+                in_transaction=self._connection_in_transaction(),
+            )
+            if returns_rows
+            else compiled_sql
+        )
+        prepared_params = prepare_teradata_parameters(params)
+        rows: list[tuple[Any, ...]] = []
+        names: list[str] = []
+        column_types: dict[str, str] = {}
+        affected = 0
+        exc_handler = self.handle_database_exceptions()
+
+        def _run(cursor: "TeradataRawCursor") -> None:
+            nonlocal names, column_types, affected
+            cursor.arraysize = int(self.driver_features.get("arraysize", 2048))
+            if _marks_session_query_band(compiled_sql):
+                self._session_query_band_dirty = True
+            cursor.execute(exec_sql, prepared_params)
+            if returns_rows:
+                description = cursor.description or None
+                names = resolve_column_names(
+                    description,
+                    self._column_name_cache,
+                    enable_lowercase_column_names=bool(self.driver_features.get("enable_lowercase_column_names", True)),
+                )
+                while chunk := cursor.fetchmany(cursor.arraysize):
+                    rows.extend(coerce_teradata_row(row, description=description) for row in chunk)
+                column_types = extract_arrow_column_types(description, column_names=names)
+                return
+            if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(compiled_sql):
+                self.connection.commit()
+            affected = resolve_rowcount(cursor)
+
+        with self.with_cursor(self.connection) as cursor:
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    _run(cursor)
+            else:
+                self._run_with_exception_handler(exc_handler, _run, cursor)
+        self._check_pending_exception(exc_handler)
+
+        if returns_rows:
+            return SQLResult(
+                statement=None,
+                data=rows,
+                rows_affected=len(rows),
+                operation_type=cached.operation_type,
+                column_names=names,
+                total_count=len(rows),
+                row_format="tuple",
+                metadata={"column_types": column_types},
+            )
+        return SQLResult(
+            statement=None, data=[], rows_affected=affected, operation_type=cached.operation_type, total_count=0
+        )
+
+    def _release_open_work(self) -> None:
+        for source in tuple(self._stream_sources):
+            source.close()
+        if self._connection_in_transaction():
+            self.rollback()
+
     def _connection_in_transaction(self) -> bool:
         """Return whether a transaction opened by this driver remains active."""
         return bool(self._transaction_active or getattr(self.connection, "autocommit", True) is False)
+
+
+def _marks_session_query_band(sql_text: str) -> bool:
+    """Return whether SQL text sets or clears a session-scoped query band."""
+    return bool(_SESSION_QUERY_BAND_SQL_PATTERN.search(sql_text))
 
 
 register_driver_profile("teradata", driver_profile)

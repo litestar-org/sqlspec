@@ -1847,8 +1847,8 @@ def test_sybase_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch
         config.close_pool()
 
 
-def test_sybase_adk_create_session_and_append_event_holdlock_merge() -> None:
-    """SybaseADKStore locks app then user state with HOLDLOCK inside explicit tx and returns merged state."""
+def test_sybase_adk_create_session_and_append_event_exclusive_lock_merge() -> None:
+    """SybaseADKStore acquires exclusive row locks via UPDATE before reading and merging scoped state."""
     now = datetime(2026, 1, 1, tzinfo=UTC)
     config = MagicMock()
     config.extension_config = {"adk": {}}
@@ -1870,20 +1870,108 @@ def test_sybase_adk_create_session_and_append_event_holdlock_merge() -> None:
     )
     assert created["state"] == {"turn": 1, "app:existing": 1, "app:added": 2, "user:lang": "en"}
 
+    create_executed = [" ".join(c.args[0].split()) for c in cursor.execute.call_args_list]
+    assert create_executed[0] == "BEGIN TRANSACTION"
+    create_app_lock_idx = create_executed.index("UPDATE [dbo].[adk_app_state] SET state = state WHERE app_name = %s")
+    create_app_read_idx = create_executed.index("SELECT state FROM [dbo].[adk_app_state] WHERE app_name = %s")
+    assert create_app_lock_idx < create_app_read_idx
+    assert all("HOLDLOCK" not in stmt for stmt in create_executed)
+    assert create_executed.count("IF @@TRANCOUNT > 0 COMMIT TRANSACTION") == 1
+
+    cursor.execute.reset_mock()
     event = _sybase_event_fixture()
     updated = store.append_event_and_update_state(
         event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"app:k": 1}, user_state_delta={"user:theme": "dark"}
     )
     assert updated["state"] == {"turn": 2, "app:k": 1, "user:lang": "en", "user:theme": "dark"}
 
-    executed = [" ".join(c.args[0].split()) for c in cursor.execute.call_args_list]
-    assert executed[0] == "BEGIN TRANSACTION"
-    assert "SELECT state FROM [dbo].[adk_app_state] HOLDLOCK WHERE app_name = %s" in executed
-    assert "SELECT state FROM [dbo].[adk_user_state] HOLDLOCK WHERE app_name = %s AND user_id = %s" in executed
-    assert executed.count("IF @@TRANCOUNT > 0 COMMIT TRANSACTION") == 2
+    append_executed = [" ".join(c.args[0].split()) for c in cursor.execute.call_args_list]
+    assert append_executed[0] == "BEGIN TRANSACTION"
+    app_lock_idx = append_executed.index("UPDATE [dbo].[adk_app_state] SET state = state WHERE app_name = %s")
+    app_read_idx = append_executed.index("SELECT state FROM [dbo].[adk_app_state] WHERE app_name = %s")
+    assert app_lock_idx < app_read_idx
+    user_lock_idx = append_executed.index(
+        "UPDATE [dbo].[adk_user_state] SET state = state WHERE app_name = %s AND user_id = %s"
+    )
+    user_read_idx = append_executed.index(
+        "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = %s AND user_id = %s"
+    )
+    assert user_lock_idx < user_read_idx
+    assert all("HOLDLOCK" not in stmt for stmt in append_executed)
+    assert append_executed.count("IF @@TRANCOUNT > 0 COMMIT TRANSACTION") == 1
 
     with pytest.raises(TypeError):
         cast("Any", store).append_event_and_update_state(event, "app", "u1", "s1", {}, app_state={"a": 1})
+
+
+def test_sybase_adk_retries_deadlock_on_create_and_append(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseADKStore retries DeadlockError up to the retry bound and raises when exhausted."""
+    import sqlspec.adapters.sybase.adk.store as store_mod
+
+    monkeypatch.setattr(store_mod.time, "sleep", lambda _s: None)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    conn = config.provide_connection.return_value.__enter__.return_value
+    conn.autocommit_state = True
+    cursor = conn.cursor.return_value
+
+    attempts = {"create": 0}
+
+    def create_execute(sql: str, _params: Any = ()) -> None:
+        if "UPDATE [dbo].[adk_app_state] SET state = state" in sql:
+            attempts["create"] += 1
+            if attempts["create"] == 1:
+                raise pymssql.OperationalError(1205, "Deadlock victim (1205)")
+
+    cursor.execute.side_effect = create_execute
+    cursor.fetchone.side_effect = [
+        ("s1", "app", "u1", '{"turn": 1}', now, now),
+        ("s1", "app", "u1", '{"turn": 1}', now, now),
+        ('{"app:base": 1}',),
+        None,
+    ]
+    store = SybaseADKStore(cast("Any", config))
+    created = store.create_session("s1", "app", "u1", {"turn": 1}, app_state_delta={"app:new": 2})
+    assert created["state"] == {"turn": 1, "app:base": 1, "app:new": 2}
+    assert attempts["create"] == 2
+
+    append_attempts = {"count": 0}
+
+    def append_execute(sql: str, _params: Any = ()) -> None:
+        if "UPDATE [dbo].[adk_user_state] SET state = state" in sql:
+            append_attempts["count"] += 1
+            if append_attempts["count"] == 1:
+                raise DeadlockError("deadlock")
+
+    cursor.execute.side_effect = append_execute
+    cursor.fetchone.side_effect = [
+        ("s1", "app", "u1", '{"turn": 2}', now, now),
+        ("s1", "app", "u1", '{"turn": 2}', now, now),
+        ('{"user:k": "v"}',),
+    ]
+    updated = store.append_event_and_update_state(
+        _sybase_event_fixture(), "app", "u1", "s1", {"turn": 2}, user_state_delta={"user:next": 3}
+    )
+    assert updated["state"] == {"turn": 2, "user:k": "v", "user:next": 3}
+    assert append_attempts["count"] == 2
+
+    def always_deadlock(sql: str, _params: Any = ()) -> None:
+        if "UPDATE [dbo].[adk_app_state] SET state = state" in sql:
+            raise pymssql.OperationalError(1205, "Deadlock victim (1205)")
+
+    cursor.execute.side_effect = always_deadlock
+    cursor.fetchone.side_effect = [("s1", "app", "u1", "{}", now, now)] * 10
+    with pytest.raises(DeadlockError):
+        store.create_session("s1", "app", "u1", {}, app_state_delta={"a": 1})
+
+    def session_pk_conflict(sql: str, _params: Any = ()) -> None:
+        if sql.lstrip().startswith("INSERT INTO [dbo].[adk_session]"):
+            raise pymssql.IntegrityError(2601, "Duplicate primary key")
+
+    cursor.execute.side_effect = session_pk_conflict
+    with pytest.raises(UniqueViolationError):
+        store.create_session("s1", "app", "u1", {}, app_state_delta={"a": 1})
 
 
 def test_sybase_adk_get_events_bounded_reverses_desc_rows(monkeypatch: pytest.MonkeyPatch) -> None:

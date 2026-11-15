@@ -677,11 +677,105 @@ async def test_cockroach_asyncpg_cache_hit_with_cursor() -> None:
     assert conn.execute.call_count == 2
 
 
-def test_cockroach_asyncpg_connection_config_timeout_annotations() -> None:
-    """CockroachAsyncpgConnectionConfig exposes statement_timeout and idle_in_transaction_session_timeout."""
+def test_cockroach_asyncpg_connection_config_forwards_timeouts_to_server_settings() -> None:
+    """Timeout and buffer options validate as non-negative int milliseconds and move into server_settings."""
     annotations = CockroachAsyncpgConnectionConfig.__annotations__
-    assert "statement_timeout" in annotations
-    assert "idle_in_transaction_session_timeout" in annotations
+    assert annotations["statement_timeout"] == NotRequired[int]
+    assert annotations["idle_in_transaction_session_timeout"] == NotRequired[int]
+    assert annotations["results_buffer_size"] == NotRequired[int]
+
+    built = build_connection_config({
+        "dsn": "postgresql://localhost:26257/defaultdb",
+        "results_buffer_size": 4096,
+        "statement_timeout": 2500,
+        "idle_in_transaction_session_timeout": 0,
+    })
+    assert "results_buffer_size" not in built
+    assert "statement_timeout" not in built
+    assert "idle_in_transaction_session_timeout" not in built
+    assert built["server_settings"] == {
+        "results_buffer_size": "4096",
+        "statement_timeout": "2500",
+        "idle_in_transaction_session_timeout": "0",
+    }
+
+    for key in ("results_buffer_size", "statement_timeout", "idle_in_transaction_session_timeout"):
+        for invalid in (-1, True, False, 1.5, "2500", None):
+            with pytest.raises(ImproperConfigurationError, match=key):
+                build_connection_config({key: invalid})
+
+
+@pytest.mark.anyio
+async def test_cockroach_asyncpg_create_pool_does_not_leak_server_setting_timeouts() -> None:
+    """Pool creation passes timeout settings inside server_settings rather than top-level asyncpg kwargs."""
+    pool = object()
+    config = CockroachAsyncpgConfig(
+        connection_config={
+            "host": "localhost",
+            "statement_timeout": 2500,
+            "idle_in_transaction_session_timeout": 5000,
+            "results_buffer_size": 8192,
+        }
+    )
+    with patch(
+        "sqlspec.adapters.cockroach_asyncpg.config.asyncpg_create_pool", new=AsyncMock(return_value=pool)
+    ) as mock:
+        await config._create_pool()
+
+    assert mock.await_args is not None
+    kwargs = mock.await_args.kwargs
+    assert "statement_timeout" not in kwargs
+    assert "idle_in_transaction_session_timeout" not in kwargs
+    assert "results_buffer_size" not in kwargs
+    assert kwargs["server_settings"] == {
+        "results_buffer_size": "8192",
+        "statement_timeout": "2500",
+        "idle_in_transaction_session_timeout": "5000",
+    }
+
+
+def test_cockroach_asyncpg_localizes_core_helpers() -> None:
+    """CockroachAsyncpgConfig and driver use localized cockroach_asyncpg.core helpers rather than asyncpg.core."""
+    from sqlspec.adapters.asyncpg import core as asyncpg_core
+    from sqlspec.adapters.cockroach_asyncpg import config as cockroach_config
+    from sqlspec.adapters.cockroach_asyncpg import core as cockroach_core
+    from sqlspec.adapters.cockroach_asyncpg import driver as cockroach_driver
+
+    assert cockroach_config.default_statement_config is cockroach_core.default_statement_config
+    assert cockroach_config.default_statement_config is not asyncpg_core.default_statement_config
+    assert cockroach_config.register_json_codecs is cockroach_core.register_json_codecs
+    assert cockroach_config.register_pgvector_support is cockroach_core.register_pgvector_support
+    assert cockroach_driver.driver_profile is cockroach_core.driver_profile
+    assert cockroach_driver.driver_profile is not asyncpg_core.driver_profile
+
+
+@pytest.mark.anyio
+async def test_cockroach_asyncpg_litestar_store_uses_fetch_without_fetchrow() -> None:
+    """CockroachAsyncpgStore queries via _fetch_one / conn.fetch without requiring fetchrow."""
+    from datetime import UTC, datetime, timedelta
+
+    expires = datetime.now(UTC) + timedelta(minutes=5)
+    conn = MagicMock(spec=["fetch", "execute"])
+    conn.fetch = AsyncMock(
+        side_effect=[[{"data": b"payload", "expires_at": expires}], [{"?column?": 1}], [{"expires_at": expires}]]
+    )
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    class _Ctx:
+        async def __aenter__(self) -> Any:
+            return conn
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    config = CockroachAsyncpgConfig(connection_config={"dsn": "postgresql://localhost:26257/db"})
+    with patch.object(config, "provide_connection", return_value=_Ctx()):
+        store = CockroachAsyncpgStore(config)
+        assert await store.get("sess-1", renew_for=60) == b"payload"
+        assert await store.exists("sess-1") is True
+        remaining = await store.expires_in("sess-1")
+        assert remaining is not None and remaining > 0
+    assert conn.fetch.await_count == 3
 
 
 async def test_cockroach_asyncpg_execute_native_storage_under_active_exception() -> None:

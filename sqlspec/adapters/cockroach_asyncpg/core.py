@@ -1,6 +1,7 @@
 """CockroachDB AsyncPG adapter helpers."""
 
 import asyncio
+import datetime as dt
 import re
 import secrets
 from collections.abc import Mapping
@@ -12,6 +13,7 @@ from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_module as asyncpg
+from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -32,17 +34,21 @@ from sqlspec.exceptions import (
     _classify_timeout_or_cancellation,
     map_sqlstate_to_exception,
 )
+from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.dispatch import TypeDispatcher
+from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
+from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlspec.core import ParameterStyleConfig, StatementConfig
+    from sqlspec.core import ParameterStyleConfig
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
@@ -52,18 +58,25 @@ __all__ = (
     "build_connection_config",
     "build_native_export",
     "build_native_import",
+    "build_profile",
+    "build_statement_config",
     "calculate_backoff_seconds",
     "configure_parameter_serializers",
     "create_mapped_exception",
+    "default_statement_config",
+    "driver_profile",
     "is_retryable_error",
     "native_export_telemetry",
     "native_import_telemetry",
     "normalize_native_export_query",
+    "register_json_codecs",
+    "register_pgvector_support",
     "resolve_follower_read_options",
     "sanitize_native_storage_uri",
     "validate_follower_read_staleness",
 )
 
+logger = get_logger("sqlspec.adapters.cockroach_asyncpg.core")
 _DEFAULT_MAX_RETRIES: Final[int] = 10
 _DEFAULT_BASE_DELAY_MS: Final[float] = 50.0
 _DEFAULT_MAX_DELAY_MS: Final[float] = 5000.0
@@ -72,6 +85,8 @@ _MAX_CAUSE_CHAIN_DEPTH: Final[int] = 16
 _SYSTEM_RANDOM: Final[secrets.SystemRandom] = secrets.SystemRandom()
 _CLUSTER_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._-]+")
 _UNSET: Final[object] = object()
+_PGVECTOR_MISSING_LOGGED = False
+_JSONB_BINARY_VERSION: Final[bytes] = b"\x01"
 _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
 _STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")
 _STALENESS_FUNCTION: Final[re.Pattern[str]] = re.compile(
@@ -118,6 +133,82 @@ class CockroachAsyncpgRetryConfig:
             max_delay_ms=float(driver_features.get("retry_delay_max_ms", _DEFAULT_MAX_DELAY_MS)),
             enable_logging=bool(driver_features.get("enable_retry_logging", _DEFAULT_ENABLE_LOGGING)),
         )
+
+
+def build_profile() -> "DriverParameterProfile":
+    """Create the CockroachDB AsyncPG driver parameter profile."""
+    return DriverParameterProfile(
+        name="CockroachAsyncpg",
+        default_style=ParameterStyle.NUMERIC,
+        supported_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+        default_execution_style=ParameterStyle.NUMERIC,
+        supported_execution_styles={ParameterStyle.NUMERIC},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="driver",
+        custom_type_coercions=_custom_type_coercions(),
+        default_dialect="postgres",
+    )
+
+
+def build_statement_config(
+    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> "StatementConfig":
+    """Construct the CockroachDB AsyncPG statement configuration with optional JSON codecs."""
+    effective_serializer = json_serializer or to_json
+    effective_deserializer = json_deserializer or from_json
+
+    profile = driver_profile
+    base_config = build_statement_config_from_profile(
+        profile,
+        statement_overrides={"dialect": "postgres"},
+        json_serializer=effective_serializer,
+        json_deserializer=effective_deserializer,
+    )
+
+    parameter_config = configure_parameter_serializers(
+        base_config.parameter_config, effective_serializer, deserializer=effective_deserializer
+    )
+
+    return base_config.replace(parameter_config=parameter_config)
+
+
+async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
+    """Register JSON type codecs on a CockroachDB asyncpg connection."""
+    try:
+        await connection.set_type_codec(
+            "json", encoder=_JsonEncoder(encoder), decoder=_JsonDecoder(decoder), schema="pg_catalog", format="binary"
+        )
+        await connection.set_type_codec(
+            "jsonb",
+            encoder=_JsonbEncoder(encoder),
+            decoder=_JsonbDecoder(decoder),
+            schema="pg_catalog",
+            format="binary",
+        )
+    except Exception:
+        logger.exception("Failed to register JSON type codecs")
+
+
+async def register_pgvector_support(connection: Any) -> None:
+    """Register pgvector extension support on a CockroachDB asyncpg connection."""
+    if not PGVECTOR_INSTALLED:
+        global _PGVECTOR_MISSING_LOGGED
+        if not _PGVECTOR_MISSING_LOGGED:
+            logger.debug("pgvector not installed - skipping vector type support")
+            _PGVECTOR_MISSING_LOGGED = True
+        return
+
+    pgvector_asyncpg = import_optional("pgvector.asyncpg")
+    if pgvector_asyncpg is None:
+        return
+    try:
+        await pgvector_asyncpg.register_vector(connection)
+    except Exception:
+        logger.exception("Failed to register pgvector support")
 
 
 def apply_driver_features(
@@ -183,14 +274,14 @@ def build_connection_config(config: "Mapping[str, Any] | None") -> "dict[str, An
             msg = "default_transaction_use_follower_reads must be a boolean"
             raise ImproperConfigurationError(msg)
         server_settings.setdefault("default_transaction_use_follower_reads", "on" if val else "off")
-    for key in ("results_buffer_size",):
+    for key in ("results_buffer_size", "statement_timeout", "idle_in_transaction_session_timeout"):
         if key not in result:
             continue
         value = result.pop(key)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             msg = f"{key} must be a non-negative integer"
             raise ImproperConfigurationError(msg)
-        server_settings.setdefault(key, str(value))
+        server_settings[key] = str(value)
     if server_settings:
         result["server_settings"] = server_settings
     return result
@@ -428,6 +519,126 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     return _create_postgres_error(error, sqlstate_code, SQLSpecError, "database error")
 
 
+def _convert_datetime_param(value: Any) -> Any:
+    """Convert datetime parameter, handling ISO strings."""
+    if isinstance(value, str):
+        return dt.datetime.fromisoformat(value)
+    return value
+
+
+def _convert_date_param(value: Any) -> Any:
+    """Convert date parameter, handling ISO strings."""
+    if isinstance(value, str):
+        return dt.date.fromisoformat(value)
+    return value
+
+
+def _convert_time_param(value: Any) -> Any:
+    """Convert time parameter, handling ISO strings."""
+    if isinstance(value, str):
+        return dt.time.fromisoformat(value)
+    return value
+
+
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+    """Return custom type coercions for CockroachDB AsyncPG."""
+    return {
+        dt.datetime: _convert_datetime_param,
+        dt.date: _convert_date_param,
+        dt.time: _convert_time_param,
+        **build_uuid_coercions(native=True),
+    }
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _JsonEncoder:
+    __slots__ = ("_encoder",)
+
+    def __init__(self, encoder: "Callable[[Any], str]") -> None:
+        self._encoder = encoder
+
+    def __call__(self, value: Any) -> bytes:
+        return _encode_json_payload(value, self._encoder)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _JsonDecoder:
+    __slots__ = ("_decoder",)
+
+    def __init__(self, decoder: "Callable[[str], Any]") -> None:
+        self._decoder = decoder
+
+    def __call__(self, value: Any) -> Any:
+        return _decode_json_payload(value, self._decoder)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _JsonbEncoder:
+    __slots__ = ("_encoder",)
+
+    def __init__(self, encoder: "Callable[[Any], str]") -> None:
+        self._encoder = encoder
+
+    def __call__(self, value: Any) -> bytes:
+        return _encode_jsonb_payload(value, self._encoder)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _JsonbDecoder:
+    __slots__ = ("_decoder",)
+
+    def __init__(self, decoder: "Callable[[str], Any]") -> None:
+        self._decoder = decoder
+
+    def __call__(self, value: Any) -> Any:
+        return _decode_jsonb_payload(value, self._decoder)
+
+
+def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw_bytes = value.tobytes() if isinstance(value, memoryview) else bytes(value)
+        if raw_bytes.startswith(_JSONB_BINARY_VERSION):
+            return raw_bytes[1:]
+        return raw_bytes
+
+    encoded: Any = encoder(value)
+    if isinstance(encoded, bytes):
+        return encoded[1:] if encoded.startswith(_JSONB_BINARY_VERSION) else encoded
+    if isinstance(encoded, bytearray):
+        raw_encoded = bytes(encoded)
+        return raw_encoded[1:] if raw_encoded.startswith(_JSONB_BINARY_VERSION) else raw_encoded
+    if isinstance(encoded, memoryview):
+        raw_encoded = encoded.tobytes()
+        return raw_encoded[1:] if raw_encoded.startswith(_JSONB_BINARY_VERSION) else raw_encoded
+    return str(encoded).encode("utf-8")
+
+
+def _decode_json_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
+    if isinstance(value, str):
+        return decoder(value)
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    return decoder(bytes(value).decode("utf-8"))
+
+
+def _encode_jsonb_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
+    payload = _encode_json_payload(value, encoder)
+    if payload.startswith(_JSONB_BINARY_VERSION):
+        return payload
+    return _JSONB_BINARY_VERSION + payload
+
+
+def _decode_jsonb_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
+    if isinstance(value, str):
+        return decoder(value)
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    payload = bytes(value)
+    if payload.startswith(_JSONB_BINARY_VERSION):
+        payload = payload[1:]
+    return decoder(payload.decode("utf-8"))
+
+
 def _resolve_connection_alias(config: "dict[str, Any]", target: str, aliases: "tuple[str, ...]") -> None:
     """Normalize connection alias keys in-place using the first present alias."""
     selected: Any = _UNSET
@@ -503,5 +714,9 @@ def _register_exception_mappings() -> None:
         asyncpg.exceptions.PostgresSyntaxError, ("42601", SQLParsingError, "SQL syntax error")
     )
 
+
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()
 
 _register_exception_mappings()

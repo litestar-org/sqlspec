@@ -5,7 +5,6 @@ import sys
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from sqlspec.adapters.asyncpg.core import driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgInterfaceError,
@@ -19,6 +18,7 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
     build_native_import,
     calculate_backoff_seconds,
     create_mapped_exception,
+    driver_profile,
     is_retryable_error,
     native_export_telemetry,
     native_import_telemetry,
@@ -35,10 +35,10 @@ from sqlspec.utils.type_guards import has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from sqlspec.adapters.asyncpg.core import AsyncpgStreamSource
     from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgConnection
     from sqlspec.core import SQLResult, StatementConfig
     from sqlspec.driver import CachedQuery, ExecutionResult
+    from sqlspec.driver._stream import AsyncRowSource
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
@@ -57,7 +57,7 @@ class CockroachAsyncpgStreamSource:
 
     __slots__ = ("_auto_started", "_driver", "_statement", "_underlying")
 
-    def __init__(self, driver: "CockroachAsyncpgDriver", statement: "SQL", underlying: "AsyncpgStreamSource") -> None:
+    def __init__(self, driver: "CockroachAsyncpgDriver", statement: "SQL", underlying: "AsyncRowSource") -> None:
         self._driver = driver
         self._statement = statement
         self._underlying = underlying
@@ -299,7 +299,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         stream = super().dispatch_select_stream(statement, chunk_size)
         if stream is None:
             return None
-        source = CockroachAsyncpgStreamSource(self, statement, cast("AsyncpgStreamSource", stream._source))
+        source = CockroachAsyncpgStreamSource(self, statement, stream._source)
         return AsyncRowStream(source)
 
     def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":
