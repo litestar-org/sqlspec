@@ -410,6 +410,8 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
+_INSERT_TARGET_CACHE_SIZE: Final[int] = 512
+_INSERT_TARGET_CACHE: "dict[int, tuple[Any, tuple[str | None, str] | None]]" = {}
 _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
     "query_only",
     "enable_foreign_keys",
@@ -813,6 +815,22 @@ def _normalize_metadata_row(row: Any) -> Any:
 
 
 def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":
+    """Return the schema and table an INSERT writes to, remembered per compiled expression.
+
+    Compiled expressions are shared by every execution of a cached statement, so the target is
+    derived once and looked up by identity afterwards.
+    """
+    cached = _INSERT_TARGET_CACHE.get(id(expression))
+    if cached is not None and cached[0] is expression:
+        return cached[1]
+    target = _read_insert_target(expression)
+    if len(_INSERT_TARGET_CACHE) >= _INSERT_TARGET_CACHE_SIZE:
+        _INSERT_TARGET_CACHE.clear()
+    _INSERT_TARGET_CACHE[id(expression)] = (expression, target)
+    return target
+
+
+def _read_insert_target(expression: Any) -> "tuple[str | None, str] | None":
     if not isinstance(expression, exp.Insert):
         return None
     target = expression.this
