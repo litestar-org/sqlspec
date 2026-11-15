@@ -260,3 +260,11 @@ def _append_first_marker(sql_text: str, parameters: Any) -> tuple[str, Any]:
 
 def _append_second_marker(sql_text: str, parameters: Any) -> tuple[str, Any]:
     return f"{sql_text} /* second */", parameters
+
+
+def test_builder_cache_distinguishes_statements_differing_in_a_literal() -> None:
+    first = sql.select("id").from_("t").where("x = 1")
+    second = sql.select("id").from_("t").where("x = 2")
+
+    assert first._cache_key() != second._cache_key()
+    assert first.build().sql != second.build().sql

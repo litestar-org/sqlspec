@@ -51,7 +51,7 @@ app/sql/
 ```
 
 - `spec.list_sql_queries()` / `spec.has_sql_query(name)` / `spec.get_sql_files()`: Inspect registered query names and file paths at startup.
-- `spec.reload_sql_files(reload=True)`: Re-reads only `.sql` files whose MD5 checksum changed and invalidates cached statement instances.
+- `spec.reload_sql_files(reload=True)`: Re-reads only `.sql` files whose SHA-256 checksum changed and invalidates cached statement instances.
 - `SQLFileLoader(storage_registry=...)`: Loads `.sql` bundles from S3, GCS, Azure Blob Storage, or `fsspec` aliases registered in `StorageRegistry`.
 
 ## Dialect Declarations

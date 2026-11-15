@@ -257,14 +257,19 @@ def _expression_cache_fingerprint(
     schema: Any = None,
     settings: Any = None,
 ) -> str:
+    try:
+        expression_sql = expr.sql(dialect=str(dialect) if dialect is not None else None)
+    except Exception:
+        expression_sql = repr(expr)
     components = (
+        expression_sql,
         hash_expression(expr),
         parameter_signature,
         str(dialect) if dialect is not None else "default",
         None if schema is None else _freeze_cache_value(schema),
         None if settings is None else _freeze_cache_value(settings),
     )
-    return hashlib.blake2b(repr(components).encode(), digest_size=8).hexdigest()
+    return hashlib.blake2b(repr(components).encode(), digest_size=16).hexdigest()
 
 
 def _freeze_cache_value(value: Any) -> Any:

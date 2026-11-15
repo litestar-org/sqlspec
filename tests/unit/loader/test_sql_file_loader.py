@@ -499,7 +499,7 @@ def test_file_cache_key() -> None:
     assert key1 != key3
 
     assert key1.startswith("file:")
-    assert len(key1.split(":")[1]) == 16
+    assert len(key1.split(":")[1]) == 64
 
 
 def test_calculate_file_checksum(tmp_path: Path) -> None:
@@ -511,7 +511,7 @@ def test_calculate_file_checksum(tmp_path: Path) -> None:
     checksum = loader._calculate_file_checksum(str(sql_file))
 
     assert isinstance(checksum, str)
-    assert len(checksum) == 32
+    assert len(checksum) == 64
 
 
 def test_is_file_unchanged(tmp_path: Path) -> None:
@@ -1197,3 +1197,10 @@ def test_parse_ignores_section_markers_inside_literals_and_block_comments(embedd
     assert fragments == {}
     assert embedded_payload.strip() in statements["outer_query"].sql
     assert statements["second_query"].sql.strip() == "SELECT 42;"
+
+
+def test_sql_file_checksum_is_sha256() -> None:
+    """SQLFile checksums are SHA-256 digests of the file content."""
+    import hashlib
+
+    assert SQLFile("SELECT 1", "x.sql").checksum == hashlib.sha256(b"SELECT 1").hexdigest()

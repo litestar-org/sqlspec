@@ -593,3 +593,20 @@ def test_hash_expression_is_deterministic_across_shared_child_nodes() -> None:
     )
 
     assert hash_expression(dag_expr) == hash_expression(fresh_expr)
+
+
+def test_expression_fingerprint_is_128_bit() -> None:
+    """Optimized-expression keys are 128-bit digests."""
+    key = hash_optimized_expression(exp.select("a").from_("t"), dialect="postgres")
+
+    assert len(key.removeprefix("opt:")) == 32
+
+
+def test_expression_fingerprint_depends_on_sql_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Statements with a colliding structural hash still receive different cache keys."""
+    monkeypatch.setattr("sqlspec.core.hashing.hash_expression", lambda *_args, **_kwargs: "constant")
+
+    first = hash_optimized_expression(parse_one("SELECT 1"), dialect="postgres")
+    second = hash_optimized_expression(parse_one("SELECT 2"), dialect="postgres")
+
+    assert first != second

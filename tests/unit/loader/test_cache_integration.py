@@ -91,7 +91,7 @@ def test_cache_key_uniqueness() -> None:
     assert len(set(keys)) == len(keys)
     for key in keys:
         assert key.startswith("file:")
-        assert len(key.split(":")[1]) == 16
+        assert len(key.split(":")[1]) == 64
 
 
 def test_cache_key_with_path_object() -> None:
@@ -400,7 +400,7 @@ def test_cache_key_performance() -> None:
     assert len(set(keys)) == len(keys)
     for key in keys:
         assert key.startswith("file:")
-        assert len(key.split(":")[1]) == 16
+        assert len(key.split(":")[1]) == 64
 
 
 def test_checksum_calculation_performance() -> None:
@@ -414,7 +414,7 @@ def test_checksum_calculation_performance() -> None:
         checksum2 = loader._calculate_file_checksum(tf.name)
         assert checksum1 == checksum2
         assert isinstance(checksum1, str)
-        assert len(checksum1) == 32
+        assert len(checksum1) == 64
         Path(tf.name).unlink()
 
 
@@ -505,3 +505,22 @@ def test_get_sql_caching_clear_cache_clears_compiled_statements() -> None:
     assert loader._compiled_statements
     loader.clear_cache()
     assert loader._compiled_statements == {}
+
+
+def test_file_cache_keys_differ_for_distinct_paths(tmp_path: Path) -> None:
+    """File cache keys carry the full SHA-256 of the path, so distinct files never share an entry."""
+    first = tmp_path / "first.sql"
+    second = tmp_path / "second.sql"
+    first.write_text("-- name: one\nSELECT 1;\n")
+    second.write_text("-- name: two\nSELECT 2;\n")
+    loader = SQLFileLoader()
+
+    first_key = loader._file_cache_key(first)
+    second_key = loader._file_cache_key(second)
+
+    assert first_key != second_key
+    assert len(first_key.removeprefix("file:")) == 64
+    loader.load_sql(first)
+    loader.load_sql(second)
+    assert "one" in loader.list_queries()
+    assert "two" in loader.list_queries()

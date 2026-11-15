@@ -1074,7 +1074,7 @@ class SQL:
         if should_prune:
             if self._statement_config.enable_caching:
                 expr_sql = new_expr.sql(dialect=self._dialect)
-                cache_key = f"prune:{hashlib.blake2b(expr_sql.encode(), digest_size=8).hexdigest()}"
+                cache_key = f"prune:{hashlib.blake2b(expr_sql.encode(), digest_size=16).hexdigest()}"
             else:
                 cache_key = None
             new_expr = apply_column_pruning(new_expr, dialect=self._dialect, cache_key=cache_key)

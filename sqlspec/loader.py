@@ -188,7 +188,7 @@ class SQLFile:
         self.path = path
         self.metadata = metadata or {}
         self.loaded_at = loaded_at or datetime.now(UTC)
-        self.checksum = hashlib.md5(self.content.encode(), usedforsecurity=False).hexdigest()
+        self.checksum = hashlib.sha256(self.content.encode()).hexdigest()
 
 
 class SQLFileCacheEntry:
@@ -669,13 +669,12 @@ class SQLFileLoader:
             Cache key string for the file.
         """
         path_str = str(path)
-        path_hash = hashlib.md5(path_str.encode(), usedforsecurity=False).hexdigest()
-        return f"file:{path_hash[:16]}"
+        return f"file:{hashlib.sha256(path_str.encode()).hexdigest()}"
 
     @staticmethod
     def _compute_checksum(content: str) -> str:
-        """Compute MD5 checksum from already-read file content."""
-        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
+        """Compute the SHA-256 checksum of already-read file content."""
+        return hashlib.sha256(content.encode()).hexdigest()
 
     def _calculate_file_checksum(self, path: str | Path) -> str:
         """Calculate checksum for file content validation.
@@ -684,7 +683,7 @@ class SQLFileLoader:
             path: File path to calculate checksum for.
 
         Returns:
-            MD5 checksum of file content.
+            SHA-256 checksum of file content.
 
         Raises:
             SQLFileParseError: If file cannot be read.
