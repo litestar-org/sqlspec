@@ -89,7 +89,6 @@ _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
 _INDEX_STYLES: Final[frozenset[ParameterStyle]] = frozenset({ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON})
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
 def _googlesql_string_literal(text: str) -> str:
     """Render a GoogleSQL single-quoted string literal using backslash escapes."""
     pieces: list[str] = []
@@ -104,6 +103,7 @@ def _googlesql_string_literal(text: str) -> str:
     return "'" + "".join(pieces) + "'"
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterConverter:
     """Parameter style conversion helper."""
 
