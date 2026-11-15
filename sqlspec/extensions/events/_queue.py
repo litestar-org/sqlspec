@@ -260,11 +260,35 @@ class _BaseTableEventQueue:
             return self._leases.pop(event_id, None)
 
     def _owned_row(self, row: "dict[str, Any] | None", lease: "tuple[str, datetime]") -> "dict[str, Any] | None":
-        """Return the row when it still carries the lease this instance claimed."""
+        """Return the row when it still carries the unexpired lease this instance claimed."""
         channel, leased_until = lease
-        if row is None or row.get("channel") != channel or not self._claim_verified(row, leased_until):
+        if (
+            row is None
+            or row.get("channel") != channel
+            or leased_until <= self._utcnow()
+            or not self._claim_verified(row, leased_until)
+        ):
             return None
         return row
+
+    @staticmethod
+    def _owned_write_applied(row: "dict[str, Any] | None", leased_until: "datetime") -> bool:
+        """Return whether a lease-guarded write that reported no affected rows took effect.
+
+        Drivers that report zero or an unknown count for successful writes fall back to the
+        stored row: the write counts as lost when the row now carries another claimer's lease.
+
+        Args:
+            row: The event row read after the write, or ``None`` when it no longer exists.
+            leased_until: The lease this instance held.
+
+        Returns:
+            ``True`` when the write took effect.
+        """
+        if row is None:
+            return True
+        lease_value = row.get("lease_expires_at")
+        return lease_value is None or parse_event_timestamp(lease_value) == leased_until
 
     @staticmethod
     def _owned_parameters(row: "dict[str, Any]") -> "dict[str, Any]":
@@ -492,17 +516,19 @@ class SyncTableEventQueue(_BaseTableEventQueue):
     def ack(self, event_id: str) -> bool:
         lease = self._take_lease(event_id)
         row = self._owned_row(self._fetch_by_event_id(event_id), lease) if lease is not None else None
-        if row is None:
+        if row is None or lease is None:
             self._runtime.increment_metric("events.ack.unowned")
             return False
         owned = self._owned_parameters(row)
-        if self._cleanup_on_ack and self._retention_seconds <= 0:
-            self._execute(self._delete_by_id_statement, owned)
-            self._runtime.increment_metric("events.ack")
-            return True
         now = self._utcnow()
-        self._execute(self._ack_statement, {**owned, "acked": _ACKED_STATUS, "acked_at": now})
-        if self._cleanup_on_ack:
+        if self._cleanup_on_ack and self._retention_seconds <= 0:
+            rows_affected = self._execute(self._delete_by_id_statement, owned)
+        else:
+            rows_affected = self._execute(self._ack_statement, {**owned, "acked": _ACKED_STATUS, "acked_at": now})
+        if not self._owned_write_confirmed(event_id, rows_affected, lease[1]):
+            self._runtime.increment_metric("events.ack.unowned")
+            return False
+        if self._cleanup_on_ack and self._retention_seconds > 0:
             self._cleanup(now)
         self._runtime.increment_metric("events.ack")
         return True
@@ -510,22 +536,30 @@ class SyncTableEventQueue(_BaseTableEventQueue):
     def nack(self, event_id: str) -> bool:
         lease = self._take_lease(event_id)
         row = self._owned_row(self._fetch_by_event_id(event_id), lease) if lease is not None else None
-        if row is None:
+        if row is None or lease is None:
             self._runtime.increment_metric("events.nack.unowned")
             return False
         owned = self._owned_parameters(row)
         attempts = int(row["attempts"])
         if attempts >= self._max_attempts:
-            self._execute(self._fail_statement, {**owned, "failed_status": _FAILED_STATUS})
+            rows_affected = self._execute(self._fail_statement, {**owned, "failed_status": _FAILED_STATUS})
         else:
             now = self._utcnow()
             delay = self._retry_backoff_seconds * (2 ** max(0, attempts - 1))
-            self._execute(
+            rows_affected = self._execute(
                 self._nack_statement,
                 {**owned, "pending": _PENDING_STATUS, "available_at": now + timedelta(seconds=delay)},
             )
+        if not self._owned_write_confirmed(event_id, rows_affected, lease[1]):
+            self._runtime.increment_metric("events.nack.unowned")
+            return False
         self._runtime.increment_metric("events.nack")
         return True
+
+    def _owned_write_confirmed(self, event_id: str, rows_affected: int, leased_until: "datetime") -> bool:
+        if rows_affected > 0:
+            return True
+        return self._owned_write_applied(self._fetch_by_event_id(event_id), leased_until)
 
     def shutdown(self) -> None:
         """Shutdown the backend (no-op for table queue)."""
@@ -771,17 +805,19 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
     async def ack(self, event_id: str) -> bool:
         lease = self._take_lease(event_id)
         row = self._owned_row(await self._fetch_by_event_id(event_id), lease) if lease is not None else None
-        if row is None:
+        if row is None or lease is None:
             self._runtime.increment_metric("events.ack.unowned")
             return False
         owned = self._owned_parameters(row)
-        if self._cleanup_on_ack and self._retention_seconds <= 0:
-            await self._execute(self._delete_by_id_statement, owned)
-            self._runtime.increment_metric("events.ack")
-            return True
         now = self._utcnow()
-        await self._execute(self._ack_statement, {**owned, "acked": _ACKED_STATUS, "acked_at": now})
-        if self._cleanup_on_ack:
+        if self._cleanup_on_ack and self._retention_seconds <= 0:
+            rows_affected = await self._execute(self._delete_by_id_statement, owned)
+        else:
+            rows_affected = await self._execute(self._ack_statement, {**owned, "acked": _ACKED_STATUS, "acked_at": now})
+        if not await self._owned_write_confirmed(event_id, rows_affected, lease[1]):
+            self._runtime.increment_metric("events.ack.unowned")
+            return False
+        if self._cleanup_on_ack and self._retention_seconds > 0:
             await self._cleanup(now)
         self._runtime.increment_metric("events.ack")
         return True
@@ -789,22 +825,30 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
     async def nack(self, event_id: str) -> bool:
         lease = self._take_lease(event_id)
         row = self._owned_row(await self._fetch_by_event_id(event_id), lease) if lease is not None else None
-        if row is None:
+        if row is None or lease is None:
             self._runtime.increment_metric("events.nack.unowned")
             return False
         owned = self._owned_parameters(row)
         attempts = int(row["attempts"])
         if attempts >= self._max_attempts:
-            await self._execute(self._fail_statement, {**owned, "failed_status": _FAILED_STATUS})
+            rows_affected = await self._execute(self._fail_statement, {**owned, "failed_status": _FAILED_STATUS})
         else:
             now = self._utcnow()
             delay = self._retry_backoff_seconds * (2 ** max(0, attempts - 1))
-            await self._execute(
+            rows_affected = await self._execute(
                 self._nack_statement,
                 {**owned, "pending": _PENDING_STATUS, "available_at": now + timedelta(seconds=delay)},
             )
+        if not await self._owned_write_confirmed(event_id, rows_affected, lease[1]):
+            self._runtime.increment_metric("events.nack.unowned")
+            return False
         self._runtime.increment_metric("events.nack")
         return True
+
+    async def _owned_write_confirmed(self, event_id: str, rows_affected: int, leased_until: "datetime") -> bool:
+        if rows_affected > 0:
+            return True
+        return self._owned_write_applied(await self._fetch_by_event_id(event_id), leased_until)
 
     async def shutdown(self) -> None:
         """Shutdown the backend (no-op for table queue)."""

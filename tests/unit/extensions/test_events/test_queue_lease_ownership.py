@@ -2,7 +2,9 @@
 
 import asyncio
 import inspect
+import sqlite3
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,7 @@ from sqlspec.adapters.aiosqlite.events.store import AiosqliteEventQueueStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
 from sqlspec.extensions.events import AsyncTableEventQueue, SyncTableEventQueue
+from sqlspec.extensions.events._queue import _BaseTableEventQueue
 
 _QUEUE_TABLE = "evq_lease_ownership"
 
@@ -24,8 +27,11 @@ async def _maybe_await(value: Any) -> Any:
 
 
 class _Harness:
-    def __init__(self, config: Any, queue_class: Any, lease_seconds: int = 30, cleanup_on_ack: bool = False) -> None:
+    def __init__(
+        self, config: Any, queue_class: Any, database: str, lease_seconds: int = 30, cleanup_on_ack: bool = False
+    ) -> None:
         self.config = config
+        self.database = database
         self.queue_class = queue_class
         self.lease_seconds = lease_seconds
         self.cleanup_on_ack = cleanup_on_ack
@@ -81,7 +87,7 @@ async def harness(request: pytest.FixtureRequest, tmp_path: Path) -> "AsyncItera
                 await driver.execute_script(statement)
         queue_class = AsyncTableEventQueue
     try:
-        yield _Harness(config, queue_class)
+        yield _Harness(config, queue_class, database)
     finally:
         await _maybe_await(config.close_pool())
 
@@ -159,3 +165,51 @@ async def test_ack_after_lease_reclaimed_is_noop(harness: _Harness) -> None:
     assert acked is False
     assert await harness.status(event_id) == ("leased", 2)
     assert await _maybe_await(second.ack(event_id)) is True
+
+
+@pytest.mark.parametrize("operation", ["ack", "nack"])
+async def test_settle_after_lease_expired_is_refused(
+    harness: _Harness, operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = harness.new_queue()
+    event_id = await _maybe_await(owner.publish("expired", {"n": 4}))
+    assert await _maybe_await(owner.dequeue("expired")) is not None
+    later = datetime.now(UTC) + timedelta(seconds=harness.lease_seconds + 1)
+    monkeypatch.setattr(_BaseTableEventQueue, "_utcnow", staticmethod(lambda: later))
+
+    settled = await _maybe_await(getattr(owner, operation)(event_id))
+
+    assert settled is False
+    assert await harness.status(event_id) == ("leased", 1)
+
+
+@pytest.mark.parametrize("operation", ["ack", "nack"])
+@pytest.mark.parametrize("cleanup_on_ack", [False, True], ids=["keep-acked", "cleanup-on-ack"])
+async def test_settle_losing_race_after_ownership_check_is_refused(
+    harness: _Harness, operation: str, cleanup_on_ack: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.cleanup_on_ack = cleanup_on_ack
+    owner = harness.new_queue()
+    event_id = await _maybe_await(owner.publish("race", {"n": 5}))
+    assert await _maybe_await(owner.dequeue("race")) is not None
+    original_owned_row = _BaseTableEventQueue._owned_row  # pyright: ignore[reportPrivateUsage]
+
+    def reclaim_after_check(self: Any, row: Any, lease: Any) -> Any:
+        owned = original_owned_row(self, row, lease)
+        connection = sqlite3.connect(harness.database)
+        try:
+            connection.execute(
+                f"UPDATE {_QUEUE_TABLE} SET lease_expires_at = ? WHERE event_id = ?",
+                ((datetime.now(UTC) + timedelta(hours=1)).isoformat(), event_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return owned
+
+    monkeypatch.setattr(_BaseTableEventQueue, "_owned_row", reclaim_after_check)
+
+    settled = await _maybe_await(getattr(owner, operation)(event_id))
+
+    assert settled is False
+    assert await harness.status(event_id) == ("leased", 1)

@@ -456,7 +456,7 @@ async def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false(
     assert built_async._cleanup_on_ack is False
     assert built_async._use_run_in_transaction is True
 
-    leased_until = datetime(2026, 11, 13, 12, 0, 30, tzinfo=UTC)
+    leased_until = datetime.now(UTC) + timedelta(minutes=5)
     owned_row = {"event_id": "event-1", "channel": "alerts", "attempts": 1, "lease_expires_at": leased_until}
     sync_statements: list[str] = []
 

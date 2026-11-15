@@ -9,7 +9,7 @@ import asyncio
 import importlib
 import inspect
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -384,7 +384,7 @@ def test_events_queue_retention_zero_deletes_immediately_on_ack() -> None:
     config.extension_config = {"events": {"retention_seconds": 0, "cleanup_on_ack": True}}
     config.provide_session.return_value = session_cm
 
-    leased_until = datetime(2026, 11, 13, 12, 0, 30, tzinfo=UTC)
+    leased_until = datetime.now(UTC) + timedelta(minutes=5)
     driver.select_one_or_none.return_value = {
         "event_id": "evt-1",
         "channel": "alerts",
