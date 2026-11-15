@@ -25,7 +25,14 @@ POOLS: "dict[str, tuple[type[Any], dict[str, Any]]]" = {
     "sqlanywhere": (SqlanywhereConnectionPool, {"eng": "demo"}),
     "db2": (
         Db2SyncConnectionPool,
-        {"database": "db", "hostname": "localhost", "port": 50000, "username": "user", "password": "secret"},
+        {
+            "database": "db",
+            "hostname": "localhost",
+            "port": 50000,
+            "username": "user",
+            "password": "secret",
+            "autocommit": False,
+        },
     ),
 }
 
@@ -35,22 +42,28 @@ class FakeConnection:
 
     autocommit_state = True
     conn_handler = object()
+    server_status = 0
 
     def __init__(self) -> None:
         self.closed = False
         self.in_transaction = False
+        self.rollbacks = 0
 
     def close(self) -> None:
         self.closed = True
 
     def rollback(self) -> None:
+        if self.closed:
+            msg = "rollback on a closed connection"
+            raise RuntimeError(msg)
+        self.rollbacks += 1
         self.in_transaction = False
 
     def ping(self, reconnect: bool = False) -> None:
         return None
 
     def get_autocommit(self) -> bool:
-        return True
+        return self.autocommit_state
 
 
 @pytest.fixture(params=sorted(POOLS))
@@ -146,31 +159,98 @@ async def test_parking_is_capped_at_eight(made: "tuple[Any, list[FakeConnection]
     assert sum(connection.closed for connection in created) == 2
 
 
-async def test_checked_out_or_transaction_handle_is_retired(made: "tuple[Any, list[FakeConnection]]") -> None:
+async def test_child_task_checkout_is_kept_until_parent_release(
+    made: "tuple[Any, list[FakeConnection]]", monkeypatch: pytest.MonkeyPatch
+) -> None:
     pool, created = made
-    release_task = asyncio.Event()
-    held: list[Any] = []
+    monkeypatch.setattr(FakeConnection, "autocommit_state", False)
 
-    async def hold_checked_out() -> None:
+    async def open_in_child() -> "tuple[Any, Any]":
         lease = pool.get_connection()
-        lease.__enter__()
-        held.append(lease)
-        release_task.set()
+        return lease, lease.__enter__()
 
-    await asyncio.create_task(hold_checked_out())
+    lease, connection = await asyncio.create_task(open_in_child())
     await asyncio.sleep(0)
-    assert release_task.is_set()
-    assert created[0].closed
+    assert not connection.closed
+    lease.__exit__(None, None, None)
+    assert connection.rollbacks == 1
+    assert not connection.closed
+
+    async def reuse() -> Any:
+        with pool.get_connection() as reused:
+            return reused
+
+    assert await asyncio.create_task(reuse()) is connection
+    assert len(created) == 1
+
+
+async def test_parent_release_of_child_checkout_leaves_parent_connection_open(
+    made: "tuple[Any, list[FakeConnection]]",
+) -> None:
+    pool, created = made
+
+    async def open_in_child() -> "tuple[Any, Any]":
+        lease = pool.get_connection()
+        return lease, lease.__enter__()
+
+    with pool.get_connection() as parent_connection:
+        lease, child_connection = await asyncio.create_task(open_in_child())
+        await asyncio.sleep(0)
+        assert child_connection is not parent_connection
+        failure = RuntimeError("request failed")
+        assert not lease.__exit__(RuntimeError, failure, None)
+        assert not parent_connection.closed
+    assert len(created) == 2
+
+
+async def test_parked_handle_outlives_its_finished_loop_thread(made: "tuple[Any, list[FakeConnection]]") -> None:
+    pool, created = made
+
+    async def use() -> None:
+        with pool.get_connection():
+            pass
+
+    def run_loop() -> None:
+        async def main() -> None:
+            await asyncio.create_task(use())
+            await asyncio.sleep(0)
+
+        asyncio.run(main())
+
+    thread = threading.Thread(target=run_loop)
+    thread.start()
+    thread.join()
+    assert len(created) == 1
+    pool.size()
+    assert not created[0].closed
+
+    async def reuse() -> Any:
+        with pool.get_connection() as reused:
+            return reused
+
+    assert await asyncio.create_task(reuse()) is created[0]
+    assert not created[0].closed
+
+
+async def test_pymysql_handle_left_in_server_transaction_is_retired(monkeypatch: pytest.MonkeyPatch) -> None:
+    created: list[FakeConnection] = []
+
+    def new_connection(self: Any) -> FakeConnection:
+        connection = FakeConnection()
+        created.append(connection)
+        return connection
+
+    monkeypatch.setattr(PyMysqlConnectionPool, "new_connection", new_connection)
+    pool = PyMysqlConnectionPool({"host": "localhost"}, health_check_interval=3600.0)
 
     async def finish_in_transaction() -> None:
-        with pool.get_connection() as connection:
+        with pool.get_connection():
             pass
-        connection.in_transaction = True
-        connection.server_status = 1
+        created[0].server_status = 1
 
     await asyncio.create_task(finish_in_transaction())
     await asyncio.sleep(0)
-    assert created[1].closed
+    assert created[0].closed
 
 
 def test_thread_local_behaviour_outside_event_loop(made: "tuple[Any, list[FakeConnection]]") -> None:

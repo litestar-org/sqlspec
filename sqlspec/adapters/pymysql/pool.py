@@ -43,6 +43,7 @@ class PyMysqlConnectionPool:
         "_connection_parameters",
         "_connection_registry",
         "_connection_threads",
+        "_detached_holders",
         "_generation",
         "_health_check_interval",
         "_idle_task_connections",
@@ -87,6 +88,7 @@ class PyMysqlConnectionPool:
         self._task_holders: weakref.WeakKeyDictionary[asyncio.Task[Any], _TaskConnectionHolder] = (
             weakref.WeakKeyDictionary()
         )
+        self._detached_holders: dict[PyMysqlConnection, _TaskConnectionHolder] = {}
         self._idle_task_connections: list[tuple[PyMysqlConnection, float, float]] = []
         self._checked_out = 0
         self._generation = 0
@@ -172,6 +174,7 @@ class PyMysqlConnectionPool:
             self._connection_threads.clear()
             self._idle_task_connections.clear()
             self._task_holders.clear()
+            self._detached_holders.clear()
             self._checked_out = 0
             self._generation += 1
         for connection in orphaned:
@@ -186,10 +189,13 @@ class PyMysqlConnectionPool:
         return connection
 
     def release(self, connection: PyMysqlConnection) -> None:
-        """Release connection back to the pool, sanitizing transactions."""
-        holder = self._current_holder()
-        is_thread_conn = holder.connection is connection
-        if is_thread_conn:
+        """Release connection back to the pool, sanitizing transactions.
+
+        The release may run in a different task than the acquire; the checkout is matched to the holder that
+        acquired it, and a finished task's connection is parked or closed once its last checkout is released.
+        """
+        holder = self._holder_for_connection(connection)
+        if holder is not None:
             remaining = max(0, holder.depth - 1)
             holder.depth = remaining
             outermost = remaining == 0
@@ -200,20 +206,14 @@ class PyMysqlConnectionPool:
                 getattr(getattr(connection, "_result", None), "unbuffered_active", False) is True
                 or getattr(connection, "unbuffered_active", False) is True
             ):
-                if is_thread_conn:
-                    self._close_thread_connection()
-                else:
-                    self._retire_connection(connection)
+                self._discard_checkout(connection, holder)
                 return
 
             if outermost and not self._is_autocommit_enabled(connection):
                 try:
                     connection.rollback()
                 except BaseException:
-                    if is_thread_conn:
-                        self._close_thread_connection()
-                    else:
-                        self._retire_connection(connection)
+                    self._discard_checkout(connection, holder)
                     raise
 
             if outermost and self._reset_session_on_release:
@@ -231,13 +231,19 @@ class PyMysqlConnectionPool:
                     )
                     reset_done = False
                 if not reset_done:
-                    if is_thread_conn:
-                        self._close_thread_connection()
-                    else:
-                        self._retire_connection(connection)
+                    self._discard_checkout(connection, holder)
         finally:
             with self._registry_lock:
                 self._checked_out = max(0, self._checked_out - 1)
+            if holder is not None and outermost:
+                self._finish_detached_holder(holder)
+
+    def _discard_checkout(self, connection: PyMysqlConnection, holder: "_TaskConnectionHolder | None") -> None:
+        """Close a released connection that cannot be reused, detaching it from its holder."""
+        if holder is not None:
+            self._close_holder_connection(holder)
+        else:
+            self._retire_connection(connection)
 
     def size(self) -> int:
         """Report total active connections managed by this pool."""
@@ -305,12 +311,26 @@ class PyMysqlConnectionPool:
         return holder
 
     def _retire_task_holder(self, task: "asyncio.Task[Any]") -> None:
+        """Park or close a finished task's connection, deferring a still checked-out one until its release."""
         with self._registry_lock:
             holder = self._task_holders.pop(task, None)
         if holder is None or holder.connection is None:
             return
         connection = holder.connection
+        if holder.depth > 0 and holder.generation == self._generation:
+            with self._registry_lock:
+                self._detached_holders[connection] = holder
+            return
         holder.connection = None
+        self._park_or_retire(connection, holder)
+
+    def _park_or_retire(self, connection: PyMysqlConnection, holder: "_TaskConnectionHolder") -> None:
+        """Park a finished task's released connection for reuse by a later task, or close it.
+
+        A connection is parked only when its holder has no open checkout, so the outermost release has
+        already rolled back, and the server status reports no open transaction. Parked connections leave
+        the thread map, so pruning a finished loop thread never closes a handle a later task may claim.
+        """
         if holder.depth == 0 and holder.generation == self._generation and not _is_in_transaction(connection):
             with self._registry_lock:
                 if (
@@ -318,8 +338,35 @@ class PyMysqlConnectionPool:
                     and len(self._idle_task_connections) < _MAX_IDLE_TASK_CONNECTIONS
                 ):
                     self._idle_task_connections.append((connection, holder.created_at, holder.last_used))
+                    self._connection_threads.pop(connection, None)
                     return
         self._retire_connection(connection)
+
+    def _holder_for_connection(self, connection: PyMysqlConnection) -> "_TaskConnectionHolder | None":
+        """Return the holder that checked out ``connection``, even when another task releases it."""
+        holder = self._current_holder()
+        if holder.connection is connection:
+            return holder
+        with self._registry_lock:
+            detached = self._detached_holders.get(connection)
+            if detached is not None:
+                return detached
+            for task_holder in self._task_holders.values():
+                if task_holder.connection is connection:
+                    return task_holder
+        return None
+
+    def _finish_detached_holder(self, holder: "_TaskConnectionHolder") -> None:
+        """Park or close a finished task's connection once its last checkout is released."""
+        connection = holder.connection
+        if connection is None or not self._detached_holders:
+            return
+        with self._registry_lock:
+            if self._detached_holders.get(connection) is not holder:
+                return
+            del self._detached_holders[connection]
+        holder.connection = None
+        self._park_or_retire(connection, holder)
 
     def _claim_idle_connection(self, holder: "_TaskConnectionHolder") -> bool:
         with self._registry_lock:
@@ -389,12 +436,17 @@ class PyMysqlConnectionPool:
         """Close a pool-owned connection and drop it from the shutdown registry."""
         with self._registry_lock:
             self._connection_registry.discard(connection)
+            self._detached_holders.pop(connection, None)
             self._connection_threads.pop(connection, None)
         with contextlib.suppress(Exception):
             connection.close()
 
     def _close_thread_connection(self) -> None:
-        holder = self._current_holder()
+        """Close and detach the calling task's or thread's dedicated connection."""
+        self._close_holder_connection(self._current_holder())
+
+    def _close_holder_connection(self, holder: "_TaskConnectionHolder") -> None:
+        """Close and detach the connection owned by ``holder``."""
         holder.depth = 0
         connection = holder.connection
         if connection is not None:

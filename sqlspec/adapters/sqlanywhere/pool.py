@@ -35,6 +35,7 @@ class SqlanywhereConnectionPool:
         "_connection_parameters",
         "_connection_registry",
         "_connection_threads",
+        "_detached_holders",
         "_generation",
         "_health_check_interval",
         "_idle_task_connections",
@@ -69,6 +70,7 @@ class SqlanywhereConnectionPool:
         self._task_holders: weakref.WeakKeyDictionary[asyncio.Task[Any], _TaskConnectionHolder] = (
             weakref.WeakKeyDictionary()
         )
+        self._detached_holders: dict[SqlanywhereConnection, _TaskConnectionHolder] = {}
         self._idle_task_connections: list[tuple[SqlanywhereConnection, float, float]] = []
         self._checked_out = 0
         self._generation = 0
@@ -103,9 +105,10 @@ class SqlanywhereConnectionPool:
             yield connection
         except BaseException:
             body_failed = True
-            if self._current_holder().depth <= 1:
+            holder = self._holder_for_connection(connection)
+            if holder is not None and holder.depth <= 1:
                 with contextlib.suppress(Exception):
-                    self._close_thread_connection()
+                    self._close_holder_connection(holder)
             raise
         finally:
             if body_failed:
@@ -123,6 +126,7 @@ class SqlanywhereConnectionPool:
             self._connection_threads.clear()
             self._idle_task_connections.clear()
             self._task_holders.clear()
+            self._detached_holders.clear()
             self._checked_out = 0
             self._generation += 1
         for connection in orphaned:
@@ -138,16 +142,22 @@ class SqlanywhereConnectionPool:
         return connection
 
     def release(self, connection: SqlanywhereConnection) -> None:
-        """Release a checked-out connection back to the thread-local slot."""
-        if self._current_holder().connection is connection:
-            holder = self._current_holder()
+        """Release a checked-out connection, rolling back open work on the outermost checkin.
+
+        The release may run in a different task than the acquire; the checkout is matched to the holder that
+        acquired it, and a finished task's connection is parked or closed once its last checkout is released.
+        """
+        holder = self._holder_for_connection(connection)
+        if holder is not None:
             holder.depth = max(0, holder.depth - 1)
         try:
-            self._rollback_on_checkin(connection)
+            self._rollback_on_checkin(connection, holder)
         finally:
             with self._registry_lock:
                 if self._checked_out > 0:
                     self._checked_out -= 1
+            if holder is not None and holder.depth == 0:
+                self._finish_detached_holder(holder)
 
     def size(self) -> int:
         """Return the number of active connections registered with this pool."""
@@ -221,21 +231,63 @@ class SqlanywhereConnectionPool:
         return holder
 
     def _retire_task_holder(self, task: "asyncio.Task[Any]") -> None:
+        """Park or close a finished task's connection, deferring a still checked-out one until its release."""
         with self._registry_lock:
             holder = self._task_holders.pop(task, None)
         if holder is None or holder.connection is None:
             return
         connection = holder.connection
+        if holder.depth > 0 and holder.generation == self._generation:
+            with self._registry_lock:
+                self._detached_holders[connection] = holder
+            return
         holder.connection = None
-        if holder.depth == 0 and holder.generation == self._generation and not _is_in_transaction(connection):
+        self._park_or_retire(connection, holder)
+
+    def _park_or_retire(self, connection: SqlanywhereConnection, holder: "_TaskConnectionHolder") -> None:
+        """Park a finished task's released connection for reuse by a later task, or close it.
+
+        A connection is parked only when its holder has no open checkout. The DB-API connection exposes no
+        transaction probe, so parking relies on the outermost release having rolled back open work.
+        Parked connections leave the thread map, so pruning a finished loop thread never closes a handle
+        a later task may claim.
+        """
+        if holder.depth == 0 and holder.generation == self._generation:
             with self._registry_lock:
                 if (
                     holder.generation == self._generation
                     and len(self._idle_task_connections) < _MAX_IDLE_TASK_CONNECTIONS
                 ):
                     self._idle_task_connections.append((connection, holder.created_at, holder.last_used))
+                    self._connection_threads.pop(connection, None)
                     return
         self._retire_connection(connection)
+
+    def _holder_for_connection(self, connection: SqlanywhereConnection) -> "_TaskConnectionHolder | None":
+        """Return the holder that checked out ``connection``, even when another task releases it."""
+        holder = self._current_holder()
+        if holder.connection is connection:
+            return holder
+        with self._registry_lock:
+            detached = self._detached_holders.get(connection)
+            if detached is not None:
+                return detached
+            for task_holder in self._task_holders.values():
+                if task_holder.connection is connection:
+                    return task_holder
+        return None
+
+    def _finish_detached_holder(self, holder: "_TaskConnectionHolder") -> None:
+        """Park or close a finished task's connection once its last checkout is released."""
+        connection = holder.connection
+        if connection is None or not self._detached_holders:
+            return
+        with self._registry_lock:
+            if self._detached_holders.get(connection) is not holder:
+                return
+            del self._detached_holders[connection]
+        holder.connection = None
+        self._park_or_retire(connection, holder)
 
     def _claim_idle_connection(self, holder: "_TaskConnectionHolder") -> bool:
         with self._registry_lock:
@@ -290,36 +342,39 @@ class SqlanywhereConnectionPool:
         holder.last_used = now
         return cast("SqlanywhereConnection", holder.connection)
 
-    def _rollback_on_checkin(self, connection: SqlanywhereConnection) -> None:
+    def _rollback_on_checkin(self, connection: SqlanywhereConnection, holder: "_TaskConnectionHolder | None") -> None:
         """Roll back uncommitted work on the outermost checkin and retire the connection when rollback fails."""
-        if self._current_holder().depth > 0:
-            return
-        if self._current_holder().connection is not connection:
+        if holder is None or holder.depth > 0 or holder.connection is not connection:
             return
         assert connection is not None
         try:
             connection.rollback()
         except BaseException:
-            self._close_thread_connection()
+            self._close_holder_connection(holder)
             raise
 
     def _retire_connection(self, connection: SqlanywhereConnection) -> None:
         """Close a pool-owned connection and drop it from the shutdown registry."""
         with self._registry_lock:
             self._connection_registry.discard(connection)
+            self._detached_holders.pop(connection, None)
             self._connection_threads.pop(connection, None)
         with contextlib.suppress(Exception):
             connection.close()
 
     def _close_thread_connection(self) -> None:
-        holder = self._current_holder()
-        conn = holder.connection
-        if conn is not None:
-            self._retire_connection(conn)
+        """Close and detach the calling task's or thread's dedicated connection."""
+        self._close_holder_connection(self._current_holder())
+
+    def _close_holder_connection(self, holder: "_TaskConnectionHolder") -> None:
+        """Close and detach the connection owned by ``holder``."""
+        holder.depth = 0
+        connection = holder.connection
+        if connection is not None:
             holder.connection = None
+            self._retire_connection(connection)
             holder.created_at = 0.0
             holder.last_used = 0.0
-        holder.depth = 0
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -340,7 +395,3 @@ def _current_async_task() -> "asyncio.Task[Any] | None":
     """Return the active asyncio Task when running inside an event loop, otherwise None."""
     loop = asyncio._get_running_loop()
     return asyncio.current_task(loop) if loop is not None else None
-
-
-def _is_in_transaction(connection: SqlanywhereConnection) -> bool:
-    return bool(getattr(connection, "in_transaction", False))
