@@ -95,8 +95,9 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         """
 
         try:
-            conn_context = self._config.provide_connection()
-            async with conn_context as conn:
+            conn_context = self._store_connection()
+            async with conn_context as store_conn:
+                conn = store_conn.connection
                 async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute(cast("Any", sql), (key,))
                     row = await cur.fetchone()
@@ -113,7 +114,8 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
                         WHERE session_id = %s
                         """
                         await conn.execute(cast("Any", update_sql), (new_expires_at, key))
-                        await conn.commit()
+                        if store_conn.owned:
+                            await conn.commit()
 
                 return bytes(row["data"])
         except errors.UndefinedTable:
@@ -140,10 +142,12 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
             updated_at = CURRENT_TIMESTAMP
         """
 
-        conn_context = self._config.provide_connection()
-        async with conn_context as conn:
+        conn_context = self._store_connection()
+        async with conn_context as store_conn:
+            conn = store_conn.connection
             await conn.execute(cast("Any", sql), (key, data, expires_at))
-            await conn.commit()
+            if store_conn.owned:
+                await conn.commit()
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -154,10 +158,12 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
         try:
-            conn_context = self._config.provide_connection()
-            async with conn_context as conn:
+            conn_context = self._store_connection()
+            async with conn_context as store_conn:
+                conn = store_conn.connection
                 await conn.execute(cast("Any", sql), (key,))
-                await conn.commit()
+                if store_conn.owned:
+                    await conn.commit()
         except errors.UndefinedTable:
             return
 
@@ -166,10 +172,12 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            conn_context = self._config.provide_connection()
-            async with conn_context as conn:
+            conn_context = self._store_connection()
+            async with conn_context as store_conn:
+                conn = store_conn.connection
                 await conn.execute(cast("Any", sql))
-                await conn.commit()
+                if store_conn.owned:
+                    await conn.commit()
             self._log_delete_all()
         except errors.UndefinedTable:
             return
@@ -190,11 +198,13 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         """
 
         try:
-            conn_context = self._config.provide_connection()
-            async with conn_context as conn, conn.cursor() as cur:
-                await cur.execute(cast("Any", sql), (key,))
-                result = await cur.fetchone()
-                return result is not None
+            conn_context = self._store_connection()
+            async with conn_context as store_conn:
+                conn = store_conn.connection
+                async with conn.cursor() as cur:
+                    await cur.execute(cast("Any", sql), (key,))
+                    result = await cur.fetchone()
+                    return result is not None
         except errors.UndefinedTable:
             return False
 
@@ -213,8 +223,9 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         """
 
         try:
-            conn_context = self._config.provide_connection()
-            async with conn_context as conn:
+            conn_context = self._store_connection()
+            async with conn_context as store_conn:
+                conn = store_conn.connection
                 async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute(cast("Any", sql), (key,))
                     row = await cur.fetchone()
@@ -241,14 +252,17 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
         try:
-            conn_context = self._config.provide_connection()
-            async with conn_context as conn, conn.cursor() as cur:
-                await cur.execute(cast("Any", sql))
-                await conn.commit()
-                count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-                if count > 0:
-                    self._log_delete_expired(count)
-                return count
+            conn_context = self._store_connection()
+            async with conn_context as store_conn:
+                conn = store_conn.connection
+                async with conn.cursor() as cur:
+                    await cur.execute(cast("Any", sql))
+                    if store_conn.owned:
+                        await conn.commit()
+                    count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                    if count > 0:
+                        self._log_delete_expired(count)
+                    return count
         except errors.UndefinedTable:
             return 0
 
@@ -444,7 +458,8 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute(cast("Any", sql), (key,))
                     row = cur.fetchone()
@@ -461,7 +476,8 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
                         WHERE session_id = %s
                         """
                         conn.execute(cast("Any", update_sql), (new_expires_at, key))
-                        conn.commit()
+                        if store_conn.owned:
+                            conn.commit()
 
                 return bytes(row["data"])
         except errors.UndefinedTable:
@@ -482,18 +498,22 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
             updated_at = CURRENT_TIMESTAMP
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             conn.execute(cast("Any", sql), (key, data, expires_at))
-            conn.commit()
+            if store_conn.owned:
+                conn.commit()
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 conn.execute(cast("Any", sql), (key,))
-                conn.commit()
+                if store_conn.owned:
+                    conn.commit()
         except errors.UndefinedTable:
             return
 
@@ -502,9 +522,11 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 conn.execute(cast("Any", sql))
-                conn.commit()
+                if store_conn.owned:
+                    conn.commit()
             self._log_delete_all()
         except errors.UndefinedTable:
             return
@@ -518,10 +540,12 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(cast("Any", sql), (key,))
-                result = cur.fetchone()
-                return result is not None
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
+                with conn.cursor() as cur:
+                    cur.execute(cast("Any", sql), (key,))
+                    result = cur.fetchone()
+                    return result is not None
         except errors.UndefinedTable:
             return False
 
@@ -533,7 +557,8 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute(cast("Any", sql), (key,))
                     row = cur.fetchone()
@@ -557,12 +582,15 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
-                cur.execute(cast("Any", sql))
-                conn.commit()
-                count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-                if count > 0:
-                    self._log_delete_expired(count)
-                return count
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
+                with conn.cursor() as cur:
+                    cur.execute(cast("Any", sql))
+                    if store_conn.owned:
+                        conn.commit()
+                    count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                    if count > 0:
+                        self._log_delete_expired(count)
+                    return count
         except errors.UndefinedTable:
             return 0

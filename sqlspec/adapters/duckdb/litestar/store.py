@@ -188,7 +188,8 @@ class DuckDBStore(BaseSQLSpecStore["DuckDBConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             cursor = conn.execute(sql, (key,))
             row = cursor.fetchone()
 
@@ -207,7 +208,8 @@ class DuckDBStore(BaseSQLSpecStore["DuckDBConfig"]):
                     WHERE session_id = ?
                     """
                     conn.execute(update_sql, (new_expires_at_str, key))
-                    conn.commit()
+                    if store_conn.owned:
+                        conn.commit()
 
             return bytes(data)
 
@@ -227,25 +229,31 @@ class DuckDBStore(BaseSQLSpecStore["DuckDBConfig"]):
             updated_at = NOW()
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             conn.execute(sql, (key, data, expires_at_str))
-            conn.commit()
+            if store_conn.owned:
+                conn.commit()
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             conn.execute(sql, (key,))
-            conn.commit()
+            if store_conn.owned:
+                conn.commit()
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             conn.execute(sql)
-            conn.commit()
+            if store_conn.owned:
+                conn.commit()
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
@@ -256,7 +264,8 @@ class DuckDBStore(BaseSQLSpecStore["DuckDBConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             cursor = conn.execute(sql, (key,))
             result = cursor.fetchone()
             return result is not None
@@ -268,7 +277,8 @@ class DuckDBStore(BaseSQLSpecStore["DuckDBConfig"]):
         WHERE session_id = ?
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             cursor = conn.execute(sql, (key,))
             row = cursor.fetchone()
 
@@ -293,10 +303,12 @@ class DuckDBStore(BaseSQLSpecStore["DuckDBConfig"]):
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP RETURNING 1"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             cursor = conn.execute(sql)
             row_count = len(cursor.fetchall())
-            conn.commit()
+            if store_conn.owned:
+                conn.commit()
             if row_count > 0:
                 self._log_delete_expired(row_count)
             return row_count

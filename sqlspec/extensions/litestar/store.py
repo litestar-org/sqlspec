@@ -1,14 +1,17 @@
 """Base session store classes for Litestar integration."""
 
+import inspect
 import re
 from abc import abstractmethod
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, Final, Generic, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, NamedTuple, NoReturn, TypeVar, cast
 
 from litestar.stores.base import Store
 
 from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.litestar._utils import borrowed_request_session, request_failed
 from sqlspec.migrations.schema import (
     DropStatement,
     SchemaTarget,
@@ -22,7 +25,10 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import has_extension_config
 
-__all__ = ("BaseSQLSpecStore", "CompanionIndex")
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
+__all__ = ("BaseSQLSpecStore", "CompanionIndex", "StoreConnection", "StoreSession")
 
 
 ConfigT = TypeVar("ConfigT")
@@ -54,6 +60,24 @@ class CompanionIndex(NamedTuple):
     ddl: str
 
 
+class _DiscardStoreWritesError(Exception):
+    """Raised inside an owned connection to roll back writes made after a failed request."""
+
+
+class StoreConnection(NamedTuple):
+    """Connection a store operation runs on and whether the store owns its transaction."""
+
+    connection: Any
+    owned: bool
+
+
+class StoreSession(NamedTuple):
+    """Driver session a store operation runs on and whether the store owns its transaction."""
+
+    session: Any
+    owned: bool
+
+
 class BaseSQLSpecStore(Store, Generic[ConfigT]):
     """Base class for SQLSpec-backed Litestar session stores.
 
@@ -65,6 +89,11 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
     - Connection management via SQLSpec configs
     - Session expiration calculation
     - Table creation utilities
+
+    While a Litestar request holds an open session for the store's config, store operations
+    run on that session's connection inside the request transaction and leave commit and
+    rollback to the request. Outside a request the store opens its own short connection and
+    commits itself.
 
     Subclasses must implement dialect-specific SQL queries.
 
@@ -90,6 +119,96 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         self._validate_extension_config()
         self._table_name = self._table_name_from_config()
         self._validate_table_name(self._table_name)
+
+    @asynccontextmanager
+    async def _store_connection(self) -> "AsyncIterator[StoreConnection]":
+        """Yield the request session's connection, or open an owned connection outside a request.
+
+        Yields:
+            The connection to use and whether the store must commit it.
+        """
+        session = borrowed_request_session(self._config)
+        if session is not None:
+            await _begin_if_needed_async(session)
+            yield StoreConnection(session.connection, False)
+            return
+        if request_failed(self._config):
+            try:
+                async with cast("Any", self._config).provide_connection() as connection:
+                    yield StoreConnection(connection, False)
+                    _discard_store_writes()
+            except _DiscardStoreWritesError:
+                return
+        async with cast("Any", self._config).provide_connection() as connection:
+            yield StoreConnection(connection, True)
+
+    @contextmanager
+    def _store_connection_sync(self) -> "Iterator[StoreConnection]":
+        """Yield the request session's connection, or open an owned connection outside a request.
+
+        Yields:
+            The connection to use and whether the store must commit it.
+        """
+        session = borrowed_request_session(self._config)
+        if session is not None:
+            _begin_if_needed_sync(session)
+            yield StoreConnection(session.connection, False)
+            return
+        if request_failed(self._config):
+            try:
+                with cast("Any", self._config).provide_connection() as connection:
+                    yield StoreConnection(connection, False)
+                    _discard_store_writes()
+            except _DiscardStoreWritesError:
+                return
+        with cast("Any", self._config).provide_connection() as connection:
+            yield StoreConnection(connection, True)
+
+    @asynccontextmanager
+    async def _store_session(self) -> "AsyncIterator[StoreSession]":
+        """Yield the request session, or open an owned session outside a request.
+
+        Yields:
+            The driver session to use and whether the store must commit it.
+        """
+        session = borrowed_request_session(self._config)
+        if session is not None:
+            await _begin_if_needed_async(session)
+            yield StoreSession(session, False)
+            return
+        if request_failed(self._config):
+            try:
+                async with cast("Any", self._config).provide_session() as owned_session:
+                    await _begin_if_needed_async(owned_session)
+                    yield StoreSession(owned_session, False)
+                    _discard_store_writes()
+            except _DiscardStoreWritesError:
+                return
+        async with cast("Any", self._config).provide_session() as owned_session:
+            yield StoreSession(owned_session, True)
+
+    @contextmanager
+    def _store_session_sync(self) -> "Iterator[StoreSession]":
+        """Yield the request session, or open an owned session outside a request.
+
+        Yields:
+            The driver session to use and whether the store must commit it.
+        """
+        session = borrowed_request_session(self._config)
+        if session is not None:
+            _begin_if_needed_sync(session)
+            yield StoreSession(session, False)
+            return
+        if request_failed(self._config):
+            try:
+                with cast("Any", self._config).provide_session() as owned_session:
+                    _begin_if_needed_sync(owned_session)
+                    yield StoreSession(owned_session, False)
+                    _discard_store_writes()
+            except _DiscardStoreWritesError:
+                return
+        with cast("Any", self._config).provide_session() as owned_session:
+            yield StoreSession(owned_session, True)
 
     @property
     def config(self) -> ConfigT:
@@ -384,3 +503,19 @@ def _reconcile_schema_sync(store: "BaseSQLSpecStore[Any]", *, create_schema: boo
         ensure_schema_sync(
             driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
         )
+
+
+async def _begin_if_needed_async(session: Any) -> None:
+    if not session._connection_in_transaction():
+        result = session.begin()
+        if inspect.isawaitable(result):
+            await result
+
+
+def _begin_if_needed_sync(session: Any) -> None:
+    if not session._connection_in_transaction():
+        session.begin()
+
+
+def _discard_store_writes() -> NoReturn:
+    raise _DiscardStoreWritesError

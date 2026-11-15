@@ -213,7 +213,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -236,7 +237,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
                     WHERE session_id = ?
                     """
                     _close_cursor(conn.execute(update_sql, (new_expires_at_julian, key)))
-                    end_transaction(conn, commit=True)
+                    if store_conn.owned:
+                        end_transaction(conn, commit=True)
 
             return bytes(data)
 
@@ -251,28 +253,34 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         VALUES (?, ?, ?)
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql, (key, data, expires_at_julian)))
-            end_transaction(conn, commit=True)
+            if store_conn.owned:
+                end_transaction(conn, commit=True)
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql, (key,)))
-            end_transaction(conn, commit=True)
+            if store_conn.owned:
+                end_transaction(conn, commit=True)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql))
-            end_transaction(conn, commit=True)
+            if store_conn.owned:
+                end_transaction(conn, commit=True)
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
@@ -283,7 +291,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -299,7 +308,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         WHERE session_id = ?
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -331,11 +341,13 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at <= julianday('now')"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql)
             try:
-                end_transaction(conn, commit=True)
+                if store_conn.owned:
+                    end_transaction(conn, commit=True)
                 count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 _close_cursor(cursor)

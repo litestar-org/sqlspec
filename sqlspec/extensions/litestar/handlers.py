@@ -22,8 +22,10 @@ from litestar.utils.scope.state import ScopeState
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import (
+    clear_request_session,
     delete_sqlspec_scope_state,
     get_sqlspec_scope_state,
+    publish_request_session,
     set_sqlspec_scope_state,
 )
 from sqlspec.utils.adapters import resolve_adapter_name
@@ -447,11 +449,13 @@ def session_provider_maker(
             existing = get_sqlspec_scope_state(scope, session_scope_key)
             if existing is not None and getattr(existing, "connection", None) is connection_obj:
                 set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", existing)
+                publish_request_session(config, existing)
                 yield cast("DriverT", existing)  # pyright: ignore
                 return
             session = build_request_session(config, connection_obj, commit_mode)
             set_sqlspec_scope_state(scope, session_scope_key, session)
             set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", session)
+            publish_request_session(config, session)
             runtime = session.observability
             if not runtime.is_idle:
                 await runtime.emit_session_start_async(session)
@@ -460,6 +464,7 @@ def session_provider_maker(
         session = build_request_session(config, connection_obj, commit_mode)
         if scope is not None:
             set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", session)
+        publish_request_session(config, session)
         runtime = session.observability
         if not runtime.is_idle:
             await runtime.emit_session_start_async(session)
@@ -596,6 +601,8 @@ async def _release_request_session(
                 if runtime is not None and not runtime.is_idle:
                     await runtime.emit_session_end_async(session)
         finally:
+            if session is not None:
+                clear_request_session(session, failed=request_exc is not None)
             stream_owner = session
             if stream_owner is None and session_scope_key is not None and session_scope_key.endswith("_instance"):
                 stream_owner = get_sqlspec_scope_state(scope, f"{session_scope_key[:-9]}_deferred")
@@ -676,6 +683,7 @@ async def _exit_connection_context(
             if runtime is not None and not runtime.is_idle:
                 await runtime.emit_session_end_async(session)
         finally:
+            clear_request_session(session, failed=exc is not None)
             try:
                 await ensure_async_(session._close_open_streams)(error=exc is not None)
             finally:

@@ -616,7 +616,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         AND (expires_at IS NULL OR expires_at > {current_ts})
         """
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             result = driver.select_one_or_none(sql, key)
 
             if result is None:
@@ -635,7 +636,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 WHERE session_id = {p2_update}
                 """
                 driver.execute(update_sql, new_expires_at, key)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
 
             if isinstance(data, str):
                 try:
@@ -673,13 +675,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                     ON CONFLICT (session_id) DO UPDATE
                     SET data = EXCLUDED.data, expires_at = NULL
                     """
-                    with self._config.provide_session() as driver:
+                    with self._store_session_sync() as store_session:
+                        driver = store_session.session
                         try:
                             driver.execute(sql, key, data)
-                            driver.commit()
+                            if store_session.owned:
+                                driver.commit()
                         except Exception:
                             with contextlib.suppress(Exception):
-                                driver.rollback()
+                                if store_session.owned:
+                                    driver.rollback()
                             raise
                     return
                 sql = f"""
@@ -716,20 +721,24 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                     "VALUES (s.session_id, s.data, s.expires_at)"
                 )
                 merge_params = (key, bind_hex, expires_at)
-            with self._config.provide_session() as driver:
+            with self._store_session_sync() as store_session:
+                driver = store_session.session
                 try:
                     driver.execute(sql, *merge_params)
-                    driver.commit()
+                    if store_session.owned:
+                        driver.commit()
                 except Exception:
                     with contextlib.suppress(Exception):
-                        driver.rollback()
+                        if store_session.owned:
+                            driver.rollback()
                     raise
             return
         elif dialect in {"bigquery", "oracle", "db2", "mssql", "teradata"}:
             bind_data: bytes | str = data
             insert_data_expr = p2
             update_data_expr = p1
-            with self._config.provide_session() as driver:
+            with self._store_session_sync() as store_session:
+                driver = store_session.session
                 try:
                     count_alias = _count_alias(dialect)
                     check_sql = f"SELECT COUNT(*) AS {count_alias} FROM {self._table_name} WHERE session_id = {p1}"
@@ -780,10 +789,12 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                             WHERE session_id = {p3}
                             """
                             driver.execute(sql, bind_data, expires_at, key)
-                    driver.commit()
+                    if store_session.owned:
+                        driver.commit()
                 except Exception:
                     with contextlib.suppress(Exception):
-                        driver.rollback()
+                        if store_session.owned:
+                            driver.rollback()
                     raise
                 return
         else:
@@ -794,13 +805,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at
             """
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             try:
                 driver.execute(sql, key, data, expires_at)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
             except Exception:
                 with contextlib.suppress(Exception):
-                    driver.rollback()
+                    if store_session.owned:
+                        driver.rollback()
                 raise
 
     def _delete(self, key: str) -> None:
@@ -808,13 +822,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         p1 = self._get_param_placeholder(1)
         sql = f"DELETE FROM {self._table_name} WHERE session_id = {p1}"
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             try:
                 driver.execute(sql, key)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
             except Exception:
                 with contextlib.suppress(Exception):
-                    driver.rollback()
+                    if store_session.owned:
+                        driver.rollback()
                 raise
 
     def _delete_all(self) -> None:
@@ -822,13 +839,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             try:
                 driver.execute(sql)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
             except Exception:
                 with contextlib.suppress(Exception):
-                    driver.rollback()
+                    if store_session.owned:
+                        driver.rollback()
                 raise
 
     def _exists(self, key: str) -> bool:
@@ -843,7 +863,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         AND (expires_at IS NULL OR expires_at > {current_ts})
         """
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             return bool(driver.select_one_or_none(sql, key) is not None)
 
     def _expires_in(self, key: str) -> "int | None":
@@ -855,7 +876,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         AND expires_at IS NOT NULL
         """
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             result = driver.select_one_or_none(sql, key)
 
             if result is None:
@@ -891,7 +913,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             count_sql = f"SELECT COUNT(*) AS {count_alias} FROM {self._table_name} WHERE expires_at <= {current_ts}"
             delete_sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts}"
 
-            with self._config.provide_session() as driver:
+            with self._store_session_sync() as store_session:
+                driver = store_session.session
                 try:
                     result = driver.select_one(count_sql)
                     raw_count = _count_value(result, count_alias)
@@ -899,25 +922,30 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
                     if count > 0:
                         driver.execute(delete_sql)
-                        driver.commit()
+                        if store_session.owned:
+                            driver.commit()
                         self._log_delete_expired(count)
                 except Exception:
                     with contextlib.suppress(Exception):
-                        driver.rollback()
+                        if store_session.owned:
+                            driver.rollback()
                     raise
                 else:
                     return count
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             try:
                 exec_result = driver.execute(sql)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
                 count = exec_result.rows_affected
                 if count > 0:
                     self._log_delete_expired(count)
             except Exception:
                 with contextlib.suppress(Exception):
-                    driver.rollback()
+                    if store_session.owned:
+                        driver.rollback()
                 raise
             else:
                 return count

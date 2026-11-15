@@ -115,7 +115,8 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         self._log_table_created()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             row = driver.select_one_or_none(
                 f"SELECT data, expires_at FROM {self._table_name} WHERE session_id = ?", (key,)
             )
@@ -125,14 +126,16 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
             expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
             if expires_at is not None and expires_at < datetime.now(UTC):
                 driver.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
                 return None
 
             if self._should_renew(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     driver.execute(*self._sql.renew(key, new_expires_at))
-                    driver.commit()
+                    if store_session.owned:
+                        driver.commit()
 
             data = _row_value(row, "data", 0)
             if data is None:
@@ -142,44 +145,52 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = _encode_bytes(self._value_to_bytes(value))
         expires_at = self._calculate_expires_at(expires_in)
-        with self._config.provide_session() as driver, _atomic_write(driver):
-            inline_data = data if len(data) <= _MAX_INLINE_DATA_LENGTH else None
-            existing = driver.select_one_or_none(
-                f"SELECT session_id FROM {self._table_name} WHERE session_id = ?", (key,)
-            )
-            if existing is None:
-                driver.execute(*self._sql.insert(key, inline_data, expires_at))
-            else:
-                driver.execute(*self._sql.update(key, inline_data, expires_at))
-            driver.execute(f"DELETE FROM {self._chunk_table_name} WHERE session_id = ?", (key,))
-            if inline_data is None:
-                for index, chunk in enumerate(_chunk_text(data, _MAX_INLINE_DATA_LENGTH)):
-                    driver.execute(
-                        f"""
-                        INSERT INTO {self._chunk_table_name} (session_id, chunk_index, data)
-                        VALUES (?, ?, ?)
-                        """,
-                        (key, index, chunk),
-                    )
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
+            with _atomic_write(driver):
+                inline_data = data if len(data) <= _MAX_INLINE_DATA_LENGTH else None
+                existing = driver.select_one_or_none(
+                    f"SELECT session_id FROM {self._table_name} WHERE session_id = ?", (key,)
+                )
+                if existing is None:
+                    driver.execute(*self._sql.insert(key, inline_data, expires_at))
+                else:
+                    driver.execute(*self._sql.update(key, inline_data, expires_at))
+                driver.execute(f"DELETE FROM {self._chunk_table_name} WHERE session_id = ?", (key,))
+                if inline_data is None:
+                    for index, chunk in enumerate(_chunk_text(data, _MAX_INLINE_DATA_LENGTH)):
+                        driver.execute(
+                            f"""
+                            INSERT INTO {self._chunk_table_name} (session_id, chunk_index, data)
+                            VALUES (?, ?, ?)
+                            """,
+                            (key, index, chunk),
+                        )
 
     def _delete(self, key: str) -> None:
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             driver.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
 
     def _delete_all(self) -> None:
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             driver.execute(f"DELETE FROM {self._table_name}")
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             row = driver.select_one_or_none(*self._sql.exists(key))
             return row is not None
 
     def _expires_in(self, key: str) -> "int | None":
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             row = driver.select_one_or_none(f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?", (key,))
             if row is None:
                 return None
@@ -190,11 +201,13 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
             return max(0, int(remaining.total_seconds()))
 
     def _delete_expired(self) -> int:
-        with self._config.provide_session() as driver, _atomic_write(driver):
-            count_sql, count_parameters = self._sql.count_expired()
-            count = int(driver.select_value(count_sql, *count_parameters) or 0)
-            delete_sql, delete_parameters = self._sql.delete_expired()
-            driver.execute(delete_sql, *delete_parameters)
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
+            with _atomic_write(driver):
+                count_sql, count_parameters = self._sql.count_expired()
+                count = int(driver.select_value(count_sql, *count_parameters) or 0)
+                delete_sql, delete_parameters = self._sql.delete_expired()
+                driver.execute(delete_sql, *delete_parameters)
         if count > 0:
             self._log_delete_expired(count)
         return count

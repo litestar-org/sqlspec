@@ -215,7 +215,7 @@ Supported database adapters export a Litestar `Store` implementation under `sqls
 
 Call `await store.create_table()` during application startup (or configure `session_table=True` in `extension_config["litestar"]`, which auto-includes the `litestar_session` table in migrations) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
 
-When pairing `ServerSideSessionConfig` (`AsyncpgStore` or another SQLSpec store) with long-lived streaming responses or analytical queries, bind the session store to its own SQLSpec configuration key with explicit `min_size` and `max_size` pool settings so concurrent streams cannot starve session-store checkouts.
+While a request holds an open database session for the store's configuration, the store runs on that session's connection and does not take a second one, so a one-connection pool cannot deadlock on its own session writes. Session changes belong to the request's transaction: they commit with a successful request and roll back with a failed one, or with a manual-mode request that never commits. A store call made outside a request, such as from startup code, a CLI command, or a background task, opens its own short session and commits itself. Stores bound to a different configuration also open their own session. No extra configuration is needed.
 
 SQL Server, Oracle, and Arrow ODBC session stores accept schema-qualified `session_table` names (such as `"auth.litestar_session"`, `"[auth].[litestar_session]"`, or `"APP.litestar_session"`). The schema must already exist.
 

@@ -104,7 +104,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 cursor = conn.cursor(PyMysqlDictCursor)
                 try:
                     cursor.execute(sql, (key,))
@@ -122,7 +123,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                             WHERE session_id = %s
                             """
                             cursor.execute(update_sql, (naive_expires_at, key))
-                            conn.commit()
+                            if store_conn.owned:
+                                conn.commit()
                 finally:
                     cursor.close()
 
@@ -146,36 +148,42 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             updated_at = UTC_TIMESTAMP(6)
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, (key, data, naive_expires_at))
             finally:
                 cursor.close()
-            conn.commit()
+            if store_conn.owned:
+                conn.commit()
 
     def _delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, (key,))
             finally:
                 cursor.close()
-            conn.commit()
+            if store_conn.owned:
+                conn.commit()
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql)
                 finally:
                     cursor.close()
-                conn.commit()
+                if store_conn.owned:
+                    conn.commit()
             self._log_delete_all()
         except PyMysqlMySQLError as exc:
             if "doesn't exist" in str(exc) or (exc.args[0] if exc.args else None) == MYSQL_TABLE_NOT_FOUND_ERROR:
@@ -191,7 +199,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, (key,))
@@ -211,7 +220,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, (key,))
@@ -240,11 +250,13 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_conn:
+                conn = store_conn.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql)
-                    conn.commit()
+                    if store_conn.owned:
+                        conn.commit()
                     count = cursor.rowcount if isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
                 finally:
                     cursor.close()

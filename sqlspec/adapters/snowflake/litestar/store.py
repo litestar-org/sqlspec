@@ -88,7 +88,8 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
             f'SELECT data AS "data", expires_at AS "expires_at" FROM {self._table_name} WHERE session_id = ? '
             "AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP())"
         )
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             row = driver.select_one_or_none(sql, (key,))
             if row is None:
                 return None
@@ -97,7 +98,8 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
                 renewed = self._calculate_expires_at(renew_for)
                 if renewed is not None:
                     driver.execute(f"UPDATE {self._table_name} SET expires_at = ? WHERE session_id = ?", (renewed, key))
-                    driver.commit()
+                    if store_session.owned:
+                        driver.commit()
             return self._decode_binary(row["data"])
 
     def _set(self, key: str, value: str | bytes, expires_in: int | timedelta | None = None) -> None:
@@ -108,19 +110,25 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
             "WHEN MATCHED THEN UPDATE SET data = s.data, expires_at = s.expires_at "
             "WHEN NOT MATCHED THEN INSERT (session_id, data, expires_at) VALUES (s.session_id, s.data, s.expires_at)"
         )
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             driver.execute(sql, (key, self._value_to_bytes(value).hex(), self._calculate_expires_at(expires_in)))
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
 
     def _delete(self, key: str) -> None:
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             driver.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
 
     def _delete_all(self) -> None:
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             driver.execute(f"DELETE FROM {self._table_name}")
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
@@ -128,11 +136,13 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
             f"SELECT 1 AS found FROM {self._table_name} WHERE session_id = ? "
             "AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP()) LIMIT 1"
         )
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             return driver.select_one_or_none(sql, (key,)) is not None
 
     def _expires_in(self, key: str) -> int | None:
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             row = driver.select_one_or_none(
                 f'SELECT expires_at AS "expires_at" FROM {self._table_name} WHERE session_id = ?', (key,)
             )
@@ -142,9 +152,11 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
         return None if expires_at is None else max(int((expires_at - datetime.now(UTC)).total_seconds()), 0)
 
     def _delete_expired(self) -> int:
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             result = driver.execute(f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP()")
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
         count = max(result.get_affected_count(), 0)
         if count:
             self._log_delete_expired(count)

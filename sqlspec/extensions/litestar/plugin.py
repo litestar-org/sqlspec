@@ -38,6 +38,7 @@ from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_asy
 from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
     get_sqlspec_scope_state,
+    publish_request_session,
     set_sqlspec_scope_state,
 )
 from sqlspec.extensions.litestar.cli import database_group
@@ -1531,11 +1532,13 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         session = get_sqlspec_scope_state(scope, session_scope_key)
         if session is not None and getattr(session, "connection", None) is connection:
             set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
+            publish_request_session(plugin_state.config, session)
             return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session), False
 
         session = build_request_session(plugin_state.config, connection, plugin_state.commit_mode)
         set_sqlspec_scope_state(scope, session_scope_key, session)
         set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
+        publish_request_session(plugin_state.config, session)
         return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session), True
 
     def _create_session(

@@ -92,35 +92,35 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
 
         try:
-            async with (
-                self._config.provide_connection() as conn,
-                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-            ):
-                await cursor.execute(sql, (key,))
-                row = await cursor.fetchone()
+            async with self._store_connection() as store_conn:
+                conn = store_conn.connection
+                async with AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor:
+                    await cursor.execute(sql, (key,))
+                    row = await cursor.fetchone()
 
-                if row is None:
-                    return None
+                    if row is None:
+                        return None
 
-                if isinstance(row, Mapping):
-                    data_value = row["data"]
-                    expires_at = row["expires_at"]
-                else:
-                    data_value, expires_at = row
+                    if isinstance(row, Mapping):
+                        data_value = row["data"]
+                        expires_at = row["expires_at"]
+                    else:
+                        data_value, expires_at = row
 
-                if self._should_renew(renew_for) and expires_at is not None:
-                    new_expires_at = self._calculate_expires_at(renew_for)
-                    if new_expires_at is not None:
-                        naive_expires_at = new_expires_at.replace(tzinfo=None)
-                        update_sql = f"""
-                            UPDATE {self._table_name}
-                            SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
-                            WHERE session_id = %s
-                            """
-                        await cursor.execute(update_sql, (naive_expires_at, key))
-                        await conn.commit()
+                    if self._should_renew(renew_for) and expires_at is not None:
+                        new_expires_at = self._calculate_expires_at(renew_for)
+                        if new_expires_at is not None:
+                            naive_expires_at = new_expires_at.replace(tzinfo=None)
+                            update_sql = f"""
+                                UPDATE {self._table_name}
+                                SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
+                                WHERE session_id = %s
+                                """
+                            await cursor.execute(update_sql, (naive_expires_at, key))
+                            if store_conn.owned:
+                                await conn.commit()
 
-                return bytes(data_value)
+                    return bytes(data_value)
         except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
@@ -147,12 +147,12 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
             updated_at = UTC_TIMESTAMP(6)
         """
 
-        async with (
-            self._config.provide_connection() as conn,
-            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-        ):
-            await cursor.execute(sql, (key, data, naive_expires_at))
-            await conn.commit()
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
+            async with AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor:
+                await cursor.execute(sql, (key, data, naive_expires_at))
+                if store_conn.owned:
+                    await conn.commit()
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -162,24 +162,24 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        async with (
-            self._config.provide_connection() as conn,
-            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-        ):
-            await cursor.execute(sql, (key,))
-            await conn.commit()
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
+            async with AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor:
+                await cursor.execute(sql, (key,))
+                if store_conn.owned:
+                    await conn.commit()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            async with (
-                self._config.provide_connection() as conn,
-                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-            ):
-                await cursor.execute(sql)
-                await conn.commit()
+            async with self._store_connection() as store_conn:
+                conn = store_conn.connection
+                async with AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor:
+                    await cursor.execute(sql)
+                    if store_conn.owned:
+                        await conn.commit()
             self._log_delete_all()
         except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
@@ -203,13 +203,12 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
 
         try:
-            async with (
-                self._config.provide_connection() as conn,
-                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-            ):
-                await cursor.execute(sql, (key,))
-                result = await cursor.fetchone()
-                return result is not None
+            async with self._store_connection() as store_conn:
+                conn = store_conn.connection
+                async with AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor:
+                    await cursor.execute(sql, (key,))
+                    result = await cursor.fetchone()
+                    return result is not None
         except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return False
@@ -230,27 +229,26 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
 
         try:
-            async with (
-                self._config.provide_connection() as conn,
-                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-            ):
-                await cursor.execute(sql, (key,))
-                row = await cursor.fetchone()
+            async with self._store_connection() as store_conn:
+                conn = store_conn.connection
+                async with AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor:
+                    await cursor.execute(sql, (key,))
+                    row = await cursor.fetchone()
 
-                if row is None:
-                    return None
-                expires_at_naive = row["expires_at"] if isinstance(row, Mapping) else row[0]
-                if expires_at_naive is None:
-                    return None
+                    if row is None:
+                        return None
+                    expires_at_naive = row["expires_at"] if isinstance(row, Mapping) else row[0]
+                    if expires_at_naive is None:
+                        return None
 
-                expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
-                now = datetime.now(UTC)
+                    expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
+                    now = datetime.now(UTC)
 
-                if expires_at_utc <= now:
-                    return 0
+                    if expires_at_utc <= now:
+                        return 0
 
-                delta = expires_at_utc - now
-                return int(delta.total_seconds())
+                    delta = expires_at_utc - now
+                    return int(delta.total_seconds())
         except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
@@ -265,16 +263,16 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
         try:
-            async with (
-                self._config.provide_connection() as conn,
-                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-            ):
-                await cursor.execute(sql)
-                await conn.commit()
-                count = resolve_rowcount(cursor)
-                if count > 0:
-                    self._log_delete_expired(count)
-                return count
+            async with self._store_connection() as store_conn:
+                conn = store_conn.connection
+                async with AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor:
+                    await cursor.execute(sql)
+                    if store_conn.owned:
+                        await conn.commit()
+                    count = resolve_rowcount(cursor)
+                    if count > 0:
+                        self._log_delete_expired(count)
+                    return count
         except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return 0

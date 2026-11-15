@@ -149,7 +149,8 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             with MssqlPythonCursor(conn) as cursor:
                 cursor.execute(sql, (key,))
                 row = cursor.fetchone()
@@ -170,7 +171,8 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                             """,
                             (new_expires_at, key),
                         )
-                    conn.commit()
+                    if store_conn.owned:
+                        conn.commit()
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
@@ -191,21 +193,30 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             INSERT (session_id, data, expires_at)
             VALUES (src.session_id, src.data, src.expires_at);
         """
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(sql, (key, data, expires_at))
-            conn.commit()
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(sql, (key, data, expires_at))
+                if store_conn.owned:
+                    conn.commit()
 
     def _delete(self, key: str) -> None:
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
-            conn.commit()
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
+                if store_conn.owned:
+                    conn.commit()
 
     def _delete_all(self) -> None:
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"TRUNCATE TABLE {table_ref}")
-            conn.commit()
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(f"TRUNCATE TABLE {table_ref}")
+                if store_conn.owned:
+                    conn.commit()
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
@@ -216,15 +227,19 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(sql, (key,))
-            return cursor.fetchone() is not None
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(sql, (key,))
+                return cursor.fetchone() is not None
 
     def _expires_in(self, key: str) -> "int | None":
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"SELECT expires_at FROM {table_ref} WHERE session_id = ?", (key,))
-            row = cursor.fetchone()
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(f"SELECT expires_at FROM {table_ref} WHERE session_id = ?", (key,))
+                row = cursor.fetchone()
 
         if row is None:
             return None
@@ -241,10 +256,13 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         WHERE expires_at IS NOT NULL
           AND expires_at < SYSUTCDATETIME()
         """
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(sql)
-            count = resolve_rowcount(cursor)
-            conn.commit()
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(sql)
+                count = resolve_rowcount(cursor)
+                if store_conn.owned:
+                    conn.commit()
         if count > 0:
             self._log_delete_expired(count)
         return count

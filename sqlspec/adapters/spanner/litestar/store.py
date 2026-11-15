@@ -1,4 +1,8 @@
-"""Spanner session store for Litestar integration."""
+"""Spanner session store for Litestar integration.
+
+Spanner writes use their own database transaction API on a snapshot or batch handle, so this store
+always opens its own Spanner transaction instead of the request session.
+"""
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NotRequired, Protocol, cast

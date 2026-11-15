@@ -59,7 +59,8 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
             row = await _fetch_one(conn, sql, key)
 
             if row is None:
@@ -91,19 +92,22 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
             updated_at = CURRENT_TIMESTAMP
         """
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
             await conn.execute(sql, key, data, expires_at)
 
     async def delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
             await conn.execute(sql, key)
 
     async def delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name}"
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
             await conn.execute(sql)
         self._log_delete_all()
 
@@ -114,7 +118,8 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
             row = await _fetch_one(conn, sql, key)
             return row is not None
 
@@ -124,7 +129,8 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
         WHERE session_id = $1
         """
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
             row = await _fetch_one(conn, sql, key)
 
             if row is None or row["expires_at"] is None:
@@ -142,7 +148,8 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
     async def delete_expired(self) -> int:
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_conn:
+            conn = store_conn.connection
             result = await conn.execute(sql)
             count = int(result.split()[-1]) if result else 0
             if count > 0:

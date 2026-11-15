@@ -1,4 +1,8 @@
-"""BigQuery session store for Litestar integration."""
+"""BigQuery session store for Litestar integration.
+
+BigQuery statements run as independent jobs without a request-scoped transaction, so this store
+always uses its own client connection instead of the request session.
+"""
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, cast

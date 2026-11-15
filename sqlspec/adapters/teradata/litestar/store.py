@@ -119,7 +119,8 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(6))
         """
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
             with TeradataCursor(conn) as cursor:
                 cursor.execute(sql, (key,))
                 row = cursor.fetchone()
@@ -140,7 +141,8 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
                             """,
                             (new_expires_at, key),
                         )
-                    _commit_if_manual(conn)
+                    if store_conn.owned:
+                        _commit_if_manual(conn)
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
@@ -158,21 +160,30 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
             "WHEN NOT MATCHED THEN INSERT (session_id, data, expires_at) "
             "VALUES (src.session_id, src.data, src.expires_at)"
         )
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
-            cursor.execute(merge_sql, (key, data, expires_at))
-            _commit_if_manual(conn)
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with TeradataCursor(conn) as cursor:
+                cursor.execute(merge_sql, (key, data, expires_at))
+                if store_conn.owned:
+                    _commit_if_manual(conn)
 
     def _delete(self, key: str) -> None:
         table_ref = format_table_ref(self._table_name)
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
-            cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
-            _commit_if_manual(conn)
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with TeradataCursor(conn) as cursor:
+                cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
+                if store_conn.owned:
+                    _commit_if_manual(conn)
 
     def _delete_all(self) -> None:
         table_ref = format_table_ref(self._table_name)
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
-            cursor.execute(f"DELETE FROM {table_ref} ALL")
-            _commit_if_manual(conn)
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with TeradataCursor(conn) as cursor:
+                cursor.execute(f"DELETE FROM {table_ref} ALL")
+                if store_conn.owned:
+                    _commit_if_manual(conn)
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
@@ -182,9 +193,11 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(6))
         """
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
-            cursor.execute(sql, (key,))
-            return cursor.fetchone() is not None
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with TeradataCursor(conn) as cursor:
+                cursor.execute(sql, (key,))
+                return cursor.fetchone() is not None
 
     def _expires_in(self, key: str) -> "int | None":
         table_ref = format_table_ref(self._table_name)
@@ -192,9 +205,11 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
         SELECT expires_at FROM {table_ref}
         WHERE session_id = ?
         """
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
-            cursor.execute(sql, (key,))
-            row = cursor.fetchone()
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with TeradataCursor(conn) as cursor:
+                cursor.execute(sql, (key,))
+                row = cursor.fetchone()
 
         if row is None:
             return None
@@ -211,10 +226,13 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
     def _delete_expired(self) -> int:
         table_ref = format_table_ref(self._table_name)
         sql = f"DELETE FROM {table_ref} WHERE expires_at <= CURRENT_TIMESTAMP(6)"
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
-            cursor.execute(sql)
-            _commit_if_manual(conn)
-            count = resolve_rowcount(cursor)
+        with self._store_connection_sync() as store_conn:
+            conn = store_conn.connection
+            with TeradataCursor(conn) as cursor:
+                cursor.execute(sql)
+                if store_conn.owned:
+                    _commit_if_manual(conn)
+                count = resolve_rowcount(cursor)
         if count > 0:
             self._log_delete_expired(count)
         return count
