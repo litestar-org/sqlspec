@@ -12,7 +12,6 @@ from time import monotonic as _monotonic
 from time import sleep as _sleep
 from time import time as _time
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
-from uuid import uuid4
 
 from mypy_extensions import mypyc_attr
 
@@ -28,6 +27,7 @@ from sqlspec.migrations.base import (
 from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

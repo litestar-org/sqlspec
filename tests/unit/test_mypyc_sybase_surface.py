@@ -16,7 +16,7 @@ def test_pyproject_registers_sybase_and_sqlanywhere_extras_entrypoints_and_marke
     config = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
 
     optional_deps = config["project"]["optional-dependencies"]
-    assert optional_deps.get("sybase") == ["pymssql"]
+    assert optional_deps.get("sybase") == ["pymssql>=2.3.0"]
     assert optional_deps.get("sqlanywhere") == ["sqlanydb>=1.0.14"]
 
     dialect_entrypoints = config["project"]["entry-points"]["sqlglot.dialects"]
