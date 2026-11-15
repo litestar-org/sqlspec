@@ -1,7 +1,6 @@
-"""SQLite and aiosqlite ADK session flows through SQLSpecSessionService."""
+"""SQLSpecSessionService flows on the SQLite and aiosqlite ADK stores."""
 
 import importlib.util
-import inspect
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -22,26 +21,24 @@ from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.extensions.adk.service import SQLSpecSessionService
 
 
-async def _maybe_await(value: Any) -> Any:
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
 @pytest.fixture(params=["sqlite", "aiosqlite"])
 async def service(request: pytest.FixtureRequest, tmp_path: Path) -> "AsyncIterator[SQLSpecSessionService]":
     database = str(tmp_path / "adk.db")
+    config: Any
     if request.param == "sqlite":
-        config: Any = SqliteConfig(connection_config={"database": database})
+        config = SqliteConfig(connection_config={"database": database})
         store: Any = SqliteADKStore(config)
+        store.create_tables()
     else:
         config = AiosqliteConfig(connection_config={"database": database})
         store = AiosqliteADKStore(config)
-    await _maybe_await(store.create_tables())
+        await store.create_tables()
     try:
         yield SQLSpecSessionService(store)
     finally:
-        await _maybe_await(config.close_pool())
+        close = config.close_pool()
+        if close is not None:
+            await close
 
 
 def _event(text: str) -> Event:
@@ -53,33 +50,39 @@ def _event(text: str) -> Event:
     )
 
 
-async def test_append_event_after_create_session(service: SQLSpecSessionService) -> None:
-    session = await service.create_session(
+async def _create(service: SQLSpecSessionService) -> Any:
+    return await service.create_session(
         app_name="app", user_id="alice", state={"k": "alice-secret", "user:pref": "A"}, session_id="S1"
     )
+
+
+async def test_append_event_after_create_session(service: SQLSpecSessionService) -> None:
+    session = await _create(service)
 
     await service.append_event(session, _event("hello from alice"))
 
     stored = await service.get_session(app_name="app", user_id="alice", session_id="S1")
     assert stored is not None
-    assert [e.content.parts[0].text for e in stored.events if e.content and e.content.parts] == ["hello from alice"]
+    assert [event.content.parts[0].text for event in stored.events if event.content and event.content.parts] == [
+        "hello from alice"
+    ]
 
 
 async def test_append_two_events_in_sequence(service: SQLSpecSessionService) -> None:
-    session = await service.create_session(app_name="app", user_id="alice", state={}, session_id="S2")
+    session = await _create(service)
 
     await service.append_event(session, _event("first"))
     await service.append_event(session, _event("second"))
 
-    stored = await service.get_session(app_name="app", user_id="alice", session_id="S2")
+    stored = await service.get_session(app_name="app", user_id="alice", session_id="S1")
     assert stored is not None
     assert len(stored.events) == 2
 
 
 async def test_create_session_timestamp_matches_storage(service: SQLSpecSessionService) -> None:
-    created = await service.create_session(app_name="app", user_id="alice", state={}, session_id="S3")
+    session = await _create(service)
 
-    stored = await service.get_session(app_name="app", user_id="alice", session_id="S3")
+    stored = await service.get_session(app_name="app", user_id="alice", session_id="S1")
 
     assert stored is not None
-    assert created.last_update_time == stored.last_update_time
+    assert session.last_update_time == stored.last_update_time
