@@ -2286,29 +2286,29 @@ async def test_oracle_none_initial_transaction_priority_restores_default_and_ski
     assert conn_override.transaction_priority == TransactionPriority.DEFAULT
     pool_override.release.assert_called_once_with(conn_override)
 
-    conn_baseline = NativeConnection()
-    pool_baseline = MagicMock()
-    pool_baseline.thin = True
+    conn_initial = NativeConnection()
+    pool_initial = MagicMock()
+    pool_initial.thin = True
     if async_mode:
-        pool_baseline.acquire = AsyncMock(return_value=conn_baseline)
-        pool_baseline.release = AsyncMock()
-        pool_baseline.drop = AsyncMock()
-        config_baseline = OracleAsyncConfig(
-            connection_instance=pool_baseline, connection_config={"transaction_priority": "HIGH"}
+        pool_initial.acquire = AsyncMock(return_value=conn_initial)
+        pool_initial.release = AsyncMock()
+        pool_initial.drop = AsyncMock()
+        config_initial = OracleAsyncConfig(
+            connection_instance=pool_initial, connection_config={"transaction_priority": "HIGH"}
         )
-        async with config_baseline.provide_connection() as acquired:
+        async with config_initial.provide_connection() as acquired:
             assert acquired.transaction_priority == TransactionPriority.HIGH
     else:
-        pool_baseline.acquire.return_value = conn_baseline
-        config_baseline = OracleSyncConfig(
-            connection_instance=pool_baseline, connection_config={"transaction_priority": "HIGH"}
+        pool_initial.acquire.return_value = conn_initial
+        config_initial = OracleSyncConfig(
+            connection_instance=pool_initial, connection_config={"transaction_priority": "HIGH"}
         )
-        with config_baseline.provide_connection() as acquired:
+        with config_initial.provide_connection() as acquired:
             assert acquired.transaction_priority == TransactionPriority.HIGH
 
-    conn_baseline.rollback.assert_not_called()
-    assert conn_baseline.transaction_priority == TransactionPriority.HIGH
-    pool_baseline.release.assert_called_once_with(conn_baseline)
+    conn_initial.rollback.assert_not_called()
+    assert conn_initial.transaction_priority == TransactionPriority.HIGH
+    pool_initial.release.assert_called_once_with(conn_initial)
 
 
 @pytest.mark.anyio
@@ -2454,10 +2454,12 @@ async def test_oracle_p12_only_wallet_directory_isolates_temp_dir_and_cleans_on_
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_oracle_session_hook_restores_edition_timezone_and_nls_with_cached_baseline(asynchronous: bool) -> None:
-    """First borrow captures baseline EDITION, TIME_ZONE, and NLS settings once and restores them on release."""
+async def test_oracle_session_hook_restores_edition_timezone_and_nls_with_cached_initial_settings(
+    asynchronous: bool,
+) -> None:
+    """First borrow captures initial EDITION, TIME_ZONE, and NLS settings once and restores them on release."""
     executed_sql: list[tuple[str, dict[str, Any]]] = []
-    baseline_rows = [
+    initial_settings_rows = [
         ("EDITION", "EDITION", "ORA$BASE"),
         ("TIME_ZONE", "TIME_ZONE", "-05:00"),
         ("NLS", "NLS_DATE_FORMAT", "DD-MON-RR"),
@@ -2476,10 +2478,10 @@ async def test_oracle_session_hook_restores_edition_timezone_and_nls_with_cached
             record_exec(sql, params)
 
         cursor.execute = AsyncMock(side_effect=async_exec)
-        cursor.fetchall = AsyncMock(return_value=baseline_rows)
+        cursor.fetchall = AsyncMock(return_value=initial_settings_rows)
     else:
         cursor.execute = MagicMock(side_effect=record_exec)
-        cursor.fetchall = MagicMock(return_value=baseline_rows)
+        cursor.fetchall = MagicMock(return_value=initial_settings_rows)
 
     conn = MagicMock()
     conn.thin = True
@@ -2543,8 +2545,8 @@ async def test_oracle_session_hook_restores_edition_timezone_and_nls_with_cached
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_oracle_session_hook_skips_baseline_probe_when_reset_disabled(asynchronous: bool) -> None:
-    """When reset_on_release is False, edition/time_zone/nls checkout skips baseline probing and release reset."""
+async def test_oracle_session_hook_skips_initial_settings_probe_when_reset_disabled(asynchronous: bool) -> None:
+    """When reset_on_release is False, edition/time_zone/nls checkout skips initial-settings probing and release reset."""
     executed_sql: list[str] = []
     cursor = MagicMock()
     cursor.__enter__.return_value = cursor

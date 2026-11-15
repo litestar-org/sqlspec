@@ -441,20 +441,22 @@ class OracleAsyncIdentifierStrategy:
             variables = _tenant_variables(payload, self._variable_keys)
             with TenantContext.bind(payload):
                 tenant_client_identifier()
-                baseline_sql, baseline_binds, sql, binds = prepare_session_checkout_with_baseline_pipeline(
-                    connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
+                initial_settings_sql, initial_settings_binds, sql, binds = (
+                    prepare_session_checkout_with_baseline_pipeline(
+                        connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
+                    )
                 )
                 if variables:
                     cast("Any", connection).set_app_context("CLIENTCONTEXT", **variables)
                 pipeline = create_oracle_pipeline()
-                if baseline_sql is not None:
-                    pipeline.add_fetchall(baseline_sql, baseline_binds)
+                if initial_settings_sql is not None:
+                    pipeline.add_fetchall(initial_settings_sql, initial_settings_binds)
                 if sql is not None:
                     pipeline.add_execute(sql, binds)
                 pipeline.add_fetchone(_IDENTIFIER_QUERY)
                 try:
                     results = await connection.run_pipeline(pipeline, continue_on_error=False)
-                    if baseline_sql is not None and results:
+                    if initial_settings_sql is not None and results:
                         record_oracle_alter_session_baseline(connection, results[0].rows)
                     row = extract_pipeline_single_row(results[-1])
                 except Exception as exc:
@@ -567,7 +569,7 @@ class OracleSyncTenantLease(SyncTenantLease):
     configured ``session_context_hook``, matching non-tenant sessions.
     """
 
-    __slots__ = ("_acquire_options", "_bypass_hook", "_config", "_pool", "_priority_baseline", "_release_tag")
+    __slots__ = ("_acquire_options", "_bypass_hook", "_config", "_initial_priority", "_pool", "_release_tag")
 
     def __init__(
         self, config: Any, strategy: "SyncTenantStrategy", acquire_options: OracleAcquireOptions | None = None
@@ -578,7 +580,7 @@ class OracleSyncTenantLease(SyncTenantLease):
         self._bypass_hook: Any = None
         self._acquire_options = acquire_options
         self._release_tag: str | None = None
-        self._priority_baseline: Any = None
+        self._initial_priority: Any = None
 
     def _acquire(self) -> Any:
         payload = TenantContext.require(self.tenant_key)
@@ -595,7 +597,7 @@ class OracleSyncTenantLease(SyncTenantLease):
         if priority is None:
             priority = configured_priority
         try:
-            self._priority_baseline = capture_oracle_transaction_priority_baseline(
+            self._initial_priority = capture_oracle_transaction_priority_baseline(
                 connection, configured_priority=configured_priority
             )
             if priority is not None:
@@ -622,9 +624,9 @@ class OracleSyncTenantLease(SyncTenantLease):
         if hook is not None:
             with TenantContext.bind(TenantContextPayload.bypass()):
                 execute_session_release_sync(connection, hook)
-        baseline, self._priority_baseline = self._priority_baseline, None
-        if baseline is not None and not oracle_transaction_priority_matches(connection, baseline):
-            apply_oracle_transaction_priority(connection, baseline)
+        initial_priority, self._initial_priority = self._initial_priority, None
+        if initial_priority is not None and not oracle_transaction_priority_matches(connection, initial_priority):
+            apply_oracle_transaction_priority(connection, initial_priority)
         mark_oracle_tagged_release(connection, False)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
             self._pool.release(connection, tag=self._release_tag)
@@ -648,7 +650,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
     configured ``session_context_hook``, matching non-tenant sessions.
     """
 
-    __slots__ = ("_acquire_options", "_bypass_hook", "_config", "_pool", "_priority_baseline", "_release_tag")
+    __slots__ = ("_acquire_options", "_bypass_hook", "_config", "_initial_priority", "_pool", "_release_tag")
 
     def __init__(
         self, config: Any, strategy: "AsyncTenantStrategy", acquire_options: OracleAcquireOptions | None = None
@@ -659,7 +661,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         self._bypass_hook: Any = None
         self._acquire_options = acquire_options
         self._release_tag: str | None = None
-        self._priority_baseline: Any = None
+        self._initial_priority: Any = None
 
     async def _acquire(self) -> Any:
         payload = await TenantContext.arequire(self.tenant_key)
@@ -676,7 +678,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         if priority is None:
             priority = configured_priority
         try:
-            self._priority_baseline = capture_oracle_transaction_priority_baseline(
+            self._initial_priority = capture_oracle_transaction_priority_baseline(
                 connection, configured_priority=configured_priority
             )
             if priority is not None:
@@ -707,9 +709,9 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         if hook is not None:
             with TenantContext.bind(TenantContextPayload.bypass()):
                 await execute_session_release_async(connection, hook)
-        baseline, self._priority_baseline = self._priority_baseline, None
-        if baseline is not None and not oracle_transaction_priority_matches(connection, baseline):
-            apply_oracle_transaction_priority(connection, baseline)
+        initial_priority, self._initial_priority = self._initial_priority, None
+        if initial_priority is not None and not oracle_transaction_priority_matches(connection, initial_priority):
+            apply_oracle_transaction_priority(connection, initial_priority)
         mark_oracle_tagged_release(connection, False)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
             await self._pool.release(connection, tag=self._release_tag)
@@ -839,19 +841,21 @@ class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
         if has_pipeline_capability(connection):
             with TenantContext.bind(payload):
                 tenant_client_identifier()
-                baseline_sql, baseline_binds, sql, hook_binds = prepare_session_checkout_with_baseline_pipeline(
-                    connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
+                initial_settings_sql, initial_settings_binds, sql, hook_binds = (
+                    prepare_session_checkout_with_baseline_pipeline(
+                        connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
+                    )
                 )
                 pipeline = create_oracle_pipeline()
-                if baseline_sql is not None:
-                    pipeline.add_fetchall(baseline_sql, baseline_binds)
+                if initial_settings_sql is not None:
+                    pipeline.add_fetchall(initial_settings_sql, initial_settings_binds)
                 if sql is not None:
                     pipeline.add_execute(sql, hook_binds)
                 pipeline.add_execute(f"BEGIN {self._set_procedure}({placeholders}); END;", binds)
                 pipeline.add_fetchone(_TENANT_STATE_QUERY, self._context_binds())
                 try:
                     results = await connection.run_pipeline(pipeline, continue_on_error=False)
-                    if baseline_sql is not None and results:
+                    if initial_settings_sql is not None and results:
                         record_oracle_alter_session_baseline(connection, results[0].rows)
                     row = extract_pipeline_single_row(results[-1])
                 except Exception as exc:

@@ -233,7 +233,7 @@ class TeradataDriver(SyncDriverAdapterBase):
                 enable_fastexport=bool(self.driver_features.get("enable_fastexport", False)),
                 in_transaction=self._connection_in_transaction(),
             )
-        if _marks_session_query_band(sql):
+        if _sets_session_query_band(sql):
             self._session_query_band_dirty = True
         cursor.execute(sql, prepare_teradata_parameters(parameters))
         if statement.returns_rows():
@@ -292,7 +292,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         sql, parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         for text in statements:
-            if _marks_session_query_band(text):
+            if _sets_session_query_band(text):
                 self._session_query_band_dirty = True
             cursor.execute(text, prepare_teradata_parameters(parameters))
             if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(text):
@@ -647,7 +647,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         def _run(cursor: "TeradataRawCursor") -> None:
             nonlocal names, column_types, affected
             cursor.arraysize = int(self.driver_features.get("arraysize", 2048))
-            if _marks_session_query_band(compiled_sql):
+            if _sets_session_query_band(compiled_sql):
                 self._session_query_band_dirty = True
             cursor.execute(exec_sql, prepared_params)
             if returns_rows:
@@ -699,7 +699,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         return bool(self._transaction_active or getattr(self.connection, "autocommit", True) is False)
 
 
-def _marks_session_query_band(sql_text: str) -> bool:
+def _sets_session_query_band(sql_text: str) -> bool:
     """Return whether SQL text sets or clears a session-scoped query band."""
     return bool(_SESSION_QUERY_BAND_SQL_PATTERN.search(sql_text))
 

@@ -153,7 +153,7 @@ class TeradataConnectionContext(SyncPoolConnectionContext):
 class _TeradataSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
 
-    def mark_query_band_state(self, connection: Any, *, dirty: bool) -> None:
+    def record_query_band_change(self, connection: Any, *, dirty: bool) -> None:
         """Record whether the session altered its connection's session query band."""
         pool = self._config.connection_instance
         if not isinstance(pool, TeradataConnectionPool):

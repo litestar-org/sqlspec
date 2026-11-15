@@ -904,15 +904,15 @@ _MISSING_TRANSACTION_PRIORITY: Final = object()
 
 
 def forget_oracle_session_state(connection: Any) -> None:
-    """Remove checkout baselines when a physical connection is discarded."""
-    _drop_oracle_session_state_by_id(id(connection))
+    """Remove captured initial settings when a physical connection is discarded."""
+    _forget_session_state_by_id(id(connection))
 
 
 def mark_oracle_tagged_release(connection: Any, enabled: bool) -> None:
     """Track whether a Thick connection's current lease releases with a state tag."""
     conn_id = id(connection)
     if enabled:
-        _ensure_session_state_cleanup(connection)
+        _ensure_session_state_finalizer(connection)
         _TAGGED_ALTER_CONN_IDS.add(conn_id)
     else:
         _TAGGED_ALTER_CONN_IDS.discard(conn_id)
@@ -923,31 +923,31 @@ def record_oracle_alter_session_baseline(connection: Any, rows: "Sequence[Any] |
     if not rows:
         return
     conn_id = id(connection)
-    baseline = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id)
-    if baseline is None:
-        _ensure_session_state_cleanup(connection)
-        baseline = {"nls_parameters": cast("Any", {})}
-        _INITIAL_ALTER_SESSION_BY_CONN_ID[conn_id] = baseline
-    nls_baseline = cast("dict[str, str]", baseline.setdefault("nls_parameters", {}))
+    initial_settings = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id)
+    if initial_settings is None:
+        _ensure_session_state_finalizer(connection)
+        initial_settings = {"nls_parameters": cast("Any", {})}
+        _INITIAL_ALTER_SESSION_BY_CONN_ID[conn_id] = initial_settings
+    initial_nls_parameters = cast("dict[str, str]", initial_settings.setdefault("nls_parameters", {}))
     for row in rows:
         if not isinstance(row, (tuple, list)) or len(row) < _VERSION_COMPONENTS:
             continue
         kind, key, value = row[0], row[1], row[2]
         if not isinstance(value, str):
             continue
-        if kind == "EDITION" and "edition" not in baseline:
+        if kind == "EDITION" and "edition" not in initial_settings:
             cleaned_edition = value.strip()
             _validate_oracle_identifier(cleaned_edition, "edition")
-            baseline["edition"] = cleaned_edition
-        elif kind == "TIME_ZONE" and "time_zone" not in baseline:
+            initial_settings["edition"] = cleaned_edition
+        elif kind == "TIME_ZONE" and "time_zone" not in initial_settings:
             cleaned_tz = value.strip()
             _validate_oracle_time_zone(cleaned_tz)
-            baseline["time_zone"] = cleaned_tz
+            initial_settings["time_zone"] = cleaned_tz
         elif kind == "NLS" and isinstance(key, str):
             upper_key = key.upper()
-            if upper_key not in nls_baseline:
+            if upper_key not in initial_nls_parameters:
                 _validate_oracle_nls_parameters({upper_key: value})
-                nls_baseline[upper_key] = value
+                initial_nls_parameters[upper_key] = value
 
 
 def normalize_oracle_appcontext(
@@ -989,22 +989,22 @@ def prepare_session_checkout_with_baseline_pipeline(
     skip_alter_session: bool = False,
     preserve_tagged_alter: bool = False,
 ) -> "tuple[str | None, dict[str, Any], str | None, dict[str, Any]]":
-    """Apply zero-round-trip fields and prepare optional baseline probe plus checkout SQL."""
+    """Apply zero-round-trip fields and prepare optional initial-settings probe plus checkout SQL."""
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
     if resolved.current_schema is not None:
-        baseline = getattr(connection, "current_schema", "")
-        if not baseline:
+        initial_schema = getattr(connection, "current_schema", "")
+        if not initial_schema:
             username = getattr(connection, "username", "")
-            baseline = normalize_identifier(username, "oracle") if isinstance(username, str) else username
-        if isinstance(baseline, str):
-            _INITIAL_SCHEMA_BY_CONN_ID.setdefault(id(connection), baseline)
+            initial_schema = normalize_identifier(username, "oracle") if isinstance(username, str) else username
+        if isinstance(initial_schema, str):
+            _INITIAL_SCHEMA_BY_CONN_ID.setdefault(id(connection), initial_schema)
     if resolved.transaction_priority is not None:
         if getattr(oracledb_module, "TransactionPriority", None) is None:
             msg = "Oracle transaction priority requires python-oracledb 26.1 or newer"
             raise oracledb_module.NotSupportedError(msg)
-        baseline_priority = capture_oracle_transaction_priority_baseline(connection)
-        if baseline_priority is not None:
-            _INITIAL_PRIORITY_BY_CONN_ID.setdefault(id(connection), baseline_priority)
+        initial_priority = capture_oracle_transaction_priority_baseline(connection)
+        if initial_priority is not None:
+            _INITIAL_PRIORITY_BY_CONN_ID.setdefault(id(connection), initial_priority)
         apply_oracle_transaction_priority(connection, resolved.transaction_priority)
     if resolved.end_user_security is not None:
         apply_end_user_security_checkout(connection, resolved.end_user_security)
@@ -1053,18 +1053,18 @@ def prepare_session_checkout_with_baseline_pipeline(
         track_nls = ()
 
     if track_edition or track_tz or track_nls:
-        _ensure_session_state_cleanup(connection)
+        _ensure_session_state_finalizer(connection)
         _ACTIVE_ALTER_FIELDS_BY_CONN_ID[conn_id] = (track_edition, track_tz, track_nls)
         cached = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id) or {}
         cached_nls = cached.get("nls_parameters") or {}
-        baseline_sql, baseline_binds = _build_alter_session_baseline_probe(
+        initial_settings_sql, initial_settings_binds = _build_initial_session_settings_query(
             need_edition=track_edition and "edition" not in cached,
             need_time_zone=track_tz and "time_zone" not in cached,
             missing_nls_keys=tuple(key for key in track_nls if key not in cached_nls),
         )
     else:
         _ACTIVE_ALTER_FIELDS_BY_CONN_ID.pop(conn_id, None)
-        baseline_sql, baseline_binds = None, {}
+        initial_settings_sql, initial_settings_binds = None, {}
 
     plsql, binds, piggybacks = _build_session_checkout_plan(concrete_config, skip_alter_session=skip_alter_session)
     for name, value in piggybacks.items():
@@ -1078,7 +1078,7 @@ def prepare_session_checkout_with_baseline_pipeline(
         else:
             with contextlib.suppress(AttributeError):
                 setattr(connection, name, value)
-    return baseline_sql, baseline_binds, plsql, binds
+    return initial_settings_sql, initial_settings_binds, plsql, binds
 
 
 def prepare_session_checkout_pipeline(
@@ -1114,7 +1114,7 @@ def prepare_session_release_pipeline(
     schema = _INITIAL_SCHEMA_BY_CONN_ID.pop(conn_id, None)
     priority = _INITIAL_PRIORITY_BY_CONN_ID.pop(conn_id, None)
     active_alter = _ACTIVE_ALTER_FIELDS_BY_CONN_ID.pop(conn_id, None)
-    alter_baseline = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id)
+    initial_settings = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id)
     _TAGGED_ALTER_CONN_IDS.discard(conn_id)
     if resolved.reset_on_release:
         if schema is not None:
@@ -1122,7 +1122,7 @@ def prepare_session_release_pipeline(
         if priority is not None:
             apply_oracle_transaction_priority(connection, priority)
     plsql, binds, piggybacks = _build_session_release_plan(
-        resolved, active_alter=active_alter, alter_baseline=alter_baseline
+        resolved, active_alter=active_alter, initial_settings=initial_settings
     )
     deferred = None
     for name, value in piggybacks.items():
@@ -1659,7 +1659,7 @@ def format_oracle_table_identifier(table: str) -> str:
     if not parts or len(parts) > _QUALIFIED_TABLE_PARTS:
         msg = f"Invalid Oracle table identifier: {table!r}"
         raise ImproperConfigurationError(msg)
-    return ".".join(_format_oracle_table_part(part, full_identifier=table) for part in parts)
+    return ".".join(_format_identifier_part(part, full_identifier=table) for part in parts)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
@@ -2822,15 +2822,17 @@ def execute_session_checkout_sync(
     skip_alter_session: bool = False,
     preserve_tagged_alter: bool = False,
 ) -> None:
-    """Apply checkout state and execute optional baseline probe plus PL/SQL block."""
+    """Apply checkout state and execute optional initial-settings probe plus PL/SQL block."""
     try:
-        baseline_sql, baseline_binds, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
+        initial_settings_sql, initial_settings_binds, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
             connection, config, skip_alter_session=skip_alter_session, preserve_tagged_alter=preserve_tagged_alter
         )
-        if baseline_sql is not None or plsql is not None:
+        if initial_settings_sql is not None or plsql is not None:
             with connection.cursor() as cursor:
-                if baseline_sql is not None:
-                    cursor.execute(baseline_sql, baseline_binds) if baseline_binds else cursor.execute(baseline_sql)
+                if initial_settings_sql is not None:
+                    cursor.execute(
+                        initial_settings_sql, initial_settings_binds
+                    ) if initial_settings_binds else cursor.execute(initial_settings_sql)
                     record_oracle_alter_session_baseline(connection, cursor.fetchall())
                 if plsql is not None:
                     cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
@@ -2860,17 +2862,17 @@ async def execute_session_checkout_async(
     skip_alter_session: bool = False,
     preserve_tagged_alter: bool = False,
 ) -> None:
-    """Apply asynchronous checkout state and optional baseline probe plus PL/SQL block."""
+    """Apply asynchronous checkout state and optional initial-settings probe plus PL/SQL block."""
     try:
-        baseline_sql, baseline_binds, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
+        initial_settings_sql, initial_settings_binds, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
             connection, config, skip_alter_session=skip_alter_session, preserve_tagged_alter=preserve_tagged_alter
         )
-        if baseline_sql is not None or plsql is not None:
+        if initial_settings_sql is not None or plsql is not None:
             with connection.cursor() as cursor:
-                if baseline_sql is not None:
-                    await cursor.execute(baseline_sql, baseline_binds) if baseline_binds else await cursor.execute(
-                        baseline_sql
-                    )
+                if initial_settings_sql is not None:
+                    await cursor.execute(
+                        initial_settings_sql, initial_settings_binds
+                    ) if initial_settings_binds else await cursor.execute(initial_settings_sql)
                     record_oracle_alter_session_baseline(connection, await cursor.fetchall())
                 if plsql is not None:
                     await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
@@ -3134,7 +3136,7 @@ def normalize_oracle_transaction_priority(value: Any) -> Any:
 
 
 def capture_oracle_transaction_priority_baseline(connection: Any, *, configured_priority: Any = None) -> Any:
-    """Capture the effective native transaction priority baseline for a connection.
+    """Capture the effective initial native transaction priority for a connection.
 
     Untouched Oracle connections report ``None`` until priority is changed,
     which corresponds to ``TransactionPriority.DEFAULT``. Mock connections that do
@@ -3676,7 +3678,7 @@ def _validate_end_user_roles(value: Any) -> None:
         raise ImproperConfigurationError(msg)
 
 
-def _drop_oracle_session_state_by_id(conn_id: int) -> None:
+def _forget_session_state_by_id(conn_id: int) -> None:
     _INITIAL_SCHEMA_BY_CONN_ID.pop(conn_id, None)
     _INITIAL_PRIORITY_BY_CONN_ID.pop(conn_id, None)
     _INITIAL_ALTER_SESSION_BY_CONN_ID.pop(conn_id, None)
@@ -3685,16 +3687,16 @@ def _drop_oracle_session_state_by_id(conn_id: int) -> None:
     _REGISTERED_SESSION_CLEANUP_IDS.discard(conn_id)
 
 
-def _ensure_session_state_cleanup(connection: Any) -> None:
+def _ensure_session_state_finalizer(connection: Any) -> None:
     conn_id = id(connection)
     if conn_id in _REGISTERED_SESSION_CLEANUP_IDS:
         return
     _REGISTERED_SESSION_CLEANUP_IDS.add(conn_id)
     with contextlib.suppress(TypeError):
-        weakref.finalize(connection, _drop_oracle_session_state_by_id, conn_id)
+        weakref.finalize(connection, _forget_session_state_by_id, conn_id)
 
 
-def _build_alter_session_baseline_probe(
+def _build_initial_session_settings_query(
     *, need_edition: bool, need_time_zone: bool, missing_nls_keys: "tuple[str, ...]"
 ) -> "tuple[str | None, dict[str, Any]]":
     branches: list[str] = []
@@ -3805,11 +3807,11 @@ def _session_release_needs_priority_rollback(
     connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]
 ) -> bool:
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
-    baseline = _INITIAL_PRIORITY_BY_CONN_ID.get(id(connection))
+    initial_priority = _INITIAL_PRIORITY_BY_CONN_ID.get(id(connection))
     return (
         resolved.reset_on_release
-        and baseline is not None
-        and not oracle_transaction_priority_matches(connection, baseline)
+        and initial_priority is not None
+        and not oracle_transaction_priority_matches(connection, initial_priority)
     )
 
 
@@ -3850,7 +3852,7 @@ def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, met
     return None
 
 
-def _format_oracle_table_part(raw_part: str, *, full_identifier: str) -> str:
+def _format_identifier_part(raw_part: str, *, full_identifier: str) -> str:
     cleaned = raw_part.strip()
     if not cleaned:
         msg = f"Invalid Oracle table identifier: {full_identifier!r}"
@@ -3999,21 +4001,21 @@ def _build_session_checkout_plan(
 def _append_alter_session_release_statement(
     plsql_statements: list[str],
     active_alter: "tuple[bool, bool, tuple[str, ...]] | None",
-    alter_baseline: "Mapping[str, Any] | None",
+    initial_settings: "Mapping[str, Any] | None",
 ) -> None:
-    if active_alter is None or alter_baseline is None:
+    if active_alter is None or initial_settings is None:
         return
     restore_edition, restore_time_zone, restore_nls_keys = active_alter
     restore_clauses: list[str] = []
-    if restore_time_zone and isinstance(alter_baseline.get("time_zone"), str):
-        base_tz = alter_baseline["time_zone"]
+    if restore_time_zone and isinstance(initial_settings.get("time_zone"), str):
+        base_tz = initial_settings["time_zone"]
         _validate_oracle_time_zone(base_tz)
         restore_clauses.append(f"TIME_ZONE = ''{base_tz}''")
-    if restore_edition and isinstance(alter_baseline.get("edition"), str):
-        base_ed = alter_baseline["edition"]
+    if restore_edition and isinstance(initial_settings.get("edition"), str):
+        base_ed = initial_settings["edition"]
         _validate_oracle_identifier(base_ed, "edition")
         restore_clauses.append(f"EDITION = {base_ed}")
-    base_nls = alter_baseline.get("nls_parameters")
+    base_nls = initial_settings.get("nls_parameters")
     if restore_nls_keys and isinstance(base_nls, Mapping):
         ordered_keys = sorted(
             (key for key in restore_nls_keys if isinstance(base_nls.get(key), str)),
@@ -4031,7 +4033,7 @@ def _build_session_release_plan(
     config: "OracleSessionContextConfig | Mapping[str, Any]",
     *,
     active_alter: "tuple[bool, bool, tuple[str, ...]] | None" = None,
-    alter_baseline: "Mapping[str, Any] | None" = None,
+    initial_settings: "Mapping[str, Any] | None" = None,
 ) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
     if not resolved.reset_on_release and not (
@@ -4059,7 +4061,7 @@ def _build_session_release_plan(
             plsql_statements.append("EXECUTE IMMEDIATE 'ALTER SESSION SET STANDBY_MAX_DATA_DELAY = NONE';")
         if resolved.adg_redirect_dml:
             plsql_statements.append("EXECUTE IMMEDIATE 'ALTER SESSION DISABLE ADG_REDIRECT_DML';")
-        _append_alter_session_release_statement(plsql_statements, active_alter, alter_baseline)
+        _append_alter_session_release_statement(plsql_statements, active_alter, initial_settings)
 
     bind_params: dict[str, Any] = {}
     if resolved.apex_detach:

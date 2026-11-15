@@ -1475,7 +1475,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "Generator[ArrowRecordBatch, None, None]":
-        oracle_dfs = _open_oracle_df_batches(
+        oracle_dfs = _fetch_dataframe_batches(
             self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
         )
         try:
@@ -1501,7 +1501,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     ) -> "tuple[list[ArrowRecordBatch], ArrowSchema | None]":
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
-        oracle_dfs = _open_oracle_df_batches(
+        oracle_dfs = _fetch_dataframe_batches(
             self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
         )
         try:
@@ -2641,7 +2641,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "AsyncIterator[ArrowRecordBatch]":
-        oracle_dfs = _open_oracle_df_batches(
+        oracle_dfs = _fetch_dataframe_batches(
             self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
         )
         yielded = False
@@ -2677,7 +2677,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     ) -> "tuple[list[ArrowRecordBatch], ArrowSchema | None]":
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
-        oracle_dfs = _open_oracle_df_batches(
+        oracle_dfs = _fetch_dataframe_batches(
             self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
         )
         try:
@@ -3052,7 +3052,7 @@ def _slice_script_parameters(statement: str, parameters: Any, pos_offset: int) -
     return parameters, pos_offset
 
 
-def _open_oracle_df_batches(
+def _fetch_dataframe_batches(
     connection: Any,
     sql: str,
     parameters: "StatementParameters | None",

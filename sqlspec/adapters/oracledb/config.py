@@ -377,7 +377,7 @@ class OracleDriverFeatures(TypedDict):
 class OracleSyncConnectionContext(SyncPoolConnectionContext):
     """Own one sync checkout and physically discard unverified sessions."""
 
-    __slots__ = ("_acquire_options", "_conn", "_desired_tag", "_priority_baseline")
+    __slots__ = ("_acquire_options", "_conn", "_desired_tag", "_initial_priority")
 
     def __init__(
         self, config: "OracleSyncConfig", tenant_lease: Any = None, acquire_options: OracleAcquireOptions | None = None
@@ -385,7 +385,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         super().__init__(config, tenant_lease)
         self._conn: Any = None
         self._desired_tag: str | None = None
-        self._priority_baseline: Any = None
+        self._initial_priority: Any = None
         self._acquire_options = acquire_options or OracleAcquireOptions()
         if self._tenant_lease is not None:
             self._tenant_lease._acquire_options = self._acquire_options
@@ -406,7 +406,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
             raise create_mapped_exception(exc) from exc
         self._conn = conn
         try:
-            self._desired_tag, skip, self._priority_baseline = _oracle_checkout_state(
+            self._desired_tag, skip, self._initial_priority = _oracle_checkout_state(
                 self._config, pool, conn, self._acquire_options
             )
             if hook is not None:
@@ -439,11 +439,11 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
             hook = self._config.driver_features.get("session_context_hook")
             if hook is not None:
                 execute_session_release_sync(conn, hook)
-            if self._priority_baseline is not None and not oracle_transaction_priority_matches(
-                conn, self._priority_baseline
+            if self._initial_priority is not None and not oracle_transaction_priority_matches(
+                conn, self._initial_priority
             ):
                 conn.rollback()
-                apply_oracle_transaction_priority(conn, self._priority_baseline)
+                apply_oracle_transaction_priority(conn, self._initial_priority)
         except BaseException as exc:
             if kwargs.get("exc_type") is None:
                 try:
@@ -983,7 +983,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
     """Own one async checkout and physically discard unverified sessions."""
 
-    __slots__ = ("_acquire_options", "_desired_tag", "_priority_baseline")
+    __slots__ = ("_acquire_options", "_desired_tag", "_initial_priority")
 
     def __init__(
         self, config: "OracleAsyncConfig", acquire_options: OracleAcquireOptions | None = None, tenant_lease: Any = None
@@ -995,7 +995,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
         if self._tenant_lease is not None:
             self._tenant_lease._acquire_options = self._acquire_options
         self._desired_tag: str | None = None
-        self._priority_baseline: Any = None
+        self._initial_priority: Any = None
 
     async def __aenter__(self) -> Any:
         if self._tenant_lease is not None:
@@ -1014,7 +1014,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
             raise create_mapped_exception(exc) from exc
         self._connection = conn
         try:
-            self._desired_tag, skip, self._priority_baseline = _oracle_checkout_state(
+            self._desired_tag, skip, self._initial_priority = _oracle_checkout_state(
                 self._config, pool, conn, self._acquire_options
             )
             if hook is not None:
@@ -1047,11 +1047,11 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
             hook = self._config.driver_features.get("session_context_hook")
             if hook is not None:
                 await execute_session_release_async(conn, hook)
-            if self._priority_baseline is not None and not oracle_transaction_priority_matches(
-                conn, self._priority_baseline
+            if self._initial_priority is not None and not oracle_transaction_priority_matches(
+                conn, self._initial_priority
             ):
                 await conn.rollback()
-                apply_oracle_transaction_priority(conn, self._priority_baseline)
+                apply_oracle_transaction_priority(conn, self._initial_priority)
         except BaseException as exc:
             if exc_type is None:
                 try:
@@ -1768,7 +1768,7 @@ def _oracle_checkout_state(
         skip = desired is not None and not has_callable_alter_session_fields(hook) and connection.tag == desired
     elif config._owns_pool_session_callback and not has_callable_alter_session_fields(hook):
         skip = True
-    baseline = capture_oracle_transaction_priority_baseline(
+    initial_priority = capture_oracle_transaction_priority_baseline(
         connection, configured_priority=config.connection_config.get("transaction_priority")
     )
     requested = options.transaction_priority
@@ -1776,7 +1776,7 @@ def _oracle_checkout_state(
         requested = config.connection_config.get("transaction_priority")
     if requested is not None:
         apply_oracle_transaction_priority(connection, requested)
-    return desired, skip, baseline
+    return desired, skip, initial_priority
 
 
 def _oracle_cleanup_error(body_error: BaseException | None, cleanup_error: BaseException) -> None:

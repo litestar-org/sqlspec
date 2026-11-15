@@ -136,6 +136,6 @@ class TeradataSessionContext:
 
     def _notify_query_band_state(self, connection: Any, *, dirty: bool) -> None:
         handler = getattr(self._release_connection, "__self__", None)
-        mark_fn = getattr(handler, "mark_query_band_state", None)
+        mark_fn = getattr(handler, "record_query_band_change", None)
         if callable(mark_fn):
             mark_fn(connection, dirty=dirty)

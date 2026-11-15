@@ -854,7 +854,7 @@ async def test_tenant_lease_invalidates_connection_when_priority_rejected(mode: 
 
 @pytest.mark.parametrize("vpd", [False, True], ids=["identifier", "vpd"])
 async def test_async_tenant_pipeline_captures_and_restores_session_alter_fields(vpd: bool) -> None:
-    """Pipelined tenant checkout probes alter baselines once in-flight and restores them on checkin."""
+    """Pipelined tenant checkout probes initial alter-session settings once in-flight and restores them on checkin."""
     connection = SimpleNamespace(client_identifier=None, edition="ORA$BASE", cursor=MagicMock(), flights=[])
 
     async def run_pipeline(pipeline: Any, *, continue_on_error: bool) -> list[Any]:

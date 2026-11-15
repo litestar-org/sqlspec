@@ -879,16 +879,16 @@ def test_normalize_and_apply_default_transaction_priority_with_none_state() -> N
             self._priority = value
 
     conn = UntouchedConnection()
-    baseline = capture_oracle_transaction_priority_baseline(conn)
-    assert baseline is TransactionPriority.DEFAULT
-    assert oracle_transaction_priority_matches(conn, baseline) is True
+    initial_priority = capture_oracle_transaction_priority_baseline(conn)
+    assert initial_priority is TransactionPriority.DEFAULT
+    assert oracle_transaction_priority_matches(conn, initial_priority) is True
 
     apply_oracle_transaction_priority(conn, TransactionPriority.DEFAULT)
     assert conn.writes == []
 
     apply_oracle_transaction_priority(conn, "HIGH")
     assert conn.writes == [TransactionPriority.HIGH]
-    assert oracle_transaction_priority_matches(conn, baseline) is False
+    assert oracle_transaction_priority_matches(conn, initial_priority) is False
 
 
 @pytest.mark.parametrize(
