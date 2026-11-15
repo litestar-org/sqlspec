@@ -9,6 +9,7 @@ import weakref
 from collections.abc import Mapping
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from mypy_extensions import mypyc_attr
 
@@ -742,17 +743,15 @@ def _current_async_task() -> "asyncio.Task[Any] | None":
 
 def _classify_memory_mode(connection_parameters: "Mapping[str, Any]") -> "tuple[bool, bool]":
     """Classify whether SQLite connection parameters target a memory and shared-cache database."""
-    database = connection_parameters.get("database", ":memory:")
-    database_str = str(database)
-    if database_str == ":memory:":
+    database = str(connection_parameters.get("database", ":memory:"))
+    if database == ":memory:":
         return True, False
-    uri_flag = connection_parameters.get("uri")
-    if uri_flag is False:
+    if not connection_parameters.get("uri") or not database.startswith("file:"):
         return False, False
-    if not uri_flag and not database_str.startswith("file:"):
-        return False, False
-    is_memory_db = "mode=memory" in database_str or (database_str.startswith("file:") and ":memory:" in database_str)
-    is_shared_memory = is_memory_db and "cache=shared" in database_str
+    parts = urlsplit(database)
+    query = parse_qs(parts.query)
+    is_memory_db = unquote(parts.path) == ":memory:" or "memory" in query.get("mode", [])
+    is_shared_memory = is_memory_db and "shared" in query.get("cache", [])
     return is_memory_db, is_shared_memory
 
 

@@ -438,7 +438,7 @@ def is_read_only_sqlite_config(connection_config: Mapping[str, Any]) -> bool:
         extra = connection_config.get("extra")
         if isinstance(extra, Mapping):
             explicit_uri = extra.get("uri")
-    if explicit_uri is False:
+    if explicit_uri is not True:
         return False
     database = str(connection_config.get("database", ""))
     return database.startswith("file:") and dict(parse_qsl(urlsplit(database).query)).get("mode") == "ro"
@@ -487,9 +487,6 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if isinstance(extra, Mapping):
         connection_parameters.update(_filter_connection_params(extra))
 
-    database = str(connection_parameters.get("database", ""))
-    if database.startswith("file:") and connection_parameters.get("uri") is None:
-        connection_parameters["uri"] = True
     return connection_parameters
 
 

@@ -695,3 +695,22 @@ def test_sqlite_pool_caps_idle_task_connections_and_closes_dirty_connections(tmp
     finally:
         pool.close()
     assert pool._idle_task_connections == []
+
+
+@pytest.mark.parametrize(
+    ("database", "uri", "expected"),
+    [
+        pytest.param("file:/x/mode=memory_notes.db", True, (False, False), id="substring-ignored"),
+        pytest.param("file:x?mode=memory&cache=shared", True, (True, True), id="query-memory-shared"),
+        pytest.param("file:x?mode=memory", True, (True, False), id="query-memory"),
+        pytest.param("file::memory:?cache=shared", True, (True, True), id="memory-path-shared"),
+        pytest.param("file:x?mode=memory", None, (False, False), id="uri-unset"),
+        pytest.param("file:x?mode=memory", False, (False, False), id="uri-false"),
+        pytest.param(":memory:", None, (True, False), id="plain-memory"),
+    ],
+)
+def test_memory_detection_parses_uri(database: str, uri: "bool | None", expected: "tuple[bool, bool]") -> None:
+    params: dict[str, object] = {"database": database}
+    if uri is not None:
+        params["uri"] = uri
+    assert sqlite_pool_module._classify_memory_mode(params) == expected

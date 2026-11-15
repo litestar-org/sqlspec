@@ -369,12 +369,13 @@ def test_aiosqlite_readonly_clone_defaults_deferred_without_changing_writer(tmp_
         connection_config={"database": str(tmp_path / "writer.db")},
         driver_features={"default_transaction_mode": "IMMEDIATE"},
     )
-    reader = primary.derive_pool(database=f"file:{tmp_path / 'writer.db'}?mode=ro")
+    reader = primary.derive_pool(database=f"file:{tmp_path / 'writer.db'}?mode=ro", uri=True)
     assert reader.driver_features["default_transaction_mode"] == "DEFERRED"
     assert primary.driver_features["default_transaction_mode"] == "IMMEDIATE"
     with pytest.raises(ImproperConfigurationError, match="DEFERRED"):
         primary.derive_pool(
             database=f"file:{tmp_path / 'writer.db'}?mode=ro",
+            uri=True,
             driver_features_overrides={"default_transaction_mode": "EXCLUSIVE"},
         )
     with pytest.raises(ImproperConfigurationError, match="file-backed"):
@@ -479,3 +480,13 @@ def test_aiosqlite_render_pragmas_rejects_trailing_newline() -> None:
         render_pragmas({"busy_timeout\n": 5000})
     with pytest.raises(ImproperConfigurationError, match="PRAGMA value"):
         render_pragmas({"journal_mode": "WAL\n"})
+
+
+def test_file_prefix_without_uri_flag_is_filename() -> None:
+    config = AiosqliteConfig(connection_config={"database": "file:x.db"})
+    assert "uri" not in config.connection_config
+
+
+def test_file_prefix_with_uri_flag_kept() -> None:
+    config = AiosqliteConfig(connection_config={"database": "file:x.db", "uri": True})
+    assert config.connection_config["uri"] is True

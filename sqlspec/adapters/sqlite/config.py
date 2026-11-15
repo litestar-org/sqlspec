@@ -283,12 +283,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             if explicit_uri is None and isinstance(extra_config, Mapping):
                 explicit_uri = extra_config.get("uri")
             if database_path.startswith("file:") and explicit_uri is None:
-                logger.debug(
-                    "Database URI detected (%s) but uri=True not set. "
-                    "Auto-enabling URI mode to prevent physical file creation.",
-                    database_path,
-                )
-                config_dict["uri"] = True
+                logger.debug("Database value starts with 'file:' but uri=True is not set; treating it as a filename")
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

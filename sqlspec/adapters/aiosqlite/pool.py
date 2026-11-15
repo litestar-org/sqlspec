@@ -7,6 +7,7 @@ from contextlib import suppress
 from inspect import isawaitable
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from mypy_extensions import mypyc_attr
 
@@ -1246,11 +1247,10 @@ def _classify_memory_mode(connection_parameters: "Mapping[str, Any]") -> "tuple[
     database = str(connection_parameters.get("database", ":memory:"))
     if database == ":memory:":
         return True, False
-    uri_flag = connection_parameters.get("uri")
-    if uri_flag is False:
+    if not connection_parameters.get("uri") or not database.startswith("file:"):
         return False, False
-    if not uri_flag and not database.startswith("file:"):
-        return False, False
-    is_memory_db = "mode=memory" in database or (database.startswith("file:") and ":memory:" in database)
-    is_shared_memory = is_memory_db and "cache=shared" in database
+    parts = urlsplit(database)
+    query = parse_qs(parts.query)
+    is_memory_db = unquote(parts.path) == ":memory:" or "memory" in query.get("mode", [])
+    is_shared_memory = is_memory_db and "shared" in query.get("cache", [])
     return is_memory_db, is_shared_memory

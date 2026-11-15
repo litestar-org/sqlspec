@@ -92,7 +92,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
     | `factory` | `SqliteConnectionFactory or None` | - | Custom `sqlite3.Connection` subclass passed to `sqlite3.connect`. |
     | `cached_statements` | `int` | - | Number of compiled SQLite VM statements cached per connection by `sqlite3`. |
     | `query_only` | `bool` | - | Enforce read-only queries on every physical connection. |
-    | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. |
+    | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. Required for `file:` URIs (including memory URIs); without it the value is treated as a filename. |
     | `autocommit` | `SQLiteAutocommitMode` | - | PEP 249 / Python 3.12+ autocommit control flag or `sqlite3.LEGACY_TRANSACTION_CONTROL` (`-1`). |
     | `pool_recycle_seconds` | `int` | - | Maximum connection age in seconds before recycling pooled SQLite connections. |
     | `health_check_interval` | `float` | - | Minimum interval in seconds between connection liveness probes in `SqliteConnectionPool`. |
@@ -145,7 +145,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
     | `factory` | `AiosqliteConnectionFactory or None` | - | Custom `sqlite3.Connection` subclass instantiated on the worker thread. |
     | `cached_statements` | `int` | - | Number of compiled SQLite VM statements cached per connection. |
     | `query_only` | `bool` | - | Enforce read-only queries on every physical connection. |
-    | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. |
+    | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. Required for `file:` URIs (including memory URIs); without it the value is treated as a filename. |
     | `iter_chunk_size` | `int` | - | Row batch size fetched per worker-thread hop when iterating `aiosqlite` cursors. |
     | `autocommit` | `SQLiteAutocommitMode` | - | PEP 249 / Python 3.12+ autocommit flag or `sqlite3.LEGACY_TRANSACTION_CONTROL` (`-1`). |
     | `pool_size` | `int` | - | Maximum number of worker-backed SQLite connections managed by `AiosqliteConnectionPool`. |

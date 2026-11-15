@@ -45,7 +45,7 @@ async def test_sync_adk_lagging_readonly_replica_and_mutation_consistency(tmp_pa
         memory.create_tables()
         memory.insert_memory_entries([_entry(label)])
     seed.close_pool()
-    reader = seed.derive_pool(database=f"file:{tmp_path / 'reader.db'}?mode=ro")
+    reader = seed.derive_pool(database=f"file:{tmp_path / 'reader.db'}?mode=ro", uri=True)
     store = SqliteADKStore(writer, read_config=reader)
     assert store.get_session("app", "user", "writer") is None
     reader_record = store.get_session("app", "user", "reader")
@@ -79,7 +79,7 @@ async def test_async_adk_readonly_replica_routes_reads_and_renewals(tmp_path: Pa
         await memory.create_tables()
         await memory.insert_memory_entries([_entry(label)])
     await seed.close_pool()
-    reader = seed.derive_pool(database=f"file:{tmp_path / 'reader.db'}?mode=ro")
+    reader = seed.derive_pool(database=f"file:{tmp_path / 'reader.db'}?mode=ro", uri=True)
     store = AiosqliteADKStore(writer, read_config=reader)
     assert await store.get_session("app", "user", "writer") is None
     record = await store.get_session("app", "user", "writer", renew_for=0)

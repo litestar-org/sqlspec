@@ -466,3 +466,36 @@ def test_sqlite_render_pragmas_rejects_trailing_newline() -> None:
         sqlite_core.render_pragmas({"busy_timeout\n": 5000})
     with pytest.raises(ImproperConfigurationError, match="PRAGMA value"):
         sqlite_core.render_pragmas({"journal_mode": "WAL\n"})
+
+
+def test_file_prefix_without_uri_flag_is_filename() -> None:
+    config = SqliteConfig(connection_config={"database": "file:x.db"})
+    assert "uri" not in config.connection_config
+
+
+def test_file_prefix_with_uri_flag_kept() -> None:
+    config = SqliteConfig(connection_config={"database": "file:x.db", "uri": True})
+    assert config.connection_config["uri"] is True
+
+
+def test_encoded_file_path_stays_inside_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tenants = tmp_path / "tenants"
+    secret = tmp_path / "secret"
+    tenants.mkdir()
+    secret.mkdir()
+    secret_db = secret / "admin.sqlite"
+    connection = sqlite3.connect(secret_db)
+    connection.execute("CREATE TABLE k (v TEXT)")
+    connection.execute("INSERT INTO k VALUES ('CANARY')")
+    connection.commit()
+    connection.close()
+    monkeypatch.chdir(tenants)
+    database = "file:" + str(secret_db).replace("/", "%2F") + "?x=.db"
+    config = SqliteConfig(connection_config={"database": database})
+    try:
+        assert "uri" not in config.connection_config
+        with config.provide_session() as session:
+            tables = session.select("SELECT name FROM sqlite_master WHERE name = 'k'")
+        assert tables == []
+    finally:
+        config.close_pool()
