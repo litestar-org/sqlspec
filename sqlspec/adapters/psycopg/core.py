@@ -80,6 +80,7 @@ __all__ = (
     "pipeline_supported",
     "resolve_many_rowcount",
     "resolve_rowcount",
+    "source_uses_pyformat",
 )
 
 TRANSACTION_STATUS_IDLE = 0
@@ -695,15 +696,44 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     return _create_postgres_error(error, error_code, SQLSpecError, "database error")
 
 
-def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
-    """Escape literal percent characters before driver-side interpolation."""
+def source_uses_pyformat(raw_sql: str, validator: "ParameterValidator") -> bool:
+    """Report whether the caller's SQL text used psycopg ``%s`` or ``%(name)s`` placeholders.
+
+    Args:
+        raw_sql: SQL text as written by the caller.
+        validator: Parameter validator used to scan placeholders.
+
+    Returns:
+        ``True`` when the text contains a pyformat placeholder outside literals and comments.
+    """
+    return any(
+        info.style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}
+        for info in validator.extract_parameters(raw_sql, dialect="postgres")
+    )
+
+
+def escape_literal_percent(
+    sql: str, parameters: Any, validator: "ParameterValidator", *, preserve_percent_escapes: bool = False
+) -> str:
+    """Escape literal percent characters before driver-side interpolation.
+
+    Args:
+        sql: Compiled SQL text using ``%s`` or ``%(name)s`` placeholders.
+        parameters: Prepared parameters payload; no escaping happens without parameters.
+        validator: Parameter validator used to locate placeholders.
+        preserve_percent_escapes: Keep an existing ``%%`` as written. Set when the caller's
+            SQL already used pyformat placeholders and therefore escaped literal percents itself.
+
+    Returns:
+        SQL text where every literal percent survives psycopg interpolation unchanged.
+    """
     if not parameters or "%" not in sql:
         return sql
     keep = {info.position for info in validator.extract_parameters(sql, dialect="postgres")}
     segments: list[str] = []
     index = 0
     while index < len(sql):
-        if sql[index : index + 2] == "%%":
+        if preserve_percent_escapes and sql[index : index + 2] == "%%":
             segments.append("%%")
             index += 2
             continue

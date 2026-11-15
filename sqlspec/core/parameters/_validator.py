@@ -3,14 +3,18 @@
 import re
 from bisect import bisect_left
 from collections import OrderedDict
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 __all__ = (
     "ANSI_PARAMETER_REGEX",
+    "BRACKET_PARAMETER_REGEX",
     "MYSQL_PARAMETER_REGEX",
     "PARAMETER_REGEX",
     "SNOWFLAKE_PARAMETER_REGEX",
@@ -42,8 +46,8 @@ _PLACEHOLDER_PATTERNS: Final = r"""
 
 PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     rf"""
-    (?P<dquote>"(?:""|\\.|[^"\\])*") |
-    (?P<squote>'(?:''|\\.|[^'\\])*') |
+    (?P<dquote>"(?:""|\\.|[^"\\])*(?:"|\\?\Z)) |
+    (?P<squote>'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
     {_DOLLAR_QUOTED_PATTERN} |
     (?P<line_comment>--[^\r\n]*) |
     {_BLOCK_COMMENT_PATTERN} |
@@ -54,8 +58,8 @@ PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
 
 ANSI_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     rf"""
-    (?P<dquote>"(?:""|[^"])*") |
-    (?P<escape_squote>(?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*') |
+    (?P<dquote>"(?:""|[^"])*(?:"|\Z)) |
+    (?P<escape_squote>(?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
     (?P<q_squote>(?<![A-Za-z0-9_])N?Q'(?:
         \[[\s\S]*?(?:\]'|\Z) |
         \{{[\s\S]*?(?:\}}'|\Z) |
@@ -63,7 +67,28 @@ ANSI_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
         <[\s\S]*?(?:>'|\Z) |
         (?P<q_delimiter>[^\s\[{{(<'])[\s\S]*?(?:(?P=q_delimiter)'|\Z)
     )) |
-    (?P<squote>'(?:''|[^'])*') |
+    (?P<squote>'(?:''|[^'])*(?:'|\Z)) |
+    {_DOLLAR_QUOTED_PATTERN} |
+    (?P<line_comment>--[^\r\n]*) |
+    {_BLOCK_COMMENT_PATTERN} |
+    {_PLACEHOLDER_PATTERNS}
+    """,
+    _REGEX_FLAGS,
+)
+
+BRACKET_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
+    rf"""
+    (?P<dquote>"(?:""|[^"])*(?:"|\Z)) |
+    (?P<escape_squote>(?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
+    (?P<q_squote>(?<![A-Za-z0-9_])N?Q'(?:
+        \[[\s\S]*?(?:\]'|\Z) |
+        \{{[\s\S]*?(?:\}}'|\Z) |
+        \([\s\S]*?(?:\)'|\Z) |
+        <[\s\S]*?(?:>'|\Z) |
+        (?P<q_delimiter>[^\s\[{{(<'])[\s\S]*?(?:(?P=q_delimiter)'|\Z)
+    )) |
+    (?P<squote>'(?:''|[^'])*(?:'|\Z)) |
+    (?P<bracket_identifier>\[(?:\]\]|[^\]])*(?:\]|\Z)) |
     {_DOLLAR_QUOTED_PATTERN} |
     (?P<line_comment>--[^\r\n]*) |
     {_BLOCK_COMMENT_PATTERN} |
@@ -74,9 +99,9 @@ ANSI_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
 
 MYSQL_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     rf"""
-    (?P<dquote>"(?:""|\\.|[^"\\])*") |
-    (?P<squote>'(?:''|\\.|[^'\\])*') |
-    (?P<bquote>`(?:``|[^`])*`) |
+    (?P<dquote>"(?:""|\\.|[^"\\])*(?:"|\\?\Z)) |
+    (?P<squote>'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
+    (?P<bquote>`(?:``|[^`])*(?:`|\Z)) |
     (?P<line_comment>(?:--|\#)[^\r\n]*) |
     {_BLOCK_COMMENT_PATTERN} |
     {_PLACEHOLDER_PATTERNS}
@@ -86,8 +111,8 @@ MYSQL_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
 
 SNOWFLAKE_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     rf"""
-    (?P<dquote>"(?:""|\\.|[^"\\])*") |
-    (?P<squote>'(?:''|\\.|[^'\\])*') |
+    (?P<dquote>"(?:""|\\.|[^"\\])*(?:"|\\?\Z)) |
+    (?P<squote>'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
     (?P<dollar_quoted_string>\$\$[\s\S]*?(?:\$\$|\Z)) |
     (?P<line_comment>--[^\r\n]*) |
     {_BLOCK_COMMENT_PATTERN} |
@@ -117,6 +142,7 @@ _SKIP_GROUPS: Final[frozenset[str]] = frozenset({
     "dollar_quoted_string",
     "line_comment",
     "block_comment",
+    "bracket_identifier",
     "pg_q_operator",
     "pg_cast",
     "sql_server_global",
@@ -139,6 +165,8 @@ _SNOWFLAKE_GROUP_DISPATCH: Final[dict[str, tuple[ParameterStyle, str | None]]] =
     "positional_colon": (ParameterStyle.POSITIONAL_COLON, "colon_num"),
 }
 _SCANNER_ANSI: Final = "ansi"
+_SCANNER_BRACKET: Final = "bracket"
+_SCANNER_NESTED: Final = "ansi_nested"
 _SCANNER_MYSQL: Final = "mysql"
 _SCANNER_SNOWFLAKE: Final = "snowflake"
 _ANSI_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
@@ -150,18 +178,31 @@ _ANSI_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
     "cockroach",
     "cockroachdb",
     "spangres",
-    "sqlite",
     "duckdb",
     "oracle",
+    "db2",
+    "teradata",
+    "vantage",
+})
+_BRACKET_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
+    "sqlite",
     "tsql",
     "mssql",
     "sqlserver",
     "sybase",
     "ase",
     "sqlanywhere",
-    "db2",
-    "teradata",
-    "vantage",
+})
+_NESTED_COMMENT_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "postgresql",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "cockroach",
+    "cockroachdb",
+    "spangres",
+    "duckdb",
 })
 _BACKSLASH_STRING_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb", "bigquery", "spanner"})
 _OPERAND_LOOKBEHIND_CHARS: Final = 128
@@ -170,9 +211,9 @@ _EMPTY_INT_FROZENSET: Final[frozenset[int]] = frozenset()
 _MYSQL_SET_BLOCK_OPENERS: Final[frozenset[str]] = frozenset({"BEGIN", "THEN", "ELSE", "DO"})
 _MYSQL_ASSIGN_SCAN_REGEX: Final[re.Pattern[str]] = re.compile(
     r"""
-    "(?:""|\\.|[^"\\])*" |
-    '(?:''|\\.|[^'\\])*' |
-    `(?:``|[^`])*` |
+    "(?:""|\\.|[^"\\])*(?:"|\\?\Z) |
+    '(?:''|\\.|[^'\\])*(?:'|\\?\Z) |
+    `(?:``|[^`])*(?:`|\Z) |
     --[^\r\n]* |
     \#[^\r\n]* |
     /\*(?:[^*]|\*(?!/))*(?:\*/|\Z) |
@@ -383,15 +424,10 @@ class ParameterValidator:
             return self._extract_snowflake_parameters(sql)
         if not _PARAM_CHARS.intersection(sql):
             return []
-        if normalized_dialect == _SCANNER_ANSI:
-            regex = ANSI_PARAMETER_REGEX
-        elif normalized_dialect == _SCANNER_MYSQL:
-            regex = MYSQL_PARAMETER_REGEX
-        else:
-            regex = PARAMETER_REGEX
+        regex = _scanner_regex(normalized_dialect)
         mysql_lhs_positions = _mysql_assignment_lhs_positions(sql) if normalized_dialect == _SCANNER_MYSQL else ()
         parameters: list[ParameterInfo] = []
-        for match in regex.finditer(sql):
+        for match in _iter_matches(regex, sql, nested_comments=normalized_dialect == _SCANNER_NESTED):
             lastgroup = match.lastgroup
             if lastgroup is None:
                 continue
@@ -417,6 +453,64 @@ class ParameterValidator:
 _QMARK_ESCAPE: Final[str] = "??"
 
 
+def _scanner_regex(scanner: str | None) -> "re.Pattern[str]":
+    """Return the compiled grammar for a resolved scanner key."""
+    if scanner == _SCANNER_SNOWFLAKE:
+        return SNOWFLAKE_PARAMETER_REGEX
+    if scanner in {_SCANNER_ANSI, _SCANNER_NESTED}:
+        return ANSI_PARAMETER_REGEX
+    if scanner == _SCANNER_BRACKET:
+        return BRACKET_PARAMETER_REGEX
+    if scanner == _SCANNER_MYSQL:
+        return MYSQL_PARAMETER_REGEX
+    return PARAMETER_REGEX
+
+
+def _nested_comment_end(sql: str, start: int) -> int:
+    """Return the index after the block comment that opens at ``start``, honoring nesting.
+
+    Args:
+        sql: SQL text.
+        start: Index of the opening ``/*``.
+
+    Returns:
+        Index just past the matching ``*/`` at depth zero, or ``len(sql)`` when unterminated.
+    """
+    depth = 0
+    index = start
+    length = len(sql)
+    while index < length - 1:
+        pair = sql[index : index + 2]
+        if pair == "/*":
+            depth += 1
+            index += 2
+        elif pair == "*/":
+            depth -= 1
+            index += 2
+            if depth == 0:
+                return index
+        else:
+            index += 1
+    return length
+
+
+def _iter_matches(regex: "re.Pattern[str]", sql: str, *, nested_comments: bool) -> "Iterator[re.Match[str]]":
+    """Yield grammar matches, resuming after the full extent of nested block comments."""
+    if not nested_comments:
+        yield from regex.finditer(sql)
+        return
+    position = 0
+    while True:
+        match = regex.search(sql, position)
+        if match is None:
+            return
+        yield match
+        if match.lastgroup == "block_comment":
+            position = max(match.end(), _nested_comment_end(sql, match.start()))
+        else:
+            position = match.end()
+
+
 def unescape_qmark_operator(
     sql: str, param_info: "list[ParameterInfo] | None" = None, dialect: str | None = None
 ) -> "tuple[str, list[ParameterInfo]]":
@@ -431,15 +525,8 @@ def unescape_qmark_operator(
     escape_positions: list[int] = []
     last_end = 0
     scanner = _resolve_scanner(dialect)
-    if scanner == _SCANNER_SNOWFLAKE:
-        regex = SNOWFLAKE_PARAMETER_REGEX
-    elif scanner == _SCANNER_ANSI:
-        regex = ANSI_PARAMETER_REGEX
-    elif scanner == _SCANNER_MYSQL:
-        regex = MYSQL_PARAMETER_REGEX
-    else:
-        regex = PARAMETER_REGEX
-    for match in regex.finditer(sql):
+    regex = _scanner_regex(scanner)
+    for match in _iter_matches(regex, sql, nested_comments=scanner == _SCANNER_NESTED):
         if match.lastgroup != "pg_q_operator" or match.group(0) != _QMARK_ESCAPE:
             continue
         segments.extend((sql[last_end : match.start()], "?"))
@@ -594,6 +681,10 @@ def _resolve_scanner(dialect: str | None) -> str | None:
         return None
     if normalized == _SCANNER_SNOWFLAKE:
         return _SCANNER_SNOWFLAKE
+    if normalized in _NESTED_COMMENT_DIALECTS:
+        return _SCANNER_NESTED
+    if normalized in _BRACKET_STRING_DIALECTS:
+        return _SCANNER_BRACKET
     if normalized in _ANSI_STRING_DIALECTS:
         return _SCANNER_ANSI
     if normalized in _BACKSLASH_STRING_DIALECTS:

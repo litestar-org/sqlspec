@@ -279,6 +279,8 @@ async def test_async_rollback_restores_changed_autocommit() -> None:
         ("SELECT '100%' AS value", (), "SELECT '100%' AS value"),
         ("SELECT 10 % 3 AS value", (), "SELECT 10 % 3 AS value"),
         ("SELECT %s AS value WHERE '100%' LIKE '100%'", (1,), "SELECT %s AS value WHERE '100%%' LIKE '100%%'"),
+        ("SELECT %s AS value WHERE 'a%%b' LIKE 'a%%b'", (1,), "SELECT %s AS value WHERE 'a%%b' LIKE 'a%%b'"),
+        ("SELECT ? AS value WHERE 'a%%b' LIKE 'a%%b'", (1,), "SELECT %s AS value WHERE 'a%%%%b' LIKE 'a%%%%b'"),
     ],
 )
 async def test_cached_percent_sql_preserves_native_binding(

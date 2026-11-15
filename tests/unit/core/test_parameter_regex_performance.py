@@ -252,3 +252,19 @@ def test_unterminated_spans_scan_in_linear_time(sql: str, dialect: "str | None")
     elapsed = time.perf_counter() - start
 
     assert elapsed < 0.5
+
+
+@pytest.mark.parametrize(
+    "dialect", [None, "mysql", "bigquery", "spanner", "snowflake", "postgres", "sqlite", "tsql", "oracle", "duckdb"]
+)
+@pytest.mark.parametrize("opener", ['"\\', "'\\", "[ ", "/* /*"])
+def test_unterminated_quote_openers_scan_in_linear_time(opener: str, dialect: "str | None") -> None:
+    """Repeated unterminated quote and bracket openers finish in bounded time on every grammar."""
+    validator = ParameterValidator(cache_max_size=0)
+    sql = "SELECT " + opener * 16000 + "?"
+
+    start = time.perf_counter()
+    validator.extract_parameters(sql, dialect=dialect)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.5

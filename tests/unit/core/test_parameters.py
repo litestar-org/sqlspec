@@ -3363,9 +3363,9 @@ def test_non_snowflake_dialects_share_parameter_cache_entries() -> None:
     """Dialects sharing a lexical grammar reuse one cached extraction."""
     validator = ParameterValidator()
 
-    validator.extract_parameters("SELECT ?", dialect="postgres")
-    validator.extract_parameters("SELECT ?", dialect="sqlite")
     validator.extract_parameters("SELECT ?", dialect="oracle")
+    validator.extract_parameters("SELECT ?", dialect="db2")
+    validator.extract_parameters("SELECT ?", dialect="teradata")
 
     assert validator.cache_stats()["size"] == 1
 
@@ -3373,6 +3373,13 @@ def test_non_snowflake_dialects_share_parameter_cache_entries() -> None:
     validator.extract_parameters("SELECT ?", dialect="redshift")
 
     assert validator.cache_stats()["size"] == 2
+
+    validator.extract_parameters("SELECT ?", dialect="postgres")
+    validator.extract_parameters("SELECT ?", dialect="cockroach")
+    validator.extract_parameters("SELECT ?", dialect="sqlite")
+    validator.extract_parameters("SELECT ?", dialect="tsql")
+
+    assert validator.cache_stats()["size"] == 4
 
 
 @pytest.mark.parametrize(

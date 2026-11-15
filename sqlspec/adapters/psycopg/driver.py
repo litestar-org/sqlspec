@@ -38,6 +38,7 @@ from sqlspec.adapters.psycopg.core import (
     pipeline_supported,
     resolve_many_rowcount,
     resolve_rowcount,
+    source_uses_pyformat,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
 from sqlspec.core import (
@@ -163,7 +164,12 @@ class PsycopgPipelineMixin:
             sql_text, prepared_parameters = driver._compiled_sql(  # pyright: ignore[reportPrivateUsage]
                 sql_statement, config
             )
-            sql_text = escape_literal_percent(sql_text, prepared_parameters, config.parameter_validator)
+            sql_text = escape_literal_percent(
+                sql_text,
+                prepared_parameters,
+                config.parameter_validator,
+                preserve_percent_escapes=source_uses_pyformat(sql_statement.raw_sql, config.parameter_validator),
+            )
             prepared.append(
                 PreparedStackOperation(
                     operation_index=index,
@@ -245,7 +251,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
 
         execute_with_optional_parameters(cursor, sql, prepared_parameters)
 
@@ -280,7 +291,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -311,7 +327,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         has_observers = runtime is not None and runtime.has_statement_observers
 
         for idx, stmt in enumerate(statements):
-            stmt_sql = escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
+            stmt_sql = escape_literal_percent(
+                stmt,
+                prepared_parameters,
+                self.statement_config.parameter_validator,
+                preserve_percent_escapes=source_uses_pyformat(
+                    statement.raw_sql, self.statement_config.parameter_validator
+                ),
+            )
             stmt_started = perf_counter() if has_observers else 0.0
             self._pending_statement_profile = None
             execute_with_optional_parameters(cursor, stmt_sql, prepared_parameters)
@@ -488,7 +511,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
         return SyncRowStream(
             PsycopgSyncStreamSource(
                 self, sql, prepared_parameters, chunk_size, column_types_resolver=_resolve_column_types
@@ -853,7 +881,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
 
         await execute_with_optional_parameters_async(cursor, sql, prepared_parameters)
 
@@ -888,7 +921,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -919,7 +957,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         has_observers = runtime is not None and runtime.has_statement_observers
 
         for idx, stmt in enumerate(statements):
-            stmt_sql = escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
+            stmt_sql = escape_literal_percent(
+                stmt,
+                prepared_parameters,
+                self.statement_config.parameter_validator,
+                preserve_percent_escapes=source_uses_pyformat(
+                    statement.raw_sql, self.statement_config.parameter_validator
+                ),
+            )
             stmt_started = perf_counter() if has_observers else 0.0
             self._pending_statement_profile = None
             await execute_with_optional_parameters_async(cursor, stmt_sql, prepared_parameters)
@@ -1100,7 +1145,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
         return AsyncRowStream(
             PsycopgAsyncStreamSource(
                 self, sql, prepared_parameters, chunk_size, column_types_resolver=_resolve_column_types
