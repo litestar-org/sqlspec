@@ -169,6 +169,17 @@ def test_sybase_event_queue_guards_resolve_same_owner(table: str, object_name: s
     assert drop_table == f"IF OBJECT_ID('{object_name}') IS NOT NULL EXECUTE('DROP TABLE {store.table_name}');"
 
 
+def _exact(*columns: str) -> str:
+    return " AND ".join(
+        f"{c} = %s AND CONVERT(VARBINARY(512), {c}) = CONVERT(VARBINARY(512), CONVERT(VARCHAR(128), %s))"
+        for c in columns
+    )
+
+
+def _doubled(*values: Any) -> tuple[Any, ...]:
+    return tuple(item for value in values for item in (value, value))
+
+
 def test_sybase_tracking_table_guard_uses_native_object_id(
     recording_sybase_config: tuple[SybaseConfig, FakeCursor],
 ) -> None:
@@ -250,12 +261,17 @@ def test_sybase_adk_events_use_top_for_bounded_queries(
     prefix = "SELECT TOP %s e.id," if limit is not None else "SELECT e.id,"
     assert sql.startswith(prefix)
     assert (
-        "JOIN [dbo].[adk_session] s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in sql
-    )
-    assert "WHERE s.app_name = %s AND s.user_id = %s AND s.id = %s" in sql
+        "JOIN [dbo].[adk_session] s ON e.session_id = s.id "
+        "AND CONVERT(VARBINARY(512), e.session_id) = CONVERT(VARBINARY(512), s.id) "
+        "AND e.app_name = s.app_name "
+        "AND CONVERT(VARBINARY(512), e.app_name) = CONVERT(VARBINARY(512), s.app_name) "
+        "AND e.user_id = s.user_id "
+        "AND CONVERT(VARBINARY(512), e.user_id) = CONVERT(VARBINARY(512), s.user_id)"
+    ) in sql
+    assert "WHERE " + _exact("s.app_name", "s.user_id", "s.id") in sql
     expected_order = "ORDER BY e.timestamp DESC" if limit is not None else "ORDER BY e.timestamp ASC"
     assert sql.endswith(expected_order)
-    expected: tuple[Any, ...] = ("app", "user", "session")
+    expected: tuple[Any, ...] = _doubled("app", "user", "session")
     if limit is not None:
         expected = (limit, *expected)
     if after is not None:
@@ -278,16 +294,17 @@ def test_sybase_adk_session_pages_use_top_only_without_offset(
     sql = " ".join(statement.split())
     if limit is not None and not offset:
         assert sql.startswith("SELECT TOP %s id,")
-        assert parameters == (limit, "app", "user")
+        assert parameters == (limit, *_doubled("app", "user"))
     else:
         assert sql.startswith("SELECT id,")
-        assert parameters == (("app", "user", limit, offset) if offset else ("app", "user"))
+        assert parameters == ((*_doubled("app", "user"), limit, offset) if offset else _doubled("app", "user"))
     ordering = "ORDER BY update_time DESC, id DESC"
     assert sql.endswith(f"{ordering} ROWS LIMIT %s OFFSET %s" if offset else ordering)
 
 
 @pytest.mark.parametrize(
-    ("scope", "scope_parameters"), [("all", ("app", "user")), ("user", ("app", "user")), ("app", ("app",))]
+    ("scope", "scope_parameters"),
+    [("all", _doubled("app", "user")), ("user", _doubled("app", "user")), ("app", _doubled("app"))],
 )
 @pytest.mark.parametrize(("limit", "expected_limit"), [(7, 7), (None, 20), (0, 20)])
 def test_sybase_memory_search_uses_top_and_preserves_scope_and_like_values(
@@ -936,7 +953,7 @@ def test_sybase_adk_store_session_list_and_memory_operations(monkeypatch: pytest
     sql, params = captured[0]
     normalized_sql = " ".join(sql.split())
     assert "ORDER BY create_time ASC, id ASC ROWS LIMIT %s OFFSET %s" in normalized_sql
-    assert params == ("app", "u1", 10, 20)
+    assert params == (*_doubled("app", "u1"), 10, 20)
 
     conn = config.provide_connection.return_value.__enter__.return_value
     cursor = conn.cursor.return_value
@@ -1081,7 +1098,9 @@ def test_sybase_format_identifier_and_insert_statements() -> None:
     sql = build_insert_statement("my_table", ["col1", "col2"])
     assert sql == "INSERT INTO [my_table] ([col1], [col2]) VALUES (%s, %s)"
     escaped = escape_literal_percent(
-        "SELECT * FROM t WHERE val LIKE '100%' AND id = %s", ("1",), default_statement_config.parameter_validator
+        "SELECT * FROM t WHERE val LIKE '100%' AND " + _exact("id"),
+        ("1",),
+        default_statement_config.parameter_validator,
     )
     assert "100%%" in escaped
 
@@ -1548,9 +1567,9 @@ def test_sybase_adk_get_session_renews_only_for_positive_duration(
             (
                 (
                     "UPDATE [dbo].[adk_session] SET update_time = GETUTCDATE() "
-                    "WHERE app_name = %s AND user_id = %s AND id = %s"
+                    "WHERE " + _exact("app_name", "user_id", "id")
                 ),
-                ("app", "u1", "s1"),
+                _doubled("app", "u1", "s1"),
             )
         ]
     else:
@@ -1573,9 +1592,9 @@ def test_sybase_adk_append_event_verifies_session_ownership(session_exists: bool
         ownership_sql, ownership_params = cursor.execute.call_args_list[0].args
         insert_sql, _ = cursor.execute.call_args_list[1].args
         assert " ".join(ownership_sql.split()) == (
-            "SELECT TOP 1 1 FROM [dbo].[adk_session] WHERE id = %s AND app_name = %s AND user_id = %s"
+            "SELECT TOP 1 1 FROM [dbo].[adk_session] WHERE " + _exact("id", "app_name", "user_id")
         )
-        assert ownership_params == ("s1", "app", "u1")
+        assert ownership_params == _doubled("s1", "app", "u1")
         assert " ".join(insert_sql.split()).startswith("INSERT INTO [dbo].[adk_event]")
         conn.commit.assert_called_once()
         conn.rollback.assert_not_called()
@@ -1645,8 +1664,11 @@ def test_sybase_adk_delete_session_deletes_scoped_events_before_session() -> Non
 
     executed = [(" ".join(c.args[0].split()), c.args[1]) for c in cursor.execute.call_args_list]
     assert executed == [
-        ("DELETE FROM [dbo].[adk_event] WHERE app_name = %s AND user_id = %s AND session_id = %s", ("app", "u1", "s1")),
-        ("DELETE FROM [dbo].[adk_session] WHERE app_name = %s AND user_id = %s AND id = %s", ("app", "u1", "s1")),
+        (
+            "DELETE FROM [dbo].[adk_event] WHERE " + _exact("app_name", "user_id", "session_id"),
+            _doubled("app", "u1", "s1"),
+        ),
+        ("DELETE FROM [dbo].[adk_session] WHERE " + _exact("app_name", "user_id", "id"), _doubled("app", "u1", "s1")),
     ]
     conn.commit.assert_called_once()
 
@@ -1657,8 +1679,8 @@ def test_sybase_adk_delete_session_deletes_scoped_events_before_session() -> Non
         pytest.param(
             "app",
             "u1",
-            "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s AND app_name = %s AND user_id = %s",
-            ("s1", "app", "u1"),
+            "DELETE FROM [dbo].[adk_memory] WHERE " + _exact("session_id", "app_name", "user_id"),
+            _doubled("s1", "app", "u1"),
             id="session-app-and-user",
         )
     ],
@@ -1692,9 +1714,9 @@ def test_sybase_adk_memory_dedup_and_scoped_delete_entries_by_session(
     insert_sql, insert_params = cursor.execute.call_args.args
     assert (
         "WHERE NOT EXISTS ( SELECT 1 FROM [dbo].[adk_memory] HOLDLOCK "
-        "WHERE app_name = %s AND user_id = %s AND event_id = %s )"
+        "WHERE " + _exact("app_name", "user_id", "event_id") + " )"
     ) in " ".join(insert_sql.split())
-    assert insert_params[-3:] == ("app", "u1", "evt-1")
+    assert insert_params[-6:] == _doubled("app", "u1", "evt-1")
 
     delete_calls: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -1853,8 +1875,10 @@ def test_sybase_adk_create_session_and_append_event_exclusive_lock_merge() -> No
 
     create_executed = [" ".join(c.args[0].split()) for c in cursor.execute.call_args_list]
     assert create_executed[0] == "BEGIN TRANSACTION"
-    create_app_lock_idx = create_executed.index("UPDATE [dbo].[adk_app_state] SET state = state WHERE app_name = %s")
-    create_app_read_idx = create_executed.index("SELECT state FROM [dbo].[adk_app_state] WHERE app_name = %s")
+    create_app_lock_idx = create_executed.index(
+        "UPDATE [dbo].[adk_app_state] SET state = state WHERE " + _exact("app_name")
+    )
+    create_app_read_idx = create_executed.index("SELECT state FROM [dbo].[adk_app_state] WHERE " + _exact("app_name"))
     assert create_app_lock_idx < create_app_read_idx
     assert all("HOLDLOCK" not in stmt for stmt in create_executed)
     assert create_executed.count("IF @@TRANCOUNT > 0 COMMIT TRANSACTION") == 1
@@ -1868,14 +1892,14 @@ def test_sybase_adk_create_session_and_append_event_exclusive_lock_merge() -> No
 
     append_executed = [" ".join(c.args[0].split()) for c in cursor.execute.call_args_list]
     assert append_executed[0] == "BEGIN TRANSACTION"
-    app_lock_idx = append_executed.index("UPDATE [dbo].[adk_app_state] SET state = state WHERE app_name = %s")
-    app_read_idx = append_executed.index("SELECT state FROM [dbo].[adk_app_state] WHERE app_name = %s")
+    app_lock_idx = append_executed.index("UPDATE [dbo].[adk_app_state] SET state = state WHERE " + _exact("app_name"))
+    app_read_idx = append_executed.index("SELECT state FROM [dbo].[adk_app_state] WHERE " + _exact("app_name"))
     assert app_lock_idx < app_read_idx
     user_lock_idx = append_executed.index(
-        "UPDATE [dbo].[adk_user_state] SET state = state WHERE app_name = %s AND user_id = %s"
+        "UPDATE [dbo].[adk_user_state] SET state = state WHERE " + _exact("app_name", "user_id")
     )
     user_read_idx = append_executed.index(
-        "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = %s AND user_id = %s"
+        "SELECT state FROM [dbo].[adk_user_state] WHERE " + _exact("app_name", "user_id")
     )
     assert user_lock_idx < user_read_idx
     assert all("HOLDLOCK" not in stmt for stmt in append_executed)

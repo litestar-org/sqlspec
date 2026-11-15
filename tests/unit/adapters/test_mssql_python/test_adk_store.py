@@ -99,10 +99,11 @@ def test_sync_store_uses_tsql_upsert_and_top_limit() -> None:
     assert "WITH (HOLDLOCK)" in app_upsert
     assert "SELECT TOP (?)" in events_sql
     assert (
-        "JOIN [dbo].[adk_session] s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id"
-        in _normalized(events_sql)
-    )
-    assert params == (5, "app", "user", "session")
+        "JOIN [dbo].[adk_session] s ON e.session_id = s.id AND e.session_id = s.id COLLATE Latin1_General_100_BIN2 "
+        "AND e.app_name = s.app_name AND e.app_name = s.app_name COLLATE Latin1_General_100_BIN2 "
+        "AND e.user_id = s.user_id AND e.user_id = s.user_id COLLATE Latin1_General_100_BIN2"
+    ) in _normalized(events_sql)
+    assert params == (5, "app", "app", "user", "user", "session", "session")
     assert "LIMIT" not in events_sql
 
 
@@ -115,11 +116,11 @@ def test_mssql_python_list_sessions_binds_order_and_page(monkeypatch: "pytest.Mo
     sql, params = calls[0]
     assert _normalized(sql) == (
         "SELECT id, app_name, user_id, state, create_time, update_time "
-        "FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? "
+        "FROM [dbo].[adk_session] WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 "
         "ORDER BY create_time ASC, id ASC "
         "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     )
-    assert params == ("app", "u1", 20, 10)
+    assert params == ("app", "app", "u1", "u1", 20, 10)
 
 
 def test_mssql_python_list_sessions_defaults_to_recent_first_without_a_page(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -129,8 +130,8 @@ def test_mssql_python_list_sessions_defaults_to_recent_first_without_a_page(monk
     store.list_sessions("app")
 
     sql, params = calls[0]
-    assert _normalized(sql).endswith("WHERE app_name = ? ORDER BY update_time DESC, id DESC")
-    assert params == ("app",)
+    assert _normalized(sql).endswith("WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 ORDER BY update_time DESC, id DESC")
+    assert params == ("app", "app")
 
 
 def test_mssql_python_list_sessions_pages_an_unfiltered_listing(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -141,7 +142,7 @@ def test_mssql_python_list_sessions_pages_an_unfiltered_listing(monkeypatch: "py
 
     sql, params = calls[0]
     assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY")
-    assert params == ("app", 0, 5)
+    assert params == ("app", "app", 0, 5)
 
 
 def test_mssql_python_list_sessions_zero_limit_never_queries(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -219,7 +220,7 @@ def test_mssql_python_adk_memory_store_search_entries(monkeypatch: "pytest.Monke
     normalized_sql = _normalized(sql)
     assert normalized_sql.startswith("SELECT TOP (?)")
     assert "content_text LIKE ?" in normalized_sql
-    assert params == (5, "app", "u1", "%latte%")
+    assert params == (5, "app", "app", "u1", "u1", "%latte%")
 
 
 def test_mssql_python_adk_memory_store_drop_table_sql() -> None:
@@ -502,8 +503,8 @@ def test_mssql_python_get_session_renews_only_for_positive_duration(
     if expect_renew:
         assert writes == [
             (
-                "UPDATE [dbo].[adk_session] SET update_time = SYSUTCDATETIME() WHERE app_name = ? AND user_id = ? AND id = ?",
-                ("app", "u1", "s1"),
+                "UPDATE [dbo].[adk_session] SET update_time = SYSUTCDATETIME() WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 AND id = ? AND id = ? COLLATE Latin1_General_100_BIN2",
+                ("app", "app", "u1", "u1", "s1", "s1"),
             )
         ]
     else:
@@ -526,9 +527,9 @@ def test_mssql_python_append_event_verifies_session_ownership(session_exists: bo
         ownership_sql, ownership_params = cursor.execute.call_args_list[0].args
         insert_sql, _ = cursor.execute.call_args_list[1].args
         assert _normalized(ownership_sql) == (
-            "SELECT TOP (1) 1 FROM [dbo].[adk_session] WHERE id = ? AND app_name = ? AND user_id = ?"
+            "SELECT TOP (1) 1 FROM [dbo].[adk_session] WHERE id = ? AND id = ? COLLATE Latin1_General_100_BIN2 AND app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2"
         )
-        assert ownership_params == ("s1", "app", "u1")
+        assert ownership_params == ("s1", "s1", "app", "app", "u1", "u1")
         assert _normalized(insert_sql).startswith("INSERT INTO [dbo].[adk_event]")
         conn.commit.assert_called_once()
         conn.rollback.assert_not_called()
@@ -595,8 +596,8 @@ def test_mssql_python_delete_session_deletes_scoped_events_before_session() -> N
 
     executed = [(_normalized(call.args[0]), call.args[1]) for call in cursor.execute.call_args_list]
     assert executed == [
-        ("DELETE FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND session_id = ?", ("app", "u1", "s1")),
-        ("DELETE FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?", ("app", "u1", "s1")),
+        ("DELETE FROM [dbo].[adk_event] WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 AND session_id = ? AND session_id = ? COLLATE Latin1_General_100_BIN2", ("app", "app", "u1", "u1", "s1", "s1")),
+        ("DELETE FROM [dbo].[adk_session] WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 AND id = ? AND id = ? COLLATE Latin1_General_100_BIN2", ("app", "app", "u1", "u1", "s1", "s1")),
     ]
     conn.commit.assert_called_once()
 
@@ -607,8 +608,8 @@ def test_mssql_python_delete_session_deletes_scoped_events_before_session() -> N
         pytest.param(
             "app",
             "u1",
-            "DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND app_name = ? AND user_id = ?",
-            ("s1", "app", "u1"),
+            "DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND session_id = ? COLLATE Latin1_General_100_BIN2 AND app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2",
+            ("s1", "s1", "app", "app", "u1", "u1"),
             id="session-app-and-user",
         )
     ],
@@ -645,9 +646,9 @@ def test_mssql_python_memory_dedup_and_scoped_delete_entries_by_session(
     insert_sql, batch_params = cursor.executemany.call_args.args
     assert (
         "WHERE NOT EXISTS ( SELECT 1 FROM [dbo].[adk_memory] WITH (UPDLOCK, HOLDLOCK) "
-        "WHERE app_name = ? AND user_id = ? AND event_id = ? );"
+        "WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 AND event_id = ? AND event_id = ? COLLATE Latin1_General_100_BIN2 );"
     ) in _normalized(insert_sql)
-    assert batch_params[0][-3:] == ("app", "u1", "evt-1")
+    assert batch_params[0][-6:] == ("app", "app", "u1", "u1", "evt-1", "evt-1")
 
     delete_calls: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -684,11 +685,11 @@ def test_mssql_python_create_session_merges_and_reads_scoped_state() -> None:
     assert created["state"] == {"turn": 1, "app:existing": 1, "app:added": 2, "user:lang": "en"}
     executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
     assert executed[0].startswith("INSERT INTO [dbo].[adk_session]")
-    assert executed[1] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ?"
+    assert executed[1] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2"
     assert (
-        executed[2] == "UPDATE [dbo].[adk_app_state] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ?"
+        executed[2] == "UPDATE [dbo].[adk_app_state] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2"
     )
-    assert executed[3] == "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = ? AND user_id = ?"
+    assert executed[3] == "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2"
     assert conn.autocommit is True
     conn.commit.assert_called_once()
 
@@ -710,10 +711,10 @@ def test_mssql_python_append_event_and_update_state_atomic_merge_and_rejects_old
 
     assert updated["state"] == {"turn": 2, "app:a": 1, "app:a2": 2, "user:u2": 3}
     executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
-    assert executed[2] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ?"
+    assert executed[2] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2"
     assert executed[3].startswith("UPDATE [dbo].[adk_app_state]")
     assert executed[4] == (
-        "SELECT state FROM [dbo].[adk_user_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND user_id = ?"
+        "SELECT state FROM [dbo].[adk_user_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2"
     )
     assert executed[5].startswith("INSERT INTO [dbo].[adk_user_state]")
     conn.commit.assert_called_once()

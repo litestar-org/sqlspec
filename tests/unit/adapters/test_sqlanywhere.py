@@ -130,6 +130,16 @@ class FakeConnection:
         self.closed = True
 
 
+def _exact(*columns: str) -> str:
+    return " AND ".join(
+        f"{c} = ? AND CAST({c} AS BINARY(512)) = CAST(CAST(? AS VARCHAR(128)) AS BINARY(512))" for c in columns
+    )
+
+
+def _doubled(*values: Any) -> tuple[Any, ...]:
+    return tuple(item for value in values for item in (value, value))
+
+
 def test_build_connection_config_normalizes_friendly_keys_and_strips_pool_keys() -> None:
     """build_connection_config maps friendly keys into sqlanydb connection keys and strips pool parameters."""
     cfg = build_connection_config({
@@ -579,7 +589,7 @@ async def test_sqlanywhere_litestar_and_adk_stores_roundtrip_with_mocked_connect
     sql, params = captured[0]
     normalized_sql = " ".join(sql.split())
     assert "ORDER BY create_time ASC, id ASC LIMIT ? OFFSET ?" in normalized_sql
-    assert params == ("app", "u1", 10, 20)
+    assert params == (*_doubled("app", "u1"), 10, 20)
 
     monkeypatch.setattr(SqlanywhereADKMemoryStore, "insert_memory_entries", MagicMock(return_value=1))
     memory_store = SqlanywhereADKMemoryStore(config)
@@ -657,7 +667,7 @@ def test_sqlanywhere_adk_memory_store_insert_sql_contains_from_sys_dummy(monkeyp
     assert len(executed_statements) == 1
     assert "FROM SYS.DUMMY" in executed_statements[0]
     assert "WHERE NOT EXISTS" in executed_statements[0]
-    assert "WHERE app_name = ? AND user_id = ? AND event_id = ?" in " ".join(executed_statements[0].split())
+    assert f"WHERE {_exact('app_name', 'user_id', 'event_id')}" in " ".join(executed_statements[0].split())
 
 
 def test_sqlanywhere_adk_memory_store_handles_native_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1237,9 +1247,9 @@ def test_sqlanywhere_adk_get_session_renews_only_for_positive_duration(
             (
                 (
                     'UPDATE "DBA"."adk_session" SET update_time = CURRENT UTC TIMESTAMP '
-                    "WHERE app_name = ? AND user_id = ? AND id = ?"
+                    f"WHERE {_exact('app_name', 'user_id', 'id')}"
                 ),
-                ("app", "u1", "s1"),
+                _doubled("app", "u1", "s1"),
             )
         ]
     else:
@@ -1263,9 +1273,9 @@ def test_sqlanywhere_adk_append_event_verifies_session_ownership(
         ownership_sql, ownership_params = cursor.calls[0]
         insert_sql, _ = cursor.calls[1]
         assert " ".join(ownership_sql.split()) == (
-            'SELECT TOP 1 1 FROM "DBA"."adk_session" WHERE id = ? AND app_name = ? AND user_id = ?'
+            f'SELECT TOP 1 1 FROM "DBA"."adk_session" WHERE {_exact("id", "app_name", "user_id")}'
         )
-        assert ownership_params == ("s1", "app", "u1")
+        assert ownership_params == _doubled("s1", "app", "u1")
         assert " ".join(insert_sql.split()).startswith('INSERT INTO "DBA"."adk_event"')
         assert conn.commits == 1
         assert conn.rollbacks == 0
@@ -1347,11 +1357,13 @@ def test_sqlanywhere_adk_events_join_and_delete_session_scoping(monkeypatch: pyt
 
     assert (
         'FROM "DBA"."adk_event" e JOIN "DBA"."adk_session" s '
-        "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
-        "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? AND e.timestamp > ? "
+        "ON e.session_id = s.id AND CAST(e.session_id AS BINARY(512)) = CAST(s.id AS BINARY(512)) "
+        "AND e.app_name = s.app_name AND CAST(e.app_name AS BINARY(512)) = CAST(s.app_name AS BINARY(512)) "
+        "AND e.user_id = s.user_id AND CAST(e.user_id AS BINARY(512)) = CAST(s.user_id AS BINARY(512)) "
+        f"WHERE {_exact('s.app_name', 's.user_id', 's.id')} AND e.timestamp > ? "
         "ORDER BY e.timestamp DESC LIMIT ?"
     ) in " ".join(events_sql.split())
-    assert events_params == ("app", "u1", "s1", after, 5)
+    assert events_params == (*_doubled("app", "u1", "s1"), after, 5)
 
     cursor = FakeCursor()
     conn = FakeConnection(cursor)
@@ -1359,8 +1371,11 @@ def test_sqlanywhere_adk_events_join_and_delete_session_scoping(monkeypatch: pyt
     store.delete_session("app", "u1", "s1")
     executed = [(" ".join(sql.split()), params) for sql, params in cursor.calls]
     assert executed == [
-        ('DELETE FROM "DBA"."adk_event" WHERE app_name = ? AND user_id = ? AND session_id = ?', ("app", "u1", "s1")),
-        ('DELETE FROM "DBA"."adk_session" WHERE app_name = ? AND user_id = ? AND id = ?', ("app", "u1", "s1")),
+        (
+            f'DELETE FROM "DBA"."adk_event" WHERE {_exact("app_name", "user_id", "session_id")}',
+            _doubled("app", "u1", "s1"),
+        ),
+        (f'DELETE FROM "DBA"."adk_session" WHERE {_exact("app_name", "user_id", "id")}', _doubled("app", "u1", "s1")),
     ]
     assert conn.commits == 1
 
@@ -1371,8 +1386,8 @@ def test_sqlanywhere_adk_events_join_and_delete_session_scoping(monkeypatch: pyt
         pytest.param(
             "app",
             "u1",
-            'DELETE FROM "DBA"."adk_memory" WHERE session_id = ? AND app_name = ? AND user_id = ?',
-            ("s1", "app", "u1"),
+            f'DELETE FROM "DBA"."adk_memory" WHERE {_exact("session_id", "app_name", "user_id")}',
+            _doubled("s1", "app", "u1"),
             id="session-app-and-user",
         )
     ],
@@ -1598,8 +1613,10 @@ def test_sqlanywhere_adk_create_append_and_get_events_chronological(monkeypatch:
     assert conn.commits == 2
 
     executed = [" ".join(sql.split()) for sql, _ in cursor.calls]
-    assert 'SELECT state FROM "DBA"."adk_app_state" WHERE app_name = ? FOR UPDATE BY LOCK' in executed
-    assert 'SELECT state FROM "DBA"."adk_user_state" WHERE app_name = ? AND user_id = ? FOR UPDATE BY LOCK' in executed
+    assert f'SELECT state FROM "DBA"."adk_app_state" WHERE {_exact("app_name")} FOR UPDATE BY LOCK' in executed
+    assert (
+        f'SELECT state FROM "DBA"."adk_user_state" WHERE {_exact("app_name", "user_id")} FOR UPDATE BY LOCK' in executed
+    )
 
     with pytest.raises(TypeError):
         cast("Any", store).append_event_and_update_state(event, "app", "u1", "s1", {}, app_state={"a": 1})

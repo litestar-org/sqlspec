@@ -97,6 +97,8 @@ Instantiate the adapter's `*ADKStore` (such as `AiosqliteADKStore`, `AsyncpgADKS
 
 Memory entry ids are unique per app and user, so two users can store entries with the same id. `delete_entries_by_session(session_id, app_name, user_id)` requires both owners and removes only that owner's rows.
 
+On SQL Server, Sybase ASE, SQL Anywhere, and Teradata, session, user, and app keys match case- and accent-sensitively even when the database collation is case-insensitive. New SQL Server and Teradata tables declare case-sensitive key columns; existing tables keep their column collation, so ids that differ only by case still collide on the primary key. Use a case-sensitive database collation if case-distinct ids must coexist.
+
 When wiring an ADK `Runner`, pass `SQLSpecSessionService(store)`, `SQLSpecMemoryService(memory_store)`, and `SQLSpecArtifactService(artifact_store, artifact_storage_uri)` inside an async context manager (`async with SQLSpecSessionService(store) as session_service:`) so session locks and resources close cleanly on shutdown.
 
 ## Full-Text, Vector, and Hybrid RRF Memory Search

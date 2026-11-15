@@ -58,11 +58,12 @@ def test_teradata_adk_public_pagination_and_atomic_delete(monkeypatch) -> None:
     store = TeradataADKStore(TeradataConfig(connection_config={"host": "localhost"}))
     assert store.list_sessions("app", "user", limit=5, offset=10) == []
     assert "QUALIFY ROW_NUMBER() OVER (ORDER BY update_time DESC, id DESC) BETWEEN ? AND ?" in statements[0][0]
-    assert statements[0][1] == ("app", "user", 11, 15)
+    assert statements[0][1] == ("app", "app", "user", "user", 11, 15)
     store.delete_session("app", "user", "session")
     assert statements[-2] == (
-        'DELETE FROM "ADK_EVENT" WHERE app_name = ? AND user_id = ? AND session_id = ?',
-        ("app", "user", "session"),
+        'DELETE FROM "ADK_EVENT" WHERE app_name = ? AND app_name (CASESPECIFIC) = ? '
+        "AND user_id = ? AND user_id (CASESPECIFIC) = ? AND session_id = ? AND session_id (CASESPECIFIC) = ?",
+        ("app", "app", "user", "user", "session", "session"),
     )
     assert states[-2:] == [False, False]
     assert conn.autocommit is True
@@ -166,9 +167,11 @@ def test_teradata_adk_crud_and_cleanup(teradata_connection) -> None:
     assert events[0]["event_data"] == {"text": "hello"}
     assert "TOP 2" in cursor.execute.call_args.args[0]
     assert "ORDER BY e.timestamp DESC, e.id DESC" in cursor.execute.call_args.args[0]
-    assert 'JOIN "ADK_SESSION" s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id' in (
-        " ".join(cursor.execute.call_args.args[0].split())
-    )
+    assert (
+        'JOIN "ADK_SESSION" s ON e.session_id = s.id AND e.session_id (CASESPECIFIC) = s.id '
+        "AND e.app_name = s.app_name AND e.app_name (CASESPECIFIC) = s.app_name "
+        "AND e.user_id = s.user_id AND e.user_id (CASESPECIFIC) = s.user_id"
+    ) in " ".join(cursor.execute.call_args.args[0].split())
     assert store.get_events("app", "user", "session", limit=0) == []
     assert store.delete_expired_events(now, "app") == 1
     assert store.delete_idle_user_states(now, "app") == 1
@@ -214,7 +217,7 @@ def test_teradata_memory_insert_search_and_delete(teradata_connection) -> None:
     assert store.insert_memory_entries([]) == 0
     assert store.delete_entries_by_session("session", "app", "user") == 1
     assert store.delete_entries_older_than(3, "app", "user") == 1
-    assert cursor.execute.call_args.args[1][1:] == ("app", "user")
+    assert cursor.execute.call_args.args[1][1:] == ("app", "app", "user")
 
 
 @pytest.mark.parametrize(
@@ -640,7 +643,7 @@ def test_teradata_memory_dedup_prequery_and_tera_concurrent_race_recovery(monkey
             if "WHERE event_id IN" in normalized:
                 fetch_results.append([("app", "u1", ev) for ev in persisted if ev in params])
             else:
-                app_p, user_p, ev_p = str(params[0]), str(params[1]), str(params[2])
+                app_p, user_p, ev_p = str(params[0]), str(params[2]), str(params[4])
                 rows = [("app", "u1", ev_p)] if (app_p, user_p) == ("app", "u1") and ev_p in persisted else []
                 fetch_results.append(rows)
             return
@@ -847,7 +850,10 @@ def test_teradata_adk_append_event_checks_session_ownership_and_rejects_mismatch
     if owner_exists:
         store.append_event(event)
         executed = [" ".join(call.args[0].split()) for call in cursor.execute.call_args_list]
-        assert executed[0] == 'SELECT TOP 1 1 FROM "ADK_SESSION" WHERE id = ? AND app_name = ? AND user_id = ?'
+        assert executed[0] == (
+            'SELECT TOP 1 1 FROM "ADK_SESSION" WHERE id = ? AND id (CASESPECIFIC) = ? '
+            "AND app_name = ? AND app_name (CASESPECIFIC) = ? AND user_id = ? AND user_id (CASESPECIFIC) = ?"
+        )
         assert executed[1].startswith('INSERT INTO "ADK_EVENT"')
         assert conn.commit.call_count == 1
     else:
@@ -869,8 +875,9 @@ def test_teradata_adk_append_event_checks_session_ownership_and_rejects_mismatch
         pytest.param(
             "app",
             "u1",
-            'DELETE FROM "ADK_MEMORY" WHERE session_id = ? AND app_name = ? AND user_id = ?',
-            ("s1", "app", "u1"),
+            'DELETE FROM "ADK_MEMORY" WHERE session_id = ? AND session_id (CASESPECIFIC) = ? '
+            "AND app_name = ? AND app_name (CASESPECIFIC) = ? AND user_id = ? AND user_id (CASESPECIFIC) = ?",
+            ("s1", "s1", "app", "app", "u1", "u1"),
             id="with-app-and-user",
         )
     ],
