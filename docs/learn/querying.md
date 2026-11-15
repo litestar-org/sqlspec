@@ -127,6 +127,8 @@ async with session.select_stream(query, chunk_size=500) as stream:
         await process_row(row)
 ```
 
+A stream belongs to its session, so finish iterating before the session block ends. When the session closes, any stream still open is closed, and iterating it afterwards raises `ImproperConfigurationError`.
+
 For columnar analytics or Parquet export over large result sets, prefer `session.select_to_arrow(...)` (covered in [Arrow and Storage](arrow-and-storage.md)).
 
 ## Recap

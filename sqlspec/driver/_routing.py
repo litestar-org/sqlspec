@@ -19,7 +19,7 @@ from typing_extensions import TypeVar
 from sqlspec.core import SQL, ArrowResult, SQLResult, StackResult, Statement, StatementConfig, StatementFilter
 from sqlspec.core.stack import StatementStack
 from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver._common import _DETACHED_CONNECTION_MESSAGE, CommonDriverAttributesMixin
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
@@ -1737,10 +1737,16 @@ class _SyncRoutingRowSource:
         return self._inner_stream.column_types
 
     def start(self) -> None:
+        self._require_open_inner()
         self._inner_stream._source.start()
 
     def fetch_chunk(self) -> list[dict[str, Any]]:
+        self._require_open_inner()
         return self._inner_stream._source.fetch_chunk()
+
+    def _require_open_inner(self) -> None:
+        if self._inner_stream._session_closed:
+            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
 
     def close(self, error: bool = False) -> None:
         try:
@@ -1805,6 +1811,8 @@ class _AsyncRoutingRowSource:
     async def fetch_chunk(self) -> list[dict[str, Any]]:
         if self._inner_stream is None:
             return []
+        if self._inner_stream._session_closed:
+            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
         return await self._inner_stream._source.fetch_chunk()
 
     async def close(self, error: bool = False) -> None:

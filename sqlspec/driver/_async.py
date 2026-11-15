@@ -1246,7 +1246,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         stream = self.dispatch_select_stream(sql_statement, chunk_size)
         if stream is not None:
-            return stream._with_schema_type(schema_type)
+            return self._register_open_stream(stream._with_schema_type(schema_type))
         if native_only:
             msg = (
                 f"Adapter '{type(self).__name__}' does not support native row streaming. "
@@ -1254,7 +1254,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 "or switch to an adapter with native row streaming support."
             )
             raise ImproperConfigurationError(msg)
-        return AsyncRowStream(_LazyEagerAsyncRowSource(self, sql_statement, chunk_size), schema_type=schema_type)
+        return self._register_open_stream(
+            AsyncRowStream(_LazyEagerAsyncRowSource(self, sql_statement, chunk_size), schema_type=schema_type)
+        )
 
     @overload
     def fetch_stream(
@@ -1308,6 +1310,17 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             native_only=native_only,
             **kwargs,
         )
+
+    async def _close_open_streams(self, *, error: bool = False) -> None:
+        """Close every registered row stream before the session releases its connection.
+
+        Args:
+            error: Whether the session is ending because of an error.
+        """
+        open_streams = self._open_streams
+        self._open_streams = []
+        for open_stream in open_streams:
+            await open_stream._aclose_for_session_exit(error=error)
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
         """Adapter hook returning a native row stream, or None when unsupported."""

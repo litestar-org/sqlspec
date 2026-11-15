@@ -927,7 +927,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         stream = self.dispatch_select_stream(sql_statement, chunk_size, fetch_lobs=fetch_lobs)
         if stream is not None:
-            return stream._with_schema_type(schema_type)
+            return self._register_open_stream(stream._with_schema_type(schema_type))
         return super().select_stream(
             sql_statement,
             schema_type=schema_type,
@@ -2046,7 +2046,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         stream = self.dispatch_select_stream(sql_statement, chunk_size, fetch_lobs=fetch_lobs)
         if stream is not None:
-            return stream._with_schema_type(schema_type)
+            return self._register_open_stream(stream._with_schema_type(schema_type))
         return super().select_stream(
             sql_statement,
             schema_type=schema_type,

@@ -1789,6 +1789,7 @@ class CommonDriverAttributesMixin:
         "_auto_begin_on_write",
         "_cache_holder",
         "_observability",
+        "_open_streams",
         "_pending_statement_profile",
         "_processed_state_pool",
         "_statement_cache",
@@ -1831,6 +1832,7 @@ class CommonDriverAttributesMixin:
         self._pending_statement_profile: dict[str, Any] | None = None
         self._auto_begin_on_write = False
         self._transaction_depth = 0
+        self._open_streams: list[Any] = []
         self._stmt_cache_max_size = self._statement_cache_size()
         shared_holder = self.driver_features.get("_statement_cache_holder")
         if (
@@ -2254,8 +2256,29 @@ class CommonDriverAttributesMixin:
             last_inserted_id=last_inserted_id,
         )
 
+    def _register_open_stream(self, stream: "Any") -> "Any":
+        """Track a returned row stream so session teardown can close it.
+
+        Args:
+            stream: Row stream returned to the caller.
+
+        Returns:
+            The same stream, unchanged.
+        """
+        open_streams = self._open_streams
+        open_streams[:] = [open_stream for open_stream in open_streams if not open_stream._closed]
+        open_streams.append(stream)
+        return stream
+
     def _detach_connection(self) -> None:
-        """Replace driver.connection with the detached sentinel after session teardown."""
+        """Invalidate open streams and replace driver.connection with the detached sentinel."""
+        open_streams = self._open_streams
+        self._open_streams = []
+        for open_stream in open_streams:
+            if hasattr(open_stream, "_close_for_session_exit"):
+                open_stream._close_for_session_exit(error=True)
+            else:
+                open_stream._mark_session_closed()
         self.connection = _DETACHED_CONNECTION
         self._auto_begin_on_write = False
         self._stmt_cache_enabled = False

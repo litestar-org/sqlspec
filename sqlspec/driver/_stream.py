@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar, cast, o
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.driver._common import _DETACHED_CONNECTION_MESSAGE
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import to_schema
 
@@ -93,7 +94,7 @@ def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[st
 class SyncRowStream(Generic[RowT]):
     """Bounded-memory iterator backed by a chunk source."""
 
-    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_source", "_started")
+    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_session_closed", "_source", "_started")
 
     def __init__(self, source: SyncRowSource, schema_type: "type[RowT] | None" = None) -> None:
         self._source = source
@@ -101,6 +102,7 @@ class SyncRowStream(Generic[RowT]):
         self._buffer: list[RowT] = []
         self._buffer_index = 0
         self._closed = False
+        self._session_closed = False
         self._started = False
 
     def __enter__(self) -> Self:
@@ -115,6 +117,8 @@ class SyncRowStream(Generic[RowT]):
         return self
 
     def __next__(self) -> RowT:
+        if self._session_closed:
+            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
         if self._closed:
             raise StopIteration
         if not self._started:
@@ -141,6 +145,11 @@ class SyncRowStream(Generic[RowT]):
 
     def close(self) -> None:
         self._close(error=False)
+
+    def _close_for_session_exit(self, *, error: bool) -> None:
+        if not self._closed:
+            self._session_closed = True
+        self._close(error=error)
 
     @property
     def column_types(self) -> "dict[str, str] | None":
@@ -181,7 +190,7 @@ class SyncRowStream(Generic[RowT]):
 class AsyncRowStream(Generic[RowT]):
     """Async bounded-memory iterator backed by an async chunk source."""
 
-    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_source", "_started")
+    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_session_closed", "_source", "_started")
 
     def __init__(self, source: AsyncRowSource, schema_type: "type[RowT] | None" = None) -> None:
         self._source = source
@@ -189,6 +198,7 @@ class AsyncRowStream(Generic[RowT]):
         self._buffer: list[RowT] = []
         self._buffer_index = 0
         self._closed = False
+        self._session_closed = False
         self._started = False
 
     def __aiter__(self) -> "AsyncRowStream[RowT]":
@@ -203,6 +213,8 @@ class AsyncRowStream(Generic[RowT]):
         await self._aclose(error=exc_type is not None)
 
     async def __anext__(self) -> RowT:
+        if self._session_closed:
+            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
         if self._closed:
             raise _StopAsync
         if not self._started:
@@ -229,6 +241,15 @@ class AsyncRowStream(Generic[RowT]):
 
     async def aclose(self) -> None:
         await self._aclose(error=False)
+
+    async def _aclose_for_session_exit(self, *, error: bool) -> None:
+        if not self._closed:
+            self._session_closed = True
+        await self._aclose(error=error)
+
+    def _mark_session_closed(self) -> None:
+        if not self._closed:
+            self._session_closed = True
 
     @property
     def column_types(self) -> "dict[str, str] | None":
