@@ -22,6 +22,7 @@ __all__ = (
     "quote_backtick_identifier",
     "quote_identifier",
     "resolve_catalog_identifier",
+    "sanitize_single_line",
     "slugify",
     "snake_case",
     "split_qualified_identifier",
@@ -37,6 +38,28 @@ _SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s@-]+", re.UNICODE)
 _SNAKE_CASE_REMOVE_NON_WORD = re.compile(r"[^\w]+", re.UNICODE)
 _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
 _MIN_QUOTED_IDENTIFIER_LENGTH = 2
+
+
+def sanitize_single_line(value: str, *, max_length: int, pattern: "re.Pattern[str]") -> str:
+    """Return the trimmed first line of ``value`` when it fully matches ``pattern``.
+
+    Text after the first carriage return or line feed is discarded, surrounding
+    whitespace is removed, and the result is cut to ``max_length`` characters
+    before matching.
+
+    Args:
+        value: Raw text, such as an HTTP header value.
+        max_length: Maximum number of characters kept.
+        pattern: Pattern that the whole kept value must match.
+
+    Returns:
+        The sanitized value, or an empty string when it does not match ``pattern``.
+    """
+    first_line = value.split("\r", 1)[0].split("\n", 1)[0]
+    candidate = first_line.strip()[:max_length]
+    if pattern.fullmatch(candidate) is None:
+        return ""
+    return candidate
 
 
 def slugify(value: str, allow_unicode: bool = False, separator: str | None = None) -> str:

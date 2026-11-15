@@ -12,6 +12,7 @@ from typing import ClassVar, Final
 from mypy_extensions import mypyc_attr
 
 from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.text import sanitize_single_line
 
 __all__ = ("CorrelationExtractor",)
 
@@ -127,16 +128,8 @@ class CorrelationExtractor:
         for header in self._headers:
             value = get_header(header)
             if value:
-                cleaned = self._sanitize_correlation_id(value)
+                cleaned = sanitize_single_line(value, max_length=self._max_length, pattern=_CORRELATION_VALUE_PATTERN)
                 if cleaned:
                     return cleaned
 
         return CorrelationContext.generate()
-
-    def _sanitize_correlation_id(self, value: str) -> str:
-        """Truncate at the first line break, trim, bound, and validate trace characters."""
-        first_line = value.split("\r", 1)[0].split("\n", 1)[0]
-        candidate = first_line.strip()[: self._max_length]
-        if _CORRELATION_VALUE_PATTERN.fullmatch(candidate) is None:
-            return ""
-        return candidate
