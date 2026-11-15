@@ -243,7 +243,7 @@ async def test_without_indexes_ddl_override_transaction_and_rebuild_error() -> N
 
 
 def test_teradata_without_indexes_keeps_primary_index_and_addresses_unnamed_index_by_columns() -> None:
-    """Teradata primary indexes stay in place and unnamed secondary indexes are dropped and rebuilt by columns."""
+    """Teradata primary and unique indexes stay in place and unnamed secondary indexes are dropped and rebuilt by columns."""
     from sqlspec.adapters.teradata.data_dictionary import build_index_metadata
 
     rows = [
@@ -282,9 +282,7 @@ def test_teradata_without_indexes_keeps_primary_index_and_addresses_unnamed_inde
         pass
     assert executed == [
         'DROP INDEX ("region", "status") ON "mart"."orders"',
-        'DROP INDEX "idx_orders_customer" ON "mart"."orders"',
         'CREATE INDEX ("region", "status") ON "mart"."orders"',
-        'CREATE UNIQUE INDEX "idx_orders_customer" ("cust") ON "mart"."orders"',
     ]
 
 
@@ -679,3 +677,11 @@ async def test_without_indexes_preserves_rebuild_diagnostics_when_body_raises(
     notes = getattr(exc_info.value, "__notes__", [])
     assert any("disk full during index rebuild" in note for note in notes)
     assert any("disk full during index rebuild" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.parametrize("flag", ["is_unique", "unique"])
+def test_unique_index_metadata_is_not_droppable(flag: str) -> None:
+    """Standalone unique indexes are never dropped for bulk loads."""
+    indexes: list[dict[str, Any]] = [{"index_name": "uq", flag: True}, {"index_name": "plain", flag: False}]
+
+    assert [idx["index_name"] for idx in filter_droppable_table_indexes(indexes)] == ["plain"]

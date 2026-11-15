@@ -37,7 +37,7 @@ _CREATE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+INDEX\s+(?!CONCURRENTLY\b)",
 def filter_droppable_table_indexes(
     indexes: Sequence[Mapping[str, Any]], constraints: Sequence[Mapping[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
-    """Filter data-dictionary index metadata to secondary indexes safe to drop and rebuild.
+    """Filter data-dictionary index metadata to non-unique secondary indexes safe to drop and rebuild.
 
     Args:
         indexes: Index metadata rows returned by a driver's data dictionary.
@@ -63,6 +63,8 @@ def filter_droppable_table_indexes(
         if idx.get("is_primary") or idx.get("primary"):
             continue
         if idx.get("is_exclusion") or idx.get("is_extension_owned") or idx.get("is_constraint_backed"):
+            continue
+        if idx.get("is_unique") or idx.get("unique"):
             continue
         if idx.get("constraint_type") in {"PRIMARY KEY", "UNIQUE", "FOREIGN KEY", "EXCLUDE"}:
             continue
