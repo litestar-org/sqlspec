@@ -83,6 +83,7 @@ _DB_SYSTEM_OVERRIDE_DIALECTS = frozenset({"snowflake", "teradata"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 _SCHEMA_QUALIFIED_PARTS = 2
+_TEMPORARY_STAGE_DIALECTS = frozenset({"sqlite", "duckdb"})
 _CATALOG_QUALIFIED_PARTS = 3
 _SCRIPT_PARAMETER_VALIDATOR = ParameterValidator()
 
@@ -942,7 +943,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             return self._execute_staged_load_sync(
                 table,
                 source,
-                raw_loader=self.load_from_arrow,
+                raw_loader=self._load_stage_from_arrow if stage_table or conflict_keys else self._ingest_arrow,
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,
@@ -955,12 +956,47 @@ class AdbcDriver(SyncDriverAdapterBase):
                 concurrent_indexes=concurrent_indexes,
                 type_casts=type_casts,
             )
+        return self._ingest_arrow(table, source, partitioner=partitioner, overwrite=overwrite, telemetry=telemetry)
+
+    def _load_stage_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Ingest Arrow data into a staging table created by the staged-load flow.
+
+        SQLite and DuckDB stage tables are TEMP tables, and ADBC ingests into the main
+        schema unless temporary ingest is requested.
+        """
+        return self._ingest_arrow(
+            table,
+            source,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=telemetry,
+            temporary=self._dialect_name in _TEMPORARY_STAGE_DIALECTS,
+        )
+
+    def _ingest_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        temporary: bool = False,
+    ) -> "StorageBridgeJob":
         ensure_pyarrow()
 
         source_data: Any = source.get_data() if hasattr(source, "get_data") else source
         ingest_mode: Literal["append", "create", "replace", "create_append"]
         ingest_mode = "replace" if overwrite else "create_append"
-        target_table, ingest_kwargs = _parse_adbc_ingest_target(table, mode=ingest_mode)
+        target_table, ingest_kwargs = _parse_adbc_ingest_target(table, mode=ingest_mode, temporary=temporary)
 
         if hasattr(source_data, "read_next_batch"):
             row_count = 0
@@ -1305,9 +1341,11 @@ class AdbcDriver(SyncDriverAdapterBase):
 
 
 def _parse_adbc_ingest_target(
-    table: str, *, mode: Literal["append", "create", "replace", "create_append"]
+    table: str, *, mode: Literal["append", "create", "replace", "create_append"], temporary: bool = False
 ) -> "tuple[str, dict[str, Any]]":
     kwargs: dict[str, Any] = {"mode": mode}
+    if temporary:
+        kwargs["temporary"] = True
     if "." not in table:
         return table, kwargs
     parts = split_qualified_identifier(table, quote_chars='"')
