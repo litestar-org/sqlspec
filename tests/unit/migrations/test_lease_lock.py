@@ -141,10 +141,10 @@ def test_renew_lock_raises_after_takeover(tmp_path: Path) -> None:
     tracker = SyncMigrationTracker()
     try:
         with config.provide_session() as driver:
-            with tracker.acquire_lock(driver):
-                tracker.renew_lock(driver)
-                driver.execute("DELETE FROM ddl_migrations_lock")
-                with pytest.raises(MigrationError, match="lease expired"):
+            with pytest.raises(MigrationError, match="lease expired"):
+                with tracker.acquire_lock(driver):
+                    tracker.renew_lock(driver)
+                    driver.execute("DELETE FROM ddl_migrations_lock")
                     tracker.renew_lock(driver)
     finally:
         config.close_pool()
@@ -251,3 +251,66 @@ async def test_async_lease_lock_acquires_renews_and_releases(async_lease_driver:
                 pass
 
     assert await driver.select("SELECT lock_name FROM ddl_migrations_lock") == []
+
+
+def test_release_raises_when_lease_was_taken_over(tmp_path: Path) -> None:
+    config = _duckdb_config(tmp_path / "lost.duckdb")
+    tracker = SyncMigrationTracker()
+    try:
+        with config.provide_session() as driver:
+            with pytest.raises(MigrationError, match="lease expired"):
+                with tracker.acquire_lock(driver):
+                    driver.execute("DELETE FROM ddl_migrations_lock")
+    finally:
+        config.close_pool()
+
+
+def test_release_after_takeover_does_not_mask_original_error(tmp_path: Path) -> None:
+    config = _duckdb_config(tmp_path / "lost_err.duckdb")
+    tracker = SyncMigrationTracker()
+    try:
+        with config.provide_session() as driver:
+            with pytest.raises(ValueError, match="boom"):
+                with tracker.acquire_lock(driver):
+                    driver.execute("DELETE FROM ddl_migrations_lock")
+                    raise ValueError("boom")
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.anyio
+async def test_async_release_raises_when_lease_was_taken_over(async_lease_driver: _LeaseAiosqliteDriver) -> None:
+    tracker = AsyncMigrationTracker()
+
+    with pytest.raises(MigrationError, match="lease expired"):
+        async with tracker.acquire_lock(async_lease_driver):
+            await async_lease_driver.execute("DELETE FROM ddl_migrations_lock")
+
+
+@pytest.mark.anyio
+async def test_async_release_after_takeover_does_not_mask_original_error(
+    async_lease_driver: _LeaseAiosqliteDriver,
+) -> None:
+    tracker = AsyncMigrationTracker()
+
+    with pytest.raises(ValueError, match="boom"):
+        async with tracker.acquire_lock(async_lease_driver):
+            await async_lease_driver.execute("DELETE FROM ddl_migrations_lock")
+            raise ValueError("boom")
+
+
+def test_lease_renewed_before_each_reconciler(tmp_path: Path) -> None:
+    config = _duckdb_config(tmp_path / "recon.duckdb")
+    commands = SyncMigrationCommands(config)
+    events: list[str] = []
+    first, second = MagicMock(), MagicMock()
+    first.name, second.name = "first", "second"
+    commands.tracker.renew_lock = lambda driver: events.append("renew")  # type: ignore[method-assign]
+    commands.runner.execute_reconciliation = lambda driver, descriptor: events.append(descriptor.name) or 1  # type: ignore[method-assign]
+    commands.extension_reconcilers = [first, second]
+    try:
+        commands._run_reconcilers(MagicMock(), [], use_logger=False, echo=False, summary_only=True)  # pyright: ignore[reportPrivateUsage]
+    finally:
+        config.close_pool()
+
+    assert events == ["renew", "first", "renew", "second"]

@@ -77,6 +77,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         """
         if not _supports_postgres_row_security(driver):
             return
+        self._reset_version_table_schema()
         if self.version_table_schema is None:
             schema_result = driver.execute("SELECT current_schema() AS schema_name")
             self._pin_version_table_schema(_resolve_current_schema(schema_result))
@@ -447,6 +448,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """
         if not _supports_postgres_row_security(driver):
             return
+        self._reset_version_table_schema()
         if self.version_table_schema is None:
             schema_result = await driver.execute("SELECT current_schema() AS schema_name")
             self._pin_version_table_schema(_resolve_current_schema(schema_result))
@@ -1241,8 +1243,10 @@ class _SyncMigrationLockContext:
         self._release_lease()
 
     def _release_lease(self) -> None:
-        self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
+        result = self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
         self._tracker._safe_commit(self._driver)
+        if getattr(result, "rows_affected", None) == 0:
+            raise _lease_expired_error()
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -1430,8 +1434,10 @@ class _AsyncMigrationLockContext:
         await self._release_lease()
 
     async def _release_lease(self) -> None:
-        await self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
+        result = await self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
         await self._tracker._safe_commit(self._driver)
+        if getattr(result, "rows_affected", None) == 0:
+            raise _lease_expired_error()
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

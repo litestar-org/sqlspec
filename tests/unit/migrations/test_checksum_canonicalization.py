@@ -407,6 +407,27 @@ def test_moving_down_header_changes_digest(temp_migrations_dir: Path) -> None:
     assert runner.calculate_checksum(original) != runner.calculate_checksum(moved)
 
 
+@pytest.mark.parametrize(
+    "edited_header",
+    ["-- name: migrate-0001 x-down", "-- name: migrate-0009-down", "-- name: migrate-00-01-down"],
+    ids=["space", "other-version", "extra-dash"],
+)
+def test_editing_down_header_changes_digest(temp_migrations_dir: Path, edited_header: str) -> None:
+    runner = SyncMigrationRunner(temp_migrations_dir)
+    original = "-- name: migrate-0001-up\nCREATE TABLE a (id INT);\n-- name: migrate-0001-down\nDROP TABLE a;\n"
+    edited = original.replace("-- name: migrate-0001-down", edited_header)
+
+    assert runner.calculate_checksum(original) != runner.calculate_checksum(edited)
+
+
+def test_header_with_files_own_version_still_canonicalized(temp_migrations_dir: Path) -> None:
+    runner = SyncMigrationRunner(temp_migrations_dir)
+    first = "-- name: migrate-20251011120000-up\nSELECT 1;\n-- name: migrate-20251011120000-down\nSELECT 2;\n"
+    second = "-- name: migrate-0001-up\nSELECT 1;\n-- name: migrate-0001-down\nSELECT 2;\n"
+
+    assert runner.calculate_checksum(first) == runner.calculate_checksum(second)
+
+
 def test_marker_digest_ignores_version_numbers(temp_migrations_dir: Path) -> None:
     runner = SyncMigrationRunner(temp_migrations_dir)
 

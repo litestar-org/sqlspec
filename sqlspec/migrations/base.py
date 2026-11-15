@@ -292,6 +292,12 @@ class BaseMigrationTracker(Generic[DriverT]):
             table_identifier.sql(copy=False),
             resolved_schema_identifier.sql(copy=False) if resolved_schema_identifier is not None else None,
         )
+        self._version_table_schema_quoted = bool(
+            resolved_schema_identifier is not None and resolved_schema_identifier.quoted
+        )
+        self._configured_version_table = self.version_table
+        self._configured_version_table_schema = self.version_table_schema
+        self._configured_version_table_schema_quoted = self._version_table_schema_quoted
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
         self._sqlite_lock_owners: set[int] = set()
         self._lease_owners: dict[int, tuple[str, str]] = {}
@@ -305,11 +311,27 @@ class BaseMigrationTracker(Generic[DriverT]):
         """
         schema_identifier = exp.to_identifier(schema_name, quoted=True if schema_name != schema_name.lower() else None)
         self.version_table_schema = schema_name
+        self._version_table_schema_quoted = bool(schema_identifier.quoted)
         self.version_table = self._qualify_version_table(self._version_table_sql, schema_identifier.sql(copy=False))
 
+    def _reset_version_table_schema(self) -> None:
+        """Restore the tracking table name and schema captured at construction."""
+        self.version_table = self._configured_version_table
+        self.version_table_schema = self._configured_version_table_schema
+        self._version_table_schema_quoted = self._configured_version_table_schema_quoted
+
     def _pg_relation_guard_parameters(self) -> "dict[str, str]":
-        """Return the bind parameters of the PostgreSQL tracking relation guard."""
-        return {"schema_name": self.version_table_schema or "", "table_name": self.version_table_name}
+        """Return the bind parameters of the PostgreSQL tracking relation guard.
+
+        Unquoted identifiers are folded to lowercase, matching how PostgreSQL stores them in the catalog.
+        """
+        schema_name = self.version_table_schema or ""
+        if not self._version_table_schema_quoted:
+            schema_name = schema_name.lower()
+        table_name = self.version_table_name
+        if not self._version_table_quoted:
+            table_name = table_name.lower()
+        return {"schema_name": schema_name, "table_name": table_name}
 
     def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
         """Set output policy for tracker console/logging behavior."""
@@ -740,7 +762,7 @@ class BaseMigrationTracker(Generic[DriverT]):
 
     def _migration_lock_key(self) -> "tuple[str, int]":
         """Derive the bounded lock name and signed 64-bit integer advisory lock ID."""
-        raw_key = f"sqlspec_mig_{self.version_table}"
+        raw_key = f"sqlspec_mig_{self._configured_version_table}"
         digest = hashlib.sha256(raw_key.encode("utf-8")).digest()
         lock_name = (
             raw_key

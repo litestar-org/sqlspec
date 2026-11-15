@@ -2124,6 +2124,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
     ) -> None:
         """Execute enabled extension reconcilers in configured order."""
         for descriptor in self.extension_reconcilers:
+            self.tracker.renew_lock(driver)
             try:
                 execution_time = self.runner.execute_reconciliation(driver, descriptor)
             except Exception as exc:
@@ -2163,6 +2164,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
     ) -> None:
         """Execute extension reconciler downgrades in reverse configured order at base."""
         for descriptor in reversed(self.extension_reconcilers):
+            self.tracker.renew_lock(driver)
             try:
                 execution_time = self.runner.execute_reconciliation_downgrade(driver, descriptor)
             except Exception as exc:
@@ -3426,6 +3428,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
     ) -> None:
         """Execute enabled extension reconcilers in configured order."""
         for descriptor in self.extension_reconcilers:
+            await self.tracker.renew_lock(driver)
             try:
                 execution_time = await self.runner.execute_reconciliation(driver, descriptor)
             except Exception as exc:
@@ -3465,6 +3468,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
     ) -> None:
         """Execute extension reconciler downgrades in reverse configured order at base."""
         for descriptor in reversed(self.extension_reconcilers):
+            await self.tracker.renew_lock(driver)
             try:
                 execution_time = await self.runner.execute_reconciliation_downgrade(driver, descriptor)
             except Exception as exc:

@@ -53,18 +53,40 @@ _SCHEMA_DIRECTIVE_PATTERN = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILIN
 _SCHEMA_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _MD5_HEX_LENGTH: Final[int] = 32
 _CHECKSUM_HEADER_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^(?:(?P<name>(?i:--[ \t]*name:[ \t]*migrate-[^\n-]+-(?P<direction>up|down)))"
+    r"^(?:(?P<name>(?i:--[ \t]*name:[ \t]*migrate-(?P<version>[\w-]+)-(?P<direction>up|down)))"
     r"|(?i:--[ \t]*version:)[ \t]*[A-Za-z0-9_.]*"
     r"|Version:[ \t]*[A-Za-z0-9_.]+)\s*$",
     re.MULTILINE,
 )
 
 
-def _checksum_marker(match: "re.Match[str]") -> str:
-    """Return the version-free marker for a name header and an empty string for a version line."""
-    if match.group("name") is None:
-        return ""
-    return f"-- name:{match.group('direction').lower()}"
+def _checksum_substitution(strip_names: bool) -> "Callable[[re.Match[str]], str]":
+    """Build a header substitution bound to the first name header's version.
+
+    Only name headers carrying the file's own version are canonicalized; any other
+    header line is kept verbatim so edits to it change the digest.
+
+    Args:
+        strip_names: Whether canonicalized name headers are dropped instead of replaced by a marker.
+
+    Returns:
+        A substitution callable for ``_CHECKSUM_HEADER_PATTERN.sub``.
+    """
+    own_version: list[str] = []
+
+    def substitute(match: "re.Match[str]") -> str:
+        if match.group("name") is None:
+            return ""
+        version = match.group("version")
+        if not own_version:
+            own_version.append(version)
+        if version != own_version[0]:
+            return match.group(0)
+        if strip_names:
+            return ""
+        return f"-- name:{match.group('direction').lower()}"
+
+    return substitute
 
 
 class BaseMigrationRunner:
@@ -284,12 +306,12 @@ class BaseMigrationRunner:
         ``-- name:down`` so up and down positions stay part of the digest, and single-line
         ``Version:`` lines are dropped.
         """
-        return _CHECKSUM_HEADER_PATTERN.sub(_checksum_marker, content)
+        return _CHECKSUM_HEADER_PATTERN.sub(_checksum_substitution(False), content)
 
     @staticmethod
     def _canonicalize_legacy_migration_content(content: str) -> str:
         """Strip version-dependent single-line headers entirely, matching earlier recorded digests."""
-        return _CHECKSUM_HEADER_PATTERN.sub("", content)
+        return _CHECKSUM_HEADER_PATTERN.sub(_checksum_substitution(True), content)
 
     def _log_migration_event(self, level: int, event: str, **extra_fields: Any) -> None:
         """Log migration events, respecting use_logger and summary_only settings."""

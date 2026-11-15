@@ -190,3 +190,68 @@ async def test_positional_catalog_rows_are_paired_with_column_names(is_async: bo
 
     with pytest.raises(MigrationError, match="owned by the current role"):
         await _ensure(_tracker(is_async), harness, is_async)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        (
+            {"version_table_name": "DDL_Migrations", "version_table_schema": "App"},
+            {"schema_name": "app", "table_name": "ddl_migrations"},
+        ),
+        (
+            {"version_table_name": '"DDL_Migrations"', "version_table_schema": '"App"'},
+            {"schema_name": "App", "table_name": "DDL_Migrations"},
+        ),
+    ],
+    ids=["unquoted-folded", "quoted-preserved"],
+)
+async def test_guard_folds_unquoted_names_like_postgres(
+    is_async: bool, kwargs: dict[str, Any], expected: dict[str, str]
+) -> None:
+    harness = _Harness(is_async=is_async, relation_rows=[OWNED_ROW])
+
+    await _ensure(_tracker(is_async, **kwargs), harness, is_async)
+
+    assert harness.guard_calls()[0][1] == expected
+
+
+async def _locked_key(tracker: Any, harness: _Harness, is_async: bool) -> int:
+    harness.executed.clear()
+    if is_async:
+        async with tracker.acquire_lock(harness.driver):
+            pass
+    else:
+        with tracker.acquire_lock(harness.driver):
+            pass
+    lock_calls = [params for text, params in harness.executed if "pg_try_advisory_lock" in text]
+    return lock_calls[0]["lock_id"]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_advisory_lock_key_is_stable_across_locked_commands(is_async: bool) -> None:
+    harness = _Harness(is_async=is_async, relation_rows=[OWNED_ROW])
+    fresh_key = await _locked_key(_tracker(is_async), _Harness(is_async=is_async, relation_rows=[OWNED_ROW]), is_async)
+    tracker = _tracker(is_async)
+
+    first_key = await _locked_key(tracker, harness, is_async)
+    second_key = await _locked_key(tracker, harness, is_async)
+
+    assert first_key == fresh_key
+    assert second_key == fresh_key
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_schema_pin_is_re_resolved_per_locked_command(is_async: bool) -> None:
+    harness = _Harness(is_async=is_async, current_schema="first", relation_rows=[OWNED_ROW])
+    tracker = _tracker(is_async)
+
+    await _locked_key(tracker, harness, is_async)
+    assert tracker.version_table == "first.ddl_migrations"
+
+    harness.current_schema = "second"
+    await _locked_key(tracker, harness, is_async)
+
+    assert tracker.version_table == "second.ddl_migrations"
+    assert harness.guard_calls()[-1][1] == {"schema_name": "second", "table_name": "ddl_migrations"}
