@@ -1460,10 +1460,17 @@ def test_compiler_rejects_non_identifier_placeholder_names(name: str) -> None:
         SQL(expression, statement_config=get_default_config()).compile()
 
 
-def test_deep_sql_where_chain_raises_parsing_error() -> None:
-    """Statements nested beyond the recursion limit raise a sqlspec parsing error."""
-    statement = SQL("select * from t", statement_config=get_default_config())
+def test_statement_nesting_overflow_raises_parsing_error(basic_statement_config: "StatementConfig") -> None:
+    """A tree too deep to walk raises ``SQLParsingError`` instead of a raw ``RecursionError``.
+
+    Whether a given chain overflows depends on the interpreter and on whether sqlglot's generator is
+    compiled, so a statement transformer raises the overflow directly inside compilation.
+    """
+
+    def overflow(expression: exp.Expr, parameters: Any) -> "tuple[exp.Expr, Any]":
+        raise RecursionError("maximum recursion depth exceeded")
+
+    processor = SQLProcessor(basic_statement_config.replace(statement_transformers=(overflow,)))
+
     with pytest.raises(SQLParsingError, match="nesting exceeds"):
-        for index in range(400):
-            statement = statement.where_eq(f"c{index}", index)
-        statement.compile()
+        processor.compile("SELECT * FROM t WHERE a = ?", [1])

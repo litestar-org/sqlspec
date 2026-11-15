@@ -14,6 +14,7 @@ Tests cover:
 """
 
 import string
+import sys
 
 import pytest
 from sqlglot import exp
@@ -531,12 +532,29 @@ def test_load_parameters_rejects_non_identifier_key() -> None:
         query.load_parameters({"a b": 1})
 
 
+def _stack_depth() -> int:
+    frame, depth = sys._getframe(), 0
+    while frame is not None:
+        frame, depth = frame.f_back, depth + 1
+    return depth
+
+
 def test_deep_builder_chain_keeps_builder_error() -> None:
+    """A build that exhausts the recursion limit raises ``SQLBuilderError``, not ``RecursionError``.
+
+    The limit is lowered relative to the current stack so the chain overflows on every interpreter,
+    including Python 3.12+ where inlined comprehensions roughly halve the frames per nesting level.
+    """
     query = sql.select("*").from_("t")
     for index in range(400):
         query = query.where_eq(f"c{index}", index)
-    with pytest.raises(SQLBuilderError, match="recursion"):
-        query.build()
+    default_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(_stack_depth() + 300)
+    try:
+        with pytest.raises(SQLBuilderError, match="recursion"):
+            query.build()
+    finally:
+        sys.setrecursionlimit(default_limit)
 
 
 def test_build_rejects_hand_built_placeholder_with_sql_text() -> None:
