@@ -35,7 +35,7 @@ _NONCE_LENGTH = 16
 _HASH_BLOCK_SIZE = 32
 _SIGNED_PART_COUNT = 2
 _ENCRYPTED_PART_COUNT = 3
-_ENCRYPTED_TOKEN_PREFIX = "e1"
+_ENCRYPTED_PREFIX = "e1"
 _ENCRYPTION_KEY_INFO = b"sqlspec-cursor-enc-v1"
 _MAC_KEY_INFO = b"sqlspec-cursor-mac-v1"
 _B64_PART_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
@@ -189,9 +189,9 @@ def encode_cursor(
         nonce = secrets.token_bytes(_NONCE_LENGTH)
         ciphertext = _apply_keystream(encryption_key, nonce, plaintext)
         sealed = _b64(nonce + ciphertext)
-        mac_input = f"{_ENCRYPTED_TOKEN_PREFIX}.{sealed}".encode("ascii")
+        mac_input = f"{_ENCRYPTED_PREFIX}.{sealed}".encode("ascii")
         mac = _b64(hmac.new(mac_key, mac_input, hashlib.sha256).digest())
-        token = f"{_ENCRYPTED_TOKEN_PREFIX}.{sealed}.{mac}"
+        token = f"{_ENCRYPTED_PREFIX}.{sealed}.{mac}"
     else:
         body = _b64(plaintext)
         token = (
@@ -367,7 +367,7 @@ def _decode_signed_parts(parts: "list[str]", *, secret: bytes | None, encrypt: b
 
 def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool) -> bytes:
     if (
-        parts[0] != _ENCRYPTED_TOKEN_PREFIX
+        parts[0] != _ENCRYPTED_PREFIX
         or _B64_PART_PATTERN.fullmatch(parts[1]) is None
         or _B64_PART_PATTERN.fullmatch(parts[2]) is None
     ):
@@ -380,7 +380,7 @@ def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt
         msg = "Invalid pagination cursor: unexpected encrypted token"
         raise InvalidCursorError(msg)
     encryption_key, mac_key = _derive_encryption_keys(secret)
-    mac_input = f"{_ENCRYPTED_TOKEN_PREFIX}.{parts[1]}".encode("ascii")
+    mac_input = f"{_ENCRYPTED_PREFIX}.{parts[1]}".encode("ascii")
     expected_mac = _b64(hmac.new(mac_key, mac_input, hashlib.sha256).digest())
     if not hmac.compare_digest(expected_mac.encode("ascii"), parts[2].encode("ascii")):
         msg = "Invalid pagination cursor: signature mismatch"
