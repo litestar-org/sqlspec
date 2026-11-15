@@ -35,7 +35,7 @@ from uuid import UUID
 import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
-from sqlglot.errors import SqlglotError
+from sqlglot.errors import ParseError, SqlglotError
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder import QueryBuilder
@@ -4135,7 +4135,7 @@ def _pagination_names(original_sql: "SQL", *, include_select_expressions: bool =
         dialect = str(original_sql.statement_config.dialect) if original_sql.statement_config.dialect else None
         try:
             parsed = sqlglot.parse_one(raw_sql, read=dialect)
-        except sqlglot.errors.ParseError:
+        except ParseError:
             parsed = sqlglot.parse_one(raw_sql)
         return _pagination_names_in_expression(parsed, include_select_expressions=include_select_expressions)
     except Exception:

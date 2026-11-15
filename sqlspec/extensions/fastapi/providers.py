@@ -480,7 +480,7 @@ async def _resolve_cursor_tenant_identity(plugin: Any) -> str:
         An empty string without tenant-enabled configurations, otherwise a suffix carrying each tenant.
     """
     tenant_configs = getattr(plugin, "_tenant_configs", None)
-    configs: tuple[Any, ...] = tenant_configs() if callable(tenant_configs) else ()
+    configs = cast("tuple[Any, ...]", tenant_configs()) if callable(tenant_configs) else ()
     if not configs:
         return ""
     if len(configs) == 1:

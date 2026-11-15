@@ -421,6 +421,8 @@ class _ParsedExpression:
         "parse_cache_key",
     )
 
+    operation_type: "OperationType"
+
     def __init__(
         self,
         cached_expression: "exp.Expr | None",
