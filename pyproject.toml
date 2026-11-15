@@ -584,6 +584,7 @@ reportTypedDictNotRequiredAccess = false
 reportUnknownArgumentType = false
 reportUnnecessaryCast = false
 venv = ".venv"
+venvPath = "."
 
 [tool.slotscheck]
 strict-imports = false
