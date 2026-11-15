@@ -242,7 +242,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             if connection is _DETACHED_CONNECTION:
                 raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
             runtime = self._observability
-            compiled_sql, execution_parameters = statement.compile()
+            if statement.is_script and (statement.positional_parameters or statement.named_parameters):
+                compiled_sql, execution_parameters = statement.raw_sql, None
+            else:
+                compiled_sql, execution_parameters = statement.compile()
             if self._auto_begin_on_write:
                 self._begin_for_statement(statement)
             result: SQLResult | None = None
@@ -321,6 +324,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             ExecutionResult with script execution data including statement counts
         """
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
@@ -343,6 +350,42 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 self._emit_script_statement_event(
                     sql=stmt,
                     parameters=prepared_parameters,
+                    operation=single_stmt.operation_type,
+                    rows_affected=sub_result.rowcount_override,
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=stmt_profile,
+                    script_ordinal=idx,
+                    script_statement_count=statement_count,
+                )
+            successful_count += 1
+
+        self._pending_statement_profile = None
+        return self.create_execution_result(
+            cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
+        )
+
+    def _dispatch_bound_script(self, cursor: Any, statements: "list[SQL]") -> ExecutionResult:
+        """Execute pre-bound script statements one at a time on the same cursor."""
+        statement_count: int = len(statements)
+        successful_count: int = 0
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
+
+        for idx, single_stmt in enumerate(statements):
+            stmt_started = perf_counter() if has_observers else 0.0
+            self._pending_statement_profile = None
+            try:
+                sub_result = self.dispatch_execute(cursor, single_stmt)
+            finally:
+                self._release_pooled_statement(single_stmt)
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                stmt_profile = self._consume_statement_profile()
+                compiled_sql, execution_parameters = single_stmt.compile()
+                self._emit_script_statement_event(
+                    sql=compiled_sql,
+                    parameters=execution_parameters,
                     operation=single_stmt.operation_type,
                     rows_affected=sub_result.rowcount_override,
                     duration_s=stmt_duration,

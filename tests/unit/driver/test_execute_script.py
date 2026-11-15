@@ -1,12 +1,17 @@
 """Unit tests for execute_script behavior in driver base classes."""
 
+import inspect
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.asyncpg.core import default_statement_config as asyncpg_statement_config
+from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.oracledb.core import default_statement_config as oracle_statement_config
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite.core import default_statement_config
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL
@@ -284,3 +289,196 @@ async def test_async_execute_with_observability_emits_error_event_under_zero_sam
     assert events[0].rows_affected is None
     assert events[0].duration_s >= 0.0
     assert events[0].sql == "SELECT * FROM missing_table_async_err"
+
+
+class _Status(str, Enum):  # noqa: UP042
+    ACTIVE = "active"
+
+
+async def _run(result: Any) -> Any:
+    return await result if inspect.isawaitable(result) else result
+
+
+@pytest.fixture(params=["sync", "async"])
+async def script_driver(request: pytest.FixtureRequest, sqlite_sync_driver: Any, aiosqlite_async_driver: Any) -> Any:
+    return sqlite_sync_driver if request.param == "sync" else aiosqlite_async_driver
+
+
+async def _rows(driver: Any, sql: str, *parameters: Any) -> "list[Any]":
+    result = await _run(driver.execute(sql, *parameters))
+    return result.get_data()
+
+
+@requires_interpreted
+async def test_script_binds_named_parameters_per_statement(script_driver: Any) -> None:
+    first = "x'; DROP TABLE t; --"
+    second = "y\\z"
+    await _run(
+        script_driver.execute_script(
+            "CREATE TABLE t(a TEXT, b TEXT); INSERT INTO t VALUES (:a, :b); INSERT INTO t VALUES (:b, :a)",
+            a=first,
+            b=second,
+        )
+    )
+
+    assert await _rows(script_driver, "SELECT a, b FROM t ORDER BY rowid") == [
+        {"a": first, "b": second},
+        {"a": second, "b": first},
+    ]
+
+
+@requires_interpreted
+async def test_script_binds_qmark_parameters_in_order(script_driver: Any) -> None:
+    result = await _run(
+        script_driver.execute_script(
+            "CREATE TABLE t(v INT); INSERT INTO t VALUES (?); INSERT INTO t VALUES (?)", (1, 2)
+        )
+    )
+
+    assert result.total_statements == 3
+    assert result.successful_statements == 3
+    assert await _rows(script_driver, "SELECT v FROM t ORDER BY rowid") == [{"v": 1}, {"v": 2}]
+
+
+@requires_interpreted
+async def test_script_binds_str_enum_value(script_driver: Any) -> None:
+    await _run(script_driver.execute_script("CREATE TABLE t(s TEXT); INSERT INTO t VALUES (:s)", s=_Status.ACTIVE))
+
+    assert await _rows(script_driver, "SELECT s FROM t") == [{"s": "active"}]
+
+
+@requires_interpreted
+async def test_script_inlines_ddl_placeholders(script_driver: Any) -> None:
+    await _run(script_driver.execute_script("CREATE TABLE t (a INT DEFAULT :d); INSERT INTO t DEFAULT VALUES", d=5))
+
+    assert await _rows(script_driver, "SELECT a FROM t") == [{"a": 5}]
+
+
+@requires_interpreted
+async def test_script_inlines_pragma_placeholders(script_driver: Any) -> None:
+    await _run(script_driver.execute_script("PRAGMA user_version = :v", v=7))
+
+    assert await _rows(script_driver, "PRAGMA user_version") == [{"user_version": 7}]
+
+
+def test_script_renumbers_numeric_parameters_on_duckdb() -> None:
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute_script(
+                "CREATE TABLE t(v INT); INSERT INTO t VALUES ($1); INSERT INTO t VALUES ($2)", (10, 20)
+            )
+            assert session.select("SELECT v FROM t ORDER BY v") == [{"v": 10}, {"v": 20}]
+    finally:
+        config.close_pool()
+
+
+def test_script_inlines_set_placeholders_on_duckdb() -> None:
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute_script("SET threads = :n", n=2)
+            assert session.select_value("SELECT current_setting('threads')") == 2
+    finally:
+        config.close_pool()
+
+
+def _asyncpg_script_driver(sqlite_sync_driver: Any) -> Any:
+    return SqliteDriver(sqlite_sync_driver.connection, statement_config=asyncpg_statement_config)
+
+
+@requires_interpreted
+@pytest.mark.parametrize(
+    ("script", "parameters"),
+    [
+        ("SET search_path = :s", {"s": "public"}),
+        ("DO $$BEGIN PERFORM :x; END$$", {"x": 1}),
+        ("NOTIFY chan, :p", {"p": "payload"}),
+        ("COPY t FROM :f", {"f": "/tmp/file.csv"}),
+        ("VACUUM (ANALYZE) :t", {"t": "users"}),
+        ("BEGIN; SELECT :v", {"v": 1}),
+    ],
+    ids=["set", "do", "notify", "copy", "vacuum", "begin"],
+)
+def test_script_inlines_non_dml_statements(sqlite_sync_driver: Any, script: str, parameters: "dict[str, Any]") -> None:
+    driver = _asyncpg_script_driver(sqlite_sync_driver)
+    statement = SQL(script, statement_config=asyncpg_statement_config, **parameters).as_script()
+
+    pieces = driver._bound_script_statements(statement)
+
+    assert pieces is not None
+    for piece in pieces:
+        keyword = piece.raw_sql.split()[0].upper()
+        _, execution_parameters = piece.compile()
+        assert bool(execution_parameters) is (keyword == "SELECT")
+
+
+@requires_interpreted
+def test_script_binds_dml_statements_on_postgres_profile(sqlite_sync_driver: Any) -> None:
+    driver = _asyncpg_script_driver(sqlite_sync_driver)
+    statement = SQL(
+        "INSERT INTO t VALUES (:v); SET search_path = :s", statement_config=asyncpg_statement_config, v=1, s="public"
+    ).as_script()
+
+    pieces = driver._bound_script_statements(statement)
+
+    assert pieces is not None
+    assert [piece.statement_config.parameter_config.needs_static_script_compilation for piece in pieces] == [
+        False,
+        True,
+    ]
+    assert list(pieces[0].compile()[1]) == [1]
+
+
+@requires_interpreted
+def test_script_oracle_begin_block_binds(sqlite_sync_driver: Any) -> None:
+    driver = SqliteDriver(sqlite_sync_driver.connection, statement_config=oracle_statement_config)
+    statement = SQL("BEGIN INSERT INTO t VALUES (:v); END;", statement_config=oracle_statement_config, v=1).as_script()
+
+    pieces = driver._bound_script_statements(statement)
+
+    assert pieces is not None
+    assert [piece.statement_config.parameter_config.needs_static_script_compilation for piece in pieces] == [False]
+
+
+@requires_interpreted
+def test_script_missing_named_parameter_raises(sqlite_sync_driver: Any) -> None:
+    with pytest.raises(SQLSpecError, match="which was not supplied"):
+        sqlite_sync_driver.execute_script(
+            "CREATE TABLE t(a); INSERT INTO t VALUES (:a); INSERT INTO t VALUES (:b)", a=1
+        )
+
+
+@requires_interpreted
+def test_script_extra_positional_parameters_raise(sqlite_sync_driver: Any) -> None:
+    with pytest.raises(SQLSpecError, match="more parameters"):
+        sqlite_sync_driver.execute_script("CREATE TABLE t(a); INSERT INTO t VALUES (?)", (1, 2))
+
+
+@requires_interpreted
+def test_script_without_parameters_uses_existing_path(sqlite_sync_driver: Any) -> None:
+    statement = SQL("SELECT 1; SELECT 2", statement_config=sqlite_sync_driver.statement_config).as_script()
+
+    assert sqlite_sync_driver._bound_script_statements(statement) is None
+    assert sqlite_sync_driver.execute_script("SELECT 1; SELECT 2").total_statements == 2
+
+
+def test_script_dml_events_carry_bound_parameters(tmp_path: Path) -> None:
+    """DML statements in a script reach observers with placeholders and bound values, not inlined text."""
+    events: list[StatementEvent] = []
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "script_bound.sqlite")},
+        observability_config=ObservabilityConfig(statement_observers=(events.append,)),
+    )
+    try:
+        with config.provide_session() as session:
+            session.execute("CREATE TABLE t (v TEXT)")
+            events.clear()
+            session.execute_script("INSERT INTO t VALUES (:v); CREATE INDEX i ON t (v)", v="needle")
+    finally:
+        config.close_pool()
+
+    insert_events = [event for event in events if event.sql.startswith("INSERT") and "CREATE" not in event.sql]
+    assert len(insert_events) == 1
+    assert "needle" not in insert_events[0].sql
+    assert insert_events[0].parameters == {"v": "needle"}

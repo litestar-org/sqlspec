@@ -58,6 +58,7 @@ from sqlspec.core import (
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
+from sqlspec.core.compiler import _leading_statement_keyword_and_rest  # pyright: ignore[reportPrivateUsage]
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import (
@@ -68,6 +69,7 @@ from sqlspec.core.parameters import (
     type_coercion_fallbacks,
     value_fingerprint,
 )
+from sqlspec.core.parameters._converter import ambiguous_index_message
 from sqlspec.core.result._base import RowFormat
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.core.statement import ProcessedState
@@ -194,6 +196,29 @@ _INT64_MAX: Final[int] = 9223372036854775807
 _MAX_NUMERIC_PRECISION: Final[int] = 38
 
 StreamT = TypeVar("StreamT")
+_SCRIPT_BIND_KEYWORDS: Final[frozenset[str]] = frozenset({
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "MERGE",
+    "WITH",
+    "VALUES",
+    "CALL",
+    "EXEC",
+    "EXECUTE",
+})
+_ORACLE_SCRIPT_BIND_KEYWORDS: Final[frozenset[str]] = frozenset({"BEGIN", "DECLARE"})
+_SCRIPT_NAMED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.NAMED_COLON,
+    ParameterStyle.NAMED_AT,
+    ParameterStyle.NAMED_DOLLAR,
+    ParameterStyle.NAMED_PYFORMAT,
+})
+_SCRIPT_INDEX_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.NUMERIC,
+    ParameterStyle.POSITIONAL_COLON,
+})
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
 _DETACHED_CONNECTION_MESSAGE: Final[str] = "Driver session has already closed and its connection has been released."
@@ -2391,6 +2416,99 @@ class CommonDriverAttributesMixin:
             expression_is_shared=True,
         )
         return SQL._create_cached_direct(sql, self.statement_config, direct_state, pooled=False)
+
+    def _bound_script_statements(self, statement: "SQL") -> "list[SQL] | None":
+        """Split a parameterized script into per-statement ``SQL`` objects.
+
+        Statements whose leading keyword is DML or DQL bind the parameters they use through the
+        normal execute path. Every other statement compiles in script mode and receives escaped
+        literals. Each returned statement is already compiled.
+
+        Args:
+            statement: Script statement carrying the caller's parameters.
+
+        Returns:
+            One compiled ``SQL`` per script statement, or ``None`` when the script has no parameters.
+
+        Raises:
+            SQLSpecError: When a statement uses a parameter that was not supplied, mixes index and
+                sequential placeholders, or the script receives positional values it never uses.
+        """
+        positional = list(statement.positional_parameters)
+        named = statement.named_parameters
+        if not positional and not named:
+            return None
+        config = self.statement_config
+        dialect = str(config.dialect) if config.dialect else None
+        bind_keywords = (
+            _SCRIPT_BIND_KEYWORDS | _ORACLE_SCRIPT_BIND_KEYWORDS if dialect == "oracle" else _SCRIPT_BIND_KEYWORDS
+        )
+        validator = config.parameter_validator
+        pieces = self.split_script_statements(statement.raw_sql, config, strip_trailing_semicolon=True)
+        script_config = config._with_script_mode()  # pyright: ignore[reportPrivateUsage]
+        statements: list[SQL] = []
+        used_positional: set[int] = set()
+        sequential_cursor = 0
+        for index, piece in enumerate(pieces):
+            infos = validator.extract_parameters(piece, dialect=dialect)
+            if not infos:
+                piece_statement = SQL(piece, statement_config=config)
+                piece_statement.compile()
+                statements.append(piece_statement)
+                continue
+            has_index = any(info.style in _SCRIPT_INDEX_STYLES for info in infos)
+            if has_index and any(
+                info.style not in _SCRIPT_INDEX_STYLES and info.style not in _SCRIPT_NAMED_STYLES for info in infos
+            ):
+                first_index = next(info for info in infos if info.style in _SCRIPT_INDEX_STYLES)
+                raise SQLSpecError(ambiguous_index_message(first_index))
+            piece_named: dict[str, Any] = {}
+            piece_positional: list[Any] = []
+            index_slots: dict[int, int] = {}
+            rewrites: list[tuple[int, int, str]] = []
+            for info in infos:
+                if info.style in _SCRIPT_NAMED_STYLES:
+                    name = cast("str", info.name)
+                    if name not in named:
+                        msg = f"Script statement {index + 1} uses parameter {name!r}, which was not supplied"
+                        raise SQLSpecError(msg)
+                    piece_named[name] = named[name]
+                elif info.style in _SCRIPT_INDEX_STYLES:
+                    source_index = int(cast("str", info.name)) - 1
+                    if source_index < 0 or source_index >= len(positional):
+                        msg = (
+                            f"Script statement {index + 1} uses parameter {info.placeholder_text!r}, "
+                            "which was not supplied"
+                        )
+                        raise SQLSpecError(msg)
+                    used_positional.add(source_index)
+                    slot = index_slots.get(source_index)
+                    if slot is None:
+                        slot = len(index_slots) + 1
+                        index_slots[source_index] = slot
+                        piece_positional.append(positional[source_index])
+                    prefix = "$" if info.style is ParameterStyle.NUMERIC else ":"
+                    rewrites.append((info.position, len(info.placeholder_text), f"{prefix}{slot}"))
+                else:
+                    if sequential_cursor >= len(positional):
+                        msg = f"Script statement {index + 1} uses more positional parameters than were supplied"
+                        raise SQLSpecError(msg)
+                    used_positional.add(sequential_cursor)
+                    piece_positional.append(positional[sequential_cursor])
+                    sequential_cursor += 1
+            for position, length, replacement in reversed(rewrites):
+                piece = piece[:position] + replacement + piece[position + length :]
+            parsed_keyword = _leading_statement_keyword_and_rest(piece)
+            binds = parsed_keyword is not None and parsed_keyword[0] in bind_keywords
+            piece_statement = SQL(
+                piece, *piece_positional, statement_config=config if binds else script_config, **piece_named
+            )
+            piece_statement.compile()
+            statements.append(piece_statement)
+        if len(used_positional) < len(positional):
+            msg = "Script received more parameters than its statements use"
+            raise SQLSpecError(msg)
+        return statements
 
     def _sub_statement(self, sql: str, execution_parameters: "ConvertedParameters") -> "SQL":
         direct_state = self._processed_state_pool.acquire()

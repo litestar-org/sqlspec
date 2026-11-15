@@ -37,7 +37,7 @@ SQLSpec provides both `select*` methods and `asyncpg`-style `fetch*` aliases wit
 | `select_stream(sql, ...)` | `fetch_stream(sql, ...)` | `SyncRowStream` or `AsyncRowStream` | Yields rows in bounded `chunk_size` batches |
 | `select_to_arrow(sql, ...)` | `fetch_to_arrow(sql, ...)` | `ArrowResult` | Returns an empty Arrow `Table` or `RecordBatch` |
 | `execute_many(sql, seq_of_params)` | — | `SQLResult` | Executes batched DML across a sequence of parameter tuples or dicts |
-| `execute_script(sql)` | — | `SQLResult` | Runs multi-statement DDL or seed scripts |
+| `execute_script(sql)` | — | `SQLResult` | Runs multi-statement DDL or seed scripts; `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `WITH`, `VALUES` and `CALL` statements bind the parameters they use, other statements receive escaped literals |
 
 Note that there is no `select_value_list` method on driver sessions; to extract a list of values from a single column, call `select(...)` and project the column key from each returned row.
 

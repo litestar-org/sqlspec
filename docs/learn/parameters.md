@@ -75,6 +75,10 @@ Bracket identifiers (`[my col]`) never contain placeholders on SQLite and the SQ
 
 `psycopg` receives literal `%` characters exactly as written. SQL that uses `?`, `:name`, or `$1` placeholders keeps `'100%'` and `'a%%b'` unchanged on the wire. Only SQL written with `%s` or `%(name)s` placeholders uses `%%` as the escape for a literal percent sign.
 
+## Script Parameters
+
+`execute_script(sql, parameters)` splits the script and gives each statement only the parameters it uses. Statements that start with `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `WITH`, `VALUES`, `CALL` or `EXEC` (and `BEGIN` or `DECLARE` blocks on Oracle) bind their values like any other query. Every other statement, such as DDL, `SET`, `PRAGMA`, `DO`, `NOTIFY`, `COPY` and `VACUUM`, receives escaped literals because those statements cannot bind parameters. Positional placeholders are consumed in order across the script, numeric placeholders (`$1`) are renumbered per statement, and a statement that uses a name that was not supplied raises `SQLSpecError`.
+
 ## Keep Parameter Styles Consistent When Using Filters
 
 Composable `StatementFilter` objects—such as `LimitOffsetFilter`, `BeforeAfterFilter`, `SearchFilter`, and `InCollectionFilter`—append **named** parameters (like `:limit` and `:offset`) to the compiled statement.
