@@ -3867,10 +3867,6 @@ def _numeric_parameter_ordinal(node: "exp.Expr") -> "int | None":
         inner = node.this
         if isinstance(inner, exp.Literal) and inner.name.isdigit():
             return int(inner.name)
-    elif isinstance(node, exp.Placeholder):
-        name = node.this
-        if isinstance(name, str) and name.isdigit():
-            return int(name)
     return None
 
 
@@ -4065,26 +4061,15 @@ def _build_rewritten_sql(
             return SQL(rewritten_expr, *realigned, statement_config=original_sql.statement_config)
 
     retained_positional: Any = positional
-    anonymous_source: Any = positional
-    if (
-        not positional
-        and original_sql.named_parameters
-        and not pagination_params
-        and isinstance(exec_params, (list, tuple))
-        and not _has_named_placeholder(rewritten_expr)
-    ):
-        anonymous_source = exec_params
-    if anonymous_source and (leading_stripped or trailing_stripped):
-        end_idx = len(anonymous_source) - trailing_stripped if trailing_stripped else len(anonymous_source)
+    if positional and (leading_stripped or trailing_stripped):
+        end_idx = len(positional) - trailing_stripped if trailing_stripped else len(positional)
         if leading_offset:
             retained_positional = (
-                *anonymous_source[:leading_offset],
-                *anonymous_source[leading_offset + leading_stripped : end_idx],
+                *positional[:leading_offset],
+                *positional[leading_offset + leading_stripped : end_idx],
             )
         else:
-            retained_positional = anonymous_source[leading_stripped:end_idx]
-        if anonymous_source is not positional:
-            return SQL(rewritten_expr, *retained_positional, statement_config=original_sql.statement_config)
+            retained_positional = positional[leading_stripped:end_idx]
 
     if original_sql.named_parameters:
         materialized_parameters = _parameters_for_repeated_names(original_sql, pagination_params)
