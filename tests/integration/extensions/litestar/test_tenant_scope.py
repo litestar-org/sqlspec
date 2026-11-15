@@ -296,7 +296,7 @@ async def test_tenant_threaded_sync_on_demand_restores_its_context(tenant_databa
     @get("/threaded", sync_to_thread=True)
     def threaded(request: Request) -> list[int]:
         before = TenantContext.get()
-        session = plugin.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        session = plugin.provide_db_session_sync("db_connection", request.app.state, request.scope)
         assert TenantContext.get() is before
         assert session.select_value("SELECT current_setting('app.current_tenant_id', true)") == "acme"
         return [row["value"] for row in session.select(f"SELECT value FROM {table}")]

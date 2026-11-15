@@ -90,8 +90,8 @@ def _serve_litestar(config: Any, bodies: "dict[str, Body]") -> Iterator[Callable
         name = request.path_params["name"]
         status = request.path_params["status"]
         access = Access(
-            session=lambda: plugin.provide_request_session(config, request.app.state, request.scope),
-            connection=lambda: plugin.provide_request_connection(config, request.app.state, request.scope),
+            session=lambda: plugin.provide_db_session(config, request.app.state, request.scope),
+            connection=lambda: plugin.provide_db_connection(config, request.app.state, request.scope),
             receipt=lambda tenant: set_connection_tenant(request, tenant),
         )
         return Response(await bodies[name](access, status), status_code=status)

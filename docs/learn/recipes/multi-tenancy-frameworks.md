@@ -51,7 +51,7 @@ one, the plugin installs no tenant handling and adds no per-request work.
   configuration.
 - **Sync accessors on async configurations**: The synchronous session accessor
   (`plugin.get_session(request)`, or Litestar's
-  `plugin.provide_request_session(key, state, scope)`) returns a session that
+  `plugin.provide_db_session(key, state, scope)`) returns a session that
   opens the connection under the request tenant on its first awaited call.
   Flask's `plugin.get_session()` blocks on the plugin's portal instead.
 - **Ambient middleware placement**: Register an outer tenant source (Flask and

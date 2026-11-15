@@ -6,7 +6,7 @@ from sqlspec.extensions.starlette import (
     SQLSpecPlugin,
     SQLSpecTransactionMiddleware,
     get_connection_from_request,
-    get_or_create_session,
+    get_or_create_db_session,
     set_request_tenant,
     tenant_bypass,
 )
@@ -32,7 +32,7 @@ Starlette lifespan management, autocommit and manual transaction ASGI middleware
 
 ## Request Session Helpers
 
-::: sqlspec.extensions.starlette._utils.get_or_create_session
+::: sqlspec.extensions.starlette._utils.get_or_create_db_session
     options:
       heading_level: 3
 

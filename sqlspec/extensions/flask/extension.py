@@ -15,7 +15,7 @@ from sqlspec.extensions.flask._portal import PortalSession, call_portal_with_con
 from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask._utils import (
     get_context_value,
-    get_or_create_session,
+    get_or_create_db_session,
     get_request_tenant,
     has_context_value,
     pop_context_value,
@@ -110,7 +110,7 @@ class SQLSpecPlugin:
                 self._enable_sqlcommenter = True
 
         self._routing_states: tuple[FlaskConfigState, ...] = tuple(
-            state for state in self._config_states if _is_routing_state_active(state)
+            state for state in self._config_states if _uses_request_routing(state)
         )
 
         if app is not None:
@@ -275,7 +275,7 @@ class SQLSpecPlugin:
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         self._ensure_request_connection(config_state)
-        session = get_or_create_session(config_state, self._portal.portal if self._portal else None)
+        session = get_or_create_db_session(config_state, self._portal.portal if self._portal else None)
         if isinstance(session, PortalSession):
             session._routing_bind_key = config_state.config.bind_key
         return session
@@ -598,10 +598,10 @@ class SQLSpecPlugin:
             for _, resource_key, _, _, _ in resource_contexts:
                 pop_context_value(g, resource_key)
             if entries or resource_contexts:
-                release = _StreamedResponseRelease(
+                release = _StreamedResponseFinalizer(
                     self, response.status_code, entries, resource_contexts=resource_contexts
                 )
-                response.response = release.track(response.response)
+                response.response = release.wrap_body(response.response)
                 response.call_on_close(release)
             return response
 
@@ -708,7 +708,7 @@ class SQLSpecPlugin:
             finally:
                 try:
                     if session is not None or connection is not None or conn_ctx is not None:
-                        self._release_config_connection(
+                        self._release_request_connection(
                             config_state,
                             session,
                             connection,
@@ -740,7 +740,7 @@ class SQLSpecPlugin:
         else:
             session._close_open_streams(error=error)
 
-    def _release_config_connection(
+    def _release_request_connection(
         self,
         config_state: FlaskConfigState,
         session: Any,
@@ -1061,7 +1061,7 @@ class SQLSpecPlugin:
             )
 
 
-class _StreamedResponseRelease:
+class _StreamedResponseFinalizer:
     """Finalize and release request connections when a streamed response closes."""
 
     __slots__ = ("_completed", "_entries", "_plugin", "_resource_contexts", "_status_code")
@@ -1080,7 +1080,7 @@ class _StreamedResponseRelease:
         self._resource_contexts = resource_contexts or []
         self._completed = False
 
-    def track(self, iterable: "Iterable[Any]") -> "Iterator[Any]":
+    def wrap_body(self, iterable: "Iterable[Any]") -> "Iterator[Any]":
         """Yield every item from the streamed response body and record full completion."""
         close = getattr(iterable, "close", None)
         try:
@@ -1127,7 +1127,7 @@ class _StreamedResponseRelease:
                         else:
                             self._plugin._execute_rollback(session, config_state, connection=connection)
                 finally:
-                    self._plugin._release_config_connection(
+                    self._plugin._release_request_connection(
                         config_state,
                         session,
                         connection,
@@ -1202,7 +1202,7 @@ def _current_tenant_payload() -> TenantContextPayload | None:
     return binding if isinstance(binding, TenantContextPayload) else None
 
 
-def _is_routing_state_active(state: FlaskConfigState) -> bool:
+def _uses_request_routing(state: FlaskConfigState) -> bool:
     return bool(
         state.enable_routing_middleware
         and (

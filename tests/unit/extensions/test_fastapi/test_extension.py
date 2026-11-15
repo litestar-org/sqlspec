@@ -21,7 +21,7 @@ from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
 from sqlspec.extensions.fastapi import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.starlette._utils import get_state_value
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
-from sqlspec.extensions.starlette.middleware import _response_owner_key, _ResponseCompletion
+from sqlspec.extensions.starlette.middleware import _response_completion_key, _ResponseCompletion
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.tenant import TenantContext
 
@@ -411,7 +411,7 @@ def test_fastapi_prepared_session_streaming_completion_and_detachment(
         request: Request, db: Annotated[Any, Depends(plugin.provide_session())]
     ) -> StreamingResponse:
         retained.append(db)
-        owners.append(get_state_value(request.state, _response_owner_key("db_connection")))
+        owners.append(get_state_value(request.state, _response_completion_key("db_connection")))
         await db.begin()
         await db.execute("INSERT INTO stream_items VALUES (1)")
         val = await db.select_value("SELECT 1")

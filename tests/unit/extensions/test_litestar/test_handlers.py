@@ -18,12 +18,12 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
-    build_request_session,
-    connection_provider_maker,
+    build_db_session,
+    db_connection_provider_maker,
+    db_pool_provider_maker,
+    db_session_provider_maker,
     lifespan_handler_maker,
     manual_handler_maker,
-    pool_provider_maker,
-    session_provider_maker,
 )
 from sqlspec.observability import ObservabilityConfig
 from tests.unit.extensions.test_litestar._request import within_tenant_request
@@ -239,7 +239,7 @@ async def test_async_pool_provider_returns_pool() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
 
-    provider = pool_provider_maker(config, pool_key)
+    provider = db_pool_provider_maker(config, pool_key)
 
     mock_pool = MagicMock()
     state = MagicMock()
@@ -257,7 +257,7 @@ async def test_async_pool_provider_raises_when_pool_missing() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
 
-    provider = pool_provider_maker(config, pool_key)
+    provider = db_pool_provider_maker(config, pool_key)
 
     state = MagicMock()
     state.get.return_value = None
@@ -276,7 +276,7 @@ async def test_async_connection_provider_creates_connection() -> None:
     pool_key = "test_pool"
     connection_key = "test_connection"
 
-    provider = connection_provider_maker(config, pool_key, connection_key)
+    provider = db_connection_provider_maker(config, pool_key, connection_key)
 
     try:
         pool = await config.create_pool()
@@ -298,7 +298,7 @@ async def test_async_connection_provider_raises_when_pool_missing() -> None:
     pool_key = "test_pool"
     connection_key = "test_connection"
 
-    provider = connection_provider_maker(config, pool_key, connection_key)
+    provider = db_connection_provider_maker(config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = None
@@ -317,7 +317,7 @@ async def test_sync_connection_provider_supports_context_manager() -> None:
     pool_key = "test_pool"
     connection_key = "test_connection"
 
-    provider = connection_provider_maker(config, pool_key, connection_key)
+    provider = db_connection_provider_maker(config, pool_key, connection_key)
 
     pool = config.create_pool()
     state = MagicMock()
@@ -339,7 +339,7 @@ async def test_async_session_provider_creates_session() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     connection_key = "test_connection"
 
-    provider = session_provider_maker(config, connection_key)
+    provider = db_session_provider_maker(config, connection_key)
 
     mock_connection = AsyncMock()
 
@@ -438,7 +438,7 @@ async def test_connection_provider_handover_on_http() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -470,7 +470,7 @@ async def test_manual_handler_terminus_after_handover() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -502,7 +502,7 @@ async def test_connection_provider_websocket_clean_exit() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -530,7 +530,7 @@ async def test_connection_provider_response_already_started() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -557,7 +557,7 @@ async def test_connection_provider_body_error_forwards_exception() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -589,7 +589,7 @@ async def test_connection_provider_suppressing_context_propagates_exception() ->
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -617,7 +617,7 @@ async def test_connection_provider_sync_manager_receives_exception() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -647,7 +647,7 @@ async def test_connection_provider_exit_failure_propagates_after_cleanup() -> No
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -1052,7 +1052,9 @@ async def test_tenant_provider_captures_payload_for_acquisition_and_checkin(
         provide_connection=async_connection if is_async else sync_connection,
     )
     scope = cast("Scope", {"type": "http"})
-    provider = connection_provider_maker(cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "tenant_conn")
+    provider = db_connection_provider_maker(
+        cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "tenant_conn"
+    )
     targets = (_TenantResolutionTarget(config, TenantResolutionSettings(tenant_extractor=extractor), ()),)
 
     async def run_request() -> None:
@@ -1120,9 +1122,9 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
 
     async def run_request() -> None:
         if is_async:
-            connection = await plugin.provide_request_connection_async("db_connection", state, scope)
+            connection = await plugin.provide_db_connection_async("db_connection", state, scope)
         else:
-            connection = plugin.provide_request_connection_sync("db_connection", state, scope)
+            connection = plugin.provide_db_connection_sync("db_connection", state, scope)
         assert get_sqlspec_scope_state(scope, "db_connection") is connection
         handler = manual_handler_maker("db_connection")
         await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
@@ -1163,7 +1165,7 @@ async def test_tenant_sync_on_demand_closes_rejected_extractor_coroutine(monkeyp
     scope = cast("Scope", {"type": "http"})
 
     async def run_request() -> None:
-        plugin.provide_request_connection_sync("db_connection", State({"db_pool": pool}), scope)
+        plugin.provide_db_connection_sync("db_connection", State({"db_pool": pool}), scope)
 
     try:
         with pytest.raises(ImproperConfigurationError, match="synchronous tenant_extractor"):
@@ -1203,7 +1205,9 @@ async def test_tenant_provider_handoff_rebinds_payload_in_each_owning_context(te
         provide_connection=connection_context,
     )
     scope = cast("Scope", {"type": "http"})
-    provider = connection_provider_maker(cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "db_connection")
+    provider = db_connection_provider_maker(
+        cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "db_connection"
+    )
     targets = (_TenantResolutionTarget(config, TenantResolutionSettings(tenant_extractor=lambda scope: "acme"), ()),)
     iterator = provider(State({"pool": object()}), scope)
 
@@ -1337,7 +1341,7 @@ async def test_autocommit_handler_finalizes_through_session_and_detaches_on_rele
 
     session: Any = None
     if has_session:
-        session = build_request_session(config, mock_conn, "autocommit")
+        session = build_db_session(config, mock_conn, "autocommit")
         session._auto_begin_on_write = auto_begin
         session._transaction = tx
         set_sqlspec_scope_state(scope, session_scope_key, session)
@@ -1385,7 +1389,7 @@ async def test_autocommit_handler_finalizes_through_session_and_detaches_on_rele
 async def test_session_provider_prepares_arms_and_emits_session_start(
     adapter_kind: str, commit_mode: str, expect_auto_begin: bool
 ) -> None:
-    """session_provider_maker prepares the driver, arms lazy begin on target adapters, caches in scope, and accepts positional calls."""
+    """db_session_provider_maker prepares the driver, arms lazy begin on target adapters, caches in scope, and accepts positional calls."""
     started: list[Any] = []
 
     async def _on_start(ctx: dict[str, Any]) -> None:
@@ -1407,7 +1411,7 @@ async def test_session_provider_prepares_arms_and_emits_session_start(
         return original_prepare(driver)
 
     config._prepare_driver = _tracking_prepare
-    provider = session_provider_maker(
+    provider = db_session_provider_maker(
         config, "db_connection", session_scope_key="db_session_instance", commit_mode=cast("Any", commit_mode)
     )
     mock_conn = MagicMock()
@@ -1432,7 +1436,7 @@ async def test_session_provider_prepares_arms_and_emits_session_start(
 async def test_connection_provider_direct_exit_emits_session_end_and_detaches_session(
     tmp_path: Path, exit_mode: str
 ) -> None:
-    """Direct exit from connection_provider_maker emits on_session_end once and detaches the driver session."""
+    """Direct exit from db_connection_provider_maker emits on_session_end once and detaches the driver session."""
     ended_sessions: list[Any] = []
 
     async def _on_end(ctx: dict[str, Any]) -> None:
@@ -1442,8 +1446,8 @@ async def test_connection_provider_direct_exit_emits_session_end_and_detaches_se
     config = AiosqliteConfig(
         connection_config={"database": str(tmp_path / f"direct_{exit_mode}.db")}, observability_config=obs
     )
-    conn_provider = connection_provider_maker(config, "db_pool", "db_connection")
-    sess_provider = session_provider_maker(config, "db_connection", session_scope_key="db_session_instance")
+    conn_provider = db_connection_provider_maker(config, "db_pool", "db_connection")
+    sess_provider = db_session_provider_maker(config, "db_connection", session_scope_key="db_session_instance")
 
     state = State({"db_pool": await config.create_pool()})
     scope_type = "websocket" if exit_mode == "websocket" else "http"

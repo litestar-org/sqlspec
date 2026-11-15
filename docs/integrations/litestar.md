@@ -105,9 +105,9 @@ When an application connects to multiple databases (for example, a transactional
 
 In custom guards, middleware, streaming iterators, or event hooks where standard route dependency injection is not active, `SQLSpecPlugin` exposes direct scope-backed session and connection accessors. `ConnectionCleanupMiddleware` stays outer to application middleware so inner `before_send` hooks evaluate `commit_mode` on `http.response.start` and release non-streaming HTTP responses on the terminal `http.response.body` (`more_body=False`) (or immediately on `http.response.start` if finalization raises), while streaming responses (`more_body=True`, `Stream` responses, or connections acquired after `http.response.start`) defer cleanup to `ConnectionCleanupMiddleware` when the ASGI request completes or cancels. Once released, the request session detaches its underlying connection and raises `ImproperConfigurationError` if accessed after teardown:
 
-- `plugin.provide_request_session(key, state, scope)` and `plugin.provide_request_connection(key, state, scope)` (when the connection already exists in ASGI scope). For an async configuration whose connection is not open yet, `provide_request_session` returns a session that acquires it on the first awaited call, with the same tenant resolution and commit handling as `provide_request_session_async`; `provide_request_connection` raises `ImproperConfigurationError` naming the async accessor.
-- `plugin.provide_request_session_sync(key, state, scope)` and `plugin.provide_request_connection_sync(key, state, scope)` (acquires a sync connection on demand if not yet present in `scope`; async configurations behave as `provide_request_session` and `provide_request_connection`).
-- `await plugin.provide_request_session_async(key, state, scope)` and `await plugin.provide_request_connection_async(key, state, scope)` (acquires an async connection on demand if not yet present in `scope`).
+- `plugin.provide_db_session(key, state, scope)` and `plugin.provide_db_connection(key, state, scope)` (when the connection already exists in ASGI scope). For an async configuration whose connection is not open yet, `provide_db_session` returns a session that acquires it on the first awaited call, with the same tenant resolution and commit handling as `provide_db_session_async`; `provide_db_connection` raises `ImproperConfigurationError` naming the async accessor.
+- `plugin.provide_db_session_sync(key, state, scope)` and `plugin.provide_db_connection_sync(key, state, scope)` (acquires a sync connection on demand if not yet present in `scope`; async configurations behave as `provide_db_session` and `provide_db_connection`).
+- `await plugin.provide_db_session_async(key, state, scope)` and `await plugin.provide_db_connection_async(key, state, scope)` (acquires an async connection on demand if not yet present in `scope`).
 
 ## Tenant-Aware Requests
 
@@ -117,7 +117,7 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, inject
 
 A config with replicas exposes `db_replica_session`, `db_replica_connection`, and `read_pool`. Rename them with `replica_session_key`, `replica_connection_key`, and `read_pool_key`. Set `routing_session_key` to opt into a routing session. A reader opens on first use. It does not open a primary session first.
 
-For direct access, use `get_db_replica_session(request)` or `provide_db_replica_session` and its `_sync`/`_async` forms. The `provide_request_routing_session*` helpers return routing sessions. Read connection helpers use the same names with `connection` in place of `session`. Pass a config or bind key to choose the database.
+For direct access, use `get_db_replica_session(request)` or `provide_db_replica_session` and its `_sync`/`_async` forms. The `provide_db_routing_session*` helpers return routing sessions. Read connection helpers use the same names with `connection` in place of `session`. Pass a config or bind key to choose the database.
 
 Tenant middleware binds the captured `TenantContextPayload` around each physical checkout, including readers. `SQLSpecRoutingMiddleware` scopes primary pins and reads stateless hints. Check tenant access in the normal request path. See [Read Replicas](../learn/recipes/read-replicas.md) for fallback and freshness choices.
 

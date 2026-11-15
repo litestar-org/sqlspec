@@ -16,8 +16,8 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
-    get_or_create_session,
-    get_or_create_session_async,
+    get_or_create_db_session,
+    get_or_create_db_session_async,
     get_request_tenant,
     has_context_value,
     pop_context_value,
@@ -109,7 +109,7 @@ class SQLSpecPlugin:
             self._config_states.append(state)
 
         self._routing_states: tuple[SanicConfigState, ...] = tuple(
-            state for state in self._config_states if _is_routing_state_active(state)
+            state for state in self._config_states if _uses_request_routing(state)
         )
 
         correlation_state = self._first_correlation_state()
@@ -253,17 +253,17 @@ class SQLSpecPlugin:
             request.ctx, self._deferred_key(config_state)
         ):
             if config_state.config.is_async:
-                deferred = self._deferred_session(request, config_state)
+                deferred = self._create_deferred_session(request, config_state)
                 set_context_value(request.ctx, session_key, deferred)
                 return deferred
             self._acquire_deferred_connection_sync(request, config_state)
-        return get_or_create_session(request, config_state)
+        return get_or_create_db_session(request, config_state)
 
     async def get_session_async(self, request: Any, key: Any = None) -> Any:
         """Get or create database session asynchronously, acquiring deferred tenant leases on demand."""
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         await self.get_connection_async(request, key)
-        return await get_or_create_session_async(request, config_state)
+        return await get_or_create_db_session_async(request, config_state)
 
     def get_connection(self, request: Any, key: Any = None) -> Any:
         """Get database connection from request context, checking it out on first access.
@@ -324,12 +324,12 @@ class SQLSpecPlugin:
         """Open and return the request's lazy routing session."""
         return await self._read_routing_resource_async(request, key, "routing")
 
-    def _deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
+    def _create_deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
         """Return a session that opens the asynchronous request connection on its first awaited call."""
 
         def current_session() -> Any:
             if has_context_value(request.ctx, config_state.connection_key):
-                return get_or_create_session(request, config_state)
+                return get_or_create_db_session(request, config_state)
             return None
 
         return DeferredAsyncSession(
@@ -459,12 +459,12 @@ class SQLSpecPlugin:
                     primary_error = _select_teardown_exception(primary_error, cleanup_error)
                 finally:
                     pop_context_value(request.ctx, key)
-                    _detach_deferred_session(pop_context_value(request.ctx, f"{key}_deferred"))
+                    _close_deferred_session(pop_context_value(request.ctx, f"{key}_deferred"))
                     pop_context_value(request.ctx, f"{key}_lock")
         for state in self._config_states:
             for resource_key in (state.replica_connection_key, state.replica_session_key, state.routing_session_key):
                 if resource_key is not None:
-                    _detach_deferred_session(pop_context_value(request.ctx, f"{resource_key}_deferred"))
+                    _close_deferred_session(pop_context_value(request.ctx, f"{resource_key}_deferred"))
                     pop_context_value(request.ctx, f"{resource_key}_lock")
         if primary_error is not None:
             raise primary_error
@@ -767,7 +767,7 @@ class SQLSpecPlugin:
                 for config_state in self._config_states:
                     if not config_state.disable_di:
                         pop_context_value(target_request.ctx, self._deferred_key(config_state))
-                        _detach_deferred_session(
+                        _close_deferred_session(
                             pop_context_value(target_request.ctx, self._deferred_session_key(config_state))
                         )
             try:
@@ -1175,7 +1175,7 @@ class SQLSpecPlugin:
             if stream_owner is not None:
                 await ensure_async_(stream_owner._close_open_streams)(error=request_exc is not None)
         finally:
-            _detach_deferred_session(deferred)
+            _close_deferred_session(deferred)
 
         if connection is None and connection_manager is None and session is None:
             return
@@ -1430,7 +1430,7 @@ def _select_teardown_exception(current: BaseException | None, candidate: BaseExc
     return current
 
 
-def _detach_deferred_session(deferred: Any) -> None:
+def _close_deferred_session(deferred: Any) -> None:
     """Detach an unawaited deferred session handle when present."""
     if deferred is not None:
         mark_closed = getattr(deferred, "_mark_closed", None)
@@ -1438,7 +1438,7 @@ def _detach_deferred_session(deferred: Any) -> None:
             mark_closed()
 
 
-def _is_routing_state_active(state: SanicConfigState) -> bool:
+def _uses_request_routing(state: SanicConfigState) -> bool:
     return bool(
         state.enable_routing_middleware
         and (

@@ -613,7 +613,7 @@ def test_litestar_unguarded_routes_controller_bypass_and_websockets_translate_te
         ):
 
             async def provide(request_scope: Any = scope) -> Any:
-                return plugin.provide_request_session_sync("db_connection", app.state, request_scope)
+                return plugin.provide_db_session_sync("db_connection", app.state, request_scope)
 
             with pytest.raises(error):
                 asyncio.run(within_tenant_request(plugin._tenant_targets(), scope, provide))
@@ -635,9 +635,7 @@ async def test_provide_request_session_async_translates_missing_tenant() -> None
 
     async def provide(scope: Any) -> Any:
         return await within_tenant_request(
-            plugin._tenant_targets(),
-            scope,
-            lambda: plugin.provide_request_session_async("db_connection", app.state, scope),
+            plugin._tenant_targets(), scope, lambda: plugin.provide_db_session_async("db_connection", app.state, scope)
         )
 
     with pytest.raises(NotAuthorizedException):

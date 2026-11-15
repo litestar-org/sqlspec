@@ -175,7 +175,7 @@ def test_sqlite_on_demand_session_rolls_back_on_exception(tmp_path: Path) -> Non
     @get("/raise")
     def raise_route(request: Request) -> None:
         p: SQLSpecPlugin = request.app.state.sqlspec
-        session = p.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        session = p.provide_db_session_sync("db_connection", request.app.state, request.scope)
         session.execute("INSERT INTO items (name) VALUES (?)", ("on_demand_fail",))
         raise RuntimeError("on demand error")
 
@@ -319,7 +319,7 @@ def test_litestar_autocommit_rolls_back_when_exception_handler_returns_200(tmp_p
     @get("/ondemand-fail")
     def ondemand_fail(request: Request[Any, Any, Any]) -> dict[str, str]:
         p: SQLSpecPlugin = request.app.state.sqlspec
-        session = p.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        session = p.provide_db_session_sync("db_connection", request.app.state, request.scope)
         session.execute("INSERT INTO items (name) VALUES (?)", ("ondemand_partial",))
         raise FallbackError("abort ondemand")
 
@@ -415,7 +415,7 @@ def test_litestar_streaming_post_response_start_on_demand_session_releases_pool(
         async def iterator() -> AsyncGenerator[bytes, None]:
             yield b"chunk-1:"
             p: SQLSpecPlugin = request.app.state.sqlspec
-            session = await p.provide_request_session_async("db_connection", request.app.state, request.scope)
+            session = await p.provide_db_session_async("db_connection", request.app.state, request.scope)
             await session.execute("INSERT INTO items (name) VALUES (:name)", name="stream_row")
             yield b"chunk-2"
 
@@ -424,7 +424,7 @@ def test_litestar_streaming_post_response_start_on_demand_session_releases_pool(
     @get("/verify")
     async def verify_route(request: Request[Any, Any, Any]) -> dict[str, list[str]]:
         p: SQLSpecPlugin = request.app.state.sqlspec
-        session = await p.provide_request_session_async("db_connection", request.app.state, request.scope)
+        session = await p.provide_db_session_async("db_connection", request.app.state, request.scope)
         result = await session.execute("SELECT name FROM items ORDER BY rowid")
         return {"rows": [row["name"] for row in result.all()]}
 

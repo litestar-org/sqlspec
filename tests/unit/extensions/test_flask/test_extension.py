@@ -16,7 +16,7 @@ from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin, set_request_tenant
-from sqlspec.extensions.flask._utils import get_or_create_session
+from sqlspec.extensions.flask._utils import get_or_create_db_session
 from sqlspec.extensions.flask.extension import DEFAULT_SESSION_KEY
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.portal import PortalProvider
@@ -147,7 +147,7 @@ def test_utils_get_or_create_session_passes_driver_features() -> None:
     connection = object()
     with app.app_context():
         setattr(g, state.connection_key, connection)
-        session = get_or_create_session(state, portal=None)
+        session = get_or_create_db_session(state, portal=None)
     assert session.connection is connection
     assert session.statement_config is _Config.statement_config
     assert session.driver_features == _Config.driver_features
@@ -158,8 +158,8 @@ def test_utils_get_or_create_session_returns_cached_session() -> None:
     state = _make_state()
     with app.app_context():
         setattr(g, state.connection_key, object())
-        first = get_or_create_session(state, portal=None)
-        second = get_or_create_session(state, portal=None)
+        first = get_or_create_db_session(state, portal=None)
+        second = get_or_create_db_session(state, portal=None)
     assert second is first
 
 

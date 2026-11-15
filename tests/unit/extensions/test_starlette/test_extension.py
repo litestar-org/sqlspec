@@ -24,14 +24,14 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
 from sqlspec.extensions.starlette import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
-from sqlspec.extensions.starlette._utils import get_or_create_driver_session, get_state_value, set_state_value
+from sqlspec.extensions.starlette._utils import _get_connected_db_session, get_state_value, set_state_value
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 from sqlspec.extensions.starlette.middleware import (
     SQLSpecTransactionMiddleware,
     _finalize_request_transaction,
-    _response_owner_key,
+    _response_completion_key,
     _ResponseCompletion,
-    acquire_pending_connection_async,
+    ensure_request_connection_async,
 )
 from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.routing import RoutingContext
@@ -181,7 +181,7 @@ async def _serve_request(
     """
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
-        await acquire_pending_connection_async(Request(scope), state)
+        await ensure_request_connection_async(Request(scope), state)
         if error is not None:
             raise error
         await send({"type": "http.response.start", "status": status, "headers": []})
@@ -359,7 +359,7 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
             raise ValueError("background failure")
 
     async def endpoint(request: Request) -> StreamingResponse:
-        await acquire_pending_connection_async(request, state)
+        await ensure_request_connection_async(request, state)
         return StreamingResponse(body(), background=BackgroundTask(background))
 
     if framework == "fastapi":
@@ -452,7 +452,7 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
         yield connection
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
-        await acquire_pending_connection_async(Request(scope), state)
+        await ensure_request_connection_async(Request(scope), state)
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"partial", "more_body": True})
 
@@ -514,7 +514,7 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
             events.append("release")
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
-        await acquire_pending_connection_async(Request(scope), state)
+        await ensure_request_connection_async(Request(scope), state)
         raise body_error
 
     async def receive() -> "Message":
@@ -758,7 +758,7 @@ def test_starlette_session_lifecycle_events_detachment_and_response_completion()
         session = await plugin.get_session_async(request)
         assert await plugin.get_session_async(request) is session
         retained_sessions.append(session)
-        owner = get_state_value(request.state, _response_owner_key("db_connection"))
+        owner = get_state_value(request.state, _response_completion_key("db_connection"))
         seen_completions.append(owner)
 
         async def chunks() -> "AsyncIterator[bytes]":
@@ -818,7 +818,7 @@ async def test_starlette_armed_and_unarmed_session_finalization(
         conn = AsyncMock(_conn=None, autocommit=False, in_transaction=in_tx)
     set_state_value(request.state, state.connection_key, conn)
 
-    session = get_or_create_driver_session(request, state)
+    session = _get_connected_db_session(request, state)
     assert session._auto_begin_on_write is expect_auto_begin
     if adapter_kind == "asyncpg":
         session._transaction = tx

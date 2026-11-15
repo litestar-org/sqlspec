@@ -186,11 +186,11 @@ def test_litestar_safe_default_routing_signed_cookie_and_deferred_cache(tmp_path
 
     @get("/inspect")
     async def inspect_route(request: Request) -> dict[str, Any]:
-        first = plugin.get_routing_session(request, "router")
-        second = plugin.get_routing_session(request, "router")
+        first = plugin.get_db_routing_session(request, "router")
+        second = plugin.get_db_routing_session(request, "router")
         assert isinstance(first, DeferredAsyncSession)
         assert first is second
-        with pytest.raises(ImproperConfigurationError, match="provide_request_routing_session_async"):
+        with pytest.raises(ImproperConfigurationError, match="provide_db_routing_session_async"):
             _ = first.primary_session
         origin = await first.select_value("SELECT origin FROM notes WHERE id=1")
         entry = RoutingContext.get_entry("shop") or RoutingEntry()
@@ -255,9 +255,9 @@ async def test_litestar_unawaited_deferred_sessions_are_detached_after_response(
 
     @get("/leaked")
     async def leaked_route(request: Request) -> dict[str, bool]:
-        primary_deferred = plugin.provide_request_session("db_session", request.app.state, request.scope)
+        primary_deferred = plugin.provide_db_session("db_session", request.app.state, request.scope)
         read_deferred = plugin.get_db_replica_session(request)
-        routing_deferred = plugin.get_routing_session(request, "router")
+        routing_deferred = plugin.get_db_routing_session(request, "router")
         assert isinstance(primary_deferred, DeferredAsyncSession)
         assert isinstance(read_deferred, DeferredAsyncSession)
         assert isinstance(routing_deferred, DeferredAsyncSession)

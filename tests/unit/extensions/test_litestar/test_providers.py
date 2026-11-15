@@ -396,11 +396,11 @@ def test_raise_missing_connection_provide_request_connection_raises_when_connect
     state = AppConfig().state
     scope = cast("HTTPScope", {"type": "http"})
     try:
-        plugin.provide_request_connection("db_connection", state, scope)
+        plugin.provide_db_connection("db_connection", state, scope)
     except ImproperConfigurationError as exc:
-        assert "provide_request_connection_async" in str(exc)
+        assert "provide_db_connection_async" in str(exc)
     else:
-        msg = "provide_request_connection should raise when no connection is scoped"
+        msg = "provide_db_connection should raise when no connection is scoped"
         raise AssertionError(msg)
 
 
@@ -409,9 +409,9 @@ def test_provide_request_session_defers_async_connection_when_none_is_scoped() -
     plugin.on_app_init(AppConfig())
     state = AppConfig().state
     scope = cast("HTTPScope", {"type": "http"})
-    session = plugin.provide_request_session("db_session", state, scope)
+    session = plugin.provide_db_session("db_session", state, scope)
     assert session.dialect == "sqlite"
-    with pytest.raises(ImproperConfigurationError, match="provide_request_session_async"):
+    with pytest.raises(ImproperConfigurationError, match="provide_db_session_async"):
         _ = session.connection
 
 
@@ -678,7 +678,7 @@ def test_aggregate_function_excludes_inactive_before_after_and_id_filters() -> N
 def test_provide_request_session_async_awaits_async_lifecycle_hooks(
     use_deferred: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Litestar provide_request_session_async and deferred sessions await async lifecycle hooks."""
+    """Litestar provide_db_session_async and deferred sessions await async lifecycle hooks."""
     events: list[str] = []
 
     async def _on_start(_ctx: dict[str, Any]) -> None:
@@ -703,9 +703,9 @@ def test_provide_request_session_async_awaits_async_lifecycle_hooks(
     @get("/check")
     async def check(request: Request[Any, Any, Any]) -> dict[str, Any]:
         session = (
-            plugin.provide_request_session(config, request.app.state, request.scope)
+            plugin.provide_db_session(config, request.app.state, request.scope)
             if use_deferred
-            else await plugin.provide_request_session_async(config, request.app.state, request.scope)
+            else await plugin.provide_db_session_async(config, request.app.state, request.scope)
         )
         return {"value": await session.select_value("SELECT 1")}
 

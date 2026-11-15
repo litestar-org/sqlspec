@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlspec.extensions.starlette._state import tenant_receipt_key
 from sqlspec.utils.adapters import resolve_adapter_name
+from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -16,8 +17,8 @@ if TYPE_CHECKING:
 __all__ = (
     "deferred_session_key",
     "get_connection_from_request",
-    "get_or_create_driver_session",
-    "get_or_create_driver_session_async",
+    "get_or_create_db_session",
+    "get_or_create_db_session_async",
     "get_or_create_session",
     "get_request_tenant",
     "get_scope_tenant",
@@ -86,12 +87,12 @@ def get_connection_from_request(request: "Request", config_state: "SQLSpecConfig
     """
     if has_state_value(request.state, config_state.connection_key):
         return get_state_value(request.state, config_state.connection_key)
-    from sqlspec.extensions.starlette.middleware import acquire_pending_connection_sync
+    from sqlspec.extensions.starlette.middleware import ensure_request_connection_sync
 
-    return acquire_pending_connection_sync(request, config_state)
+    return ensure_request_connection_sync(request, config_state)
 
 
-def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+def get_or_create_db_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Get or create database session for request.
 
     Sessions are cached per request to ensure the same session instance
@@ -112,15 +113,15 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     if deferred is not None:
         return deferred
     if config_state.config.is_async and not has_state_value(request.state, config_state.connection_key):
-        from sqlspec.extensions.starlette.middleware import deferred_request_session
+        from sqlspec.extensions.starlette.middleware import create_deferred_request_session
 
-        deferred = deferred_request_session(request, config_state)
+        deferred = create_deferred_request_session(request, config_state)
         set_state_value(request.state, deferred_key, deferred)
         return deferred
-    return get_or_create_driver_session(request, config_state)
+    return _get_connected_db_session(request, config_state)
 
 
-def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+def _get_connected_db_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Get or create the driver session bound to the request connection.
 
     Args:
@@ -130,7 +131,7 @@ def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfi
     Returns:
         Database session (driver instance).
     """
-    session, created = _resolve_or_build_driver_session(request, config_state)
+    session, created = _resolve_or_build_db_session(request, config_state)
     if created:
         runtime = session.observability
         if not runtime.is_idle:
@@ -138,7 +139,7 @@ def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfi
     return session
 
 
-async def get_or_create_driver_session_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+async def get_or_create_db_session_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Get or create the driver session asynchronously, awaiting session-start hooks.
 
     Args:
@@ -148,7 +149,7 @@ async def get_or_create_driver_session_async(request: "Request", config_state: "
     Returns:
         Database session (driver instance).
     """
-    session, created = _resolve_or_build_driver_session(request, config_state)
+    session, created = _resolve_or_build_db_session(request, config_state)
     if created:
         runtime = session.observability
         if not runtime.is_idle:
@@ -224,7 +225,7 @@ def get_scope_tenant(scope: "Mapping[str, Any]", config_state: "SQLSpecConfigSta
     return None
 
 
-def _resolve_or_build_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> "tuple[Any, bool]":
+def _resolve_or_build_db_session(request: "Request", config_state: "SQLSpecConfigState") -> "tuple[Any, bool]":
     """Return the cached driver session or build and cache a fresh one."""
     session_instance_key = f"{config_state.session_key}_instance"
     existing_session = get_state_value(request.state, session_instance_key, None)
@@ -253,3 +254,12 @@ def _state_dict(state: Any) -> dict[str, Any]:
         return cast("dict[str, Any]", object.__getattribute__(state, "_state"))
     except AttributeError:
         return cast("dict[str, Any]", state.__dict__)
+
+
+@deprecated("0.72.0", removal_in="0.74.0", alternative="get_or_create_db_session")
+def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+    """Return the request's database session.
+
+    Deprecated alias of :func:`get_or_create_db_session`.
+    """
+    return get_or_create_db_session(request, config_state)

@@ -16,7 +16,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic import SQLSpecPlugin
-from sqlspec.extensions.sanic._utils import get_or_create_session, has_context_value, set_context_value
+from sqlspec.extensions.sanic._utils import get_or_create_db_session, has_context_value, set_context_value
 
 pytestmark = pytest.mark.anyio
 
@@ -754,7 +754,7 @@ async def test_sanic_armed_and_unarmed_session_commit_and_rollback_targets(
     request = SimpleNamespace(ctx=SimpleNamespace())
     set_context_value(request.ctx, config_state.connection_key, conn)
 
-    session = get_or_create_session(request, config_state)
+    session = get_or_create_db_session(request, config_state)
     assert session._auto_begin_on_write is expect_auto_begin
     if adapter_kind == "asyncpg":
         session._transaction = tx

@@ -1,7 +1,7 @@
 """Integration tests for SQLSpecPlugin request scope access methods.
 
-Tests verify that provide_request_session, provide_request_session_async,
-provide_request_connection, and provide_request_connection_async work
+Tests verify that provide_db_session, provide_db_session_async,
+provide_db_connection, and provide_db_connection_async work
 correctly when accessed from route handlers and guards.
 """
 
@@ -82,12 +82,12 @@ def test_async_request_scope_access_di_session_injection_baseline(
 def test_async_request_scope_access_provide_session_from_handler(
     async_request_scope_access_async_config: AiosqliteConfig,
 ) -> None:
-    """Test provide_request_session_async from route handler."""
+    """Test provide_db_session_async from route handler."""
 
     @get("/test")
     async def handler(request: Request) -> dict[str, Any]:
         plugin: SQLSpecPlugin = request.app.state.sqlspec
-        session = await plugin.provide_request_session_async("db_connection", request.app.state, request.scope)
+        session = await plugin.provide_db_session_async("db_connection", request.app.state, request.scope)
         result = await session.execute("SELECT 1 as value")
         data = result.get_first()
         return {"value": data["value"] if data else None}
@@ -101,12 +101,12 @@ def test_async_request_scope_access_provide_session_from_handler(
 def test_async_request_scope_access_provide_connection_from_handler(
     async_request_scope_access_async_config: AiosqliteConfig,
 ) -> None:
-    """Test provide_request_connection_async from route handler."""
+    """Test provide_db_connection_async from route handler."""
 
     @get("/test")
     async def handler(request: Request) -> dict[str, Any]:
         plugin: SQLSpecPlugin = request.app.state.sqlspec
-        connection = await plugin.provide_request_connection_async("db_connection", request.app.state, request.scope)
+        connection = await plugin.provide_db_connection_async("db_connection", request.app.state, request.scope)
         assert connection is not None
         return {"success": True}
 
@@ -119,12 +119,12 @@ def test_async_request_scope_access_provide_connection_from_handler(
 def test_async_request_scope_access_provide_connection_from_guard(
     async_request_scope_access_async_config: AiosqliteConfig,
 ) -> None:
-    """Test provide_request_connection_async from a guard."""
+    """Test provide_db_connection_async from a guard."""
     guard_executed = {"value": False}
 
     async def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
         plugin: SQLSpecPlugin = connection.app.state.sqlspec
-        db_conn = await plugin.provide_request_connection_async("db_connection", connection.app.state, connection.scope)
+        db_conn = await plugin.provide_db_connection_async("db_connection", connection.app.state, connection.scope)
         assert db_conn is not None
         guard_executed["value"] = True
 
@@ -141,12 +141,12 @@ def test_async_request_scope_access_provide_connection_from_guard(
 def test_async_request_scope_access_provide_session_from_guard(
     async_request_scope_access_async_config: AiosqliteConfig,
 ) -> None:
-    """Test provide_request_session_async from a guard."""
+    """Test provide_db_session_async from a guard."""
     guard_result = {"value": None}
 
     async def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
         plugin: SQLSpecPlugin = connection.app.state.sqlspec
-        session = await plugin.provide_request_session_async("db_connection", connection.app.state, connection.scope)
+        session = await plugin.provide_db_session_async("db_connection", connection.app.state, connection.scope)
         result = await session.execute("SELECT 42 as answer")
         data = result.get_first()
         guard_result["value"] = data["answer"] if data else None
@@ -188,12 +188,12 @@ def test_sync_request_scope_access_di_session_injection_baseline(
 def test_sync_request_scope_access_provide_session_from_handler(
     sync_request_scope_access_sync_config: SqliteConfig,
 ) -> None:
-    """Test provide_request_session_sync from route handler."""
+    """Test provide_db_session_sync from route handler."""
 
     @get("/test", sync_to_thread=False)
     def handler(request: Request) -> dict[str, Any]:
         plugin: SQLSpecPlugin = request.app.state.sqlspec
-        session = plugin.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        session = plugin.provide_db_session_sync("db_connection", request.app.state, request.scope)
         result = session.execute("SELECT 1 as value")
         data = result.get_first()
         return {"value": data["value"] if data else None}
@@ -207,12 +207,12 @@ def test_sync_request_scope_access_provide_session_from_handler(
 def test_sync_request_scope_access_provide_connection_from_handler(
     sync_request_scope_access_sync_config: SqliteConfig,
 ) -> None:
-    """Test provide_request_connection_sync from route handler."""
+    """Test provide_db_connection_sync from route handler."""
 
     @get("/test", sync_to_thread=False)
     def handler(request: Request) -> dict[str, Any]:
         plugin: SQLSpecPlugin = request.app.state.sqlspec
-        connection = plugin.provide_request_connection_sync("db_connection", request.app.state, request.scope)
+        connection = plugin.provide_db_connection_sync("db_connection", request.app.state, request.scope)
         assert connection is not None
         return {"success": True}
 
@@ -225,12 +225,12 @@ def test_sync_request_scope_access_provide_connection_from_handler(
 def test_sync_request_scope_access_provide_connection_from_guard(
     sync_request_scope_access_sync_config: SqliteConfig,
 ) -> None:
-    """Test provide_request_connection_sync from a guard."""
+    """Test provide_db_connection_sync from a guard."""
     guard_executed = {"value": False}
 
     def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
         plugin: SQLSpecPlugin = connection.app.state.sqlspec
-        db_conn = plugin.provide_request_connection_sync("db_connection", connection.app.state, connection.scope)
+        db_conn = plugin.provide_db_connection_sync("db_connection", connection.app.state, connection.scope)
         assert db_conn is not None
         guard_executed["value"] = True
 
@@ -247,12 +247,12 @@ def test_sync_request_scope_access_provide_connection_from_guard(
 def test_sync_request_scope_access_provide_session_from_guard(
     sync_request_scope_access_sync_config: SqliteConfig,
 ) -> None:
-    """Test provide_request_session_sync from a guard."""
+    """Test provide_db_session_sync from a guard."""
     guard_result = {"value": None}
 
     def db_guard(connection: ASGIConnection, handler: BaseRouteHandler) -> None:
         plugin: SQLSpecPlugin = connection.app.state.sqlspec
-        session = plugin.provide_request_session_sync("db_connection", connection.app.state, connection.scope)
+        session = plugin.provide_db_session_sync("db_connection", connection.app.state, connection.scope)
         result = session.execute("SELECT 42 as answer")
         data = result.get_first()
         guard_result["value"] = data["answer"] if data else None

@@ -334,12 +334,12 @@ def test_all_24_adapters_lazy_begin_arming_across_commit_modes(
     from unittest.mock import MagicMock
 
     from sqlspec.extensions.flask._state import FlaskConfigState
-    from sqlspec.extensions.flask._utils import get_or_create_session as flask_get_session
-    from sqlspec.extensions.litestar.handlers import build_request_session as litestar_build_session
+    from sqlspec.extensions.flask._utils import get_or_create_db_session as flask_get_session
+    from sqlspec.extensions.litestar.handlers import build_db_session as litestar_build_session
     from sqlspec.extensions.sanic._state import SanicConfigState
-    from sqlspec.extensions.sanic._utils import get_or_create_session as sanic_get_session
+    from sqlspec.extensions.sanic._utils import get_or_create_db_session as sanic_get_session
     from sqlspec.extensions.sanic._utils import set_context_value as sanic_set_ctx
-    from sqlspec.extensions.starlette._utils import get_or_create_driver_session as starlette_get_session
+    from sqlspec.extensions.starlette._utils import _get_connected_db_session as starlette_get_session
 
     _ = is_client_tx_exception
     cfg_cls = getattr(importlib.import_module(f"sqlspec.adapters.{adapter}.config"), cfg_name)
@@ -416,7 +416,8 @@ async def test_all_24_adapters_manual_mode_rollback_and_explicit_commit_contract
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
-    from sqlspec.extensions.litestar.handlers import _finalize_request_session, build_request_session
+    from sqlspec.extensions.litestar.handlers import _finalize_request_transaction as _finalize_litestar_request
+    from sqlspec.extensions.litestar.handlers import build_db_session
     from sqlspec.extensions.starlette._utils import set_state_value
     from sqlspec.extensions.starlette.middleware import _finalize_request_transaction
 
@@ -427,7 +428,7 @@ async def test_all_24_adapters_manual_mode_rollback_and_explicit_commit_contract
     if is_client_tx_exception:
         conn = MagicMock()
         if adapter == "bigquery":
-            raw_session = build_request_session(config, conn, "manual")
+            raw_session = build_db_session(config, conn, "manual")
             assert raw_session._auto_begin_on_write is False
             raw_session.rollback()
             assert raw_session._connection_in_transaction() is False
@@ -443,21 +444,21 @@ async def test_all_24_adapters_manual_mode_rollback_and_explicit_commit_contract
             tx_session, tx_counts = _build_contract_driver(config, monkeypatch)
             tx_session._owns_transaction = True
             tx_session.begin()
-            await _finalize_request_session(tx_session, tx_session.connection, commit=False)
+            await _finalize_litestar_request(tx_session, tx_session.connection, commit=False)
             assert tx_counts["rollback"] == 1
         return
 
     session, counts = _build_contract_driver(config, monkeypatch)
     session._auto_begin_on_write = expect_lazy_begin
     if expect_lazy_begin:
-        await _finalize_request_session(session, session.connection, commit=False)
+        await _finalize_litestar_request(session, session.connection, commit=False)
         assert counts["rollback"] == 0
 
     if config.is_async:
         await session.begin()
     else:
         session.begin()
-    await _finalize_request_session(session, session.connection, commit=False)
+    await _finalize_litestar_request(session, session.connection, commit=False)
     assert counts["rollback"] == 1
     assert counts["commit"] == 0
 

@@ -5,7 +5,7 @@ from sqlspec.extensions.sanic import (
     SanicConfigState,
     SQLSpecPlugin,
     get_connection_from_request,
-    get_or_create_session,
+    get_or_create_db_session,
     set_request_tenant,
     tenant_bypass,
 )
@@ -25,7 +25,7 @@ Sanic server listener and request/response middleware extension for pool lifecyc
 
 ## Request Context Helpers
 
-::: sqlspec.extensions.sanic._utils.get_or_create_session
+::: sqlspec.extensions.sanic._utils.get_or_create_db_session
     options:
       heading_level: 3
 

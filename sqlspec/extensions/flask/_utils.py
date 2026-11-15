@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlspec.extensions.flask._portal import PortalSession, call_portal_with_context
 from sqlspec.extensions.flask._state import tenant_receipt_key
 from sqlspec.utils.adapters import resolve_adapter_name
+from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "get_context_value",
+    "get_or_create_db_session",
     "get_or_create_session",
     "get_request_tenant",
     "has_context_value",
@@ -62,7 +64,7 @@ def has_context_value(target: Any, key: str) -> bool:
     return key in _context_dict(target)
 
 
-def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | None") -> Any:
+def get_or_create_db_session(config_state: "FlaskConfigState", portal: "Portal | None") -> Any:
     """Get or create database session for current request.
 
     Sessions are cached per request in Flask g object to ensure
@@ -158,3 +160,12 @@ def get_request_tenant(config_state: "FlaskConfigState") -> Any:
 def _context_dict(target: Any) -> dict[str, Any]:
     """Return the underlying context dictionary."""
     return cast("DictProtocol", target).__dict__
+
+
+@deprecated("0.72.0", removal_in="0.74.0", alternative="get_or_create_db_session")
+def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | None") -> Any:
+    """Return the request's database session.
+
+    Deprecated alias of :func:`get_or_create_db_session`.
+    """
+    return get_or_create_db_session(config_state, portal)

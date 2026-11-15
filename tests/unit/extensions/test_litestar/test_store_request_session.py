@@ -145,7 +145,7 @@ async def test_store_write_precedes_finalize(harness: Harness, monkeypatch: pyte
     from sqlspec.extensions.litestar import handlers, plugin
 
     original_set = type(harness.store).set
-    original_finalize = handlers._finalize_request_session  # pyright: ignore[reportPrivateUsage]
+    original_finalize = handlers._finalize_request_transaction  # pyright: ignore[reportPrivateUsage]
 
     async def recording_set(self: Any, *args: Any, **kwargs: Any) -> Any:
         harness.events.append("store-set")
@@ -156,8 +156,8 @@ async def test_store_write_precedes_finalize(harness: Harness, monkeypatch: pyte
         return await original_finalize(*args, **kwargs)
 
     monkeypatch.setattr(type(harness.store), "set", recording_set)
-    monkeypatch.setattr(handlers, "_finalize_request_session", recording_finalize)
-    monkeypatch.setattr(plugin, "_finalize_request_session", recording_finalize)
+    monkeypatch.setattr(handlers, "_finalize_request_transaction", recording_finalize)
+    monkeypatch.setattr(plugin, "_finalize_request_transaction", recording_finalize)
     async with AsyncTestClient(harness.app) as client:
         await client.get("/")
     assert harness.events == ["handler", "store-set", "sqlspec-finalize"]
@@ -181,7 +181,7 @@ async def test_deferred_request_session_is_borrowed(tmp_path: Path) -> None:
 
     @get("/")
     async def deferred(request: Request[Any, Any, Any]) -> dict[str, bool]:
-        session = plugin.provide_request_session(config, request.app.state, request.scope)
+        session = plugin.provide_db_session(config, request.app.state, request.scope)
         await session.select_value("SELECT 1")
         request.session["x"] = 1
         return {"ok": True}

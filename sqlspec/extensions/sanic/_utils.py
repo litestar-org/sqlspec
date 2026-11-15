@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic._state import tenant_receipt_key
 from sqlspec.utils.adapters import resolve_adapter_name
+from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -15,8 +16,9 @@ if TYPE_CHECKING:
 __all__ = (
     "get_connection_from_request",
     "get_context_value",
+    "get_or_create_db_session",
+    "get_or_create_db_session_async",
     "get_or_create_session",
-    "get_or_create_session_async",
     "get_request_tenant",
     "has_context_value",
     "pop_context_value",
@@ -119,7 +121,7 @@ def get_connection_from_request(request: Any, config_state: "SanicConfigState") 
         raise ImproperConfigurationError(msg) from exc
 
 
-def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any:
+def get_or_create_db_session(request: Any, config_state: "SanicConfigState") -> Any:
     """Get or create database session for request.
 
     Sessions are cached per request to return the same session instance across
@@ -132,7 +134,7 @@ def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any
     Returns:
         Database session driver instance.
     """
-    session, created = _resolve_or_build_session(request, config_state)
+    session, created = _resolve_or_build_db_session(request, config_state)
     if created:
         runtime = session.observability
         if not runtime.is_idle:
@@ -140,7 +142,7 @@ def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any
     return session
 
 
-async def get_or_create_session_async(request: Any, config_state: "SanicConfigState") -> Any:
+async def get_or_create_db_session_async(request: Any, config_state: "SanicConfigState") -> Any:
     """Get or create database session asynchronously, awaiting session-start hooks.
 
     Args:
@@ -150,7 +152,7 @@ async def get_or_create_session_async(request: Any, config_state: "SanicConfigSt
     Returns:
         Database session driver instance.
     """
-    session, created = _resolve_or_build_session(request, config_state)
+    session, created = _resolve_or_build_db_session(request, config_state)
     if created:
         runtime = session.observability
         if not runtime.is_idle:
@@ -198,7 +200,7 @@ def get_request_tenant(request: Any, config_state: "SanicConfigState") -> Any:
     return None
 
 
-def _resolve_or_build_session(request: Any, config_state: "SanicConfigState") -> tuple[Any, bool]:
+def _resolve_or_build_db_session(request: Any, config_state: "SanicConfigState") -> tuple[Any, bool]:
     """Return the cached request session or build and cache a fresh one."""
     session_instance_key = f"{config_state.session_key}_instance"
     existing_session = get_context_value(request.ctx, session_instance_key, None)
@@ -219,3 +221,12 @@ def _resolve_or_build_session(request: Any, config_state: "SanicConfigState") ->
         session._auto_begin_on_write = True
     set_context_value(request.ctx, session_instance_key, session)
     return session, True
+
+
+@deprecated("0.72.0", removal_in="0.74.0", alternative="get_or_create_db_session")
+def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any:
+    """Return the request's database session.
+
+    Deprecated alias of :func:`get_or_create_db_session`.
+    """
+    return get_or_create_db_session(request, config_state)

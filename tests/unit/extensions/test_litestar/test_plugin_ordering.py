@@ -27,7 +27,7 @@ from sqlspec.base import SQLSpec
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
-from sqlspec.extensions.litestar.handlers import autocommit_handler_maker, build_request_session
+from sqlspec.extensions.litestar.handlers import autocommit_handler_maker, build_db_session
 from sqlspec.extensions.litestar.plugin import (
     ConnectionCleanupMiddleware,
     CorrelationMiddleware,
@@ -295,7 +295,7 @@ async def test_connection_cleanup_middleware_owns_deferred_streaming_sessions(sc
             exited.append((exc_type, exc_val, exc_tb))
             return False
 
-    session = build_request_session(config, conn, "autocommit")
+    session = build_db_session(config, conn, "autocommit")
 
     before_send = autocommit_handler_maker("db_connection", session_scope_key="db_session_instance")
     target = _ConnectionCleanupTarget(

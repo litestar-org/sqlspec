@@ -23,9 +23,9 @@ from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._utils import (
+    _get_connected_db_session,
     deferred_session_key,
-    get_or_create_driver_session,
-    get_or_create_driver_session_async,
+    get_or_create_db_session_async,
     get_scope_tenant,
     get_state_value,
     has_state_value,
@@ -58,9 +58,9 @@ __all__ = (
     "SQLCommenterMiddleware",
     "SQLSpecTenantRequestMiddleware",
     "SQLSpecTransactionMiddleware",
-    "acquire_pending_connection_async",
-    "acquire_pending_connection_sync",
-    "deferred_request_session",
+    "create_deferred_request_session",
+    "ensure_request_connection_async",
+    "ensure_request_connection_sync",
     "get_request_resource",
     "get_request_resource_async",
     "has_tenant_strategy",
@@ -76,7 +76,7 @@ class SQLSpecTransactionMiddleware:
         """Bind the downstream application and its active database configurations."""
         self.app = app
         self.config_states = tuple(config_states)
-        self._routing_states = tuple(state for state in self.config_states if _is_routing_state_active(state))
+        self._routing_states = tuple(state for state in self.config_states if _uses_request_routing(state))
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -127,11 +127,11 @@ class SQLSpecTransactionMiddleware:
                 for state in self.config_states:
                     completion = _ResponseCompletion()
                     completions.append(completion)
-                    set_state_value(request.state, _response_owner_key(state.connection_key), completion)
+                    set_state_value(request.state, _response_completion_key(state.connection_key), completion)
                     set_state_value(
                         request.state,
-                        _pending_connection_key(state.connection_key),
-                        _PendingConnection(stack, request, state),
+                        _deferred_connection_key(state.connection_key),
+                        _DeferredConnectionSlot(stack, request, state),
                     )
                     for resource_key, kind in (
                         (state.replica_connection_key, "connection"),
@@ -171,9 +171,9 @@ class SQLSpecTransactionMiddleware:
                             raise finalize_error
                 finally:
                     for state in self.config_states:
-                        pop_state_value(request.state, _response_owner_key(state.connection_key))
-                        pop_state_value(request.state, _pending_connection_key(state.connection_key))
-                        await _clear_deferred_session(request, deferred_session_key(state))
+                        pop_state_value(request.state, _response_completion_key(state.connection_key))
+                        pop_state_value(request.state, _deferred_connection_key(state.connection_key))
+                        await _pop_and_close_session(request, deferred_session_key(state))
                         for resource_key in (
                             state.replica_connection_key,
                             state.replica_session_key,
@@ -182,7 +182,7 @@ class SQLSpecTransactionMiddleware:
                             if resource_key is not None:
                                 pop_state_value(request.state, _resource_slot_key(resource_key))
                                 pop_state_value(request.state, resource_key)
-                                await _clear_deferred_session(request, f"{resource_key}_deferred")
+                                await _pop_and_close_session(request, f"{resource_key}_deferred")
 
     async def _finalize(self, request: "Request", state: "SQLSpecConfigState", commit: bool) -> None:
         should_commit = commit and state.commit_mode != "manual"
@@ -433,12 +433,12 @@ class SQLSpecTenantRequestMiddleware:
         return None
 
 
-async def acquire_pending_connection_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+async def ensure_request_connection_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Acquire the deferred request connection asynchronously if not yet checked out."""
     if has_state_value(request.state, config_state.connection_key):
         return get_state_value(request.state, config_state.connection_key)
-    pending_key = _pending_connection_key(config_state.connection_key)
-    pending = cast("_PendingConnection | None", get_state_value(request.state, pending_key, None))
+    pending_key = _deferred_connection_key(config_state.connection_key)
+    pending = cast("_DeferredConnectionSlot | None", get_state_value(request.state, pending_key, None))
     if pending is None:
         return get_state_value(request.state, config_state.connection_key)
     async with pending.lock:
@@ -449,7 +449,7 @@ async def acquire_pending_connection_async(request: "Request", config_state: "SQ
         return connection
 
 
-def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+def ensure_request_connection_sync(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Acquire the deferred request connection synchronously on first access.
 
     Raises:
@@ -457,8 +457,8 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
     """
     if has_state_value(request.state, config_state.connection_key):
         return get_state_value(request.state, config_state.connection_key)
-    pending_key = _pending_connection_key(config_state.connection_key)
-    pending = cast("_PendingConnection | None", get_state_value(request.state, pending_key, None))
+    pending_key = _deferred_connection_key(config_state.connection_key)
+    pending = cast("_DeferredConnectionSlot | None", get_state_value(request.state, pending_key, None))
     if pending is None:
         return get_state_value(request.state, config_state.connection_key)
 
@@ -508,7 +508,7 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
     return connection
 
 
-def deferred_request_session(request: "Request", config_state: "SQLSpecConfigState") -> DeferredAsyncSession:
+def create_deferred_request_session(request: "Request", config_state: "SQLSpecConfigState") -> DeferredAsyncSession:
     """Return a session that opens the asynchronous request connection on its first awaited call.
 
     Args:
@@ -518,16 +518,16 @@ def deferred_request_session(request: "Request", config_state: "SQLSpecConfigSta
     Returns:
         A deferred session bound to the request's pending connection.
     """
-    if get_state_value(request.state, _pending_connection_key(config_state.connection_key), None) is None:
+    if get_state_value(request.state, _deferred_connection_key(config_state.connection_key), None) is None:
         get_state_value(request.state, config_state.connection_key)
 
     async def open_session() -> Any:
-        await acquire_pending_connection_async(request, config_state)
-        return await get_or_create_driver_session_async(request, config_state)
+        await ensure_request_connection_async(request, config_state)
+        return await get_or_create_db_session_async(request, config_state)
 
     def current_session() -> Any:
         if has_state_value(request.state, config_state.connection_key):
-            return get_or_create_driver_session(request, config_state)
+            return _get_connected_db_session(request, config_state)
         return None
 
     return DeferredAsyncSession(
@@ -594,7 +594,7 @@ async def get_request_resource_async(
         return current
 
 
-class _PendingConnection:
+class _DeferredConnectionSlot:
     """Deferred request-scoped connection slot checked out on first access."""
 
     __slots__ = ("config_state", "lock", "request", "stack")
@@ -615,11 +615,11 @@ class _ResponseCompletion:
         self.complete = False
 
 
-def _response_owner_key(connection_key: str) -> str:
+def _response_completion_key(connection_key: str) -> str:
     return f"sqlspec_response_owner_{connection_key}"
 
 
-def _pending_connection_key(connection_key: str) -> str:
+def _deferred_connection_key(connection_key: str) -> str:
     return f"sqlspec_pending_connection_{connection_key}"
 
 
@@ -811,7 +811,7 @@ def _reject_missing_tenant(scope: "Scope") -> NoReturn:
     raise HTTPException(status_code=401, detail="Authentication required")
 
 
-async def _clear_deferred_session(request: "Request", key: str) -> None:
+async def _pop_and_close_session(request: "Request", key: str) -> None:
     """Pop one deferred session key from request state, closing its open streams and detaching it."""
     deferred = pop_state_value(request.state, key)
     if deferred is not None:
@@ -821,7 +821,7 @@ async def _clear_deferred_session(request: "Request", key: str) -> None:
             deferred._mark_closed()
 
 
-def _is_routing_state_active(state: "SQLSpecConfigState") -> bool:
+def _uses_request_routing(state: "SQLSpecConfigState") -> bool:
     return bool(
         state.enable_routing_middleware
         and (

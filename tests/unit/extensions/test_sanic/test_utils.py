@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.sanic import SanicConfigState, get_connection_from_request, get_or_create_session
+from sqlspec.extensions.sanic import SanicConfigState, get_connection_from_request, get_or_create_db_session
 from sqlspec.extensions.sanic._utils import get_context_value, pop_context_value, set_context_value
 
 
@@ -45,7 +45,7 @@ def test_get_connection_from_request_raises_when_missing() -> None:
 
 
 def test_get_or_create_session_creates_and_caches_session() -> None:
-    """get_or_create_session should cache one driver instance per request."""
+    """get_or_create_db_session should cache one driver instance per request."""
     connection = object()
     request = SimpleNamespace(ctx=SimpleNamespace(db_connection=connection))
     config = MagicMock()
@@ -54,8 +54,8 @@ def test_get_or_create_session_creates_and_caches_session() -> None:
     config.driver_features = {"feature": True}
     config_state = _make_state(config=config)
 
-    session = get_or_create_session(request, config_state)
-    cached_session = get_or_create_session(request, config_state)
+    session = get_or_create_db_session(request, config_state)
+    cached_session = get_or_create_db_session(request, config_state)
 
     assert cached_session is session
     config.driver_type.assert_called_once_with(

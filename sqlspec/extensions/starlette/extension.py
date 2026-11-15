@@ -12,8 +12,8 @@ from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import (
-    get_or_create_driver_session_async,
-    get_or_create_session,
+    get_or_create_db_session,
+    get_or_create_db_session_async,
     get_state_value,
     has_state_value,
 )
@@ -22,8 +22,8 @@ from sqlspec.extensions.starlette.middleware import (
     SQLCommenterMiddleware,
     SQLSpecTenantRequestMiddleware,
     SQLSpecTransactionMiddleware,
-    acquire_pending_connection_async,
-    acquire_pending_connection_sync,
+    ensure_request_connection_async,
+    ensure_request_connection_sync,
     get_request_resource,
     get_request_resource_async,
     has_tenant_strategy,
@@ -345,7 +345,7 @@ class SQLSpecPlugin:
             Database session (driver instance).
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-        return get_or_create_session(request, config_state)
+        return get_or_create_db_session(request, config_state)
 
     async def get_session_async(self, request: "Request", key: Any = None) -> Any:
         """Get or create database session asynchronously, acquiring deferred tenant leases on demand.
@@ -359,8 +359,8 @@ class SQLSpecPlugin:
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         if not has_state_value(request.state, config_state.connection_key):
-            await acquire_pending_connection_async(request, config_state)
-        return cast("Any", await get_or_create_driver_session_async(request, config_state))
+            await ensure_request_connection_async(request, config_state)
+        return cast("Any", await get_or_create_db_session_async(request, config_state))
 
     def get_connection(self, request: "Request", key: Any = None) -> Any:
         """Get database connection from request state, checking it out on first access.
@@ -378,7 +378,7 @@ class SQLSpecPlugin:
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         if not has_state_value(request.state, config_state.connection_key):
-            return acquire_pending_connection_sync(request, config_state)
+            return ensure_request_connection_sync(request, config_state)
         return get_state_value(request.state, config_state.connection_key)
 
     async def get_connection_async(self, request: "Request", key: Any = None) -> Any:
@@ -393,7 +393,7 @@ class SQLSpecPlugin:
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         if not has_state_value(request.state, config_state.connection_key):
-            return await acquire_pending_connection_async(request, config_state)
+            return await ensure_request_connection_async(request, config_state)
         return get_state_value(request.state, config_state.connection_key)
 
     def get_replica_session(self, request: "Request", key: Any = None) -> Any:

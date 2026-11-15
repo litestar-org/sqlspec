@@ -38,9 +38,9 @@ Litestar plugin, ASGI transaction and correlation middlewares, automatic HTTP `4
         - get_config
         - resolve_tenant_settings
         - get_annotations
-        - provide_request_session
-        - provide_request_session_sync
-        - provide_request_session_async
+        - provide_db_session
+        - provide_db_session_sync
+        - provide_db_session_async
 
 ::: sqlspec.extensions.litestar.plugin.CommitMode
     options:
