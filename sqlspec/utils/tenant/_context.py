@@ -31,7 +31,7 @@ MAX_TENANT_ID_BYTES: Final = 256
 _TENANT_BYPASS_ATTR: Final = "__sqlspec_tenant_bypass__"
 _MISSING_TENANT_MESSAGE: Final = "A tenant scope or explicit bypass is required before acquiring a connection"
 _SYNC_RESOLUTION_MESSAGE: Final = (
-    "This request resolves its tenant asynchronously; use await TenantContext.aget() / arequire(), "
+    "This request resolves its tenant asynchronously; use await TenantContext.get_async() / require_async(), "
     "an async session, or a synchronous tenant_extractor"
 )
 
@@ -148,7 +148,7 @@ class TenantRequestBinding:
         self._memo[memo_key] = payload
         return payload
 
-    async def aresolve(self, key: Any = None) -> TenantContextPayload | None:
+    async def resolve_async(self, key: Any = None) -> TenantContextPayload | None:
         """Return the tenant for ``key``, awaiting an asynchronous resolver on first use."""
         key = self._key(key)
         memo_key = id(key)
@@ -173,13 +173,13 @@ class TenantRequestBinding:
         """
         return self._require_resolved(key, self.resolve(key))
 
-    async def arequire(self, key: Any = None) -> TenantContextPayload:
+    async def require_async(self, key: Any = None) -> TenantContextPayload:
         """Return the tenant for ``key`` or reject the request, awaiting asynchronous resolution.
 
         Raises:
             TenantContextError: No tenant resolved and no framework response applies.
         """
-        return self._require_resolved(key, await self.aresolve(key))
+        return self._require_resolved(key, await self.resolve_async(key))
 
     def freeze(self) -> None:
         """Resolve every pending key from request state, then stop reading it.
@@ -195,12 +195,12 @@ class TenantRequestBinding:
                     self._memo[id(key)] = None
         self._frozen = True
 
-    async def afreeze(self) -> None:
+    async def freeze_async(self) -> None:
         """Resolve every pending key from request state asynchronously, then stop reading it."""
         for key in self._keys:
             if id(key) not in self._memo:
                 try:
-                    await self.aresolve(key)
+                    await self.resolve_async(key)
                 except Exception:
                     self._memo[id(key)] = None
         self._frozen = True
@@ -219,7 +219,7 @@ class TenantRequestBinding:
     async def _ambient_value_async(self, key: Any) -> TenantContextPayload | None:
         ambient = self._ambient
         if isinstance(ambient, TenantRequestBinding):
-            return await ambient.aresolve(key)
+            return await ambient.resolve_async(key)
         return ambient
 
     def _require_resolved(self, key: Any, payload: TenantContextPayload | None) -> TenantContextPayload:
@@ -252,7 +252,7 @@ class TenantContext:
         return value
 
     @classmethod
-    async def aget(cls, key: Any = None) -> TenantContextPayload | None:
+    async def get_async(cls, key: Any = None) -> TenantContextPayload | None:
         """Return the current payload, awaiting asynchronous request resolution.
 
         Args:
@@ -260,7 +260,7 @@ class TenantContext:
         """
         value = tenant_context_var.get()
         if isinstance(value, TenantRequestBinding):
-            return await value.aresolve(key)
+            return await value.resolve_async(key)
         return value
 
     @classmethod
@@ -284,7 +284,7 @@ class TenantContext:
         return value
 
     @classmethod
-    async def arequire(cls, key: Any = None) -> TenantContextPayload:
+    async def require_async(cls, key: Any = None) -> TenantContextPayload:
         """Return the current payload or fail, awaiting asynchronous request resolution.
 
         Args:
@@ -298,7 +298,7 @@ class TenantContext:
         """
         value = tenant_context_var.get()
         if isinstance(value, TenantRequestBinding):
-            return await value.arequire(key)
+            return await value.require_async(key)
         if value is None:
             raise TenantContextError(_MISSING_TENANT_MESSAGE)
         return value

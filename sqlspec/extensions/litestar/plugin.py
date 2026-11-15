@@ -43,12 +43,12 @@ from sqlspec.extensions.litestar._utils import (
 from sqlspec.extensions.litestar.cli import database_group
 from sqlspec.extensions.litestar.handlers import (
     _REQUEST_EXCEPTION_KEY,
-    _capture_connection_tenant,
-    _capture_connection_tenant_sync,
     _finalize_request_transaction,
     _open_request_resource_async,
     _open_request_resource_sync,
     _release_request_connection,
+    _resolve_connection_tenant_async,
+    _resolve_connection_tenant_sync,
     autocommit_handler_maker,
     build_db_session,
     db_connection_provider_maker,
@@ -67,8 +67,8 @@ from sqlspec.extensions.litestar.handlers import (
 from sqlspec.extensions.litestar.tenant import (
     TenantResolutionSettings,
     raise_missing_tenant_http_exception,
-    receipt_state_key,
     resolve_route_tenant,
+    tenant_receipt_key,
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
@@ -262,7 +262,7 @@ class _TenantResolutionTarget:
     receipt_state_keys: tuple[str, ...]
 
 
-class TenantRequestMiddleware:
+class SQLSpecTenantRequestMiddleware:
     """Bind one lazy tenant resolver for each HTTP or WebSocket request.
 
     Installed only when a registered configuration enables ``tenant_strategy``. Request start
@@ -299,7 +299,7 @@ class TenantRequestMiddleware:
                     if message_type == "http.response.pathsend" or (
                         message_type == "http.response.body" and not message.get("more_body", False)
                     ):
-                        await binding.afreeze()
+                        await binding.freeze_async()
                     await send(message)
 
                 await self._app(scope, receive, frozen_send)
@@ -806,7 +806,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if tenant_targets:
             app_config.middleware = [
                 *(app_config.middleware or []),
-                DefineMiddleware(TenantRequestMiddleware, targets=tenant_targets),
+                DefineMiddleware(SQLSpecTenantRequestMiddleware, targets=tenant_targets),
             ]
 
         log_with_context(
@@ -1446,7 +1446,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 config=state.config,
                 settings=state.tenant_settings,
                 receipt_state_keys=tuple(
-                    receipt_state_key(key)
+                    tenant_receipt_key(key)
                     for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
                     if isinstance(key, str) and key
                 ),
@@ -1639,7 +1639,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if pool is None:
             self._raise_missing_connection(plugin_state.connection_key)
 
-        payload = _capture_connection_tenant_sync(plugin_state.config, scope, plugin_state.connection_key)
+        payload = _resolve_connection_tenant_sync(plugin_state.config, scope, plugin_state.connection_key)
         payload_key = tenant_payload_key(plugin_state.connection_key)
         set_sqlspec_scope_state(scope, payload_key, payload)
         try:
@@ -1663,7 +1663,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if pool is None:
             self._raise_missing_connection(plugin_state.connection_key)
 
-        payload = await _capture_connection_tenant(plugin_state.config, scope, plugin_state.connection_key)
+        payload = await _resolve_connection_tenant_async(plugin_state.config, scope, plugin_state.connection_key)
         try:
             with TenantContext.bind(payload):
                 cm = cast("AbstractAsyncContextManager[Any]", plugin_state.config.provide_connection(pool))

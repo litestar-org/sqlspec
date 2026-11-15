@@ -664,7 +664,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         self._initial_priority: Any = None
 
     async def _acquire(self) -> Any:
-        payload = await TenantContext.arequire(self.tenant_key)
+        payload = await TenantContext.require_async(self.tenant_key)
         options = resolve_tenant_shard_keys(payload, self._config.driver_features, self._acquire_options)
         self._pool = await self._config.provide_pool()
         kwargs = self._config._build_pool_acquire_kwargs(

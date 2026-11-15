@@ -28,14 +28,14 @@ one, the plugin installs no tenant handling and adds no per-request work.
   lease, `provide_session()`, a `SQLSpec*Service(config=...)`, or
   `TenantContext.get()` / `TenantContext.require()` needs it, once per
   database configuration. Async extractors resolve at async access points; use
-  `await TenantContext.aget()` instead of the synchronous `get()` when your
+  `await TenantContext.get_async()` instead of the synchronous `get()` when your
   extractor is asynchronous.
 - **Precedence** (highest first):
     1. `provide_session(tenant=...)` or `provide_session(bypass_tenant=True)`.
     2. A `TenantContext.scope(...)` or `TenantContext.bypass()` entered inside the handler.
     3. Route resolution: the `tenant_bypass` route marker (or Litestar
        `opt={"tenant_bypass": True}`), the request receipt from
-       `set_request_tenant(...)` / `set_connection_tenant(...)`, the configured
+       `set_request_tenant(...)`, the configured
        `tenant_extractor`, and, on Litestar, verified auth resolution.
     4. A `TenantContext` scope bound outside the request, such as
        `SQLSpecTenantMiddleware` installed in front of the application.
@@ -166,7 +166,7 @@ per configuration per request.
   extractor, so an auth database without an extractor and tenant databases with
   distinct extractors coexist in one `SQLSpecPlugin`.
 - **Receipts first**: A request receipt for the same configuration
-  (`set_request_tenant(...)`, or `set_connection_tenant(...)` on Litestar) takes
+  (`set_request_tenant(...)`) takes
   precedence over its extractor.
 
 ## Bare ASGI Applications

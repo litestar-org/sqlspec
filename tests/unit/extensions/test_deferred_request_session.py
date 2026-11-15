@@ -83,7 +83,7 @@ def _serve_litestar(config: Any, bodies: "dict[str, Body]") -> Iterator[Callable
     from litestar.response import Response
     from litestar.testing import TestClient
 
-    from sqlspec.extensions.litestar import SQLSpecPlugin, set_connection_tenant
+    from sqlspec.extensions.litestar import SQLSpecPlugin, set_request_tenant
 
     @get("/{name:str}/{status:int}")
     async def route(request: Request[Any, Any, Any]) -> Response[Any]:
@@ -92,7 +92,7 @@ def _serve_litestar(config: Any, bodies: "dict[str, Body]") -> Iterator[Callable
         access = Access(
             session=lambda: plugin.provide_db_session(config, request.app.state, request.scope),
             connection=lambda: plugin.provide_db_connection(config, request.app.state, request.scope),
-            receipt=lambda tenant: set_connection_tenant(request, tenant),
+            receipt=lambda tenant: set_request_tenant(request, tenant),
         )
         return Response(await bodies[name](access, status), status_code=status)
 

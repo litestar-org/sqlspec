@@ -410,7 +410,7 @@ class SQLSpecTenantRequestMiddleware:
 
                 async def frozen_send(message: "Message") -> None:
                     if _completes_response(message):
-                        await binding.afreeze()
+                        await binding.freeze_async()
                     await send(message)
 
                 await self.app(scope, receive, frozen_send)
@@ -679,7 +679,7 @@ async def _published_connection(
 @asynccontextmanager
 async def _open_config_connection(config_state: "SQLSpecConfigState", request: "Request") -> "AsyncGenerator[Any]":
     config = config_state.config
-    captured_payload = await TenantContext.arequire(config) if has_tenant_strategy(config) else None
+    captured_payload = await TenantContext.require_async(config) if has_tenant_strategy(config) else None
     provided: Any = None
     if config.supports_connection_pooling:
         provided = config.provide_connection(get_state_value(request.app.state, config_state.pool_key))
@@ -780,7 +780,7 @@ def _captured_sync_resource(slot: _RequestResourceSlot) -> "Generator[Any]":
 @asynccontextmanager
 async def _captured_async_resource(slot: _RequestResourceSlot) -> "AsyncGenerator[Any]":
     config = slot.config_state.config
-    captured_payload = await TenantContext.arequire(config) if has_tenant_strategy(config) else None
+    captured_payload = await TenantContext.require_async(config) if has_tenant_strategy(config) else None
     with TenantContext.bind(captured_payload):
         context = with_ensure_async_(_resource_context(slot))
         value = await context.__aenter__()

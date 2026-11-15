@@ -132,7 +132,7 @@ class TenantEndpoint(NoPoolAsyncConfig[Any, Any]):
 
     @asynccontextmanager
     async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Any]:
-        yield await TenantContext.arequire(self._tenant_key)
+        yield await TenantContext.require_async(self._tenant_key)
 
 
 async def test_async_request_tenant_resolution_is_lazy_and_shared_with_replicas() -> None:
@@ -150,7 +150,7 @@ async def test_async_request_tenant_resolution_is_lazy_and_shared_with_replicas(
         assert seen == []
         async with context as payload:
             assert payload.tenant_id == "acme"
-        await binding.afreeze()
+        await binding.freeze_async()
         with RoutingContext.primary("app"):
             async with primary.provide_replica_session() as payload:
                 assert payload.tenant_id == "acme"

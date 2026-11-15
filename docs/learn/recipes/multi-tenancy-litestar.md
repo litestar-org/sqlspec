@@ -27,7 +27,7 @@ once the configuration uses a tenant-enabled adapter such as
 Litestar tries these sources in order for each tenant configuration:
 
 1. A route marked `opt={"tenant_bypass": True}` or decorated with `@tenant_bypass`.
-2. A receipt from `set_connection_tenant(connection, tenant_id)`.
+2. A receipt from `set_request_tenant(connection, tenant_id)`.
 3. The configured `tenant_extractor`.
 4. A verified path parameter, server session key, or configured header,
    checked against the user's memberships, falling back to the verified
@@ -36,7 +36,7 @@ Litestar tries these sources in order for each tenant configuration:
 
 A selector outside the caller's memberships always fails closed with `403`.
 In custom guards or dependencies, verify membership yourself and call
-`set_connection_tenant(connection, org_id)`; pass `key=` with a session,
+`set_request_tenant(connection, org_id)`; pass `key=` with a session,
 connection, or bind key to scope the receipt to one database configuration.
 
 ## Single-Database JWT Flow

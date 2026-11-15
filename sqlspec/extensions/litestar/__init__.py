@@ -20,7 +20,7 @@ from sqlspec.extensions.litestar.tenant import (
     is_scope_authenticated,
     require_tenant,
     resolve_litestar_tenant,
-    set_connection_tenant,
+    set_request_tenant,
 )
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 from sqlspec.utils.tenant import SQLSpecTenantMiddleware, tenant_bypass
@@ -46,7 +46,7 @@ __all__ = (
     "is_scope_authenticated",
     "require_tenant",
     "resolve_litestar_tenant",
-    "set_connection_tenant",
+    "set_request_tenant",
     "set_sqlspec_scope_state",
     "tenant_bypass",
 )

@@ -295,7 +295,7 @@ class SQLSpecPlugin:
                 async with lock:
                     if not has_context_value(request.ctx, config_state.connection_key):
                         tenant = _has_tenant_strategy(config_state.config)
-                        payload = await TenantContext.arequire(config_state.config) if tenant else None
+                        payload = await TenantContext.require_async(config_state.config) if tenant else None
                         await self._acquire_request_connection(request, config_state, payload, bind_payload=tenant)
                         pop_context_value(request.ctx, self._deferred_key(config_state))
         return get_context_value(request.ctx, config_state.connection_key)
@@ -422,7 +422,9 @@ class SQLSpecPlugin:
         async with lock:
             current = get_context_value(request.ctx, resource_key, None)
             if current is None:
-                captured = await TenantContext.arequire(state.config) if _has_tenant_strategy(state.config) else None
+                captured = (
+                    await TenantContext.require_async(state.config) if _has_tenant_strategy(state.config) else None
+                )
                 with TenantContext.bind(captured):
                     context = with_ensure_async_(self._new_read_routing_context(state, kind))
                     current = await context.__aenter__()
@@ -709,7 +711,7 @@ class SQLSpecPlugin:
         try:
             binding = TenantContext.current_binding()
             if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
-                await binding.afreeze()
+                await binding.freeze_async()
             await self._finalize_request(request, response)
         finally:
             self._reset_tenant(request)
@@ -846,7 +848,7 @@ class SQLSpecPlugin:
         try:
             binding = TenantContext.current_binding()
             if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
-                await binding.afreeze()
+                await binding.freeze_async()
         finally:
             self._restore_observability_contexts(request, response)
 

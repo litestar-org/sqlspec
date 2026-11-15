@@ -568,11 +568,11 @@ async def _resolve_cursor_tenant_identity(plugin: Any) -> str:
     if not configs:
         return ""
     if len(configs) == 1:
-        return f"|tenant:{_tenant_identity_of(await TenantContext.aget(configs[0]))}"
+        return f"|tenant:{_tenant_identity_of(await TenantContext.get_async(configs[0]))}"
     parts: list[str] = []
     for index, config in enumerate(configs):
         label = getattr(config, "bind_key", None) or str(index)
-        parts.append(f"{label}={_tenant_identity_of(await TenantContext.aget(config))}")
+        parts.append(f"{label}={_tenant_identity_of(await TenantContext.get_async(config))}")
     return "|tenants:" + ",".join(parts)
 
 

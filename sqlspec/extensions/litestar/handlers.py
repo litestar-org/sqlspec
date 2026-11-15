@@ -374,7 +374,7 @@ def db_connection_provider_maker(
             msg = f"Database pool with key '{pool_key}' not found. Cannot create a connection."
             raise ImproperConfigurationError(msg)
 
-        payload = await _capture_connection_tenant(config, scope, connection_key)
+        payload = await _resolve_connection_tenant_async(config, scope, connection_key)
         try:
             context_manager: AbstractAsyncContextManager[ConnectionT] | None = None
             with TenantContext.bind(payload):
@@ -635,7 +635,7 @@ async def _release_request_connection(
                             mark_deferred_closed()
 
 
-async def _capture_connection_tenant(
+async def _resolve_connection_tenant_async(
     config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", connection_key: str
 ) -> TenantContextPayload | None:
     """Resolve and record the tenant for one request connection.
@@ -646,7 +646,7 @@ async def _capture_connection_tenant(
     cache_key = f"_sqlspec_resolved_tenant_{id(config)}"
     cached = get_sqlspec_scope_state(scope, cache_key)
     if cached is None:
-        payload = await TenantContext.arequire(config) if has_tenant_strategy(config) else None
+        payload = await TenantContext.require_async(config) if has_tenant_strategy(config) else None
         set_sqlspec_scope_state(scope, cache_key, (payload,))
     else:
         payload = cached[0]
@@ -701,7 +701,7 @@ async def _release_connection(
             await ensure_async_(connection.close)()
 
 
-def _capture_connection_tenant_sync(config: Any, scope: "Scope", connection_key: str) -> TenantContextPayload | None:
+def _resolve_connection_tenant_sync(config: Any, scope: "Scope", connection_key: str) -> TenantContextPayload | None:
     cache_key = f"_sqlspec_resolved_tenant_{id(config)}"
     cached = get_sqlspec_scope_state(scope, cache_key)
     if cached is None:
@@ -717,7 +717,7 @@ def _open_request_resource_sync(config: Any, scope: "Scope", resource_key: str, 
     current = get_sqlspec_scope_state(scope, resource_key)
     if current is not None:
         return current
-    payload = _capture_connection_tenant_sync(config, scope, resource_key)
+    payload = _resolve_connection_tenant_sync(config, scope, resource_key)
     with TenantContext.bind(payload):
         if kind == "routing":
             context = config.provide_routing_session()
@@ -744,7 +744,7 @@ async def _open_request_resource_async(config: Any, scope: "Scope", resource_key
         current = get_sqlspec_scope_state(scope, resource_key)
         if current is not None:
             return current
-        payload = await _capture_connection_tenant(config, scope, resource_key)
+        payload = await _resolve_connection_tenant_async(config, scope, resource_key)
         with TenantContext.bind(payload):
             if kind == "routing":
                 context = config.provide_routing_session()
