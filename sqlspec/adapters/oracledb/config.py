@@ -44,7 +44,6 @@ from sqlspec.adapters.oracledb.core import (
     apply_oracle_transaction_priority,
     apply_wallet_ssl_context,
     build_connection_config,
-    capture_oracle_transaction_priority_baseline,
     clear_oracle_otel_trace_context,
     create_mapped_exception,
     default_statement_config,
@@ -55,9 +54,10 @@ from sqlspec.adapters.oracledb.core import (
     extract_oracle_wallet_zip,
     extract_static_alter_session_config,
     forget_oracle_session_state,
+    get_oracle_transaction_priority,
     has_callable_alter_session_fields,
+    has_oracle_transaction_priority,
     is_oracle_standby_failover_error,
-    oracle_transaction_priority_matches,
     release_extracted_wallet_dir,
     retain_extracted_wallet_dir,
     rewrite_oracle_dsn_service_name,
@@ -439,9 +439,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
             hook = self._config.driver_features.get("session_context_hook")
             if hook is not None:
                 execute_session_release_sync(conn, hook)
-            if self._initial_priority is not None and not oracle_transaction_priority_matches(
-                conn, self._initial_priority
-            ):
+            if self._initial_priority is not None and not has_oracle_transaction_priority(conn, self._initial_priority):
                 conn.rollback()
                 apply_oracle_transaction_priority(conn, self._initial_priority)
         except BaseException as exc:
@@ -1047,9 +1045,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
             hook = self._config.driver_features.get("session_context_hook")
             if hook is not None:
                 await execute_session_release_async(conn, hook)
-            if self._initial_priority is not None and not oracle_transaction_priority_matches(
-                conn, self._initial_priority
-            ):
+            if self._initial_priority is not None and not has_oracle_transaction_priority(conn, self._initial_priority):
                 await conn.rollback()
                 apply_oracle_transaction_priority(conn, self._initial_priority)
         except BaseException as exc:
@@ -1768,7 +1764,7 @@ def _oracle_checkout_state(
         skip = desired is not None and not has_callable_alter_session_fields(hook) and connection.tag == desired
     elif config._owns_pool_session_callback and not has_callable_alter_session_fields(hook):
         skip = True
-    initial_priority = capture_oracle_transaction_priority_baseline(
+    initial_priority = get_oracle_transaction_priority(
         connection, configured_priority=config.connection_config.get("transaction_priority")
     )
     requested = options.transaction_priority

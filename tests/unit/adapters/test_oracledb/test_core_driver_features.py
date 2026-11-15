@@ -40,14 +40,14 @@ from sqlspec.adapters.oracledb.core import (
     build_insert_statement,
     build_tns_description,
     build_truncate_statement,
-    capture_oracle_transaction_priority_baseline,
     extract_duality_etag,
     extract_duality_view_etag,
     extract_oracle_wallet_zip,
-    format_oracle_table_identifier,
+    format_table_identifier,
+    get_oracle_transaction_priority,
+    has_oracle_transaction_priority,
     inject_duality_view_etag,
     normalize_oracle_transaction_priority,
-    oracle_transaction_priority_matches,
     sanitize_oracle_text_query,
 )
 from sqlspec.core import StatementConfig
@@ -836,7 +836,7 @@ def test_unchanged_transaction_priority_does_not_assign_native_property() -> Non
 )
 def test_format_oracle_table_identifier_and_statement_builders(raw_table: str, expected_table: str) -> None:
     """Oracle table identifier formatter preserves valid unquoted and quoted identifiers."""
-    assert format_oracle_table_identifier(raw_table) == expected_table
+    assert format_table_identifier(raw_table) == expected_table
     assert build_truncate_statement(raw_table) == f"TRUNCATE TABLE {expected_table}"
     assert (
         build_insert_statement(raw_table, ["id", "user"])
@@ -850,7 +850,7 @@ def test_format_oracle_table_identifier_and_statement_builders(raw_table: str, e
 def test_format_oracle_table_identifier_rejects_malformed_identifiers(bad_table: str) -> None:
     """Malformed Oracle table identifiers raise ImproperConfigurationError."""
     with pytest.raises(ImproperConfigurationError):
-        format_oracle_table_identifier(bad_table)
+        format_table_identifier(bad_table)
 
 
 @pytest.mark.parametrize("bad_col", ["", "col\x00", "col\nname"])
@@ -879,16 +879,16 @@ def test_normalize_and_apply_default_transaction_priority_with_none_state() -> N
             self._priority = value
 
     conn = UntouchedConnection()
-    initial_priority = capture_oracle_transaction_priority_baseline(conn)
+    initial_priority = get_oracle_transaction_priority(conn)
     assert initial_priority is TransactionPriority.DEFAULT
-    assert oracle_transaction_priority_matches(conn, initial_priority) is True
+    assert has_oracle_transaction_priority(conn, initial_priority) is True
 
     apply_oracle_transaction_priority(conn, TransactionPriority.DEFAULT)
     assert conn.writes == []
 
     apply_oracle_transaction_priority(conn, "HIGH")
     assert conn.writes == [TransactionPriority.HIGH]
-    assert oracle_transaction_priority_matches(conn, initial_priority) is False
+    assert has_oracle_transaction_priority(conn, initial_priority) is False
 
 
 @pytest.mark.parametrize(

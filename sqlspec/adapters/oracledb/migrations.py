@@ -8,7 +8,7 @@ import getpass
 import importlib
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.oracledb.core import format_oracle_table_identifier
+from sqlspec.adapters.oracledb.core import format_table_identifier
 from sqlspec.builder import CreateTable, Select, sql
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.version import parse_version
@@ -64,7 +64,7 @@ class OracleMigrationTrackerMixin:
 
     def _escaped_plsql_version_table(self) -> str:
         """Validate version_table and escape single quotes for PL/SQL string literals."""
-        formatted_table = format_oracle_table_identifier(self.version_table)
+        formatted_table = format_table_identifier(self.version_table)
         return formatted_table.replace("'", "''")
 
     def _tracking_table_builder(self) -> CreateTable:
@@ -400,7 +400,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, SyncMigrationTrack
         if not column_def:
             return
 
-        formatted_table = format_oracle_table_identifier(self.version_table)
+        formatted_table = format_table_identifier(self.version_table)
         quoted_col = self._quote_oracle_identifier(column_def.name)
         default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
         not_null_clause = " NOT NULL" if column_def.not_null else ""
@@ -629,7 +629,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, AsyncMigrationTra
         if not column_def:
             return
 
-        formatted_table = format_oracle_table_identifier(self.version_table)
+        formatted_table = format_table_identifier(self.version_table)
         quoted_col = self._quote_oracle_identifier(column_def.name)
         default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
         not_null_clause = " NOT NULL" if column_def.not_null else ""

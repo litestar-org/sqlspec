@@ -129,7 +129,6 @@ __all__ = (
     "build_tns_description",
     "build_truncate_statement",
     "build_wallet_ssl_context_if_needed",
-    "capture_oracle_transaction_priority_baseline",
     "chain_input_handler",
     "chain_output_handler",
     "clear_end_user_security_release",
@@ -155,8 +154,10 @@ __all__ = (
     "extract_pipeline_single_row",
     "extract_static_alter_session_config",
     "forget_oracle_session_state",
-    "format_oracle_table_identifier",
+    "format_table_identifier",
+    "get_oracle_transaction_priority",
     "has_callable_alter_session_fields",
+    "has_oracle_transaction_priority",
     "inject_duality_view_etag",
     "is_oracle_standby_failover_error",
     "is_oracle_standby_lag_error",
@@ -170,15 +171,14 @@ __all__ = (
     "normalize_oracle_purity",
     "normalize_oracle_sharding_keys",
     "normalize_oracle_transaction_priority",
-    "oracle_transaction_priority_matches",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
     "prepare_session_checkout_pipeline",
-    "prepare_session_checkout_with_baseline_pipeline",
+    "prepare_session_checkout_with_probe",
     "prepare_session_release_pipeline",
     "read_oracle_lob_async",
     "read_oracle_lob_sync",
-    "record_oracle_alter_session_baseline",
+    "record_initial_session_settings",
     "release_extracted_wallet_dir",
     "resolve_dbms_cloud_source_uri",
     "resolve_oracle_connection_compatible_major",
@@ -918,7 +918,7 @@ def mark_oracle_tagged_release(connection: Any, enabled: bool) -> None:
         _TAGGED_ALTER_CONN_IDS.discard(conn_id)
 
 
-def record_oracle_alter_session_baseline(connection: Any, rows: "Sequence[Any] | None") -> None:
+def record_initial_session_settings(connection: Any, rows: "Sequence[Any] | None") -> None:
     """Cache initial session edition, time zone, and NLS values for release restoration."""
     if not rows:
         return
@@ -982,7 +982,7 @@ def extract_pipeline_single_row(pipeline_result: Any) -> tuple[Any, ...] | None:
     return tuple(rows[0]) if rows else None
 
 
-def prepare_session_checkout_with_baseline_pipeline(
+def prepare_session_checkout_with_probe(
     connection: Any,
     config: "OracleSessionContextConfig | Mapping[str, Any]",
     *,
@@ -1002,7 +1002,7 @@ def prepare_session_checkout_with_baseline_pipeline(
         if getattr(oracledb_module, "TransactionPriority", None) is None:
             msg = "Oracle transaction priority requires python-oracledb 26.1 or newer"
             raise oracledb_module.NotSupportedError(msg)
-        initial_priority = capture_oracle_transaction_priority_baseline(connection)
+        initial_priority = get_oracle_transaction_priority(connection)
         if initial_priority is not None:
             _INITIAL_PRIORITY_BY_CONN_ID.setdefault(id(connection), initial_priority)
         apply_oracle_transaction_priority(connection, resolved.transaction_priority)
@@ -1089,7 +1089,7 @@ def prepare_session_checkout_pipeline(
     preserve_tagged_alter: bool = False,
 ) -> tuple[str | None, dict[str, Any]]:
     """Apply zero-round-trip connection fields and prepare optional checkout SQL."""
-    _, _, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
+    _, _, plsql, binds = prepare_session_checkout_with_probe(
         connection, config, skip_alter_session=skip_alter_session, preserve_tagged_alter=preserve_tagged_alter
     )
     return plsql, binds
@@ -1620,7 +1620,7 @@ async def coerce_many_parameters_async(
     return normalized if coerced_rows is None else coerced_rows
 
 
-def format_oracle_table_identifier(table: str) -> str:
+def format_table_identifier(table: str) -> str:
     """Validate and format a single or schema-qualified Oracle table identifier."""
     if not isinstance(table, str) or "\x00" in table or "\r" in table or "\n" in table:
         msg = f"Invalid Oracle table identifier: {table!r}"
@@ -1663,14 +1663,14 @@ def format_oracle_table_identifier(table: str) -> str:
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
-    formatted_table = format_oracle_table_identifier(table)
+    formatted_table = format_table_identifier(table)
     column_list = ", ".join(_format_insert_column(col) for col in columns)
     placeholders = ", ".join(f":{idx + 1}" for idx in range(len(columns)))
     return f"INSERT INTO {formatted_table} ({column_list}) VALUES ({placeholders})"
 
 
 def build_truncate_statement(table: str) -> str:
-    return f"TRUNCATE TABLE {format_oracle_table_identifier(table)}"
+    return f"TRUNCATE TABLE {format_table_identifier(table)}"
 
 
 def build_pipeline_stack_result(
@@ -2824,7 +2824,7 @@ def execute_session_checkout_sync(
 ) -> None:
     """Apply checkout state and execute optional initial-settings probe plus PL/SQL block."""
     try:
-        initial_settings_sql, initial_settings_binds, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
+        initial_settings_sql, initial_settings_binds, plsql, binds = prepare_session_checkout_with_probe(
             connection, config, skip_alter_session=skip_alter_session, preserve_tagged_alter=preserve_tagged_alter
         )
         if initial_settings_sql is not None or plsql is not None:
@@ -2833,7 +2833,7 @@ def execute_session_checkout_sync(
                     cursor.execute(
                         initial_settings_sql, initial_settings_binds
                     ) if initial_settings_binds else cursor.execute(initial_settings_sql)
-                    record_oracle_alter_session_baseline(connection, cursor.fetchall())
+                    record_initial_session_settings(connection, cursor.fetchall())
                 if plsql is not None:
                     cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
     except oracledb_module.DatabaseError as exc:
@@ -2864,7 +2864,7 @@ async def execute_session_checkout_async(
 ) -> None:
     """Apply asynchronous checkout state and optional initial-settings probe plus PL/SQL block."""
     try:
-        initial_settings_sql, initial_settings_binds, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
+        initial_settings_sql, initial_settings_binds, plsql, binds = prepare_session_checkout_with_probe(
             connection, config, skip_alter_session=skip_alter_session, preserve_tagged_alter=preserve_tagged_alter
         )
         if initial_settings_sql is not None or plsql is not None:
@@ -2873,7 +2873,7 @@ async def execute_session_checkout_async(
                     await cursor.execute(
                         initial_settings_sql, initial_settings_binds
                     ) if initial_settings_binds else await cursor.execute(initial_settings_sql)
-                    record_oracle_alter_session_baseline(connection, await cursor.fetchall())
+                    record_initial_session_settings(connection, await cursor.fetchall())
                 if plsql is not None:
                     await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
     except oracledb_module.DatabaseError as exc:
@@ -3135,7 +3135,7 @@ def normalize_oracle_transaction_priority(value: Any) -> Any:
     return value
 
 
-def capture_oracle_transaction_priority_baseline(connection: Any, *, configured_priority: Any = None) -> Any:
+def get_oracle_transaction_priority(connection: Any, *, configured_priority: Any = None) -> Any:
     """Capture the effective initial native transaction priority for a connection.
 
     Untouched Oracle connections report ``None`` until priority is changed,
@@ -3156,7 +3156,7 @@ def capture_oracle_transaction_priority_baseline(connection: Any, *, configured_
     return _resolve_transaction_priority_value(current, priority_type)
 
 
-def oracle_transaction_priority_matches(connection: Any, target: Any) -> bool:
+def has_oracle_transaction_priority(connection: Any, target: Any) -> bool:
     """Return whether ``connection.transaction_priority`` effectively matches ``target``."""
     resolved = normalize_oracle_transaction_priority(target)
     if resolved is None:
@@ -3175,7 +3175,7 @@ def apply_oracle_transaction_priority(connection: Any, priority: Any) -> None:
     resolved = normalize_oracle_transaction_priority(priority)
     if resolved is not None:
         try:
-            if not oracle_transaction_priority_matches(connection, resolved):
+            if not has_oracle_transaction_priority(connection, resolved):
                 connection.transaction_priority = resolved
         except oracledb_module.Error as exc:
             raise create_mapped_exception(exc) from exc
@@ -3811,7 +3811,7 @@ def _session_release_needs_priority_rollback(
     return (
         resolved.reset_on_release
         and initial_priority is not None
-        and not oracle_transaction_priority_matches(connection, initial_priority)
+        and not has_oracle_transaction_priority(connection, initial_priority)
     )
 
 

@@ -835,7 +835,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def _ensure_pragmas(self, connection: Any) -> None:
         """Apply PRAGMA optimization profile once per live pooled connection."""
-        token = SqliteConnectionPool.resolve_connection_token(connection, self._config, self._read_config)
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config, self._read_config)
         if token is not None and token in self._configured_connections:
             return
         self._apply_pragmas(connection)
@@ -852,7 +852,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         _close_cursor(connection.execute("PRAGMA journal_size_limit = 67108864"))
         for pragma_name, pragma_value in self._pragma_overrides:
             _close_cursor(connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
-        token = SqliteConnectionPool.resolve_connection_token(connection, self._config, self._read_config)
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config, self._read_config)
         if token is not None:
             self._configured_connections.add(token)
 
@@ -1371,7 +1371,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         return statements
 
     def _ensure_foreign_keys(self, connection: Any) -> None:
-        token = SqliteConnectionPool.resolve_connection_token(connection, self._config, self._read_config)
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config, self._read_config)
         if token is not None and token in self._configured_connections:
             return
         self._enable_foreign_keys(connection)
@@ -1385,7 +1385,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         _close_cursor(connection.execute("PRAGMA foreign_keys = ON"))
         for pragma_name, pragma_value in self._pragma_overrides:
             _close_cursor(connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
-        token = SqliteConnectionPool.resolve_connection_token(connection, self._config, self._read_config)
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config, self._read_config)
         if token is not None:
             self._configured_connections.add(token)
 

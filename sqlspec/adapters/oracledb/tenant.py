@@ -13,7 +13,6 @@ from sqlspec.adapters.oracledb.core import (
     _validate_oracle_identifier,
     apply_end_user_security_checkout,
     apply_oracle_transaction_priority,
-    capture_oracle_transaction_priority_baseline,
     clear_end_user_security_release,
     clear_oracle_otel_trace_context,
     execute_session_checkout_async,
@@ -22,12 +21,13 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_sync,
     extract_pipeline_single_row,
     forget_oracle_session_state,
+    get_oracle_transaction_priority,
     has_callable_alter_session_fields,
+    has_oracle_transaction_priority,
     mark_oracle_tagged_release,
-    oracle_transaction_priority_matches,
-    prepare_session_checkout_with_baseline_pipeline,
+    prepare_session_checkout_with_probe,
     prepare_session_release_pipeline,
-    record_oracle_alter_session_baseline,
+    record_initial_session_settings,
     synthesize_session_state_tag,
 )
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
@@ -441,10 +441,8 @@ class OracleAsyncIdentifierStrategy:
             variables = _tenant_variables(payload, self._variable_keys)
             with TenantContext.bind(payload):
                 tenant_client_identifier()
-                initial_settings_sql, initial_settings_binds, sql, binds = (
-                    prepare_session_checkout_with_baseline_pipeline(
-                        connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
-                    )
+                initial_settings_sql, initial_settings_binds, sql, binds = prepare_session_checkout_with_probe(
+                    connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
                 )
                 if variables:
                     cast("Any", connection).set_app_context("CLIENTCONTEXT", **variables)
@@ -457,7 +455,7 @@ class OracleAsyncIdentifierStrategy:
                 try:
                     results = await connection.run_pipeline(pipeline, continue_on_error=False)
                     if initial_settings_sql is not None and results:
-                        record_oracle_alter_session_baseline(connection, results[0].rows)
+                        record_initial_session_settings(connection, results[0].rows)
                     row = extract_pipeline_single_row(results[-1])
                 except Exception as exc:
                     msg = "Oracle tenant identifier pipeline checkout failed"
@@ -597,7 +595,7 @@ class OracleSyncTenantLease(SyncTenantLease):
         if priority is None:
             priority = configured_priority
         try:
-            self._initial_priority = capture_oracle_transaction_priority_baseline(
+            self._initial_priority = get_oracle_transaction_priority(
                 connection, configured_priority=configured_priority
             )
             if priority is not None:
@@ -625,7 +623,7 @@ class OracleSyncTenantLease(SyncTenantLease):
             with TenantContext.bind(TenantContextPayload.bypass()):
                 execute_session_release_sync(connection, hook)
         initial_priority, self._initial_priority = self._initial_priority, None
-        if initial_priority is not None and not oracle_transaction_priority_matches(connection, initial_priority):
+        if initial_priority is not None and not has_oracle_transaction_priority(connection, initial_priority):
             apply_oracle_transaction_priority(connection, initial_priority)
         mark_oracle_tagged_release(connection, False)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
@@ -678,7 +676,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         if priority is None:
             priority = configured_priority
         try:
-            self._initial_priority = capture_oracle_transaction_priority_baseline(
+            self._initial_priority = get_oracle_transaction_priority(
                 connection, configured_priority=configured_priority
             )
             if priority is not None:
@@ -710,7 +708,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
             with TenantContext.bind(TenantContextPayload.bypass()):
                 await execute_session_release_async(connection, hook)
         initial_priority, self._initial_priority = self._initial_priority, None
-        if initial_priority is not None and not oracle_transaction_priority_matches(connection, initial_priority):
+        if initial_priority is not None and not has_oracle_transaction_priority(connection, initial_priority):
             apply_oracle_transaction_priority(connection, initial_priority)
         mark_oracle_tagged_release(connection, False)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
@@ -841,10 +839,8 @@ class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
         if has_pipeline_capability(connection):
             with TenantContext.bind(payload):
                 tenant_client_identifier()
-                initial_settings_sql, initial_settings_binds, sql, hook_binds = (
-                    prepare_session_checkout_with_baseline_pipeline(
-                        connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
-                    )
+                initial_settings_sql, initial_settings_binds, sql, hook_binds = prepare_session_checkout_with_probe(
+                    connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
                 )
                 pipeline = create_oracle_pipeline()
                 if initial_settings_sql is not None:
@@ -856,7 +852,7 @@ class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
                 try:
                     results = await connection.run_pipeline(pipeline, continue_on_error=False)
                     if initial_settings_sql is not None and results:
-                        record_oracle_alter_session_baseline(connection, results[0].rows)
+                        record_initial_session_settings(connection, results[0].rows)
                     row = extract_pipeline_single_row(results[-1])
                 except Exception as exc:
                     msg = "Oracle trusted tenant pipeline checkout failed"

@@ -279,20 +279,20 @@ class SqliteConnectionPool:
         with self._registry_lock:
             return self._checked_out_count
 
-    def connection_token(self, connection: Any) -> object | None:
+    def get_connection_identity(self, connection: Any) -> object | None:
         """Return the weakref-capable live token for a pool-owned connection."""
         with self._registry_lock:
             return self._connection_identities.get(connection)
 
     @staticmethod
-    def resolve_connection_token(connection: Any, *configs: Any) -> object | None:
+    def resolve_connection_identity(connection: Any, *configs: Any) -> object | None:
         """Resolve the active pool connection token across primary and replica configs."""
         for config in configs:
             if config is None:
                 continue
             pool = getattr(config, "connection_instance", None)
             if isinstance(pool, SqliteConnectionPool):
-                token = pool.connection_token(connection)
+                token = pool.get_connection_identity(connection)
                 if token is not None:
                     return token
             replica_groups = getattr(config, "replica_groups", None)
@@ -301,7 +301,7 @@ class SqliteConnectionPool:
                     for replica_config in getattr(group, "configs", ()):
                         replica_pool = getattr(replica_config, "connection_instance", None)
                         if isinstance(replica_pool, SqliteConnectionPool):
-                            token = replica_pool.connection_token(connection)
+                            token = replica_pool.get_connection_identity(connection)
                             if token is not None:
                                 return token
         return None

@@ -149,14 +149,14 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         return await async_(self._delete_expired)()
 
     def _record_configured_connection(self, connection: Any) -> None:
-        token = SqliteConnectionPool.resolve_connection_token(connection, self._config)
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config)
         if token is not None:
             self._configured_connections.add(token)
 
     def _ensure_pragmas(self, connection: Any) -> None:
         if not self._pragma_statements:
             return
-        token = SqliteConnectionPool.resolve_connection_token(connection, self._config)
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config)
         if token is not None and token in self._configured_connections:
             return
         apply_extension_pragmas(connection, self._pragma_statements)
