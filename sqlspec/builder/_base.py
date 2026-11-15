@@ -1163,9 +1163,8 @@ class QueryBuilder:
             "simplify_expressions": self.simplify_expressions,
         }
 
-        dialect_key = optimizer_dialect or "default"
         cache_key = hash_optimized_expression(
-            expression, dialect=dialect_key, schema=self.schema, optimizer_settings=optimizer_settings
+            expression, dialect=optimizer_dialect, schema=self.schema, optimizer_settings=optimizer_settings
         )
 
         cache = get_cache()

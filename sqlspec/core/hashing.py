@@ -227,7 +227,7 @@ def hash_expression_node(node: "exp.Expr", include_children: bool = True, dialec
 
 def hash_optimized_expression(
     expr: "exp.Expr",
-    dialect: str,
+    dialect: "str | None",
     schema: "dict[str, Any] | None" = None,
     optimizer_settings: "dict[str, Any] | None" = None,
 ) -> str:
@@ -238,7 +238,7 @@ def hash_optimized_expression(
 
     Args:
         expr: The unoptimized expression
-        dialect: Target SQL dialect
+        dialect: Optimizer dialect, or None for generic SQL
         schema: Schema information
         optimizer_settings: Additional optimizer configuration
 

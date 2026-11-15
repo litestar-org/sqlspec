@@ -5,9 +5,10 @@ from typing import Any
 
 import pytest
 from sqlglot import exp, parse_one
+from sqlglot.dialects.dialect import Dialect
 
 from sqlspec import sql
-from sqlspec.builder import QueryBuilder, Select
+from sqlspec.builder import QueryBuilder, Select, _base
 from sqlspec.core import CacheConfig, LimitOffsetFilter, NamespacedCache, StatementConfig
 from sqlspec.core.parameters import TypedParameter
 from sqlspec.core.sqlcommenter import SQLCommenterContext
@@ -64,6 +65,26 @@ def test_optimized_expression_cache_returns_owned_copies(monkeypatch: pytest.Mon
     assert first is not second
     first.set("limit", exp.Limit(expression=exp.Literal.number(1)))
     assert second.args.get("limit") is None
+
+
+@pytest.mark.parametrize("dialect", [None, "oracle", "postgres"], ids=["generic", "oracle", "postgres"])
+def test_optimizer_cache_key_renders_with_a_sqlglot_dialect(monkeypatch: pytest.MonkeyPatch, dialect: Any) -> None:
+    """The optimizer cache key renders SQL with a dialect sqlglot accepts, never a placeholder name."""
+    seen: list[Any] = []
+    real_hash = _base.hash_optimized_expression
+
+    def recording_hash(expr: exp.Expr, dialect: Any, **kwargs: Any) -> str:
+        seen.append(dialect)
+        return real_hash(expr, dialect, **kwargs)
+
+    monkeypatch.setattr(_base, "hash_optimized_expression", recording_hash)
+
+    sql.select("*", dialect=dialect).from_("users").where_eq("id", 1).build()
+
+    assert seen
+    for used in seen:
+        if used is not None:
+            Dialect.get_or_raise(used)
 
 
 @pytest.mark.parametrize("builder_kind", ["select", "insert", "update", "delete", "merge"])
