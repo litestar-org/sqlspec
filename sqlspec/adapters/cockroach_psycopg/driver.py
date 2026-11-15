@@ -70,7 +70,7 @@ _T = TypeVar("_T")
 class CockroachPsycopgSyncStreamSource:
     """Sync chunk source for CockroachDB Psycopg with follower read support."""
 
-    __slots__ = ("_auto_started", "_driver", "_underlying")
+    __slots__ = ("_auto_started", "_connection", "_driver", "_underlying")
 
     def __init__(
         self, driver: "CockroachPsycopgSyncDriver", underlying: "PsycopgSyncStreamSource", auto_started: bool
@@ -78,6 +78,7 @@ class CockroachPsycopgSyncStreamSource:
         self._driver = driver
         self._underlying = underlying
         self._auto_started = auto_started
+        self._connection = driver.connection
 
     @property
     def column_types(self) -> "dict[str, str] | None":
@@ -99,7 +100,13 @@ class CockroachPsycopgSyncStreamSource:
         try:
             self._underlying.close(error=error)
         finally:
-            if self._auto_started and self._driver._connection_in_transaction():
+            connection = self._connection
+            self._connection = None
+            if (
+                self._auto_started
+                and self._driver.connection is connection
+                and self._driver._connection_in_transaction()
+            ):
                 if error:
                     with suppress(Exception):
                         self._driver.rollback()
@@ -110,7 +117,7 @@ class CockroachPsycopgSyncStreamSource:
 class CockroachPsycopgAsyncStreamSource:
     """Async chunk source for CockroachDB Psycopg with follower read support."""
 
-    __slots__ = ("_auto_started", "_driver", "_statement", "_underlying")
+    __slots__ = ("_auto_started", "_connection", "_driver", "_statement", "_underlying")
 
     def __init__(
         self, driver: "CockroachPsycopgAsyncDriver", statement: "SQL", underlying: "PsycopgAsyncStreamSource"
@@ -119,12 +126,14 @@ class CockroachPsycopgAsyncStreamSource:
         self._statement = statement
         self._underlying = underlying
         self._auto_started = False
+        self._connection: Any = None
 
     @property
     def column_types(self) -> "dict[str, str] | None":
         return getattr(self._underlying, "column_types", None)
 
     async def start(self) -> None:
+        self._connection = self._driver.connection
         if self._driver._wants_follower_read(self._statement):
             self._auto_started = await self._driver._begin_follower_read_transaction()
         try:
@@ -142,7 +151,13 @@ class CockroachPsycopgAsyncStreamSource:
         try:
             await self._underlying.close(error=error)
         finally:
-            if self._auto_started and self._driver._connection_in_transaction():
+            connection = self._connection
+            self._connection = None
+            if (
+                self._auto_started
+                and self._driver.connection is connection
+                and self._driver._connection_in_transaction()
+            ):
                 if error:
                     with suppress(Exception):
                         await self._driver.rollback()

@@ -448,7 +448,7 @@ def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":
 class AsyncpgStreamSource:
     """Compiled async chunk source streaming dict rows from an asyncpg cursor in a stream-owned transaction."""
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_timeout", "_transaction")
+    __slots__ = ("_chunk_size", "_connection", "_cursor", "_driver", "_parameters", "_sql", "_timeout", "_transaction")
 
     def __init__(
         self,
@@ -468,6 +468,7 @@ class AsyncpgStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._connection: Any = None
         self._cursor: Any = None
         self._transaction: Any = None
 
@@ -505,6 +506,10 @@ class AsyncpgStreamSource:
         self._cursor = None
         transaction = self._transaction
         self._transaction = None
+        connection = self._connection
+        self._connection = None
+        if self._driver.connection is not connection:
+            return
         try:
             if cursor is not None and getattr(cursor, "_portal_name", None):
                 await cursor._close_portal(self._timeout)
@@ -515,20 +520,22 @@ class AsyncpgStreamSource:
                     await transaction.commit()
         except BaseException:
             with contextlib.suppress(Exception):
-                await self._driver.connection.close()
+                await connection.close()
             raise
 
     async def _start(self) -> None:
+        connection = self._driver.connection
+        self._connection = connection
         already_in_tx = self._driver._connection_in_transaction()
         if not already_in_tx:
-            transaction = self._driver.connection.transaction()
+            transaction = connection.transaction()
             await transaction.start()
             self._transaction = transaction
         try:
             if self._timeout is not None:
-                self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters, timeout=self._timeout)
+                self._cursor = await connection.cursor(self._sql, *self._parameters, timeout=self._timeout)
             else:
-                self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters)
+                self._cursor = await connection.cursor(self._sql, *self._parameters)
         except BaseException:
             transaction = self._transaction
             self._transaction = None
@@ -537,7 +544,7 @@ class AsyncpgStreamSource:
                     await transaction.rollback()
                 except BaseException:
                     with contextlib.suppress(Exception):
-                        await self._driver.connection.close()
+                        await connection.close()
             raise
 
 

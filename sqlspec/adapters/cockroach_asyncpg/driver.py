@@ -55,15 +55,17 @@ _T = TypeVar("_T")
 class CockroachAsyncpgStreamSource:
     """Async chunk source for CockroachDB AsyncPG with follower read support."""
 
-    __slots__ = ("_auto_started", "_driver", "_statement", "_underlying")
+    __slots__ = ("_auto_started", "_connection", "_driver", "_statement", "_underlying")
 
     def __init__(self, driver: "CockroachAsyncpgDriver", statement: "SQL", underlying: "AsyncRowSource") -> None:
         self._driver = driver
         self._statement = statement
         self._underlying = underlying
         self._auto_started = False
+        self._connection: Any = None
 
     async def start(self) -> None:
+        self._connection = self._driver.connection
         if self._driver._wants_follower_read(self._statement):
             self._auto_started = await self._driver._begin_follower_read_transaction()
         try:
@@ -81,7 +83,13 @@ class CockroachAsyncpgStreamSource:
         try:
             await self._underlying.close(error=error)
         finally:
-            if self._auto_started and self._driver._connection_in_transaction():
+            connection = self._connection
+            self._connection = None
+            if (
+                self._auto_started
+                and self._driver.connection is connection
+                and self._driver._connection_in_transaction()
+            ):
                 if error:
                     with suppress(Exception):
                         await self._driver.rollback()

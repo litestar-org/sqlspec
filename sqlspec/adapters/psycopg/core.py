@@ -290,6 +290,7 @@ class PsycopgSyncStreamSource:
         "_chunk_size",
         "_column_names",
         "_column_types_resolver",
+        "_connection",
         "_cursor",
         "_driver",
         "_parameters",
@@ -311,6 +312,7 @@ class PsycopgSyncStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._connection: Any = None
         self._cursor: Any = None
         self._transaction: Any = None
         self._column_names: list[str] | None = None
@@ -335,11 +337,15 @@ class PsycopgSyncStreamSource:
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
+        transaction = self._transaction
+        self._transaction = None
+        owned = self._driver.connection is self._connection
+        self._connection = None
+        if not owned:
+            return
         if cursor is not None:
             with contextlib.suppress(Exception):
                 cursor.close()
-        transaction = self._transaction
-        self._transaction = None
         if transaction is not None:
             with contextlib.suppress(Exception):
                 if error:
@@ -348,11 +354,12 @@ class PsycopgSyncStreamSource:
                     transaction.__exit__(None, None, None)
 
     def _start(self) -> None:
-        transaction = self._driver.connection.transaction()
+        self._connection = self._driver.connection
+        transaction = self._connection.transaction()
         transaction.__enter__()
         self._transaction = transaction
         try:
-            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+            cursor = self._connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
             cursor.itersize = self._chunk_size
             execute_with_optional_parameters(cursor, self._sql, self._parameters)
             self._cursor = cursor
@@ -376,6 +383,7 @@ class PsycopgAsyncStreamSource:
         "_chunk_size",
         "_column_names",
         "_column_types_resolver",
+        "_connection",
         "_cursor",
         "_driver",
         "_parameters",
@@ -397,6 +405,7 @@ class PsycopgAsyncStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._connection: Any = None
         self._cursor: Any = None
         self._transaction: Any = None
         self._column_names: list[str] | None = None
@@ -421,11 +430,15 @@ class PsycopgAsyncStreamSource:
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
+        transaction = self._transaction
+        self._transaction = None
+        owned = self._driver.connection is self._connection
+        self._connection = None
+        if not owned:
+            return
         if cursor is not None:
             with contextlib.suppress(Exception):
                 await cursor.close()
-        transaction = self._transaction
-        self._transaction = None
         if transaction is not None:
             with contextlib.suppress(Exception):
                 if error:
@@ -434,11 +447,12 @@ class PsycopgAsyncStreamSource:
                     await transaction.__aexit__(None, None, None)
 
     async def _start(self) -> None:
-        transaction = self._driver.connection.transaction()
+        self._connection = self._driver.connection
+        transaction = self._connection.transaction()
         await transaction.__aenter__()
         self._transaction = transaction
         try:
-            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+            cursor = self._connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
             cursor.itersize = self._chunk_size
             await execute_with_optional_parameters_async(cursor, self._sql, self._parameters)
             self._cursor = cursor

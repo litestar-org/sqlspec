@@ -308,13 +308,14 @@ class PsqlpyStreamSource:
     left untouched.
     """
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+    __slots__ = ("_chunk_size", "_connection", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
 
     def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._connection: Any = None
         self._cursor: Any = None
         self._transaction: Any = None
 
@@ -334,11 +335,15 @@ class PsqlpyStreamSource:
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
+        transaction = self._transaction
+        self._transaction = None
+        connection = self._connection
+        self._connection = None
+        if self._driver.connection is not connection:
+            return
         if cursor is not None:
             with contextlib.suppress(Exception):
                 cursor.close()
-        transaction = self._transaction
-        self._transaction = None
         if transaction is not None:
             try:
                 if error:
@@ -350,12 +355,14 @@ class PsqlpyStreamSource:
                     await transaction.rollback()
 
     async def _start(self) -> None:
+        connection = self._driver.connection
+        self._connection = connection
         if self._driver._connection_in_transaction():
-            cursor = self._driver.connection.cursor(self._sql, self._parameters, array_size=self._chunk_size)
+            cursor = connection.cursor(self._sql, self._parameters, array_size=self._chunk_size)
             await cursor.start()
             self._cursor = cursor
             return
-        transaction = self._driver.connection.transaction()
+        transaction = connection.transaction()
         await transaction.begin()
         self._transaction = transaction
         try:
