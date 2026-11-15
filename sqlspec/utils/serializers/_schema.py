@@ -1,6 +1,7 @@
 """Schema dumping and cache helpers for ``sqlspec.utils.serializers``."""
 
 import os
+import sys
 from collections import OrderedDict
 from dataclasses import Field
 from dataclasses import fields as dataclasses_fields
@@ -9,8 +10,7 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, Empty, msgspec_fields
-from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
-from sqlspec.utils.schema import _reset_schema_caches
+from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers._json import _dump_attrs_instance as _dump_attrs
 from sqlspec.utils.serializers._json import _reset_structural_encoder_cache
 from sqlspec.utils.type_guards import (
@@ -105,6 +105,7 @@ class SchemaSerializer:
         self, items: "Iterable[Any]", *, return_format: "ArrowReturnFormat" = "table", batch_size: int | None = None
     ) -> Any:
         payload = self.dump_many(items)
+        convert_dict_to_arrow = import_optional_attr("sqlspec.utils.arrow_helpers", "convert_dict_to_arrow")
         return convert_dict_to_arrow(payload, return_format=return_format, batch_size=batch_size)
 
 
@@ -165,7 +166,9 @@ def reset_serializer_cache() -> None:
         _SCHEMA_SERIALIZERS.clear()
         _DATACLASS_FIELDS_CACHE.clear()
         _SERIALIZER_METRICS.reset()
-        _reset_schema_caches()
+        schema_module = sys.modules.get("sqlspec.utils.schema")
+        if schema_module is not None:
+            schema_module._reset_schema_caches()
         _reset_structural_encoder_cache()
         _reset_msgspec_rename_caches()
 

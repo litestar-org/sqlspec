@@ -14,7 +14,7 @@ from urllib.parse import quote, unquote
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
-from sqlspec.observability import get_trace_context
+from sqlspec.observability._common import get_trace_context
 from sqlspec.utils.correlation import CorrelationContext
 
 __all__ = (

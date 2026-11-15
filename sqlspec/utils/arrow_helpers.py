@@ -13,7 +13,6 @@ from functools import lru_cache
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
-from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.exceptions import ImproperConfigurationError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -1520,8 +1519,9 @@ def _arrow_schema_has_opaque_uuid(schema: Any) -> bool:
 def _resolve_dialect_config(dialect: str | None) -> "DialectConfig | None":
     if not dialect:
         return None
+    get_dialect_config = import_optional_attr("sqlspec.data_dictionary._registry", "get_dialect_config")
     with contextlib.suppress(ValueError):
-        return get_dialect_config(str(dialect).strip())
+        return cast("DialectConfig", get_dialect_config(str(dialect).strip()))
     return None
 
 
