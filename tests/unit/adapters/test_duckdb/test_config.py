@@ -522,7 +522,7 @@ def test_duckdb_config_reuses_idle_task_connections_sequentially_and_isolates_co
 
         assert len(created_connections) == 1
         assert len(set(seq_ids)) == 1
-        assert len(pool._idle_task_states) == 1
+        assert len(pool._idle_task_holders) == 1
 
         all_entered = asyncio.Event()
         entered = 0
@@ -542,12 +542,12 @@ def test_duckdb_config_reuses_idle_task_connections_sequentially_and_isolates_co
         await asyncio.sleep(0)
         assert len(set(conc_ids)) == 10
         assert len(created_connections) == 10
-        assert len(pool._idle_task_states) == 8
+        assert len(pool._idle_task_holders) == 8
 
     try:
         asyncio.run(_run())
     finally:
         config.close_pool()
 
-    assert pool._idle_task_states == []
+    assert pool._idle_task_holders == []
     assert pool.size() == 0

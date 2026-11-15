@@ -97,7 +97,7 @@ class DuckDBConnectionPool:
         "_generation",
         "_has_dynamic_secrets",
         "_health_check_interval",
-        "_idle_task_states",
+        "_idle_task_holders",
         "_installed_signatures",
         "_is_memory_db",
         "_lock",
@@ -148,7 +148,7 @@ class DuckDBConnectionPool:
         self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
         self._connection_registry: set[DuckDBConnection] = set()
-        self._idle_task_states: list[dict[str, Any]] = []
+        self._idle_task_holders: list[dict[str, Any]] = []
         self._generation = 0
         self._lock = threading.RLock()
         self._pool_id = str(uuid4())[:8]
@@ -158,7 +158,7 @@ class DuckDBConnectionPool:
     @property
     def _database_name(self) -> str:
         """Get sanitized database name for logging."""
-        return _sanitize_database_name(self._connection_config.get("database", ""))
+        return _sanitize_database_uri(self._connection_config.get("database", ""))
 
     def new_connection(self, record_thread_state: bool = False) -> DuckDBConnection:
         """Open a standalone connection with extensions and secrets applied.
@@ -283,7 +283,7 @@ class DuckDBConnectionPool:
             with self._lock:
                 self._baseline_databases[id(connection)] = baseline
         if record_thread_state:
-            state = self._checkout_state()
+            state = self._get_or_create_connection_holder()
             state["storage_extensions"] = frozenset(loaded_extensions)
             state["storage_secrets"] = tuple(created_secrets)
             state["secret_refresh_times"] = secret_refresh_times
@@ -308,7 +308,7 @@ class DuckDBConnectionPool:
             DuckDBConnection: A thread- or task-isolated connection.
         """
         connection = self._get_thread_connection()
-        state = self._checkout_state()
+        state = self._get_or_create_connection_holder()
         depth = int(state.get("depth", 0))
         state["depth"] = depth + 1
         try:
@@ -338,13 +338,13 @@ class DuckDBConnectionPool:
         self._close_thread_connection()
         task_states = cast(
             "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None",
-            self._thread_local.__dict__.pop("_task_states", None),
+            self._thread_local.__dict__.pop("_task_holders", None),
         )
         if task_states is not None:
             task_states.clear()
         with self._lock:
-            idle_states = list(self._idle_task_states)
-            self._idle_task_states.clear()
+            idle_states = list(self._idle_task_holders)
+            self._idle_task_holders.clear()
             orphaned = set(self._connection_registry)
             self._connection_registry.clear()
             profile_paths = list(self._profile_paths.values())
@@ -379,7 +379,7 @@ class DuckDBConnectionPool:
         Returns:
             DuckDBConnection: A thread- or task-isolated connection
         """
-        state = self._checkout_state()
+        state = self._get_or_create_connection_holder()
         connection = self._get_thread_connection()
         if not state.get("depth", 0):
             state["manual_acquire"] = True
@@ -430,7 +430,7 @@ class DuckDBConnectionPool:
 
     def _storage_settings(self, connection: DuckDBConnection) -> "dict[str, Any]":
         """Return storage setup completed for this thread's current connection."""
-        state = self._existing_checkout_state()
+        state = self._get_connection_holder()
         if state is None or state.get("connection") is not connection:
             with self._lock:
                 profile_path = self._profile_paths.get(id(connection))
@@ -494,7 +494,7 @@ class DuckDBConnectionPool:
         Each thread gets its own dedicated DuckDB connection to prevent
         thread-safety issues with concurrent cursor operations.
         """
-        thread_state = self._checkout_state()
+        thread_state = self._get_or_create_connection_holder()
         if thread_state.get("generation") != self._generation:
             stale = thread_state.pop("connection", None)
             if stale is not None:
@@ -544,7 +544,7 @@ class DuckDBConnectionPool:
         """Refresh secrets configured with ``value_provider`` when ``refresh_interval_seconds`` has elapsed."""
         if not self._has_dynamic_secrets:
             return
-        thread_state = self._checkout_state()
+        thread_state = self._get_or_create_connection_holder()
         refresh_times = cast("dict[str, float]", thread_state.setdefault("secret_refresh_times", {}))
         current_secrets = list(cast("tuple[dict[str, Any], ...]", thread_state.get("storage_secrets", ())))
         profile_path = cast("Path | None", thread_state.get("profile_path"))
@@ -579,32 +579,32 @@ class DuckDBConnectionPool:
             thread_state["storage_secrets"] = tuple(current_secrets)
             thread_state.pop("_cached_storage_settings", None)
 
-    def _checkout_state(self) -> "dict[str, Any]":
-        """Return the checkout state mapping for the current sync thread or active asyncio task."""
+    def _get_or_create_connection_holder(self) -> "dict[str, Any]":
+        """Return the connection holder mapping for the current sync thread or active asyncio task."""
         thread_dict = self._thread_local.__dict__
         task = _current_async_task()
         if task is None:
             return thread_dict
         task_states = cast(
-            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_states")
+            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_holders")
         )
         if task_states is None:
             task_states = WeakKeyDictionary()
-            thread_dict["_task_states"] = task_states
+            thread_dict["_task_holders"] = task_states
         state = task_states.get(task)
         if state is None:
-            state = self._pop_idle_task_state() or {}
+            state = self._reuse_idle_task_connection() or {}
             task_states[task] = state
-            task.add_done_callback(partial(self._retire_finished_task_state, task_states))
+            task.add_done_callback(partial(self._retire_finished_task, task_states))
         return state
 
-    def _pop_idle_task_state(self) -> "dict[str, Any] | None":
+    def _reuse_idle_task_connection(self) -> "dict[str, Any] | None":
         now = time.time()
         while True:
             with self._lock:
-                if not self._idle_task_states:
+                if not self._idle_task_holders:
                     return None
-                candidate = self._idle_task_states.pop()
+                candidate = self._idle_task_holders.pop()
                 current_generation = self._generation
             connection = cast("DuckDBConnection | None", candidate.get("connection"))
             if connection is None:
@@ -637,20 +637,20 @@ class DuckDBConnectionPool:
             candidate["last_used"] = now
             return candidate
 
-    def _existing_checkout_state(self) -> "dict[str, Any] | None":
-        """Return an existing checkout state mapping without allocating a new task slot."""
+    def _get_connection_holder(self) -> "dict[str, Any] | None":
+        """Return an existing connection holder mapping without allocating a new task holder."""
         thread_dict = self._thread_local.__dict__
         task = _current_async_task()
         if task is None:
             return thread_dict
         task_states = cast(
-            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_states")
+            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_holders")
         )
         if task_states is None:
             return None
         return task_states.get(task)
 
-    def _retire_finished_task_state(
+    def _retire_finished_task(
         self, task_states: "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]]", completed_task: "asyncio.Task[Any]"
     ) -> None:
         state = task_states.pop(completed_task, None)
@@ -664,7 +664,7 @@ class DuckDBConnectionPool:
                 if (
                     state.get("generation") == self._generation
                     and connection in self._connection_registry
-                    and len(self._idle_task_states) < _MAX_IDLE_TASK_CONNECTIONS
+                    and len(self._idle_task_holders) < _MAX_IDLE_TASK_CONNECTIONS
                 ):
                     idle_state: dict[str, Any] = {
                         "connection": connection,
@@ -675,7 +675,7 @@ class DuckDBConnectionPool:
                     for key in _TASK_STORAGE_STATE_KEYS:
                         if key in state:
                             idle_state[key] = state[key]
-                    self._idle_task_states.append(idle_state)
+                    self._idle_task_holders.append(idle_state)
                     return
         self._retire_connection(connection)
 
@@ -691,7 +691,7 @@ class DuckDBConnectionPool:
 
     def _close_thread_connection(self) -> None:
         """Close the connection for the current thread or task."""
-        thread_state = self._existing_checkout_state()
+        thread_state = self._get_connection_holder()
         if thread_state is None:
             return
         thread_state.pop("storage_extensions", None)
@@ -770,7 +770,7 @@ def _current_async_task() -> "asyncio.Task[Any] | None":
     return asyncio.current_task(loop) if loop is not None else None
 
 
-def _sanitize_database_name(database: object) -> str:
+def _sanitize_database_uri(database: object) -> str:
     """Strip userinfo and query parameters from DuckDB database URIs for logging."""
     raw = str(database) if database else ""
     if not raw or raw.startswith(":memory:"):
