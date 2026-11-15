@@ -326,7 +326,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         session_state = dict(state)
         has_deltas = bool(app_state_delta or user_state_delta)
         max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
@@ -754,7 +754,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         session_state = dict(state)
         has_deltas = bool(app_state_delta or user_state_delta)
         max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
@@ -1602,7 +1602,7 @@ def _is_table_missing(exc: BaseException) -> bool:
     return extract_sqlstate(exc) == MISSING_OBJECT_SQLSTATE
 
 
-def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
     if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
         app_name,
         user_id,

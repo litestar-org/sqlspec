@@ -6,7 +6,7 @@ import struct
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, Literal, Never, NotRequired, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.adbc._typing import AdbcNativeError, AdbcNotSupportedError
 from sqlspec.adapters.adbc.core import (
@@ -1329,8 +1329,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         conn.commit()
                     finally:
                         cursor.close()
-                if row is None:
-                    _raise_missing_created_session()
+                row = _require_created_session_row(row)
                 return StoredSession(
                     id=row[0],
                     app_name=row[1],
@@ -1340,9 +1339,9 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     update_time=self._decode_timestamp(row[5]),
                 )
             except Exception as exc:
-                if self._is_retryable_tx_error(exc) and attempt + 1 < max_attempts:
+                if self._is_retryable_error(exc) and attempt + 1 < max_attempts:
                     continue
-                if isinstance(exc, _StateWriteConflictError) or self._is_retryable_tx_error(exc):
+                if isinstance(exc, _StateWriteConflictError) or self._is_retryable_error(exc):
                     msg = f"Failed to merge scoped state after {max_attempts} attempts for session {session_id}"
                     raise SerializationConflictError(msg) from exc
                 raise
@@ -1748,9 +1747,9 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     update_time=self._decode_timestamp(row[5]),
                 )
             except Exception as exc:
-                if self._is_retryable_tx_error(exc) and attempt + 1 < max_attempts:
+                if self._is_retryable_error(exc) and attempt + 1 < max_attempts:
                     continue
-                if isinstance(exc, _StateWriteConflictError) or self._is_retryable_tx_error(exc):
+                if isinstance(exc, _StateWriteConflictError) or self._is_retryable_error(exc):
                     msg = f"Failed to merge scoped state after {max_attempts} attempts for session {session_id}"
                     raise SerializationConflictError(msg) from exc
                 raise
@@ -1762,7 +1761,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Return bounded retry budget for atomic state merges on the active dialect."""
         return _MAX_DUCKDB_MERGE_ATTEMPTS if self._dialect == DIALECT_DUCKDB else _MAX_STATE_MERGE_ATTEMPTS
 
-    def _is_retryable_tx_error(self, exc: Exception) -> bool:
+    def _is_retryable_error(self, exc: Exception) -> bool:
         """Return True when an exception indicates a retryable lock, conflict, or CAS race."""
         if isinstance(exc, _StateWriteConflictError):
             return True
@@ -4095,6 +4094,8 @@ def _provide_state_transaction(config: "AdbcConfig", dialect: str) -> Iterator[A
                     set_autocommit(False)
 
 
-def _raise_missing_created_session() -> Never:
-    msg = "Failed to fetch created session"
-    raise RuntimeError(msg)
+def _require_created_session_row(row: Any) -> Any:
+    if row is None:
+        msg = "Failed to fetch created session"
+        raise RuntimeError(msg)
+    return row

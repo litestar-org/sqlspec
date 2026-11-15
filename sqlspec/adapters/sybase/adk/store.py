@@ -188,7 +188,9 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
             return session
 
-        return _run_sybase_tx_with_retry(self._config, _operation, has_deltas=bool(app_state_delta or user_state_delta))
+        return _run_transaction_with_retry(
+            self._config, _operation, has_deltas=bool(app_state_delta or user_state_delta)
+        )
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -288,7 +290,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 if row is None:
                     with contextlib.suppress(Exception):
                         conn.rollback()
-                    _raise_session_not_found_for_scope(session_id, app_name, user_id)
+                    _raise_session_not_found_for_user(session_id, app_name, user_id)
                 cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
                 conn.commit()
             except ValueError:
@@ -310,7 +312,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and merge scoped state deltas."""
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         update_sql = f"""
         UPDATE {_table_ref(self._session_table)}
         SET state = %s, update_time = GETUTCDATE()
@@ -377,7 +379,9 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
             return session
 
-        return _run_sybase_tx_with_retry(self._config, _operation, has_deltas=bool(app_state_delta or user_state_delta))
+        return _run_transaction_with_retry(
+            self._config, _operation, has_deltas=bool(app_state_delta or user_state_delta)
+        )
 
     def get_events(
         self,
@@ -1205,7 +1209,7 @@ def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     return quote_bracket_identifier(f"{prefix}_{table_name}_{suffix}")
 
 
-def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
     if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
         app_name,
         user_id,
@@ -1231,7 +1235,7 @@ def _require_created_session_row(row: Any) -> Any:
     return row
 
 
-def _raise_session_not_found_for_scope(session_id: str, app_name: str, user_id: str) -> NoReturn:
+def _raise_session_not_found_for_user(session_id: str, app_name: str, user_id: str) -> NoReturn:
     msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
     raise ValueError(msg)
 
@@ -1311,7 +1315,7 @@ def _apply_state_delta(
     return merged_state
 
 
-def _rollback_sybase_tx(conn: Any, cursor: Any, explicit_tx: bool) -> None:
+def _rollback_transaction(conn: Any, cursor: Any, explicit_tx: bool) -> None:
     with contextlib.suppress(Exception):
         if explicit_tx:
             cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
@@ -1319,20 +1323,20 @@ def _rollback_sybase_tx(conn: Any, cursor: Any, explicit_tx: bool) -> None:
             conn.rollback()
 
 
-def _retry_delay_seconds(attempt: int) -> float:
+def _calculate_backoff_seconds(attempt: int) -> float:
     base = min(_SYBASE_RETRY_MAX_SECONDS, _SYBASE_RETRY_BASE_SECONDS * (attempt + 1))
     jitter = secrets.randbelow(80) / 10_000.0
     return base + jitter
 
 
-def _run_sybase_tx_with_retry(
+def _run_transaction_with_retry(
     config: Any, operation: "Callable[[Any, Callable[[], None]], StoredSession]", *, has_deltas: bool
 ) -> StoredSession:
     """Run a Sybase ADK transaction with bounded retry on deadlock or scoped-insert race."""
     for attempt in range(_SYBASE_RETRY_MAX_ATTEMPTS):
         scoped_started = False
 
-        def _mark_scoped() -> None:
+        def _mark_state_writes_started() -> None:
             nonlocal scoped_started
             scoped_started = True
 
@@ -1342,16 +1346,16 @@ def _run_sybase_tx_with_retry(
                 if explicit_tx:
                     cursor.execute("BEGIN TRANSACTION")
                 try:
-                    result = operation(cursor, _mark_scoped)
+                    result = operation(cursor, _mark_state_writes_started)
                     if explicit_tx:
                         cursor.execute("IF @@TRANCOUNT > 0 COMMIT TRANSACTION")
                     else:
                         conn.commit()
                 except (ValueError, RuntimeError):
-                    _rollback_sybase_tx(conn, cursor, explicit_tx)
+                    _rollback_transaction(conn, cursor, explicit_tx)
                     raise
                 except Exception as exc:
-                    _rollback_sybase_tx(conn, cursor, explicit_tx)
+                    _rollback_transaction(conn, cursor, explicit_tx)
                     mapped = exc if isinstance(exc, SQLSpecError) else create_mapped_exception(exc)
                     if mapped is exc:
                         raise
@@ -1361,6 +1365,6 @@ def _run_sybase_tx_with_retry(
             retryable = isinstance(exc, DeadlockError) or (scoped_started and has_deltas)
             if not retryable or attempt + 1 >= _SYBASE_RETRY_MAX_ATTEMPTS:
                 raise
-            time.sleep(_retry_delay_seconds(attempt))
+            time.sleep(_calculate_backoff_seconds(attempt))
     msg = "Failed to complete Sybase ADK transaction after retries."
     raise DeadlockError(msg)

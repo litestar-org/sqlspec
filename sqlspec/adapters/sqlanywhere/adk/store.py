@@ -281,7 +281,7 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
             try:
                 cursor.execute(ownership_sql, _exact_params(session_id, app_name, user_id))
                 if cursor.fetchone() is None:
-                    _raise_session_not_found_for_scope(session_id, app_name, user_id)
+                    _raise_session_not_found_for_user(session_id, app_name, user_id)
                 cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
             except Exception:
                 conn.rollback()
@@ -300,7 +300,7 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
         user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and merge scoped state deltas."""
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         update_sql = f"""
         UPDATE {_table_ref(self._session_table)}
         SET state = ?, update_time = CURRENT UTC TIMESTAMP
@@ -1057,7 +1057,7 @@ def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     return quote_double_identifier(f"{prefix}_{table_name}_{suffix}")
 
 
-def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
     if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
         app_name,
         user_id,
@@ -1083,7 +1083,7 @@ def _require_created_session_row(row: Any) -> Any:
     return row
 
 
-def _raise_session_not_found_for_scope(session_id: str, app_name: str, user_id: str) -> NoReturn:
+def _raise_session_not_found_for_user(session_id: str, app_name: str, user_id: str) -> NoReturn:
     msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
     raise ValueError(msg)
 

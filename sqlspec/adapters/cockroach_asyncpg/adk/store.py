@@ -167,7 +167,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             )
 
         async with self._config.provide_connection() as conn:
-            return await _run_tx_with_retry(self._config, conn, lambda: _attempt(conn))
+            return await _run_transaction_with_retry(self._config, conn, lambda: _attempt(conn))
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -370,7 +370,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             )
 
         async with self._config.provide_connection() as conn:
-            return await _run_tx_with_retry(self._config, conn, lambda: _attempt(conn))
+            return await _run_transaction_with_retry(self._config, conn, lambda: _attempt(conn))
 
     async def get_events(
         self,
@@ -1058,7 +1058,7 @@ def _resolve_retry_config(config: Any) -> "tuple[CockroachAsyncpgRetryConfig, bo
     return CockroachAsyncpgRetryConfig(), True
 
 
-async def _run_tx_with_retry(
+async def _run_transaction_with_retry(
     config: Any, conn: Any, operation: "Callable[[], Awaitable[StoredSession]]"
 ) -> StoredSession:
     retry_config, enable_retry = _resolve_retry_config(config)

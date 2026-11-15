@@ -153,9 +153,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 await conn.execute("BEGIN")
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
-                if not rows:
-                    _raise_failed_create_session()
-                row = rows[0]
+                row = _require_created_session_row(rows[0] if rows else None)
                 resolved_app = (
                     await self._apply_app_state_delta(conn, app_name, app_state_delta)
                     if app_state_delta
@@ -1499,9 +1497,11 @@ def _raise_missing_session(session_id: str) -> NoReturn:
     raise ValueError(msg)
 
 
-def _raise_failed_create_session() -> NoReturn:
-    msg = "Failed to fetch created session"
-    raise RuntimeError(msg)
+def _require_created_session_row(row: Any) -> Any:
+    if row is None:
+        msg = "Failed to fetch created session"
+        raise RuntimeError(msg)
+    return row
 
 
 def _decode_json_state(raw: Any) -> "dict[str, Any]":

@@ -515,7 +515,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         app_state_delta: "dict[str, Any] | None" = None,
         user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         session_state = dict(state)
         self._update_session_state(app_name, user_id, session_id, session_state)
         record = self._get_session(app_name, user_id, session_id)
@@ -873,7 +873,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         raise TypeError(msg)
 
 
-def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
     record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
     expected_scope = (app_name, user_id, session_id)
     if record_scope != expected_scope:

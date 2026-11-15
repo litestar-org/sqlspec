@@ -569,7 +569,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
                     if in_tx:
                         with contextlib.suppress(Exception):
                             conn.rollback()
-                    if scoped_started and _is_duckdb_retryable_error(exc, allow_unique_conflict=has_deltas):
+                    if scoped_started and _is_retryable_error(exc, allow_unique_conflict=has_deltas):
                         continue
                     raise
         msg = f"Failed to merge scoped state during create_session after {max_attempts} attempts."
@@ -841,7 +841,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
                     if in_tx:
                         with contextlib.suppress(Exception):
                             conn.rollback()
-                    if _is_duckdb_retryable_error(exc, allow_unique_conflict=has_deltas):
+                    if _is_retryable_error(exc, allow_unique_conflict=has_deltas):
                         continue
                     raise
         msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} attempts."
@@ -1665,7 +1665,7 @@ def _next_monotonic_timestamp(previous: "datetime | None") -> datetime:
     return now
 
 
-def _is_duckdb_retryable_error(exc: Exception, *, allow_unique_conflict: bool) -> bool:
+def _is_retryable_error(exc: Exception, *, allow_unique_conflict: bool) -> bool:
     message = str(exc).lower()
     if "conflict" in message or "transactioncontext" in message:
         return True

@@ -278,7 +278,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             )
 
         async with self._config.provide_connection() as conn:
-            return await _run_async_tx_with_retry(self._config, conn, _attempt)
+            return await _run_transaction_with_retry_async(self._config, conn, _attempt)
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -492,7 +492,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             )
 
         async with self._config.provide_connection() as conn:
-            return await _run_async_tx_with_retry(self._config, conn, _attempt)
+            return await _run_transaction_with_retry_async(self._config, conn, _attempt)
 
     async def get_events(
         self,
@@ -901,7 +901,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             )
 
         with self._config.provide_connection() as conn:
-            return _run_sync_tx_with_retry(self._config, conn, _attempt)
+            return _run_transaction_with_retry_sync(self._config, conn, _attempt)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -1077,7 +1077,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             )
 
         with self._config.provide_connection() as conn:
-            return _run_sync_tx_with_retry(self._config, conn, _attempt)
+            return _run_transaction_with_retry_sync(self._config, conn, _attempt)
 
     def get_events(
         self,
@@ -2154,7 +2154,7 @@ def _resolve_retry_config(config: Any) -> "tuple[CockroachPsycopgRetryConfig, bo
     return CockroachPsycopgRetryConfig(), True
 
 
-async def _run_async_tx_with_retry(
+async def _run_transaction_with_retry_async(
     config: Any, conn: Any, operation: "Callable[[Any], Awaitable[StoredSession]]"
 ) -> StoredSession:
     retry_config, enable_retry = _resolve_retry_config(config)
@@ -2190,7 +2190,9 @@ async def _run_async_tx_with_retry(
             attempt += 1
 
 
-def _run_sync_tx_with_retry(config: Any, conn: Any, operation: "Callable[[Any], StoredSession]") -> StoredSession:
+def _run_transaction_with_retry_sync(
+    config: Any, conn: Any, operation: "Callable[[Any], StoredSession]"
+) -> StoredSession:
     retry_config, enable_retry = _resolve_retry_config(config)
     attempt = 0
     while True:

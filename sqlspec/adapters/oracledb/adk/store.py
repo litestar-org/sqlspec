@@ -755,7 +755,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 with conn.cursor() as cursor:
                     await cursor.execute(ownership_sql, {"id": session_id, "app_name": app_name, "user_id": user_id})
                     if await cursor.fetchone() is None:
-                        _raise_session_not_found_for_scope(session_id, app_name, user_id)
+                        _raise_session_not_found_for_user(session_id, app_name, user_id)
                     coerced_params = await coerce_large_parameters_async(
                         conn,
                         {
@@ -790,7 +790,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         All writes are executed within a single transaction with ``FOR UPDATE``
         row locks on updated scoped-state rows so they succeed or fail together.
         """
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -1187,7 +1187,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 try:
                     await cursor.execute(insert_sql, insert_params)
                 except OracleDatabaseError as exc:
-                    if not _is_oracle_unique_error(exc):
+                    if not _is_unique_violation(exc):
                         raise
                     continue
                 else:
@@ -1891,7 +1891,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 with conn.cursor() as cursor:
                     cursor.execute(ownership_sql, {"id": session_id, "app_name": app_name, "user_id": user_id})
                     if cursor.fetchone() is None:
-                        _raise_session_not_found_for_scope(session_id, app_name, user_id)
+                        _raise_session_not_found_for_user(session_id, app_name, user_id)
                     params = coerce_large_parameters_sync(
                         conn,
                         {
@@ -1922,7 +1922,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update session + scoped state."""
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -2306,7 +2306,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 try:
                     cursor.execute(insert_sql, insert_params)
                 except OracleDatabaseError as exc:
-                    if not _is_oracle_unique_error(exc):
+                    if not _is_unique_violation(exc):
                         raise
                     continue
                 else:
@@ -3774,7 +3774,7 @@ def _get_oracle_version_info_sync(config: "OracleSyncConfig") -> "OracleVersionI
     return version_info
 
 
-def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
     record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
     expected_scope = (app_name, user_id, session_id)
     if record_scope != expected_scope:
@@ -3813,7 +3813,7 @@ def _raise_session_not_found(session_id: str) -> NoReturn:
     raise ValueError(msg)
 
 
-def _is_oracle_unique_error(exc: BaseException) -> bool:
+def _is_unique_violation(exc: BaseException) -> bool:
     if isinstance(exc, OracleDatabaseError):
         error_obj = exc.args[0] if exc.args else None
         if error_obj is not None and getattr(error_obj, "code", None) == ORACLE_DUPLICATE_KEY_ERROR:
@@ -3821,7 +3821,7 @@ def _is_oracle_unique_error(exc: BaseException) -> bool:
     return "ORA-00001" in str(exc)
 
 
-def _raise_session_not_found_for_scope(session_id: str, app_name: str, user_id: str) -> NoReturn:
+def _raise_session_not_found_for_user(session_id: str, app_name: str, user_id: str) -> NoReturn:
     msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
     raise ValueError(msg)
 

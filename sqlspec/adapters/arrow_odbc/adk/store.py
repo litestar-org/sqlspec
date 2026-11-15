@@ -259,7 +259,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                 msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
                 raise ValueError(msg)
             driver.execute(
-                sql_dialect.scoped_insert_event_sql(self._events_table, self._session_table),
+                sql_dialect.insert_event_if_session_owned_sql(self._events_table, self._session_table),
                 (*_event_insert_params(event_record, sql_dialect.format_datetime), session_id, app_name, user_id),
             )
 
@@ -1328,7 +1328,7 @@ class _TsqlAdkSql:
     def upsert_metadata_sql(self, table: str) -> str:
         return _upsert_metadata_sql(table)
 
-    def scoped_insert_event_sql(self, events_table: str, session_table: str) -> str:
+    def insert_event_if_session_owned_sql(self, events_table: str, session_table: str) -> str:
         return f"""
         INSERT INTO {_table_ref(events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -1527,7 +1527,7 @@ class _Db2AdkSql:
             'WHEN NOT MATCHED THEN INSERT ("KEY", value) VALUES (source."KEY", source.value)'
         )
 
-    def scoped_insert_event_sql(self, events_table: str, session_table: str) -> str:
+    def insert_event_if_session_owned_sql(self, events_table: str, session_table: str) -> str:
         return (
             f"INSERT INTO {events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
             "SELECT CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(128)), "

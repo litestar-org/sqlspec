@@ -4,7 +4,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Never, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from sqlspec.adapters.teradata._typing import TeradataCursor
 from sqlspec.adapters.teradata.core import (
@@ -145,8 +145,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                     cursor.execute(insert_sql, params)
                     cursor.execute(select_sql, _exact_params(app_name, user_id, session_id))
                     row = cursor.fetchone()
-                    if row is None:
-                        _raise_missing_created_session()
+                    row = _require_created_session_row(row)
                     scoped_started = True
                     current_app_state = (
                         self._apply_state_delta(
@@ -197,7 +196,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                     record["state"] = merge_scoped_state(record["state"], current_app_state, current_user_state)
                     return record
             except Exception as exc:
-                if scoped_started and _is_teradata_duplicate_key(exc) and attempt + 1 < max_attempts:
+                if scoped_started and _is_unique_violation(exc) and attempt + 1 < max_attempts:
                     continue
                 raise
         msg = f"Failed to merge scoped state during create_session after {max_attempts} CAS attempts."
@@ -310,7 +309,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         session_state = dict(state)
         update_sql = f"""
         UPDATE {format_table_ref(self._session_table)}
@@ -368,7 +367,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                     record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
                     return record
             except Exception as exc:
-                if scoped_started and _is_teradata_duplicate_key(exc) and attempt + 1 < max_attempts:
+                if scoped_started and _is_unique_violation(exc) and attempt + 1 < max_attempts:
                     continue
                 raise
         msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} CAS attempts."
@@ -1177,7 +1176,7 @@ def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     return format_identifier(f"{prefix}_{table_name}_{suffix}")
 
 
-def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
     record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
     expected_scope = (app_name, user_id, session_id)
     if record_scope != expected_scope:
@@ -1290,10 +1289,12 @@ def _next_monotonic_timestamp(previous: Any) -> datetime:
     return now
 
 
-def _is_teradata_duplicate_key(exc: BaseException) -> bool:
+def _is_unique_violation(exc: BaseException) -> bool:
     return extract_error_code(exc) in _DUPLICATE_KEY_CODES
 
 
-def _raise_missing_created_session() -> Never:
-    msg = "Failed to fetch created session"
-    raise RuntimeError(msg)
+def _require_created_session_row(row: Any) -> Any:
+    if row is None:
+        msg = "Failed to fetch created session"
+        raise RuntimeError(msg)
+    return row

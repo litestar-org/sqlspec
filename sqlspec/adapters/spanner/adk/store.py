@@ -975,7 +975,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically update session state and insert an event in one transaction."""
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         session_state = dict(state)
         job = _SpannerSyncAppendAndUpdateJob(
             update_statement=self._build_update_session_state_statement(app_name, user_id, session_id, session_state),
@@ -1439,7 +1439,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically update session state and insert an event in one transaction."""
-        _validate_event_record_scope(event_record, app_name, user_id, session_id)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         session_state = dict(state)
         database = await self._database()
         job = _SpannerAsyncAppendAndUpdateJob(
@@ -2392,7 +2392,7 @@ def _parse_spanner_target(table: str, ddl: str) -> SchemaTarget:
     )
 
 
-def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
     record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
     expected_scope = (app_name, user_id, session_id)
     if record_scope != expected_scope:

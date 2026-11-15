@@ -756,9 +756,9 @@ def _create_session(
                     cursor.close()
 
         except Exception as exc:
-            if not _is_retryable_mysql_error(exc) or attempt + 1 >= max_attempts:
+            if not _is_retryable_error(exc) or attempt + 1 >= max_attempts:
                 raise
-            time.sleep(_retry_delay_seconds(attempt))
+            time.sleep(_calculate_backoff_seconds(attempt))
         else:
             session = _session_record_from_row(row, deserializer=store._json_deserializer)
             session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
@@ -1012,9 +1012,9 @@ def _append_event_and_update_state(
                     cursor.close()
 
         except Exception as exc:
-            if not _is_retryable_mysql_error(exc) or attempt + 1 >= max_attempts:
+            if not _is_retryable_error(exc) or attempt + 1 >= max_attempts:
                 raise
-            time.sleep(_retry_delay_seconds(attempt))
+            time.sleep(_calculate_backoff_seconds(attempt))
         else:
             session = _session_record_from_row(row, deserializer=store._json_deserializer)
             if merged_app_state is not None or merged_user_state is not None:
@@ -1235,7 +1235,7 @@ def _is_table_missing(exc: BaseException) -> bool:
     )
 
 
-def _is_retryable_mysql_error(exc: BaseException) -> bool:
+def _is_retryable_error(exc: BaseException) -> bool:
     if isinstance(exc, DeadlockError):
         return True
     args = getattr(exc, "args", ())
@@ -1244,7 +1244,7 @@ def _is_retryable_mysql_error(exc: BaseException) -> bool:
     return errno in _MYSQL_RETRYABLE_ERRNOS or sqlstate == "40001" or bool(args and args[0] in _MYSQL_RETRYABLE_ERRNOS)
 
 
-def _retry_delay_seconds(attempt: int) -> float:
+def _calculate_backoff_seconds(attempt: int) -> float:
     base = min(0.05, 0.002 * (attempt + 1))
     jitter = secrets.randbelow(80) / 10_000.0
     return base + jitter
