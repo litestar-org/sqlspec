@@ -87,7 +87,7 @@ async def test_detached_driver_stream_raises(
             monkeypatch.setattr(type(session), "dispatch_select_stream", lambda *_args, **_kwargs: None)
         stream = session.select_stream(_QUERY, chunk_size=1)
         assert await next_row(stream) == {"x": "A0"}
-        session._detach_connection()
+        session._mark_closed()
         with pytest.raises(ImproperConfigurationError):
             await next_row(stream)
 
@@ -99,7 +99,7 @@ async def test_lazy_unstarted_stream_raises_after_detach(
     async with open_session(mode, database) as session:
         monkeypatch.setattr(type(session), "dispatch_select_stream", lambda *_args, **_kwargs: None)
         stream = session.select_stream(_QUERY, chunk_size=1)
-        session._detach_connection()
+        session._mark_closed()
         with pytest.raises(ImproperConfigurationError):
             await next_row(stream)
 
@@ -110,7 +110,7 @@ async def test_user_closed_stream_still_stops_cleanly(mode: str, database: str) 
         stream = session.select_stream(_QUERY, chunk_size=1)
         assert await next_row(stream) == {"x": "A0"}
         await resolve(stream.aclose() if mode == "async" else stream.close())
-        session._detach_connection()
+        session._mark_closed()
         assert await drain(stream) == []
 
 
@@ -141,7 +141,7 @@ def test_routing_stream_raises_after_inner_detach(database: str) -> None:
             stream = session.select_stream(_QUERY, chunk_size=1)
             assert next(stream) == {"x": "A0"}
             assert session.replica_session is not None
-            session.replica_session._detach_connection()
+            session.replica_session._mark_closed()
             with pytest.raises(ImproperConfigurationError):
                 next(stream)
     finally:

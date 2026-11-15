@@ -14,7 +14,7 @@ from sqlspec.base import (
     _RuntimeReadSyncContext,
     _RuntimeSyncContext,
 )
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.observability import LifecycleContext, ObservabilityConfig, TelemetryConfig
 from sqlspec.utils.routing import RoutingContext
 
@@ -228,8 +228,8 @@ async def test_runtime_contexts_cleanup_on_lifecycle_hook_failures(asynchronous:
         def __init__(self) -> None:
             self.connection: Any = object()
 
-        def _detach_connection(self) -> None:
-            self.connection = _DETACHED_CONNECTION
+        def _mark_closed(self) -> None:
+            self.connection = _CLOSED_CONNECTION
 
     class _FakeConfig:
         def __init__(self, runtime: _BoomRuntime) -> None:
@@ -268,7 +268,7 @@ async def test_runtime_contexts_cleanup_on_lifecycle_hook_failures(asynchronous:
                 with sync_ctx as session:
                     captured.append(session)
         assert len(destroyed) == 1
-        assert captured[0].connection is _DETACHED_CONNECTION
+        assert captured[0].connection is _CLOSED_CONNECTION
 
         destroyed.clear()
         start_boom_runtime = _BoomRuntime(fail_start=True, fail_end=False)
@@ -281,7 +281,7 @@ async def test_runtime_contexts_cleanup_on_lifecycle_hook_failures(asynchronous:
                 with _RuntimeReadSyncContext(failing_read_provider, session=True):
                     pass
         assert exited == [True]
-        assert failing_read_provider.session.connection is _DETACHED_CONNECTION
+        assert failing_read_provider.session.connection is _CLOSED_CONNECTION
     finally:
         if isinstance(config, AiosqliteConfig):
             await config.close_pool()
@@ -299,10 +299,10 @@ async def test_runtime_read_context_detaches_session_and_skips_detached_destroy(
 
     class _FakeReadSession:
         def __init__(self, pre_detached: bool) -> None:
-            self.connection: Any = _DETACHED_CONNECTION if pre_detached else object()
+            self.connection: Any = _CLOSED_CONNECTION if pre_detached else object()
 
-        def _detach_connection(self) -> None:
-            self.connection = _DETACHED_CONNECTION
+        def _mark_closed(self) -> None:
+            self.connection = _CLOSED_CONNECTION
 
     class _FakeReadProvider:
         def __init__(self, pre_detached: bool) -> None:
@@ -335,9 +335,9 @@ async def test_runtime_read_context_detaches_session_and_skips_detached_destroy(
             with _RuntimeReadSyncContext(provider_live, session=True):
                 pass
 
-        assert provider_live.session.connection is _DETACHED_CONNECTION
+        assert provider_live.session.connection is _CLOSED_CONNECTION
         assert len(destroyed) == 1
-        assert destroyed[0] is not _DETACHED_CONNECTION
+        assert destroyed[0] is not _CLOSED_CONNECTION
     finally:
         if isinstance(config, AiosqliteConfig):
             await config.close_pool()

@@ -238,7 +238,7 @@ class _TenantDriver:
     async def rollback(self) -> None:
         await self.connection.rollback()
 
-    def _detach_connection(self) -> None:
+    def _mark_closed(self) -> None:
         self.connection = None  # type: ignore[assignment]
 
 

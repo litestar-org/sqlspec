@@ -768,16 +768,16 @@ async def _clear_published_connection(request: "Request", config_state: "SQLSpec
                     await ensure_async_(stream_owner._close_open_streams)(error=sys.exc_info()[1] is not None)
             finally:
                 if session is not None:
-                    session._detach_connection()
+                    session._mark_closed()
     finally:
         pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
         pop_state_value(request.state, f"{config_state.session_key}_instance")
         deferred = pop_state_value(request.state, deferred_session_key(config_state))
         pop_state_value(request.state, config_state.connection_key)
         if deferred is not None:
-            deferred_detach = getattr(deferred, "_detach_connection", None)
-            if deferred_detach is not None:
-                deferred_detach()
+            mark_deferred_closed = getattr(deferred, "_mark_closed", None)
+            if mark_deferred_closed is not None:
+                mark_deferred_closed()
 
 
 @asynccontextmanager
@@ -959,7 +959,7 @@ async def _clear_deferred_session(request: "Request", key: str) -> None:
         try:
             await deferred._close_open_streams(error=sys.exc_info()[1] is not None)
         finally:
-            deferred._detach_connection()
+            deferred._mark_closed()
 
 
 def _is_routing_state_active(state: "SQLSpecConfigState") -> bool:

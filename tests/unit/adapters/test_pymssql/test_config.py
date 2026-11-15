@@ -13,7 +13,7 @@ from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 from sqlspec.adapters.pymssql.tenant import PymssqlSessionContextStrategy
 from sqlspec.core.tenant import TenantLeaseState
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     ImproperConfigurationError,
@@ -168,7 +168,7 @@ def test_pymssql_session_clean_exit_rolls_back_active_transaction() -> None:
 
     assert conn.rollbacks == 1
     assert calls == ["release"]
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
 
 
 def test_use_datetime2_default() -> None:
@@ -300,8 +300,8 @@ def test_tenant_config_nested_sessions_have_distinct_connections(monkeypatch: py
         assert first.connection is connections[0]
         assert second.connection is connections[1]
         assert first.connection is not second.connection
-    assert first.connection is _DETACHED_CONNECTION
-    assert second.connection is _DETACHED_CONNECTION
+    assert first.connection is _CLOSED_CONNECTION
+    assert second.connection is _CLOSED_CONNECTION
     assert calls == ["checkout:a", "checkout:a", "rollback", "checkin:a", "close", "rollback", "checkin:a", "close"]
 
 

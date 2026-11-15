@@ -611,7 +611,7 @@ async def _release_request_session(
                     await ensure_async_(stream_owner._close_open_streams)(error=request_exc is not None)
             finally:
                 if session is not None:
-                    session._detach_connection()
+                    session._mark_closed()
     finally:
         try:
             await _exit_connection_context(
@@ -626,9 +626,9 @@ async def _release_request_session(
                 if session_scope_key.endswith("_instance"):
                     deferred = get_sqlspec_scope_state(scope, f"{session_scope_key[:-9]}_deferred", pop=True)
                     if deferred is not None:
-                        deferred_detach = getattr(deferred, "_detach_connection", None)
-                        if deferred_detach is not None:
-                            deferred_detach()
+                        mark_deferred_closed = getattr(deferred, "_mark_closed", None)
+                        if mark_deferred_closed is not None:
+                            mark_deferred_closed()
 
 
 async def _capture_connection_tenant(
@@ -687,7 +687,7 @@ async def _exit_connection_context(
             try:
                 await ensure_async_(session._close_open_streams)(error=exc is not None)
             finally:
-                session._detach_connection()
+                session._mark_closed()
     with TenantContext.bind(payload):
         if isinstance(connection_cm, AbstractAsyncContextManager):
             await connection_cm.__aexit__(*exit_args)

@@ -172,7 +172,7 @@ class Db2SyncSessionContext:
         if self._connection is None:
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
             return None
         try:
             if driver is not None:
@@ -186,7 +186,7 @@ class Db2SyncSessionContext:
             finally:
                 self._driver = None
                 if driver is not None:
-                    driver._detach_connection()
+                    driver._mark_closed()
         return None
 
 
@@ -305,7 +305,7 @@ class Db2AsyncSessionContext:
         if self._connection is None:
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
             return None
         try:
             if driver is not None:
@@ -319,7 +319,7 @@ class Db2AsyncSessionContext:
             finally:
                 self._driver = None
                 if driver is not None:
-                    driver._detach_connection()
+                    driver._mark_closed()
         return None
 
 

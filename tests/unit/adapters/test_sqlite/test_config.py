@@ -13,7 +13,7 @@ from sqlspec.adapters.sqlite._typing import SqliteConnectionFactory, SqliteSessi
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.core import build_connection_config, create_mapped_exception
 from sqlspec.core import StatementConfig
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError
 
 
@@ -342,7 +342,7 @@ def test_provide_session_detaches_driver_on_exit(tmp_path: Path) -> None:
     try:
         with config.provide_session() as session:
             assert session.select_value("SELECT 1") == 1
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         with pytest.raises(ImproperConfigurationError, match="already closed"):
             session.execute("SELECT 1")
     finally:
@@ -375,7 +375,7 @@ def test_session_context_enter_failure_releases_pool_and_detaches_driver(tmp_pat
             with pytest.raises(RuntimeError, match="prepare boom"), ctx:
                 pytest.fail("prepare failure must abort __enter__")
             assert release_events == [(True, RuntimeError)]
-            assert getattr(captured[0], "connection", None) is _DETACHED_CONNECTION
+            assert getattr(captured[0], "connection", None) is _CLOSED_CONNECTION
 
         assert pool.checked_out() == 0
     finally:

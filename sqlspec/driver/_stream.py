@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar, cast, o
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.driver._common import _DETACHED_CONNECTION_MESSAGE
+from sqlspec.driver._common import _CLOSED_CONNECTION_MESSAGE
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import to_schema
@@ -118,7 +118,7 @@ class SyncRowStream(Generic[RowT]):
 
     def __next__(self) -> RowT:
         if self._session_closed:
-            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+            raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
         if self._closed:
             raise StopIteration
         if not self._started:
@@ -214,7 +214,7 @@ class AsyncRowStream(Generic[RowT]):
 
     async def __anext__(self) -> RowT:
         if self._session_closed:
-            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+            raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
         if self._closed:
             raise _StopAsync
         if not self._started:

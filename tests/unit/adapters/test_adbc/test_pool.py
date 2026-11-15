@@ -14,7 +14,7 @@ from sqlspec.adapters.adbc._typing import AdbcOperationalError, AdbcSessionConte
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.pool import AdbcConnectionPool
 from sqlspec.core import StatementConfig
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 
 
@@ -501,13 +501,13 @@ def test_adbc_caller_connection_instance_rolled_back_and_not_closed(entry: str, 
         if entry == "provide_session":
             assert first.connection is conn
     if entry == "provide_session":
-        assert first.connection is _DETACHED_CONNECTION
+        assert first.connection is _CLOSED_CONNECTION
 
     with getattr(config, entry)() as second:
         if entry == "provide_session":
             assert second.connection is conn
     if entry == "provide_session":
-        assert second.connection is _DETACHED_CONNECTION
+        assert second.connection is _CLOSED_CONNECTION
 
     conn.close.assert_not_called()
     assert conn.rollback.call_count == (0 if autocommit else 2)
@@ -541,7 +541,7 @@ def test_adbc_session_context_rolls_back_active_driver_transaction(body_raises: 
         assert caught.value is rollback_err
     fake_driver.rollback.assert_called_once_with()
     release.assert_called_once()
-    fake_driver._detach_connection.assert_called_once_with()
+    fake_driver._mark_closed.assert_called_once_with()
     assert release.call_args.kwargs["exc_type"] is (ValueError if body_raises else RuntimeError)
     assert release.call_args.kwargs["already_rolled_back"] is True
 
@@ -573,7 +573,7 @@ def test_adbc_session_context_enter_failure_detaches_constructed_driver() -> Non
         pytest.fail("prepare failure must abort __enter__")
 
     assert released_while_attached == [True]
-    assert captured[0].connection is _DETACHED_CONNECTION
+    assert captured[0].connection is _CLOSED_CONNECTION
 
 
 def test_adbc_pool_clone_maps_native_error() -> None:

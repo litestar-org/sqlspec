@@ -21,7 +21,7 @@ from sqlspec.adapters.asyncpg.core import build_connection_config, build_stateme
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.core import StatementConfig, StatementStack
 from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -723,7 +723,7 @@ async def test_provide_session_detaches_driver_on_exit() -> None:
     config = AsyncpgConfig(connection_instance=pool)
     async with config.provide_session() as session:
         assert session.connection is connection
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
 
 
 async def test_session_context_aenter_failure_releases_and_detaches_driver() -> None:
@@ -753,7 +753,7 @@ async def test_session_context_aenter_failure_releases_and_detaches_driver() -> 
             pytest.fail("prepare failure must abort __aenter__")
 
     assert release_events == [(True, True, RuntimeError)]
-    assert captured[0].connection is _DETACHED_CONNECTION
+    assert captured[0].connection is _CLOSED_CONNECTION
 
 
 @pytest.mark.parametrize("failure_stage", ["pool", "acquire"])

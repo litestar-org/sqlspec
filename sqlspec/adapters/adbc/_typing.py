@@ -141,7 +141,7 @@ class AdbcSessionContext:
                     connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__, driver=driver
                 )
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
             raise
 
     def __exit__(
@@ -151,7 +151,7 @@ class AdbcSessionContext:
         self._driver = None
         if self._connection is None:
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
             return None
         connection = self._connection
         self._connection = None
@@ -191,7 +191,7 @@ class AdbcSessionContext:
                 raise first_error
         finally:
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
         return None
 
 

@@ -218,7 +218,7 @@ class OracleSyncSessionContext:
                 self._connection = None
                 self._driver = None
                 if driver is not None:
-                    driver._detach_connection()
+                    driver._mark_closed()
             raise
         else:
             return self._driver
@@ -236,7 +236,7 @@ class OracleSyncSessionContext:
         finally:
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
         return None
 
 
@@ -301,7 +301,7 @@ class OracleAsyncSessionContext:
                 self._connection = None
                 self._driver = None
                 if driver is not None:
-                    driver._detach_connection()
+                    driver._mark_closed()
             raise
         else:
             return self._driver
@@ -319,7 +319,7 @@ class OracleAsyncSessionContext:
         finally:
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
         return None
 
 

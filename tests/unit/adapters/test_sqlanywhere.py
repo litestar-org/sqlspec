@@ -38,7 +38,7 @@ from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTrac
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.data_dictionary.dialects.sqlanywhere import SqlanywhereVersionInfo
 from sqlspec.data_dictionary.dialects.sqlanywhere.config import SQLANYWHERE_FEATURE_FLAGS
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -806,7 +806,7 @@ def test_sqlanywhere_session_context_rolls_back_implicit_work() -> None:
         driver.execute("INSERT INTO items (id) VALUES (1)")
 
     assert conn.rollbacks == 1
-    assert driver.connection is _DETACHED_CONNECTION
+    assert driver.connection is _CLOSED_CONNECTION
 
 
 @pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
@@ -824,7 +824,7 @@ def test_sqlanywhere_provide_session_detaches_driver_on_exit(
         else:
             with config.provide_session() as session:
                 pass
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
     finally:
         config.close_pool()
 
@@ -1428,7 +1428,7 @@ def test_sqlanywhere_session_context_cleans_up_on_prepare_and_exit_work_failures
             pass
 
         assert pool.checked_out() == 0
-        assert seen[0].connection is _DETACHED_CONNECTION
+        assert seen[0].connection is _CLOSED_CONNECTION
 
         released: list[object] = []
         ctx = SqlanywhereSessionContext(
@@ -1446,7 +1446,7 @@ def test_sqlanywhere_session_context_cleans_up_on_prepare_and_exit_work_failures
             )
 
         assert released == [conn]
-        assert driver.connection is _DETACHED_CONNECTION
+        assert driver.connection is _CLOSED_CONNECTION
     finally:
         config.close_pool()
 

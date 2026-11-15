@@ -223,7 +223,7 @@ class PsycopgSyncSessionContext:
                     self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
             finally:
                 if driver is not None:
-                    driver._detach_connection()
+                    driver._mark_closed()
             raise
 
     def __exit__(
@@ -260,7 +260,7 @@ class PsycopgSyncSessionContext:
         finally:
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
         return None
 
 
@@ -320,7 +320,7 @@ class PsycopgAsyncSessionContext:
                     )
             finally:
                 if driver is not None:
-                    driver._detach_connection()
+                    driver._mark_closed()
             raise
 
     async def __aexit__(
@@ -357,7 +357,7 @@ class PsycopgAsyncSessionContext:
         finally:
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
         return None
 
 

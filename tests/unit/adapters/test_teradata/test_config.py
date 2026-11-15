@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sqlspec.adapters.teradata import TeradataConfig, TeradataDriver, TeradataSessionContext
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import TransactionError
 from sqlspec.utils.module_loader import reset_dependency_cache
 
@@ -38,11 +38,11 @@ def test_config_session_releases_connection_after_success(connections: list[Any]
     with config.provide_session() as session:
         assert isinstance(session, TeradataDriver)
         assert pool.checked_out() == 1
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
     assert pool.checked_out() == 0
     with config.provide_session() as session:
         assert session.connection is connections[0]
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
     pool.close()
 
 
@@ -63,7 +63,7 @@ def test_session_prepare_hook_failure_discards_lease(connections: list[Any]) -> 
     with pytest.raises(ValueError, match="session setup failed"):
         with context:
             pytest.fail("setup hook must fail before yielding session")
-    assert captured[0].connection is _DETACHED_CONNECTION
+    assert captured[0].connection is _CLOSED_CONNECTION
     assert pool.checked_out() == 0
     assert pool.size() == 0
     connections[0].close.assert_called_once_with()
@@ -78,7 +78,7 @@ def test_session_rollback_failure_discards_lease(connections: list[Any]) -> None
         with config.provide_session() as session:
             session.begin()
             session.connection.rollback.side_effect = RuntimeError("socket gone")
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
     assert pool.checked_out() == 0
     assert pool.size() == 0
     connections[0].close.assert_called_once_with()

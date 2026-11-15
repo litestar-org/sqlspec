@@ -187,7 +187,7 @@ class AiomysqlSessionContext:
         finally:
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
         return None
 
 

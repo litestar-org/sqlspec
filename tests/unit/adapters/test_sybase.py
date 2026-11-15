@@ -40,7 +40,7 @@ from sqlspec.adapters.sybase.litestar import SybaseStore
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.data_dictionary.dialects.sybase import SybaseVersionInfo
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -187,7 +187,7 @@ def test_sybase_tracking_table_guard_uses_native_object_id(
     with config.provide_session() as driver:
         SybaseSyncMigrationTracker(version_table_name="audit.ddl_migrations").ensure_tracking_table(driver)
 
-    assert driver.connection is _DETACHED_CONNECTION
+    assert driver.connection is _CLOSED_CONNECTION
     assert cursor.calls[0][0].startswith(
         "IF OBJECT_ID('[audit].[ddl_migrations]') IS NULL EXECUTE('CREATE TABLE [audit].[ddl_migrations]"
     )
@@ -206,7 +206,7 @@ def test_sybase_provide_session_detaches_driver_on_exit(
         with config.provide_session() as session:
             pass
 
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
 
 
 def test_sybase_adk_lifecycle_uses_native_object_id(recording_sybase_config: tuple[SybaseConfig, FakeCursor]) -> None:
@@ -1750,7 +1750,7 @@ def test_sybase_provide_session_releases_and_detaches_when_prepare_driver_fails(
         pass
 
     assert pool.checked_out() == 0
-    assert seen[0].connection is _DETACHED_CONNECTION
+    assert seen[0].connection is _CLOSED_CONNECTION
 
 
 @pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])

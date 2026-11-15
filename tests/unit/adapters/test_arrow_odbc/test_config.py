@@ -26,7 +26,7 @@ from sqlspec.adapters.arrow_odbc import (
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.core import _extract_sqlstate, create_mapped_exception
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -476,13 +476,13 @@ def test_arrow_odbc_caller_connection_instance_rolled_back_and_preserved(entry: 
         if entry == "provide_session":
             assert first.connection is stub
     if entry == "provide_session":
-        assert first.connection is _DETACHED_CONNECTION
+        assert first.connection is _CLOSED_CONNECTION
 
     with getattr(config, entry)() as second:
         if entry == "provide_session":
             assert second.connection is stub
     if entry == "provide_session":
-        assert second.connection is _DETACHED_CONNECTION
+        assert second.connection is _CLOSED_CONNECTION
 
     assert stub.closed is False
     assert stub.rollbacks == (0 if autocommit else 2)
@@ -518,7 +518,7 @@ def test_arrow_odbc_owned_connection_closed_and_session_rolls_back_active_transa
 
     assert owned.executed == ["BEGIN", "ROLLBACK"]
     assert owned.closed is True
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
 
 
 def test_arrow_odbc_session_failed_rollback_preserves_mapped_error_on_connection_instance() -> None:
@@ -544,7 +544,7 @@ def test_arrow_odbc_session_failed_rollback_preserves_mapped_error_on_connection
         session.begin()
 
     assert caller.rollbacks == 1
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
 
 
 @pytest.mark.parametrize("method", ["provide_connection", "provide_session"])

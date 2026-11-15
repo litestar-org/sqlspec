@@ -14,7 +14,7 @@ from sqlspec.adapters.aiosqlite.config import (
 from sqlspec.adapters.aiosqlite.core import build_connection_config, is_read_only_sqlite_config, render_pragmas
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectTimeoutError
 from sqlspec.core import StatementConfig
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 
 
@@ -387,9 +387,9 @@ async def test_provide_session_detaches_driver_on_exit(tmp_path: Path) -> None:
     try:
         async with config.provide_session() as session:
             assert await session.select_value("SELECT 1") == 1
-            assert session.connection is not _DETACHED_CONNECTION
+            assert session.connection is not _CLOSED_CONNECTION
 
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         with pytest.raises(ImproperConfigurationError, match="already closed"):
             await session.execute("SELECT 1")
     finally:
@@ -423,7 +423,7 @@ async def test_session_context_aenter_failure_releases_and_detaches_driver() -> 
             pytest.fail("prepare failure must abort __aenter__")
 
     assert release_events == [(True, True, RuntimeError)]
-    assert captured[0].connection is _DETACHED_CONNECTION
+    assert captured[0].connection is _CLOSED_CONNECTION
 
 
 async def test_aiosqlite_read_replica_failover_on_timeout_and_cantopen(tmp_path: Path) -> None:

@@ -240,7 +240,7 @@ def _make_request(*, pool: object | None) -> SimpleNamespace:
             db_session_instance=SimpleNamespace(
                 observability=SimpleNamespace(is_idle=True),
                 _close_open_streams=lambda error=False: None,
-                _detach_connection=lambda: None,
+                _mark_closed=lambda: None,
             )
         ),
         headers={},
@@ -324,7 +324,7 @@ async def test_sanic_defers_tenant_connection_until_handler_sets_tenant(status: 
         commit=connection.commit,
         rollback=connection.rollback,
         _close_open_streams=lambda error=False: None,
-        _detach_connection=lambda: None,
+        _mark_closed=lambda: None,
     )
     original = config.provide_connection
 

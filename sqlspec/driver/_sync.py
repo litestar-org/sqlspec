@@ -33,8 +33,8 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.data_dictionary._index_ddl import SyncWithoutIndexesContext
 from sqlspec.driver._common import (
-    _DETACHED_CONNECTION,
-    _DETACHED_CONNECTION_MESSAGE,
+    _CLOSED_CONNECTION,
+    _CLOSED_CONNECTION_MESSAGE,
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
     DataDictionaryMixin,
@@ -239,8 +239,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             The result of the SQL execution
         """
         try:
-            if connection is _DETACHED_CONNECTION:
-                raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+            if connection is _CLOSED_CONNECTION:
+                raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
             runtime = self._observability
             if statement.is_script and (statement.positional_parameters or statement.named_parameters):
                 compiled_sql, execution_parameters = statement.raw_sql, None

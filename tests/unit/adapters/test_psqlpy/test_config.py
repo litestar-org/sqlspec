@@ -22,7 +22,7 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -822,7 +822,7 @@ async def test_provide_session_detaches_driver_on_exit() -> None:
     config = PsqlpyConfig(connection_instance=cast("PsqlpyConnectionPool", pool))
     async with config.provide_session() as session:
         assert session.connection is connection
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
 
 
 async def test_session_context_aenter_failure_releases_and_detaches_driver() -> None:
@@ -852,7 +852,7 @@ async def test_session_context_aenter_failure_releases_and_detaches_driver() -> 
             pytest.fail("prepare failure must abort __aenter__")
 
     assert release_events == [(True, True, RuntimeError)]
-    assert captured[0].connection is _DETACHED_CONNECTION
+    assert captured[0].connection is _CLOSED_CONNECTION
 
 
 @pytest.mark.parametrize("failure_stage", ["pool", "acquire"])

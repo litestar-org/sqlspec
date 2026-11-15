@@ -14,7 +14,7 @@ from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams, build_connection_config
 from sqlspec.adapters.pymysql.core import create_mapped_exception
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, OperationalError
 
 
@@ -439,7 +439,7 @@ def test_provide_session_detaches_driver_on_exit() -> None:
         with config.provide_session() as session:
             assert session.connection is raw_conn
 
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         with pytest.raises(ImproperConfigurationError, match="already closed"):
             session.execute("SELECT 1")
     finally:
@@ -462,7 +462,7 @@ def test_provide_session_releases_and_detaches_when_prepare_driver_fails(monkeyp
             pass
 
         assert pool.checked_out() == 0
-        assert seen[0].connection is _DETACHED_CONNECTION
+        assert seen[0].connection is _CLOSED_CONNECTION
     finally:
         pool.close()
 

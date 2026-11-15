@@ -97,7 +97,7 @@ class SnowflakeSessionContext:
                     self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
                 finally:
                     if driver is not None:
-                        driver._detach_connection()
+                        driver._mark_closed()
             raise
 
     def __exit__(
@@ -118,4 +118,4 @@ class SnowflakeSessionContext:
                 self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
         finally:
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()

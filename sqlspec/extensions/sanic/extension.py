@@ -1187,7 +1187,7 @@ class SQLSpecPlugin:
                     if runtime is not None and not runtime.is_idle:
                         await runtime.emit_session_end_async(session)
                 finally:
-                    session._detach_connection()
+                    session._mark_closed()
         finally:
             if connection is not None or connection_manager is not None:
                 exc = (
@@ -1433,9 +1433,9 @@ def _select_teardown_exception(current: BaseException | None, candidate: BaseExc
 def _detach_deferred_session(deferred: Any) -> None:
     """Detach an unawaited deferred session handle when present."""
     if deferred is not None:
-        detach = getattr(deferred, "_detach_connection", None)
-        if detach is not None:
-            detach()
+        mark_closed = getattr(deferred, "_mark_closed", None)
+        if mark_closed is not None:
+            mark_closed()
 
 
 def _is_routing_state_active(state: SanicConfigState) -> bool:

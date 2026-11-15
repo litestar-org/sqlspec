@@ -773,7 +773,7 @@ class SQLSpecPlugin:
                             tenant_override=captured_payload if has_captured_payload else "ambient",
                         )
                     finally:
-                        session._detach_connection()
+                        session._mark_closed()
         finally:
             if connection is not None or conn_ctx is not None:
                 try:

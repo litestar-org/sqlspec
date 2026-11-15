@@ -28,7 +28,7 @@ from sqlspec.core import (
     reset_stats_only,
     update_cache_config,
 )
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 from sqlspec.loader import SQLFileLoader
@@ -952,7 +952,7 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
                 prepared: Any = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
                 driver = prepared
                 raw_connection = prepared.connection
-                if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                     self._runtime.emit_connection_create_sync(raw_connection)
                     connection_created = True
                 self._runtime.emit_session_start_sync(prepared)
@@ -965,12 +965,12 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
                         if (
                             connection_created
                             and raw_connection is not None
-                            and raw_connection is not _DETACHED_CONNECTION
+                            and raw_connection is not _CLOSED_CONNECTION
                         ):
                             self._runtime.emit_connection_destroy_sync(raw_connection)
                 finally:
                     if driver is not None:
-                        _detach_session(driver)
+                        _mark_driver_closed(driver)
                 raise
             self._value = prepared
             return cast("ContextValueT", prepared)
@@ -995,17 +995,17 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
             self._value = None
             if value is not None:
                 if self._config is None:
-                    if value is not _DETACHED_CONNECTION:
+                    if value is not _CLOSED_CONNECTION:
                         self._runtime.emit_connection_destroy_sync(value)
                 else:
                     try:
                         try:
                             self._runtime.emit_session_end_sync(value)
                         finally:
-                            if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                            if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                                 self._runtime.emit_connection_destroy_sync(raw_connection)
                     finally:
-                        _detach_session(value)
+                        _mark_driver_closed(value)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1034,7 +1034,7 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                 prepared: Any = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
                 driver = prepared
                 raw_connection = prepared.connection
-                if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                     await self._runtime.emit_connection_create_async(raw_connection)
                     connection_created = True
                 await self._runtime.emit_session_start_async(prepared)
@@ -1047,12 +1047,12 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                         if (
                             connection_created
                             and raw_connection is not None
-                            and raw_connection is not _DETACHED_CONNECTION
+                            and raw_connection is not _CLOSED_CONNECTION
                         ):
                             await self._runtime.emit_connection_destroy_async(raw_connection)
                 finally:
                     if driver is not None:
-                        _detach_session(driver)
+                        _mark_driver_closed(driver)
                 raise
             self._value = prepared
             return cast("ContextValueT", prepared)
@@ -1077,17 +1077,17 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
             self._value = None
             if value is not None:
                 if self._config is None:
-                    if value is not _DETACHED_CONNECTION:
+                    if value is not _CLOSED_CONNECTION:
                         await self._runtime.emit_connection_destroy_async(value)
                 else:
                     try:
                         try:
                             await self._runtime.emit_session_end_async(value)
                         finally:
-                            if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                            if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                                 await self._runtime.emit_connection_destroy_async(raw_connection)
                     finally:
-                        _detach_session(value)
+                        _mark_driver_closed(value)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1112,7 +1112,7 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
         connection = value.connection if self._session else value
         connection_created = False
         try:
-            if connection is not None and connection is not _DETACHED_CONNECTION:
+            if connection is not None and connection is not _CLOSED_CONNECTION:
                 runtime.emit_connection_create_sync(connection)
                 connection_created = True
             if self._session:
@@ -1124,11 +1124,11 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
                 try:
                     self._context.__exit__(type(exc), exc, exc.__traceback__)
                 finally:
-                    if connection_created and connection is not None and connection is not _DETACHED_CONNECTION:
+                    if connection_created and connection is not None and connection is not _CLOSED_CONNECTION:
                         runtime.emit_connection_destroy_sync(connection)
             finally:
                 if self._session:
-                    _detach_session(value)
+                    _mark_driver_closed(value)
             raise
         self._runtime = runtime
         self._value = value
@@ -1151,11 +1151,11 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
                         if self._session and value is not None:
                             runtime.emit_session_end_sync(value)
                     finally:
-                        if connection is not None and connection is not _DETACHED_CONNECTION:
+                        if connection is not None and connection is not _CLOSED_CONNECTION:
                             runtime.emit_connection_destroy_sync(connection)
             finally:
                 if self._session and value is not None:
-                    _detach_session(value)
+                    _mark_driver_closed(value)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1180,7 +1180,7 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
         connection = value.connection if self._session else value
         connection_created = False
         try:
-            if connection is not None and connection is not _DETACHED_CONNECTION:
+            if connection is not None and connection is not _CLOSED_CONNECTION:
                 await runtime.emit_connection_create_async(connection)
                 connection_created = True
             if self._session:
@@ -1192,11 +1192,11 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
                 try:
                     await self._context.__aexit__(type(exc), exc, exc.__traceback__)
                 finally:
-                    if connection_created and connection is not None and connection is not _DETACHED_CONNECTION:
+                    if connection_created and connection is not None and connection is not _CLOSED_CONNECTION:
                         await runtime.emit_connection_destroy_async(connection)
             finally:
                 if self._session:
-                    _detach_session(value)
+                    _mark_driver_closed(value)
             raise
         self._runtime = runtime
         self._value = value
@@ -1219,14 +1219,14 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
                         if self._session and value is not None:
                             await runtime.emit_session_end_async(value)
                     finally:
-                        if connection is not None and connection is not _DETACHED_CONNECTION:
+                        if connection is not None and connection is not _CLOSED_CONNECTION:
                             await runtime.emit_connection_destroy_async(connection)
             finally:
                 if self._session and value is not None:
-                    _detach_session(value)
+                    _mark_driver_closed(value)
 
 
-def _detach_session(value: Any) -> None:
-    detach = getattr(value, "_detach_connection", None)
-    if detach is not None:
-        detach()
+def _mark_driver_closed(value: Any) -> None:
+    mark_closed = getattr(value, "_mark_closed", None)
+    if mark_closed is not None:
+        mark_closed()

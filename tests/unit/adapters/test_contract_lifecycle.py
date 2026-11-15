@@ -13,7 +13,7 @@ import pytest
 
 import sqlspec.adapters
 from sqlspec.core import StatementConfig as SQLSpecStatementConfig
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.integration.adapters._shared._cases import DRIVER_CASES, get_driver_case
 
@@ -229,7 +229,7 @@ def test_sync_session_context_detaches_driver_after_release(
     holder: list[Any] = []
 
     def release_connection(conn: Any, **kwargs: Any) -> None:
-        assert conn is not _DETACHED_CONNECTION
+        assert conn is not _CLOSED_CONNECTION
         drv = holder[0]
         release_events.append((conn is stub_conn, drv.connection is stub_conn, kwargs.get("exc_type")))
 
@@ -251,7 +251,7 @@ def test_sync_session_context_detaches_driver_after_release(
             assert driver.connection is stub_conn
 
     assert release_events == [(True, True, _SessionBodyError if body_raises else None)]
-    assert driver.connection is _DETACHED_CONNECTION
+    assert driver.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError, match="already closed"):
         driver.execute("SELECT 1")
 
@@ -271,7 +271,7 @@ async def test_async_session_context_detaches_driver_after_release(
         return stub_conn
 
     async def release_connection(conn: Any, **kwargs: Any) -> None:
-        assert conn is not _DETACHED_CONNECTION
+        assert conn is not _CLOSED_CONNECTION
         drv = holder[0]
         release_events.append((conn is stub_conn, drv.connection is stub_conn, kwargs.get("exc_type")))
 
@@ -295,7 +295,7 @@ async def test_async_session_context_detaches_driver_after_release(
             assert driver.connection is stub_conn
 
     assert release_events == [(True, True, _SessionBodyError if body_raises else None)]
-    assert driver.connection is _DETACHED_CONNECTION
+    assert driver.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError, match="already closed"):
         await driver.execute("SELECT 1")
 
@@ -313,7 +313,7 @@ def test_sync_session_context_enter_failure_detaches_driver(module_name: str, co
         raise _SessionBodyError
 
     def release_connection(conn: Any, **kwargs: Any) -> None:
-        assert conn is not _DETACHED_CONNECTION
+        assert conn is not _CLOSED_CONNECTION
         drv = holder[0]
         release_events.append((conn is stub_conn, drv.connection is stub_conn, kwargs.get("exc_type")))
 
@@ -328,7 +328,7 @@ def test_sync_session_context_enter_failure_detaches_driver(module_name: str, co
         pytest.fail("prepare_driver failure must abort __enter__")
 
     assert release_events == [(True, True, _SessionBodyError)]
-    assert holder[0].connection is _DETACHED_CONNECTION
+    assert holder[0].connection is _CLOSED_CONNECTION
 
 
 @pytest.mark.parametrize(("module_name", "context_name"), _ASYNC_ENTER_FAILURE_CONTEXTS)
@@ -347,7 +347,7 @@ async def test_async_session_context_enter_failure_detaches_driver(module_name: 
         raise _SessionBodyError
 
     async def release_connection(conn: Any, **kwargs: Any) -> None:
-        assert conn is not _DETACHED_CONNECTION
+        assert conn is not _CLOSED_CONNECTION
         drv = holder[0]
         release_events.append((conn is stub_conn, drv.connection is stub_conn, kwargs.get("exc_type")))
 
@@ -363,4 +363,4 @@ async def test_async_session_context_enter_failure_detaches_driver(module_name: 
             pytest.fail("prepare_driver failure must abort __aenter__")
 
     assert release_events == [(True, True, _SessionBodyError)]
-    assert holder[0].connection is _DETACHED_CONNECTION
+    assert holder[0].connection is _CLOSED_CONNECTION

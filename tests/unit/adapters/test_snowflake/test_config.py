@@ -11,7 +11,7 @@ from sqlspec.adapters.snowflake._typing import SnowflakeSessionContext
 from sqlspec.adapters.snowflake.config import SnowflakeConfig
 from sqlspec.adapters.snowflake.core import apply_driver_features, build_statement_config, normalize_connection_params
 from sqlspec.core import ParameterStyle
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.correlation import CorrelationContext
 
@@ -196,7 +196,7 @@ def test_config_preserves_query_tag_when_correlating_cached_statements(
                 with CorrelationContext.context(correlation_id):
                     assert session.select("SELECT 1 AS ID") == [{"id": 1}]
             session.select("SELECT 1 AS ID")
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         assert [call[2] for call in snowflake_connection.calls] == [
             {"_statement_params": {"QUERY_TAG": f"{expected_tag}:request-a"}},
             {"_statement_params": {"QUERY_TAG": f"{expected_tag}:request-b"}},
@@ -233,7 +233,7 @@ def test_named_profile_query_tag_is_preserved_for_correlation(
     try:
         with config.provide_session() as session, CorrelationContext.context("request-a"):
             session.select("SELECT 1 AS ID")
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         assert snowflake_connection.calls[-1][2] == {"_statement_params": {"QUERY_TAG": "profile-report:request-a"}}
     finally:
         config.close_pool()
@@ -350,4 +350,4 @@ def test_snowflake_session_context_detaches_driver_after_release(mode: str) -> N
             assert session.connection is conn
 
     assert released_while_attached == [True]
-    assert holder[0].connection is _DETACHED_CONNECTION
+    assert holder[0].connection is _CLOSED_CONNECTION

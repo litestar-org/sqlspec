@@ -221,7 +221,7 @@ _SCRIPT_INDEX_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
 })
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
-_DETACHED_CONNECTION_MESSAGE: Final[str] = "Driver session has already closed and its connection has been released."
+_CLOSED_CONNECTION_MESSAGE: Final[str] = "Driver session has already closed and its connection has been released."
 _READ_ONLY_OPERATION_TYPES: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA", "COPY_TO"})
 
 _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
@@ -1795,7 +1795,7 @@ class DataDictionaryMixin:
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class _DetachedConnection:
+class _ClosedConnection:
     """Sentinel assigned to driver.connection after session exit."""
 
     __slots__ = ()
@@ -1804,15 +1804,15 @@ class _DetachedConnection:
         return False
 
     def __repr__(self) -> str:
-        return "<DetachedConnection>"
+        return "<ClosedConnection>"
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("__") and name.endswith("__"):
             raise AttributeError(name)
-        raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+        raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
 
 
-_DETACHED_CONNECTION: Final[Any] = _DetachedConnection()
+_CLOSED_CONNECTION: Final[Any] = _ClosedConnection()
 
 
 def operation_requires_transaction(operation_type: "OperationType", modifies_rows: bool) -> bool:
@@ -2309,8 +2309,8 @@ class CommonDriverAttributesMixin:
         open_streams.append(stream)
         return stream
 
-    def _detach_connection(self) -> None:
-        """Invalidate open streams and replace driver.connection with the detached sentinel."""
+    def _mark_closed(self) -> None:
+        """Invalidate open streams and replace driver.connection with the closed sentinel."""
         open_streams = self._open_streams
         self._open_streams = []
         for open_stream in open_streams:
@@ -2318,7 +2318,7 @@ class CommonDriverAttributesMixin:
                 open_stream._close_for_session_exit(error=True)
             else:
                 open_stream._mark_session_closed()
-        self.connection = _DETACHED_CONNECTION
+        self.connection = _CLOSED_CONNECTION
         self._auto_begin_on_write = False
         self._stmt_cache_enabled = False
         self._transaction_depth = 0
@@ -2341,7 +2341,7 @@ class CommonDriverAttributesMixin:
 
     def _refresh_statement_cache_state(self) -> None:
         self._stmt_cache_enabled = bool(
-            self.connection is not _DETACHED_CONNECTION
+            self.connection is not _CLOSED_CONNECTION
             and self._stmt_cache_max_size > 0
             and not self.statement_config._has_transformers
             and not self.statement_config._has_uncacheable_transformers

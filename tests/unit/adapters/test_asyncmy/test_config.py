@@ -16,7 +16,7 @@ from sqlspec.adapters.asyncmy.config import (
     build_connection_config,
 )
 from sqlspec.adapters.asyncmy.core import build_statement_config, default_statement_config
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, OperationalError
 
 
@@ -403,7 +403,7 @@ async def test_asyncmy_session_context_initialization() -> None:
     async with ctx as driver:
         assert driver.connection is mock_conn
     assert release.called
-    assert driver.connection is _DETACHED_CONNECTION
+    assert driver.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError, match="already closed"):
         await driver.execute("SELECT 1")
 
@@ -501,7 +501,7 @@ async def test_provide_session_detaches_driver_on_exit() -> None:
     async with config.provide_session() as session:
         assert session.connection is mock_conn
 
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError, match="already closed"):
         await session.execute("SELECT 1")
 
@@ -524,7 +524,7 @@ async def test_provide_session_releases_and_detaches_when_prepare_driver_fails(m
             pass
 
     acquire_ctx.__aexit__.assert_awaited_once()
-    assert seen[0].connection is _DETACHED_CONNECTION
+    assert seen[0].connection is _CLOSED_CONNECTION
 
 
 def _make_asyncmy_mock_conn() -> MagicMock:

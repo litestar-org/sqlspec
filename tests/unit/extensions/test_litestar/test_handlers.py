@@ -13,7 +13,7 @@ from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.handlers import (
@@ -1465,7 +1465,7 @@ async def test_connection_provider_direct_exit_emits_session_end_and_detaches_se
                 await anext(conn_gen)
 
         assert ended_sessions == [session]
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         assert get_sqlspec_scope_state(scope, "db_connection_session") is None
         with pytest.raises(ImproperConfigurationError, match="already closed"):
             _ = session.connection.cursor

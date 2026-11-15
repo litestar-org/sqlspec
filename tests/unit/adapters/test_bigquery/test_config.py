@@ -18,7 +18,7 @@ from sqlspec.adapters.bigquery.config import (
     build_connection_config,
 )
 from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 
 
 class _RecordingBigQueryClient:
@@ -287,7 +287,7 @@ def test_bigquery_session_context_rolls_back_active_script_transaction(
 
     fake_driver.rollback.assert_called_once_with()
     release.assert_called_once()
-    fake_driver._detach_connection.assert_called_once_with()
+    fake_driver._mark_closed.assert_called_once_with()
 
 
 @pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
@@ -303,4 +303,4 @@ def test_bigquery_provide_session_detaches_driver_on_exit(body_raises: bool) -> 
         with config.provide_session() as session:
             assert session.connection is client
 
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION

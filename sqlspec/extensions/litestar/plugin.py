@@ -2046,9 +2046,9 @@ def _detach_and_delete_scope_state(scope: "Scope", key: str) -> None:
     """Pop one scope entry and detach it if it is a deferred or active session."""
     value = get_sqlspec_scope_state(scope, key, pop=True)
     if value is not None:
-        detach = getattr(value, "_detach_connection", None)
-        if detach is not None:
-            detach()
+        mark_closed = getattr(value, "_mark_closed", None)
+        if mark_closed is not None:
+            mark_closed()
 
 
 def _is_routing_state_active(state: PluginConfigState) -> bool:

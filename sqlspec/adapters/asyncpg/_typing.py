@@ -136,7 +136,7 @@ class AsyncpgSessionContext:
                     )
             finally:
                 if driver is not None:
-                    driver._detach_connection()
+                    driver._mark_closed()
             raise
 
     async def __aexit__(
@@ -152,7 +152,7 @@ class AsyncpgSessionContext:
         finally:
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
         return None
 
 

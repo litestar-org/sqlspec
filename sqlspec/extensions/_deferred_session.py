@@ -16,7 +16,7 @@ from contextvars import copy_context
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.driver._common import _DETACHED_CONNECTION_MESSAGE
+from sqlspec.driver._common import _CLOSED_CONNECTION_MESSAGE
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.routing import RoutingContext, RoutingContextPayload
@@ -84,7 +84,7 @@ class DeferredAsyncSession:
             The driver session bound to the request connection.
         """
         if self._closed:
-            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+            raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
         session = self._current()
         if session is not None:
             return session
@@ -92,7 +92,7 @@ class DeferredAsyncSession:
 
     def __getattr__(self, name: str) -> Any:
         if self._closed:
-            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+            raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
         session = self._current()
         if session is not None:
             return getattr(session, name)
@@ -128,14 +128,14 @@ class DeferredAsyncSession:
         if session is not None:
             await session._close_open_streams(error=error)
 
-    def _detach_connection(self) -> None:
+    def _mark_closed(self) -> None:
         """Mark the deferred session closed and detach the underlying driver session when open."""
         self._closed = True
         session = self._current()
         if session is not None:
-            detach = getattr(session, "_detach_connection", None)
-            if detach is not None:
-                detach()
+            mark_closed = getattr(session, "_mark_closed", None)
+            if mark_closed is not None:
+                mark_closed()
 
     def _raise_not_open(self, name: str) -> NoReturn:
         msg = (
@@ -356,11 +356,11 @@ class PortalSession:
 
         call_portal_with_context(self._portal, run, tenant_override=None)
 
-    def _detach_connection(self) -> None:
+    def _mark_closed(self) -> None:
         """Detach the wrapped asynchronous driver session directly without dispatching via the portal."""
-        detach = getattr(self._session, "_detach_connection", None)
-        if detach is not None:
-            detach()
+        mark_closed = getattr(self._session, "_mark_closed", None)
+        if mark_closed is not None:
+            mark_closed()
 
 
 class _PortalResource:

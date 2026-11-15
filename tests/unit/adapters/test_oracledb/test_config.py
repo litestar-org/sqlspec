@@ -40,7 +40,7 @@ from sqlspec.adapters.oracledb.config import (
     OraclePoolParams,
     OracleSyncConfig,
 )
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.tenant import TenantContext
 
@@ -841,7 +841,7 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
     with pytest.raises(RuntimeError, match="boom_sync"), sync_cfg.provide_session() as sync_session:
         raise RuntimeError("boom_sync")
 
-    assert sync_session.connection is _DETACHED_CONNECTION
+    assert sync_session.connection is _CLOSED_CONNECTION
     assert len(executed_sync) == 2
     assert "DBMS_SESSION.SET_IDENTIFIER" in executed_sync[0]
     assert "DBMS_SESSION.RESET_PACKAGE;" in executed_sync[1]
@@ -869,7 +869,7 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
         async with async_cfg.provide_session() as async_session:
             raise RuntimeError("boom_async")
 
-    assert async_session.connection is _DETACHED_CONNECTION
+    assert async_session.connection is _CLOSED_CONNECTION
 
     assert len(executed_async) == 2
     assert "DBMS_SESSION.SET_IDENTIFIER" in executed_async[0]
@@ -2185,7 +2185,7 @@ async def test_oracle_non_lease_release_rolls_back_iff_autocommit_off(
             pass
 
     if provider == "provide_session":
-        assert target.connection is _DETACHED_CONNECTION
+        assert target.connection is _CLOSED_CONNECTION
 
     expected_rollbacks = 0 if autocommit else 1
     assert conn.rollback.call_count == expected_rollbacks

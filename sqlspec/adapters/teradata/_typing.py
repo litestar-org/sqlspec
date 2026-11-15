@@ -106,7 +106,7 @@ class TeradataSessionContext:
                 self._connection = None
                 self._driver = None
                 if driver is not None:
-                    driver._detach_connection()
+                    driver._mark_closed()
             raise
 
     def __exit__(
@@ -131,7 +131,7 @@ class TeradataSessionContext:
             self._connection = None
             self._driver = None
             if driver is not None:
-                driver._detach_connection()
+                driver._mark_closed()
         return None
 
     def _notify_query_band_state(self, connection: Any, *, dirty: bool) -> None:

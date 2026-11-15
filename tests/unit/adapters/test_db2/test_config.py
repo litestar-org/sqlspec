@@ -27,7 +27,7 @@ from sqlspec.adapters.db2.core import (
 from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 from tests.unit.adapters.test_db2._fakes import (
     DriverMode,
@@ -496,7 +496,7 @@ async def test_async_provide_session_yields_async_driver(fake_ibm_db: FakeModule
             session_connection = driver.connection
             pool = await config.provide_pool()
             assert pool.checked_out() == 1
-        assert driver.connection is _DETACHED_CONNECTION
+        assert driver.connection is _CLOSED_CONNECTION
         assert pool.checked_out() == 0
         async with config.provide_connection() as connection:
             assert connection is session_connection
@@ -528,7 +528,7 @@ async def test_db2_provide_session_detaches_driver_on_exit(
         else:
             with config.provide_session() as session:
                 pass
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
     finally:
         if db2_mode.is_async:
             await config.close_pool()

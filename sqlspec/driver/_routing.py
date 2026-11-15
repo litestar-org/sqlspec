@@ -19,7 +19,7 @@ from typing_extensions import TypeVar
 from sqlspec.core import SQL, ArrowResult, SQLResult, StackResult, Statement, StatementConfig, StatementFilter
 from sqlspec.core.stack import StatementStack
 from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import _DETACHED_CONNECTION_MESSAGE, CommonDriverAttributesMixin
+from sqlspec.driver._common import _CLOSED_CONNECTION_MESSAGE, CommonDriverAttributesMixin
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
@@ -190,13 +190,13 @@ class _RoutingSessionState:
                 drivers.append(driver)
         return tuple(drivers)
 
-    def _detach_connection(self) -> None:
-        """Detach underlying driver connections and mark the routing session closed."""
+    def _mark_closed(self) -> None:
+        """Close underlying driver connections and mark the routing session closed."""
         for driver in (self._primary_driver, self._replica_driver):
             if driver is not None:
-                detach = getattr(driver, "_detach_connection", None)
-                if callable(detach):
-                    detach()
+                mark_closed = getattr(driver, "_mark_closed", None)
+                if callable(mark_closed):
+                    mark_closed()
                 else:
                     driver.connection = None
         self._primary_driver = None
@@ -343,7 +343,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         try:
             self._stack.__exit__(exc_type, exc_val, exc_tb)
         finally:
-            self._detach_connection()
+            self._mark_closed()
 
     def _close_open_streams(self, *, error: bool = False) -> None:
         """Close row streams held by the primary and replica sessions.
@@ -1067,7 +1067,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         try:
             await self._stack.__aexit__(exc_type, exc_val, exc_tb)
         finally:
-            self._detach_connection()
+            self._mark_closed()
 
     async def _close_open_streams(self, *, error: bool = False) -> None:
         """Close row streams held by the primary and replica sessions.
@@ -1771,7 +1771,7 @@ class _SyncRoutingRowSource:
 
     def _require_open_inner(self) -> None:
         if self._inner_stream._session_closed:
-            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+            raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
 
     def close(self, error: bool = False) -> None:
         try:
@@ -1837,7 +1837,7 @@ class _AsyncRoutingRowSource:
         if self._inner_stream is None:
             return []
         if self._inner_stream._session_closed:
-            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+            raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
         return await self._inner_stream._source.fetch_chunk()
 
     async def close(self, error: bool = False) -> None:

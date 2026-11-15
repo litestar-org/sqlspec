@@ -28,7 +28,7 @@ from sqlspec.adapters.duckdb.core import (
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.adapters.duckdb.pool import _SQL_IDENTIFIER_RE, DuckDBConnectionPool, _validate_sql_identifier
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -306,7 +306,7 @@ def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) 
             with config.provide_session() as session:
                 session.begin()
                 session.execute("INSERT INTO items VALUES (1)")
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         with pytest.raises(ImproperConfigurationError, match="already closed"):
             session.execute("SELECT 1")
         with config.provide_session() as check_session:
@@ -333,7 +333,7 @@ def test_provide_session_failed_rollback_forwards_exception_to_pool_and_avoids_c
             session.begin()
             session.execute("INSERT INTO items VALUES (42)")
 
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         assert config.provide_pool().size() == 0
         monkeypatch.undo()
         with config.provide_session() as check_session:

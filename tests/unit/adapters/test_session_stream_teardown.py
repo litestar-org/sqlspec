@@ -15,7 +15,7 @@ from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -145,7 +145,7 @@ async def test_stream_closed_before_connection_release(
             stream = make_stream(events, is_async=config.is_async)
             session._register_open_stream(stream)
         assert events == ["stream-close", "release"]
-        assert session.connection is _DETACHED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
     finally:
         await resolve(config.close_pool())
 
@@ -257,6 +257,6 @@ async def test_server_context_orders_stream_close_rollback_release_detach(
     assert events[0] == "stream-close"
     assert events[-1] == "release"
     assert events.index("stream-close") < events.index("release")
-    assert driver.connection is _DETACHED_CONNECTION
+    assert driver.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError):
         driver.connection.cursor()

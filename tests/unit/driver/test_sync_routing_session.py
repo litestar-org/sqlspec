@@ -16,7 +16,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core import SQL, StatementConfig, StatementStack
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.driver._routing import SyncRoutingSession
 from sqlspec.exceptions import (
     ImproperConfigurationError,
@@ -65,8 +65,8 @@ def test_idle_facade_and_closed_session(routing_config: SqliteConfig) -> None:
         active_session.rollback()
     assert active_session.primary_session is None
     assert active_session.replica_session is None
-    assert leaked_replica.connection is _DETACHED_CONNECTION
-    assert leaked_primary.connection is _DETACHED_CONNECTION
+    assert leaked_replica.connection is _CLOSED_CONNECTION
+    assert leaked_primary.connection is _CLOSED_CONNECTION
 
 
 def test_reads_replica_then_write_pins_primary(routing_config: SqliteConfig) -> None:
@@ -830,7 +830,7 @@ def test_sync_max_size_one_primary_pool_reuses_held_primary_on_auto_fallback(
                 session.select_value("SELECT origin FROM notes WHERE id=1")
             assert session.primary_session is orig_primary
             assert session.replica_session is None
-            assert orig_primary.connection is not _DETACHED_CONNECTION
+            assert orig_primary.connection is not _CLOSED_CONNECTION
 
             with RoutingContext.scope(
                 RoutingContextPayload({DEFAULT_BIND_KEY: RoutingEntry("auto", causal_token="lsn-2")})
@@ -850,7 +850,7 @@ def test_sync_max_size_one_primary_pool_reuses_held_primary_on_auto_fallback(
             session.execute("INSERT INTO notes VALUES (4, 'after_reuse')")
             session.commit()
             assert session.select_value("SELECT count(*) FROM notes") == 4
-        assert orig_primary.connection is _DETACHED_CONNECTION
+        assert orig_primary.connection is _CLOSED_CONNECTION
         expected_count = 1 if use_registry else 0
         assert events.count("start") == expected_count
         assert events.count("end") == expected_count

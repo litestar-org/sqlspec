@@ -11,7 +11,7 @@ import pytest
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core import StatementStack
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, ReplicaUnavailableError, RoutingContextError, SQLSpecError
@@ -46,8 +46,8 @@ async def test_async_idle_read_write_pin_and_closed(async_routing_config: Aiosql
         assert await session.fetch_value("SELECT origin FROM notes WHERE id=1") == "primary"
     assert session.primary_session is None
     assert session.replica_session is None
-    assert leaked_replica.connection is _DETACHED_CONNECTION
-    assert leaked_primary.connection is _DETACHED_CONNECTION
+    assert leaked_replica.connection is _CLOSED_CONNECTION
+    assert leaked_primary.connection is _CLOSED_CONNECTION
     with pytest.raises(SQLSpecError, match="closed"):
         await session.select("SELECT 1")
 
@@ -273,7 +273,7 @@ async def test_async_max_size_one_primary_pool_reuses_held_primary_on_auto_fallb
                 await asyncio.wait_for(session.select_value("SELECT origin FROM notes WHERE id=1"), timeout=2)
             assert session.primary_session is orig_primary
             assert session.replica_session is None
-            assert orig_primary.connection is not _DETACHED_CONNECTION
+            assert orig_primary.connection is not _CLOSED_CONNECTION
 
             with RoutingContext.scope(
                 RoutingContextPayload({DEFAULT_BIND_KEY: RoutingEntry("auto", causal_token="lsn-2")})
@@ -295,7 +295,7 @@ async def test_async_max_size_one_primary_pool_reuses_held_primary_on_auto_fallb
             await session.execute("INSERT INTO notes VALUES (4, 'after_reuse')")
             await session.commit()
             assert await session.select_value("SELECT count(*) FROM notes") == 4
-        assert orig_primary.connection is _DETACHED_CONNECTION
+        assert orig_primary.connection is _CLOSED_CONNECTION
         expected_count = 1 if use_registry else 0
         assert events.count("start") == expected_count
         assert events.count("end") == expected_count

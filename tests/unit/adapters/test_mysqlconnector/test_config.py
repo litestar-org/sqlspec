@@ -24,7 +24,7 @@ from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorSyncConnectionParams,
     build_connection_config,
 )
-from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import (
     ConnectionTimeoutError,
     DatabaseConnectionError,
@@ -761,7 +761,7 @@ def test_sync_provide_session_detaches_driver_on_exit() -> None:
     with config.provide_session() as session:
         assert session.connection is pooled_conn
 
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError, match="already closed"):
         session.execute("SELECT 1")
 
@@ -774,7 +774,7 @@ async def test_async_provide_session_detaches_driver_on_exit() -> None:
     async with config.provide_session() as session:
         assert session.connection is pooled_conn
 
-    assert session.connection is _DETACHED_CONNECTION
+    assert session.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError, match="already closed"):
         await session.execute("SELECT 1")
 
@@ -795,7 +795,7 @@ def test_sync_provide_session_releases_and_detaches_when_prepare_driver_fails(mo
         pass
 
     pooled_conn.close.assert_called_once()
-    assert seen[0].connection is _DETACHED_CONNECTION
+    assert seen[0].connection is _CLOSED_CONNECTION
 
 
 async def test_async_provide_session_releases_and_detaches_when_prepare_driver_fails(
@@ -817,7 +817,7 @@ async def test_async_provide_session_releases_and_detaches_when_prepare_driver_f
             pass
 
     pooled_conn.close.assert_awaited_once()
-    assert seen[0].connection is _DETACHED_CONNECTION
+    assert seen[0].connection is _CLOSED_CONNECTION
 
 
 def test_mysqlconnector_async_derived_pools_own_distinct_native_names_and_readonly_state() -> None:

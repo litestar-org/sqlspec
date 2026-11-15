@@ -16,7 +16,7 @@ from sqlspec.adapters.sqlite._typing import SqliteSessionContext
 from sqlspec.base import SQLSpec
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import OperationType
-from sqlspec.driver._common import _DETACHED_CONNECTION, operation_requires_transaction
+from sqlspec.driver._common import _CLOSED_CONNECTION, operation_requires_transaction
 from sqlspec.driver._sync import SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
@@ -470,14 +470,14 @@ def test_failed_duckdb_session_discards_a_file_connection(tmp_path: Path) -> Non
 
 
 def test_detached_connection_sentinel_semantics() -> None:
-    assert bool(_DETACHED_CONNECTION) is False
-    assert repr(_DETACHED_CONNECTION) == "<DetachedConnection>"
+    assert bool(_CLOSED_CONNECTION) is False
+    assert repr(_CLOSED_CONNECTION) == "<ClosedConnection>"
     with pytest.raises(AttributeError):
-        _ = _DETACHED_CONNECTION.__deepcopy__
+        _ = _CLOSED_CONNECTION.__deepcopy__
     with pytest.raises(ImproperConfigurationError, match="already closed"):
-        _ = _DETACHED_CONNECTION.cursor
+        _ = _CLOSED_CONNECTION.cursor
     with pytest.raises(ImproperConfigurationError, match="already closed"):
-        hasattr(_DETACHED_CONNECTION, "cursor")
+        hasattr(_CLOSED_CONNECTION, "cursor")
 
 
 @pytest.mark.parametrize(
@@ -512,8 +512,8 @@ def test_sync_detached_driver_rejects_operations_and_keeps_cache_disabled(
     sync_config: SqliteConfig, tx_method: str
 ) -> None:
     with sync_config.provide_session() as session:
-        session._detach_connection()  # pyright: ignore[reportPrivateUsage]
-        assert session.connection is _DETACHED_CONNECTION
+        session._mark_closed()  # pyright: ignore[reportPrivateUsage]
+        assert session.connection is _CLOSED_CONNECTION
         session.attach_observability(ObservabilityRuntime())
         assert session._stmt_cache_enabled is False  # pyright: ignore[reportPrivateUsage]
         with pytest.raises(ImproperConfigurationError, match="already closed"):
@@ -527,8 +527,8 @@ async def test_async_detached_driver_rejects_operations_and_keeps_cache_disabled
     async_config: AiosqliteConfig, tx_method: str
 ) -> None:
     async with async_config.provide_session() as session:
-        session._detach_connection()  # pyright: ignore[reportPrivateUsage]
-        assert session.connection is _DETACHED_CONNECTION
+        session._mark_closed()  # pyright: ignore[reportPrivateUsage]
+        assert session.connection is _CLOSED_CONNECTION
         session.attach_observability(ObservabilityRuntime())
         assert session._stmt_cache_enabled is False  # pyright: ignore[reportPrivateUsage]
         with pytest.raises(ImproperConfigurationError, match="already closed"):
@@ -545,8 +545,8 @@ def test_sqlspec_runtime_sync_provide_session_detaches_and_emits_raw_connection_
     try:
         with spec.provide_session(cfg) as session:
             live_conn = session.connection
-            assert live_conn is not _DETACHED_CONNECTION
-        assert session.connection is _DETACHED_CONNECTION
+            assert live_conn is not _CLOSED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         assert len(destroyed) == 1
         assert destroyed[0]["connection"] is live_conn
         with pytest.raises(ImproperConfigurationError, match="already closed"):
@@ -563,8 +563,8 @@ async def test_sqlspec_runtime_async_provide_session_detaches_and_emits_raw_conn
     try:
         async with spec.provide_session(cfg) as session:
             live_conn = session.connection
-            assert live_conn is not _DETACHED_CONNECTION
-        assert session.connection is _DETACHED_CONNECTION
+            assert live_conn is not _CLOSED_CONNECTION
+        assert session.connection is _CLOSED_CONNECTION
         assert len(destroyed) == 1
         assert destroyed[0]["connection"] is live_conn
         with pytest.raises(ImproperConfigurationError, match="already closed"):
