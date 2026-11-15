@@ -34,6 +34,7 @@ important operational fixes.
 * Litestar session stores on SQL Server, Oracle, and Arrow ODBC accept validated schema-qualified table names.
 * Added `AmbiguousIdentifierError` (`sqlspec.exceptions`), raised when a catalog lookup matches several names that differ only by case and none matches exactly. Snowflake catalog reads and migration schema reconciliation match names exactly first, then case-insensitively only when one candidate remains.
 * Added FTS5 search for ADK memory on ADBC SQLite when `memory_use_fts` is enabled, and one-time FTS companion index creation/rebuild when `memory_use_fts` is enabled on an existing `sqlite`, `aiosqlite`, ADBC SQLite, or `duckdb` ADK memory table.
+* New `reset_session_on_release` driver feature resets session state (temporary tables, attached databases, settings, and similar) when a pooled connection is returned, for the SQLite, aiosqlite, DuckDB, PostgreSQL, CockroachDB, and MySQL adapters. See [Session Reset on Release](learn/configuration.md#session-reset-on-release).
 
 **Breaking changes:**
 
@@ -63,6 +64,7 @@ important operational fixes.
 * **Behavior change for third-party adapters:** external ADK stores must now declare extra options through `extension_config_options`. Configurations with explicit ADK stores and an `adapter_name` outside `sqlspec.adapters`, supported since v0.70.1 ([#877](https://github.com/litestar-org/sqlspec/pull/877)), skipped option validation and accepted any key. Undeclared keys and typos now raise `ImproperConfigurationError`, including memory settings outside `ADKConfig` such as `vector_dimensions`.
 * `StorageRegistry` resolves `file://` URIs and bare local paths to `LocalStore` (`backend="local"`) by default rather than `ObStoreBackend`, unless `backend="obstore"` or `backend="fsspec"` is explicitly requested. `LocalStore`, `ObStoreBackend`, and `FSSpecBackend` now reject unknown or conflicting `write_bytes_*` / `write_text_*` keyword arguments with `TypeError` or `ValueError` instead of silently discarding them. ([#888](https://github.com/litestar-org/sqlspec/issues/888))
 * `SQL(..., dialect=...)` statements compile faster: frozen statement configurations keep one derived configuration per dialect instead of rebuilding it on every statement.
+* DuckDB pooled connections now roll back uncommitted work when returned instead of committing it. Call `commit()` before the session ends to keep changes.
 
 **Fixed:**
 
@@ -107,6 +109,11 @@ important operational fixes.
 * `SQLFileLoader._parse_statements()` now skips `-- name:` and `-- fragment:` markers inside SQL string literals, quoted identifiers, dollar-quoted blocks, and block comments via `_scan_sql_comments()`.
 * `MySQLSyncDataDictionary` and `MySQLAsyncDataDictionary` (`get_indexes(table=None)` and `get_constraints(table=None)`) now bind `table_name=None` on schema-wide catalog queries, resolving parameter binding errors on MySQL and PyMySQL `--from-schema` and `dump-schema` runs.
 * `MssqlPythonConfig` and `MssqlPythonConnectionPool` now explicitly disable native pyodbc pooling when pooling is disabled or pools close. ([#915](https://github.com/litestar-org/sqlspec/pull/915))
+* Result streams now close when their session ends. Iterating a stream after its session block exits raises `ImproperConfigurationError` instead of reading from a connection that another session may be using.
+* PostgreSQL and CockroachDB stream transactions are finalized only on the connection that opened them.
+* The PyMySQL, pymssql, Sybase, SQL Anywhere, and Db2 sync pools give each asyncio task its own connection, and Snowflake and Teradata nested connection contexts no longer share a lease across tasks.
+* Litestar SQLSpec session stores use the request's open database session, so a store on the request's config no longer waits for a second connection, and session changes commit or roll back with the request.
+* Framework guides now describe when the request connection is released.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
