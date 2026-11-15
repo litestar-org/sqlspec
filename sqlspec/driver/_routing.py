@@ -62,6 +62,7 @@ _ARROW_STACK_OPTIONS: Final[tuple[str, ...]] = ("return_format", "native_only", 
 
 class _RoutingSessionState:
     __slots__ = (
+        "_active_replica_group",
         "_bypass_tenant",
         "_closed",
         "_config",
@@ -71,7 +72,6 @@ class _RoutingSessionState:
         "_registry_lifecycle",
         "_replica_causal_token",
         "_replica_driver",
-        "_replica_group",
         "_replica_group",
         "_replica_max_staleness",
         "_replica_streams",
@@ -176,7 +176,7 @@ class _RoutingSessionState:
         self._registry_lifecycle = False
         self._primary_driver: Any = None
         self._replica_driver: Any = None
-        self._replica_group: str | None = None
+        self._active_replica_group: str | None = None
         self._replica_causal_token: str | None = None
         self._replica_max_staleness: float | None = None
         self._replica_strict = False
@@ -947,7 +947,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         strict_replica = entry is not None and entry.mode == "replica"
         if (
             self._replica_driver is None
-            or replica_group != self._replica_group
+            or replica_group != self._active_replica_group
             or causal_token != self._replica_causal_token
             or max_staleness != self._replica_max_staleness
             or strict_replica != self._replica_strict
@@ -970,7 +970,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                 if driver is self._primary_driver:
                     context.__exit__(None, None, None)
                     self._replica_driver = self._primary_driver
-                    self._replica_group = replica_group
+                    self._active_replica_group = replica_group
                     self._replica_causal_token = causal_token
                     self._replica_max_staleness = max_staleness
                     self._replica_strict = strict_replica
@@ -1001,7 +1001,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                     self._primary_read_stack = lease_stack
                 elif managed_replicas and self._primary_driver is None:
                     self._primary_driver = self._replica_driver
-            self._replica_group = replica_group
+            self._active_replica_group = replica_group
             self._replica_causal_token = causal_token
             self._replica_max_staleness = max_staleness
             self._replica_strict = strict_replica
@@ -1674,7 +1674,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         strict_replica = entry is not None and entry.mode == "replica"
         if (
             self._replica_driver is None
-            or replica_group != self._replica_group
+            or replica_group != self._active_replica_group
             or causal_token != self._replica_causal_token
             or max_staleness != self._replica_max_staleness
             or strict_replica != self._replica_strict
@@ -1697,7 +1697,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                 if driver is self._primary_driver:
                     await context.__aexit__(None, None, None)
                     self._replica_driver = self._primary_driver
-                    self._replica_group = replica_group
+                    self._active_replica_group = replica_group
                     self._replica_causal_token = causal_token
                     self._replica_max_staleness = max_staleness
                     self._replica_strict = strict_replica
@@ -1728,7 +1728,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                     self._primary_read_stack = lease_stack
                 elif managed_replicas and self._primary_driver is None:
                     self._primary_driver = self._replica_driver
-            self._replica_group = replica_group
+            self._active_replica_group = replica_group
             self._replica_causal_token = causal_token
             self._replica_max_staleness = max_staleness
             self._replica_strict = strict_replica
