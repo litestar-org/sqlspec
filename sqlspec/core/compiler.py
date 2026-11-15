@@ -655,7 +655,8 @@ class SQLProcessor:
             and (self._config.sqlcommenter_enable_context or self._config.sqlcommenter_enable_traceparent)
         )
 
-    def _effective_statement_transformers(self) -> "tuple[Any, ...]":
+    def _cacheable_statement_transformers(self) -> "tuple[Any, ...]":
+        """Return the configured statement transformers without the trailing dynamic SQLCommenter transformer."""
         statement_transformers = self._config.statement_transformers
         if statement_transformers and self._has_dynamic_sqlcommenter():
             return statement_transformers[:-1]
@@ -902,7 +903,7 @@ class SQLProcessor:
         Returns:
             Updated expression metadata and transformation state.
         """
-        statement_transformers = self._effective_statement_transformers()
+        statement_transformers = self._cacheable_statement_transformers()
         ast_transformer = self._parameter_config.ast_transformer
         if expression is None or (not statement_transformers and not ast_transformer):
             return expression, parameters, False, operation_type, operation_profile
@@ -1072,7 +1073,7 @@ class SQLProcessor:
                 param_fingerprint=param_fingerprint,
             )
             has_ast_transforms = bool(
-                self._effective_statement_transformers() or self._parameter_config.ast_transformer is not None
+                self._cacheable_statement_transformers() or self._parameter_config.ast_transformer is not None
             )
             allow_placeholder_rewrite = (
                 process_result.placeholder_only

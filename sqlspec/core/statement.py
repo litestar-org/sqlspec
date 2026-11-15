@@ -776,7 +776,7 @@ class SQL:
 
         condition_expr: exp.Expr
         if isinstance(condition, str):
-            if not condition.strip() or "\x00" in condition or _has_unquoted_semicolon(condition, self._dialect):
+            if not condition.strip() or "\x00" in condition or contains_statement_terminator(condition, self._dialect):
                 msg = "WHERE condition must be a single expression without NUL characters or statement separators"
                 raise sqlspec.exceptions.SQLParsingError(msg)
             if not self._statement_config.enable_parsing:
@@ -2173,7 +2173,7 @@ def _get_rebind_processor(config: "StatementConfig") -> ParameterProcessor:
 
 def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:
     """Parse a single ORDER BY item string into a SQLGlot expression."""
-    if "\x00" in order_item or _has_unquoted_semicolon(order_item, dialect):
+    if "\x00" in order_item or contains_statement_terminator(order_item, dialect):
         msg = "ORDER BY item must not contain NUL characters or statement separators"
         raise sqlspec.exceptions.SQLParsingError(msg)
     normalized = order_item.strip()
@@ -2201,18 +2201,13 @@ def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bo
 
 def _raw_condition(condition: str, dialect: "str | None" = None) -> exp.Expr:
     """Wrap an unparsed condition fragment, requiring it to be a single expression."""
-    if _has_unquoted_semicolon(condition, dialect) or _STATEMENT_START_RE.match(condition) is not None:
+    if contains_statement_terminator(condition, dialect) or _STATEMENT_START_RE.match(condition) is not None:
         msg = "WHERE condition must be a single expression without statement separators"
         raise sqlspec.exceptions.SQLParsingError(msg)
     return exp.Paren(this=exp.Var(this=condition))
 
 
-def _has_unquoted_semicolon(fragment: str, dialect: "str | None" = None) -> bool:
-    """Return whether a SQL fragment contains a statement separator outside comments and quoted literals."""
-    return contains_statement_terminator(fragment, dialect)
-
-
-def _is_dynamic_callable(func: Any) -> bool:
+def _is_uncacheable_callable(func: Any) -> bool:
     if func is None:
         return False
     if isinstance(func, (FunctionType, BuiltinFunctionType)):
@@ -2229,6 +2224,6 @@ def _config_has_uncacheable_transformers(
 ) -> bool:
     if param_config.ast_transformer is not None:
         return True
-    if _is_dynamic_callable(output_transformer) or _is_dynamic_callable(param_config.output_transformer):
+    if _is_uncacheable_callable(output_transformer) or _is_uncacheable_callable(param_config.output_transformer):
         return True
-    return any(_is_dynamic_callable(transformer) for transformer in statement_transformers)
+    return any(_is_uncacheable_callable(transformer) for transformer in statement_transformers)

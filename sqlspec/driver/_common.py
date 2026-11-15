@@ -72,7 +72,7 @@ from sqlspec.core.parameters import (
 from sqlspec.core.parameters._converter import ambiguous_index_message
 from sqlspec.core.result._base import RowFormat
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
-from sqlspec.core.statement import ProcessedState
+from sqlspec.core.statement import ProcessedState, _is_uncacheable_callable
 from sqlspec.data_dictionary import (
     DDL_PARENT_TABLE_CONTEXT_KEY,
     ColumnProfileMetadata,
@@ -4234,27 +4234,6 @@ def _build_rewritten_sql(
     return SQL(rewritten_expr, *retained_positional, statement_config=original_sql.statement_config)
 
 
-def _is_dynamic_callable(func: Any) -> bool:
-    if func is None:
-        return False
-    if isinstance(func, (FunctionType, BuiltinFunctionType)):
-        qualname = getattr(func, "__qualname__", "") or ""
-        return "<locals>" in qualname or getattr(func, "__closure__", None) is not None
-    func_type = type(func)
-    return (
-        getattr(func_type, "__hash__", None) is object.__hash__ or getattr(func_type, "__eq__", None) is object.__eq__
-    )
-
-
-def _has_uncacheable_transformers(config: "StatementConfig") -> bool:
-    param_config = config.parameter_config
-    if param_config.ast_transformer is not None:
-        return True
-    if _is_dynamic_callable(config.output_transformer) or _is_dynamic_callable(param_config.output_transformer):
-        return True
-    return any(_is_dynamic_callable(transformer) for transformer in config.statement_transformers)
-
-
 def _callable_cache_key(func: Any) -> Any:
     """Return a stable cache key component for callables.
 
@@ -4268,7 +4247,7 @@ def _callable_cache_key(func: Any) -> Any:
         return None
     module = getattr(func, "__module__", None)
     qualname = getattr(func, "__qualname__", type(func).__name__)
-    if _is_dynamic_callable(func):
+    if _is_uncacheable_callable(func):
         return (module, qualname, "dynamic", next(_DYNAMIC_CALLABLE_COUNTER))
     if isinstance(func, (FunctionType, BuiltinFunctionType)):
         return (module, qualname, id(func))

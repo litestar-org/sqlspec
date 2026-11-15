@@ -46,7 +46,7 @@ from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.parameters._declared import ParameterDeclaration
 from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
 from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import _callable_cache_key, _check_declared_parameters, _has_uncacheable_transformers
+from sqlspec.driver._common import _callable_cache_key, _check_declared_parameters
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.observability import LoggingConfig, StatementEvent
@@ -1794,9 +1794,6 @@ def test_callable_cache_key_handles_static_vs_dynamic_callables() -> None:
     """Static functions stay cacheable while closures, lambdas, and default-hash instances get dynamic keys."""
     assert _callable_cache_key(None) is None
     assert _callable_cache_key(_static_statement_transformer) is not None
-    assert (
-        _has_uncacheable_transformers(StatementConfig(statement_transformers=(_static_statement_transformer,))) is False
-    )
 
     label = "dyn"
 
@@ -1820,9 +1817,6 @@ def test_callable_cache_key_handles_static_vs_dynamic_callables() -> None:
     assert "dynamic" in k3
     assert "dynamic" in k4
     assert "dynamic" in k5
-    assert _has_uncacheable_transformers(StatementConfig(output_transformer=local_closure)) is True
-    assert _has_uncacheable_transformers(StatementConfig(output_transformer=_IdentityCallable("a"))) is True
-    assert _has_uncacheable_transformers(StatementConfig(statement_transformers=(local_stmt_closure,))) is True
 
 
 def test_statement_and_output_transformer_closures_bypass_cache(tmp_path: Path) -> None:
