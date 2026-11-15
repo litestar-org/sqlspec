@@ -425,7 +425,7 @@ class QueryBuilder:
         for placeholder in _PLACEHOLDER_SCANNER.extract_parameters(sql, dialect=dialect_name):
             if placeholder.name is None or placeholder.name not in parameters:
                 continue
-            literal = self._debug_literal(parameters[placeholder.name])
+            literal = self._format_display_literal(parameters[placeholder.name])
             if literal.startswith("-") and placeholder.position > 0 and sql[placeholder.position - 1] == "-":
                 literal = f" {literal}"
             segments.extend((sql[cursor : placeholder.position], literal))
@@ -807,7 +807,7 @@ class QueryBuilder:
         msg = "Unreachable"
         raise AssertionError(msg)
 
-    def _debug_literal(self, value: Any) -> str:
+    def _format_display_literal(self, value: Any) -> str:
         """Render a bound value as display text for ``to_sql(show_parameters=True)``."""
         if isinstance(value, str):
             escaped = value.replace("'", "''")

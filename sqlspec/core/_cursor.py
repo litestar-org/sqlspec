@@ -35,8 +35,8 @@ _NONCE_LENGTH = 16
 _HASH_BLOCK_SIZE = 32
 _SIGNED_PART_COUNT = 2
 _ENCRYPTED_PART_COUNT = 3
-_ENCRYPTED_FORMAT = "e1"
-_ENC_KEY_INFO = b"sqlspec-cursor-enc-v1"
+_ENCRYPTED_TOKEN_PREFIX = "e1"
+_ENCRYPTION_KEY_INFO = b"sqlspec-cursor-enc-v1"
 _MAC_KEY_INFO = b"sqlspec-cursor-mac-v1"
 _B64_PART_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
@@ -185,13 +185,13 @@ def encode_cursor(
     plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if encrypt:
         assert secret is not None
-        enc_key, mac_key = _derive_encryption_keys(secret)
+        encryption_key, mac_key = _derive_encryption_keys(secret)
         nonce = secrets.token_bytes(_NONCE_LENGTH)
-        ciphertext = _xor_keystream(enc_key, nonce, plaintext)
+        ciphertext = _apply_keystream(encryption_key, nonce, plaintext)
         sealed = _b64(nonce + ciphertext)
-        mac_input = f"{_ENCRYPTED_FORMAT}.{sealed}".encode("ascii")
+        mac_input = f"{_ENCRYPTED_TOKEN_PREFIX}.{sealed}".encode("ascii")
         mac = _b64(hmac.new(mac_key, mac_input, hashlib.sha256).digest())
-        token = f"{_ENCRYPTED_FORMAT}.{sealed}.{mac}"
+        token = f"{_ENCRYPTED_TOKEN_PREFIX}.{sealed}.{mac}"
     else:
         body = _b64(plaintext)
         token = (
@@ -246,7 +246,7 @@ def decode_cursor(
     if len(parts) == _ENCRYPTED_PART_COUNT:
         raw_bytes = _decode_encrypted_parts(parts, secret=secret, encrypt=encrypt)
     elif len(parts) in {1, _SIGNED_PART_COUNT}:
-        raw_bytes = _decode_v1_parts(parts, secret=secret, encrypt=encrypt)
+        raw_bytes = _decode_signed_parts(parts, secret=secret, encrypt=encrypt)
     else:
         msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg)
@@ -316,18 +316,19 @@ _DECODERS: dict[str, Callable[[str], Any]] = {
 
 
 def _derive_encryption_keys(secret: bytes) -> "tuple[bytes, bytes]":
-    enc_key = hmac.new(secret, _ENC_KEY_INFO, hashlib.sha256).digest()
+    encryption_key = hmac.new(secret, _ENCRYPTION_KEY_INFO, hashlib.sha256).digest()
     mac_key = hmac.new(secret, _MAC_KEY_INFO, hashlib.sha256).digest()
-    return enc_key, mac_key
+    return encryption_key, mac_key
 
 
-def _xor_keystream(enc_key: bytes, nonce: bytes, data: bytes) -> bytes:
+def _apply_keystream(encryption_key: bytes, nonce: bytes, data: bytes) -> bytes:
+    """XOR data with an HMAC-SHA256 counter keystream; the same call encrypts and decrypts."""
     length = len(data)
     output = bytearray(length)
     offset = 0
     counter = 0
     while offset < length:
-        block = hmac.new(enc_key, nonce + counter.to_bytes(8, "big"), hashlib.sha256).digest()
+        block = hmac.new(encryption_key, nonce + counter.to_bytes(8, "big"), hashlib.sha256).digest()
         chunk_len = min(_HASH_BLOCK_SIZE, length - offset)
         for idx in range(chunk_len):
             output[offset + idx] = data[offset + idx] ^ block[idx]
@@ -336,7 +337,7 @@ def _xor_keystream(enc_key: bytes, nonce: bytes, data: bytes) -> bytes:
     return bytes(output)
 
 
-def _decode_v1_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool) -> bytes:
+def _decode_signed_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool) -> bytes:
     for part in parts:
         if _B64_PART_PATTERN.fullmatch(part) is None:
             msg = "Invalid pagination cursor: malformed token"
@@ -366,7 +367,7 @@ def _decode_v1_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool)
 
 def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool) -> bytes:
     if (
-        parts[0] != _ENCRYPTED_FORMAT
+        parts[0] != _ENCRYPTED_TOKEN_PREFIX
         or _B64_PART_PATTERN.fullmatch(parts[1]) is None
         or _B64_PART_PATTERN.fullmatch(parts[2]) is None
     ):
@@ -378,8 +379,8 @@ def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt
     if not encrypt:
         msg = "Invalid pagination cursor: unexpected encrypted token"
         raise InvalidCursorError(msg)
-    enc_key, mac_key = _derive_encryption_keys(secret)
-    mac_input = f"{_ENCRYPTED_FORMAT}.{parts[1]}".encode("ascii")
+    encryption_key, mac_key = _derive_encryption_keys(secret)
+    mac_input = f"{_ENCRYPTED_TOKEN_PREFIX}.{parts[1]}".encode("ascii")
     expected_mac = _b64(hmac.new(mac_key, mac_input, hashlib.sha256).digest())
     if not hmac.compare_digest(expected_mac.encode("ascii"), parts[2].encode("ascii")):
         msg = "Invalid pagination cursor: signature mismatch"
@@ -394,7 +395,7 @@ def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt
         raise InvalidCursorError(msg)
     nonce = sealed[:_NONCE_LENGTH]
     ciphertext = sealed[_NONCE_LENGTH:]
-    return _xor_keystream(enc_key, nonce, ciphertext)
+    return _apply_keystream(encryption_key, nonce, ciphertext)
 
 
 def _parse_timestamp_claim(raw_value: Any) -> float:

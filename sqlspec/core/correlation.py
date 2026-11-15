@@ -127,13 +127,13 @@ class CorrelationExtractor:
         for header in self._headers:
             value = get_header(header)
             if value:
-                cleaned = self._clean_value(value)
+                cleaned = self._sanitize_correlation_id(value)
                 if cleaned:
                     return cleaned
 
         return CorrelationContext.generate()
 
-    def _clean_value(self, value: str) -> str:
+    def _sanitize_correlation_id(self, value: str) -> str:
         """Truncate at the first line break, trim, bound, and validate trace characters."""
         first_line = value.split("\r", 1)[0].split("\n", 1)[0]
         candidate = first_line.strip()[: self._max_length]

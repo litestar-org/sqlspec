@@ -45,7 +45,7 @@ class Values(QueryBuilder):
         if alias is not None:
             _validate_values_alias(alias)
         self._alias: str | None = alias
-        self._columns: list[str] | None = _validate_columns(columns) if columns is not None else None
+        self._columns: list[str] | None = _validate_values_columns(columns) if columns is not None else None
         self._rows: list[list[Any]] = []
         self._initialize_expression()
 
@@ -97,7 +97,7 @@ class Values(QueryBuilder):
         Raises:
             SQLBuilderError: If column count does not match row width.
         """
-        validated_columns = _validate_columns(columns)
+        validated_columns = _validate_values_columns(columns)
         if self._rows and len(validated_columns) != len(self._rows[0]):
             msg = f"Column count ({len(validated_columns)}) does not match row width ({len(self._rows[0])})."
             raise SQLBuilderError(msg)
@@ -129,7 +129,7 @@ class Values(QueryBuilder):
                 if not first_row:
                     msg = "VALUES clause rows must contain at least one column."
                     raise SQLBuilderError(msg)
-                columns = _validate_columns(list(first_row.keys()))
+                columns = _validate_values_columns(list(first_row.keys()))
             if not columns:
                 msg = "VALUES clause rows must contain at least one column."
                 raise SQLBuilderError(msg)
@@ -255,7 +255,7 @@ def _validate_values_alias(alias: Any) -> str:
     return alias
 
 
-def _validate_columns(columns: Sequence[Any]) -> list[str]:
+def _validate_values_columns(columns: Sequence[Any]) -> list[str]:
     """Validate VALUES column names are unique, non-empty strings without NUL bytes."""
     validated: list[str] = []
     for col in columns:
