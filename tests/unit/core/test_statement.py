@@ -1811,13 +1811,13 @@ def test_shared_expression_skips_ast_copy_on_cache_hit_and_rebind() -> None:
         for i in range(5):
             hit_stmt = SQL(cte_sql, i, i + 10, statement_config=config)
             hit_stmt.compile()
-            assert hit_stmt._peek_expression() is not None
+            assert hit_stmt._get_shared_expression() is not None
         assert copy_calls == 0
 
         for i in range(5):
             rebound = warm_stmt.copy(parameters=(i, i + 20))
             rebound.compile()
-            assert rebound._peek_expression() is not None
+            assert rebound._get_shared_expression() is not None
         assert copy_calls == 0
 
 
@@ -1835,14 +1835,14 @@ def test_copy_on_access_expression_isolates_cached_and_rebound_statements() -> N
     rebound = stmt1.copy(parameters=(3,))
     rebound.compile()
 
-    assert stmt1._peek_expression() is stmt2._peek_expression()
-    assert stmt1._peek_expression() is rebound._peek_expression()
+    assert stmt1._get_shared_expression() is stmt2._get_shared_expression()
+    assert stmt1._get_shared_expression() is rebound._get_shared_expression()
 
     owned1 = stmt1.expression
     assert owned1 is not None
     assert stmt1.expression is owned1
     assert stmt1.statement_expression is owned1
-    assert owned1 is not stmt2._peek_expression()
+    assert owned1 is not stmt2._get_shared_expression()
 
     owned1.set("limit", exp.Limit(expression=exp.Literal.number(1)))
 

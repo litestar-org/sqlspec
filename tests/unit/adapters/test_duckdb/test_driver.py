@@ -271,7 +271,7 @@ def test_concurrent_execute_many_ast_mutation() -> None:
 
     stmt = SQL("INSERT INTO items VALUES (?, ?)", statement_config=driver.statement_config)
     stmt.compile()
-    expr = stmt._peek_expression()
+    expr = stmt._get_shared_expression()
     assert expr is not None
     meta_before = dict(expr.meta)
 

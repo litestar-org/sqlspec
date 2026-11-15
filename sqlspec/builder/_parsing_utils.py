@@ -548,7 +548,7 @@ def extract_sql_object_expression(
         msg = f"Value is not a SQL object: {type(value)}"
         raise TypeError(msg)
 
-    raw_expr = value._peek_expression()  # pyright: ignore[reportPrivateUsage]
+    raw_expr = value._get_shared_expression()  # pyright: ignore[reportPrivateUsage]
     if raw_expr is not None and isinstance(raw_expr, exp.Expr):
         expr = raw_expr.copy()
         param_mapping = _merge_sql_parameters(value, builder)

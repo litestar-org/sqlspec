@@ -122,7 +122,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 sql,
                 normalized_parameters,
                 statement.operation_type,
-                statement._peek_expression(),
+                statement._get_shared_expression(),
                 self._rowid_target_cache,
             )
             data, column_names, row_count = collect_rows(fetched_data, description)
@@ -145,7 +145,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             sql,
             normalized_parameters,
             statement.operation_type,
-            statement._peek_expression(),
+            statement._get_shared_expression(),
             self._rowid_target_cache,
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)

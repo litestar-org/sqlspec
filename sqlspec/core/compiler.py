@@ -399,6 +399,46 @@ class CompiledSQL:
 
 @final
 @mypyc_attr(allow_interpreted_subclasses=False)
+class _ParsedExpression:
+    """Result of resolving a SQLGlot expression for one compilation.
+
+    Attributes:
+        cached_expression: Expression shared with the parse cache, or None when the parse cache is not used.
+        expression: Expression to compile.
+        operation_profile: Row-return, row-modification, and read-only classification.
+        operation_type: Detected operation type.
+        parameter_casts: Parameter casts collected on a parse miss, or None.
+        parse_cache_key: Parse cache key, or None when the parse cache is not used.
+    """
+
+    __slots__ = (
+        "cached_expression",
+        "expression",
+        "operation_profile",
+        "operation_type",
+        "parameter_casts",
+        "parse_cache_key",
+    )
+
+    def __init__(
+        self,
+        cached_expression: "exp.Expr | None",
+        expression: "exp.Expr | None",
+        operation_profile: OperationProfile,
+        operation_type: OperationType,
+        parameter_casts: "dict[int, str] | None",
+        parse_cache_key: "Any | None",
+    ) -> None:
+        self.cached_expression = cached_expression
+        self.expression = expression
+        self.operation_profile = operation_profile
+        self.operation_type = operation_type
+        self.parameter_casts = parameter_casts
+        self.parse_cache_key = parse_cache_key
+
+
+@final
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SQLProcessor:
     """SQL processor with compilation and caching.
 
@@ -544,9 +584,7 @@ class SQLProcessor:
             or self._parameter_config.ast_transformer is not None
             or (self._parameter_config.needs_static_script_compilation and parameters)
         ):
-            result, _ = self._compile_uncached_with_template(
-                sql, parameters, is_many, expression, param_fingerprint=None
-            )
+            result, _ = self._compile_statement(sql, parameters, is_many, expression, param_fingerprint=None)
             return self._apply_dynamic_sqlcommenter(result)
 
         if param_fingerprint is None:
@@ -569,7 +607,7 @@ class SQLProcessor:
             return self._apply_dynamic_sqlcommenter(self._materialize_cached_result(cached_result, parameters, is_many))
 
         self._cache_misses += 1
-        result, cached_expression_template = self._compile_uncached_with_template(
+        result, cached_expression = self._compile_statement(
             sql, parameters, is_many, expression, param_fingerprint=param_fingerprint
         )
 
@@ -577,9 +615,7 @@ class SQLProcessor:
             self._cache.popitem(last=False)
 
         if result.expression is not None:
-            cached_expr = (
-                cached_expression_template if cached_expression_template is not None else result.expression.copy()
-            )
+            cached_expr = cached_expression if cached_expression is not None else result.expression.copy()
             cached_entry = CompiledSQL(
                 compiled_sql=result.compiled_sql,
                 execution_parameters=result.execution_parameters,
@@ -801,7 +837,7 @@ class SQLProcessor:
         cache_parse: bool = True,
         *,
         collect_casts: bool = False,
-    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile, Any | None, dict[int, str] | None, exp.Expr | None]":
+    ) -> _ParsedExpression:
         """Resolve an SQLGlot expression with caching.
 
         Args:
@@ -812,7 +848,7 @@ class SQLProcessor:
             collect_casts: Whether to collect parameter casts on a parse miss.
 
         Returns:
-            Expression metadata, parse cache information, optional parameter casts, and shared template.
+            The expression with its metadata, parse cache key, optional parameter casts, and the expression shared with the parse cache.
         """
         parse_cache_key = None
         parse_cache_entry = None
@@ -827,15 +863,17 @@ class SQLProcessor:
             expression, operation_type, operation_profile, parameter_casts = self._parse_expression_uncached(
                 sqlglot_sql, dialect_str, expression_override, collect_casts=collect_casts
             )
-            cached_template: exp.Expr | None = None
+            cached_expression: exp.Expr | None = None
             if parse_cache_key is not None:
-                cached_template = self._store_parse_cache(
+                cached_expression = self._store_parse_cache(
                     parse_cache_key, expression, operation_type, operation_profile
                 )
             resolved_casts: dict[int, str] | None = parameter_casts if collect_casts else None
-            return expression, operation_type, operation_profile, parse_cache_key, resolved_casts, cached_template
+            return _ParsedExpression(
+                cached_expression, expression, operation_profile, operation_type, resolved_casts, parse_cache_key
+            )
         expression, operation_type, operation_profile = SQLProcessor._unpack_parse_cache_entry(parse_cache_entry)
-        return expression, operation_type, operation_profile, parse_cache_key, None, expression
+        return _ParsedExpression(expression, expression, operation_profile, operation_type, None, parse_cache_key)
 
     def _apply_ast_transformers(
         self,
@@ -993,36 +1031,7 @@ class SQLProcessor:
             log_with_context(logger, logging.ERROR, "sql.validate", error_type=type(exc).__name__)
             raise
 
-    def _compile_uncached(
-        self,
-        sql: str,
-        parameters: Any,
-        is_many: bool = False,
-        expression_override: "exp.Expr | None" = None,
-        *,
-        param_fingerprint: Any | None,
-    ) -> CompiledSQL:
-        """Compile SQL without caching.
-
-        Scripts compiled with embedded parameter values also bypass the parse
-        cache, since each parameter set yields distinct SQL text.
-
-        Args:
-            sql: SQL string
-            parameters: Parameter values
-            is_many: Whether this is for execute_many operation
-            expression_override: Pre-parsed SQLGlot expression to reuse
-            param_fingerprint: Pre-computed parameter fingerprint for cache key.
-
-        Returns:
-            CompiledSQL result
-        """
-        result, _ = self._compile_uncached_with_template(
-            sql, parameters, is_many, expression_override, param_fingerprint=param_fingerprint
-        )
-        return result
-
-    def _compile_uncached_with_template(
+    def _compile_statement(
         self,
         sql: str,
         parameters: Any,
@@ -1031,6 +1040,22 @@ class SQLProcessor:
         *,
         param_fingerprint: Any | None,
     ) -> "tuple[CompiledSQL, exp.Expr | None]":
+        """Compile SQL without the compiled-result cache.
+
+        Scripts compiled with embedded parameter values also bypass the parse
+        cache, since each parameter set yields distinct SQL text.
+
+        Args:
+            sql: SQL string.
+            parameters: Parameter values.
+            is_many: Whether this is for an execute_many operation.
+            expression_override: Pre-parsed SQLGlot expression to reuse.
+            param_fingerprint: Pre-computed parameter fingerprint for the cache key.
+
+        Returns:
+            The compiled result with the shared parse-cache expression, or None when the AST was transformed or
+            parsing failed.
+        """
         parameter_profile = ParameterProfile.empty()
         operation_profile = OperationProfile.empty()
 
@@ -1070,19 +1095,23 @@ class SQLProcessor:
             operation_type: OperationType = "COMMAND"
             parameter_casts: dict[int, str] = {}
             parse_cache_key = None
-            cached_template: exp.Expr | None = None
+            cached_expression: exp.Expr | None = None
 
             if self._config.enable_parsing:
                 collect_casts = not has_ast_transforms
-                (expression, operation_type, operation_profile, parse_cache_key, resolved_casts, cached_template) = (
-                    self._resolve_expression(
-                        process_result.sqlglot_sql,
-                        self._dialect_str,
-                        expression_override,
-                        cache_parse=not (self._parameter_config.needs_static_script_compilation and parameters),
-                        collect_casts=collect_casts,
-                    )
+                parsed = self._resolve_expression(
+                    process_result.sqlglot_sql,
+                    self._dialect_str,
+                    expression_override,
+                    cache_parse=not (self._parameter_config.needs_static_script_compilation and parameters),
+                    collect_casts=collect_casts,
                 )
+                expression = parsed.expression
+                operation_type = parsed.operation_type
+                operation_profile = parsed.operation_profile
+                parse_cache_key = parsed.parse_cache_key
+                resolved_casts = parsed.parameter_casts
+                cached_expression = parsed.cached_expression
                 (expression, final_parameters, ast_was_transformed, operation_type, operation_profile) = (
                     self._apply_ast_transformers(
                         expression,
@@ -1101,7 +1130,7 @@ class SQLProcessor:
                     else:
                         parameter_casts = SQLProcessor._parameter_casts(expression)
                 if ast_was_transformed:
-                    cached_template = None
+                    cached_expression = None
 
             final_sql, final_params, parameter_profile, input_named_params, applied_wrap = self._finalize_compilation(
                 process_result.sql,
@@ -1157,7 +1186,7 @@ class SQLProcessor:
             log_with_context(logger, logging.ERROR, "sql.compile", error_type=type(exc).__name__, status="error")
             raise
         else:
-            return compiled, cached_template
+            return compiled, cached_expression
 
     def _parameter_fingerprint(self, parameters: Any, is_many: bool) -> Any:
         if self._parameter_config.needs_static_script_compilation:

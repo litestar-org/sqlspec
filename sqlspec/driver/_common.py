@@ -3055,7 +3055,7 @@ class CommonDriverAttributesMixin:
                 cached_statement = CachedStatement(
                     compiled_sql=compiled_sql,
                     parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
-                    expression=statement._peek_expression(),
+                    expression=statement._get_shared_expression(),
                     input_named_parameters=processed.input_named_parameters,
                     parameter_profile=processed.parameter_profile,
                     applied_wrap_types=processed.applied_wrap_types,
@@ -3190,7 +3190,7 @@ class CommonDriverAttributesMixin:
         cached_statement = CachedStatement(
             compiled_sql=compiled_sql,
             parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", cached_parameters),
-            expression=statement._peek_expression(),
+            expression=statement._get_shared_expression(),
             input_named_parameters=processed.input_named_parameters,
             parameter_profile=processed.parameter_profile,
             applied_wrap_types=processed.applied_wrap_types,

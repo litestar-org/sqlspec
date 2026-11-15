@@ -1615,8 +1615,8 @@ class SQL:
         self._sql_param_counters[prefixed_base] = next_index
         return candidate
 
-    def _peek_expression(self) -> "exp.Expr | None":
-        """Return the parsed or raw SQLGlot expression for read-only inspection without copying."""
+    def _get_shared_expression(self) -> "exp.Expr | None":
+        """Return the parsed or raw SQLGlot expression without copying; callers must not mutate it."""
         state = self._processed_state
         if state is not Empty:
             return state.parsed_expression
