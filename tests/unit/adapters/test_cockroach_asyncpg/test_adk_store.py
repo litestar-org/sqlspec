@@ -630,6 +630,11 @@ class _SequencedCockroachConnection(_RecordingConnection):
 
     async def fetch(self, sql: str, *params: Any) -> "list[Any]":
         self.calls.append((sql, params))
+        if self._fetchrow_queue and not self._fetch_rows:
+            item = self._fetchrow_queue.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return [item] if item is not None else []
         return list(self._fetch_rows)
 
 

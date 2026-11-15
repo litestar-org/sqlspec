@@ -15,7 +15,7 @@ from sqlspec.adapters.db2.core import (
     utc_now,
 )
 from sqlspec.adapters.db2.migrations import build_guarded_drop_table
-from sqlspec.exceptions import SerializationConflictError, SQLSpecError, UniqueViolationError
+from sqlspec.exceptions import DeadlockError, SerializationConflictError, SQLSpecError, UniqueViolationError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
     BaseSyncADKStore,
@@ -182,7 +182,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
         for attempt in range(max_attempts):
             scoped_started = False
-            with self._config.provide_session() as driver:
+            with self._config.provide_session(transaction=True) as driver:
                 try:
                     driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
                     row = driver.select_one_or_none(
@@ -218,10 +218,14 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                         )
                     )
                     driver.commit()
-                except UniqueViolationError:
+                except (DeadlockError, SerializationConflictError, UniqueViolationError) as exc:
                     with contextlib.suppress(Exception):
                         driver.rollback()
-                    if scoped_started and has_deltas and attempt + 1 < max_attempts:
+                    if (
+                        (not isinstance(exc, UniqueViolationError) or scoped_started)
+                        and has_deltas
+                        and attempt + 1 < max_attempts
+                    ):
                         continue
                     raise
                 except Exception:
@@ -330,7 +334,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
         for attempt in range(max_attempts):
             scoped_started = False
-            with self._config.provide_session() as driver:
+            with self._config.provide_session(transaction=True) as driver:
                 try:
                     driver.execute(
                         _update_session_state_sql(self._session_table),
@@ -369,10 +373,14 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                         else None
                     )
                     driver.commit()
-                except UniqueViolationError:
+                except (DeadlockError, SerializationConflictError, UniqueViolationError) as exc:
                     with contextlib.suppress(Exception):
                         driver.rollback()
-                    if scoped_started and has_deltas and attempt + 1 < max_attempts:
+                    if (
+                        (not isinstance(exc, UniqueViolationError) or scoped_started)
+                        and has_deltas
+                        and attempt + 1 < max_attempts
+                    ):
                         continue
                     raise
                 except Exception:
@@ -604,7 +612,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
         for attempt in range(max_attempts):
             scoped_started = False
-            async with self._config.provide_session() as driver:
+            async with self._config.provide_session(transaction=True) as driver:
                 try:
                     await driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
                     row = await driver.select_one_or_none(
@@ -640,10 +648,14 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                         )
                     )
                     await driver.commit()
-                except UniqueViolationError:
+                except (DeadlockError, SerializationConflictError, UniqueViolationError) as exc:
                     with contextlib.suppress(Exception):
                         await driver.rollback()
-                    if scoped_started and has_deltas and attempt + 1 < max_attempts:
+                    if (
+                        (not isinstance(exc, UniqueViolationError) or scoped_started)
+                        and has_deltas
+                        and attempt + 1 < max_attempts
+                    ):
                         continue
                     raise
                 except Exception:
@@ -754,7 +766,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
         for attempt in range(max_attempts):
             scoped_started = False
-            async with self._config.provide_session() as driver:
+            async with self._config.provide_session(transaction=True) as driver:
                 try:
                     await driver.execute(
                         _update_session_state_sql(self._session_table),
@@ -793,10 +805,14 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                         else None
                     )
                     await driver.commit()
-                except UniqueViolationError:
+                except (DeadlockError, SerializationConflictError, UniqueViolationError) as exc:
                     with contextlib.suppress(Exception):
                         await driver.rollback()
-                    if scoped_started and has_deltas and attempt + 1 < max_attempts:
+                    if (
+                        (not isinstance(exc, UniqueViolationError) or scoped_started)
+                        and has_deltas
+                        and attempt + 1 < max_attempts
+                    ):
                         continue
                     raise
                 except Exception:

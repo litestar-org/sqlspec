@@ -1,12 +1,16 @@
 """AsyncMy ADK store for Google Agent Development Kit session/event storage."""
 
+import asyncio
+import contextlib
 import re
+import secrets
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmyProgrammingError, AsyncmyRawCursor
 from sqlspec.adapters.asyncmy.core import format_identifier, resolve_rowcount
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import DeadlockError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -24,6 +28,8 @@ if TYPE_CHECKING:
 __all__ = ("AsyncmyADKConfig", "AsyncmyADKMemoryStore", "AsyncmyADKStore")
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_MYSQL_RETRYABLE_ERRNOS: Final = frozenset({1205, 1213})
+_MAX_STATE_MERGE_ATTEMPTS: Final = 16
 _MYSQL_SESSION_IDENTITY_COLUMNS: Final = ("id", "app_name", "user_id")
 _MYSQL_EVENT_IDENTITY_COLUMNS: Final = ("id", "app_name", "user_id", "session_id")
 _MYSQL_APP_STATE_IDENTITY_COLUMNS: Final = ("app_name",)
@@ -162,80 +168,96 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
-        merged_app_state: dict[str, Any] | None = None
-        merged_user_state: dict[str, Any] | None = None
-        async with (
-            self._config.provide_connection() as conn,
-            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
-        ):
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 3
+        for attempt in range(max_attempts):
+            merged_app_state: dict[str, Any] | None = None
+            merged_user_state: dict[str, Any] | None = None
             try:
-                await cursor.execute("BEGIN")
-                await cursor.execute(sql, params)
-                await cursor.execute(select_sql, (app_name, user_id, session_id))
-                row = await cursor.fetchone()
-                row = _require_created_session_row(row)
+                async with (
+                    self._config.provide_connection() as conn,
+                    AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+                ):
+                    try:
+                        await cursor.execute("BEGIN")
+                        await cursor.execute(sql, params)
+                        await cursor.execute(select_sql, (app_name, user_id, session_id))
+                        row = await cursor.fetchone()
+                        row = _require_created_session_row(row)
 
-                if app_state_delta:
-                    await cursor.execute(
-                        _mysql_insert_ignore_app_state_sql(self._app_state_table), (app_name, empty_state_json)
-                    )
-                    await cursor.execute(_mysql_select_app_state_for_update_sql(self._app_state_table), (app_name,))
-                    app_row = await cursor.fetchone()
-                    current_app = (
-                        _json_dict(_row_first_value(app_row, "state"), self._json_deserializer) or {}
-                        if app_row is not None
-                        else {}
-                    )
-                    merged_app_state = {**current_app, **app_state_delta}
-                    await cursor.execute(
-                        _mysql_update_app_state_sql(self._app_state_table),
-                        (self._json_serializer(merged_app_state), app_name),
-                    )
-                else:
-                    await cursor.execute(_mysql_select_app_state_sql(self._app_state_table), (app_name,))
-                    app_row = await cursor.fetchone()
-                    merged_app_state = (
-                        _json_dict(_row_first_value(app_row, "state"), self._json_deserializer)
-                        if app_row is not None
-                        else None
-                    )
+                        if app_state_delta:
+                            await cursor.execute(
+                                _mysql_insert_ignore_app_state_sql(self._app_state_table), (app_name, empty_state_json)
+                            )
+                            await cursor.execute(
+                                _mysql_select_app_state_for_update_sql(self._app_state_table), (app_name,)
+                            )
+                            app_row = await cursor.fetchone()
+                            current_app = (
+                                _json_dict(_row_first_value(app_row, "state"), self._json_deserializer) or {}
+                                if app_row is not None
+                                else {}
+                            )
+                            merged_app_state = {**current_app, **app_state_delta}
+                            await cursor.execute(
+                                _mysql_update_app_state_sql(self._app_state_table),
+                                (self._json_serializer(merged_app_state), app_name),
+                            )
+                        else:
+                            await cursor.execute(_mysql_select_app_state_sql(self._app_state_table), (app_name,))
+                            app_row = await cursor.fetchone()
+                            merged_app_state = (
+                                _json_dict(_row_first_value(app_row, "state"), self._json_deserializer)
+                                if app_row is not None
+                                else None
+                            )
 
-                if user_state_delta:
-                    await cursor.execute(
-                        _mysql_insert_ignore_user_state_sql(self._user_state_table),
-                        (app_name, user_id, empty_state_json),
-                    )
-                    await cursor.execute(
-                        _mysql_select_user_state_for_update_sql(self._user_state_table), (app_name, user_id)
-                    )
-                    user_row = await cursor.fetchone()
-                    current_user = (
-                        _json_dict(_row_first_value(user_row, "state"), self._json_deserializer) or {}
-                        if user_row is not None
-                        else {}
-                    )
-                    merged_user_state = {**current_user, **user_state_delta}
-                    await cursor.execute(
-                        _mysql_update_user_state_sql(self._user_state_table),
-                        (self._json_serializer(merged_user_state), app_name, user_id),
-                    )
-                else:
-                    await cursor.execute(_mysql_select_user_state_sql(self._user_state_table), (app_name, user_id))
-                    user_row = await cursor.fetchone()
-                    merged_user_state = (
-                        _json_dict(_row_first_value(user_row, "state"), self._json_deserializer)
-                        if user_row is not None
-                        else None
-                    )
+                        if user_state_delta:
+                            await cursor.execute(
+                                _mysql_insert_ignore_user_state_sql(self._user_state_table),
+                                (app_name, user_id, empty_state_json),
+                            )
+                            await cursor.execute(
+                                _mysql_select_user_state_for_update_sql(self._user_state_table), (app_name, user_id)
+                            )
+                            user_row = await cursor.fetchone()
+                            current_user = (
+                                _json_dict(_row_first_value(user_row, "state"), self._json_deserializer) or {}
+                                if user_row is not None
+                                else {}
+                            )
+                            merged_user_state = {**current_user, **user_state_delta}
+                            await cursor.execute(
+                                _mysql_update_user_state_sql(self._user_state_table),
+                                (self._json_serializer(merged_user_state), app_name, user_id),
+                            )
+                        else:
+                            await cursor.execute(
+                                _mysql_select_user_state_sql(self._user_state_table), (app_name, user_id)
+                            )
+                            user_row = await cursor.fetchone()
+                            merged_user_state = (
+                                _json_dict(_row_first_value(user_row, "state"), self._json_deserializer)
+                                if user_row is not None
+                                else None
+                            )
 
-                await conn.commit()
-            except Exception:
-                await conn.rollback()
-                raise
+                        await conn.commit()
+                    except Exception:
+                        with contextlib.suppress(Exception):
+                            await conn.rollback()
+                        raise
 
-        session = _session_record_from_row(row, self._json_deserializer)
-        session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
-        return session
+            except Exception as exc:
+                if not _is_retryable_mysql_error(exc) or attempt + 1 >= max_attempts:
+                    raise
+                await asyncio.sleep(_retry_delay_seconds(attempt))
+            else:
+                session = _session_record_from_row(row, self._json_deserializer)
+                session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+                return session
+        msg = "Failed to merge scoped state during create_session after retries."
+        raise DeadlockError(msg)
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -404,75 +426,89 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
-        merged_app_state: dict[str, Any] | None = None
-        merged_user_state: dict[str, Any] | None = None
-        async with (
-            self._config.provide_connection() as conn,
-            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
-        ):
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 3
+        for attempt in range(max_attempts):
+            merged_app_state: dict[str, Any] | None = None
+            merged_user_state: dict[str, Any] | None = None
             try:
-                await cursor.execute("BEGIN")
-                await cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
-                await cursor.execute(select_sql, (app_name, user_id, session_id))
-                row = await cursor.fetchone()
-                if row is None:
-                    _raise_session_not_found(session_id)
-                await cursor.execute(
-                    insert_sql,
-                    (
-                        event_record["id"],
-                        app_name,
-                        user_id,
-                        session_id,
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        _json_for_storage(event_record["event_data"], self._json_serializer),
-                    ),
-                )
-                if app_state_delta:
-                    await cursor.execute(
-                        _mysql_insert_ignore_app_state_sql(self._app_state_table), (app_name, empty_state_json)
-                    )
-                    await cursor.execute(_mysql_select_app_state_for_update_sql(self._app_state_table), (app_name,))
-                    app_row = await cursor.fetchone()
-                    current_app = (
-                        _json_dict(_row_first_value(app_row, "state"), self._json_deserializer) or {}
-                        if app_row is not None
-                        else {}
-                    )
-                    merged_app_state = {**current_app, **app_state_delta}
-                    await cursor.execute(
-                        _mysql_update_app_state_sql(self._app_state_table),
-                        (self._json_serializer(merged_app_state), app_name),
-                    )
-                if user_state_delta:
-                    await cursor.execute(
-                        _mysql_insert_ignore_user_state_sql(self._user_state_table),
-                        (app_name, user_id, empty_state_json),
-                    )
-                    await cursor.execute(
-                        _mysql_select_user_state_for_update_sql(self._user_state_table), (app_name, user_id)
-                    )
-                    user_row = await cursor.fetchone()
-                    current_user = (
-                        _json_dict(_row_first_value(user_row, "state"), self._json_deserializer) or {}
-                        if user_row is not None
-                        else {}
-                    )
-                    merged_user_state = {**current_user, **user_state_delta}
-                    await cursor.execute(
-                        _mysql_update_user_state_sql(self._user_state_table),
-                        (self._json_serializer(merged_user_state), app_name, user_id),
-                    )
-                await conn.commit()
-            except Exception:
-                await conn.rollback()
-                raise
+                async with (
+                    self._config.provide_connection() as conn,
+                    AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+                ):
+                    try:
+                        await cursor.execute("BEGIN")
+                        await cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
+                        await cursor.execute(select_sql, (app_name, user_id, session_id))
+                        row = await cursor.fetchone()
+                        if row is None:
+                            _raise_session_not_found(session_id)
+                        await cursor.execute(
+                            insert_sql,
+                            (
+                                event_record["id"],
+                                app_name,
+                                user_id,
+                                session_id,
+                                event_record["invocation_id"],
+                                event_record["timestamp"],
+                                _json_for_storage(event_record["event_data"], self._json_serializer),
+                            ),
+                        )
+                        if app_state_delta:
+                            await cursor.execute(
+                                _mysql_insert_ignore_app_state_sql(self._app_state_table), (app_name, empty_state_json)
+                            )
+                            await cursor.execute(
+                                _mysql_select_app_state_for_update_sql(self._app_state_table), (app_name,)
+                            )
+                            app_row = await cursor.fetchone()
+                            current_app = (
+                                _json_dict(_row_first_value(app_row, "state"), self._json_deserializer) or {}
+                                if app_row is not None
+                                else {}
+                            )
+                            merged_app_state = {**current_app, **app_state_delta}
+                            await cursor.execute(
+                                _mysql_update_app_state_sql(self._app_state_table),
+                                (self._json_serializer(merged_app_state), app_name),
+                            )
+                        if user_state_delta:
+                            await cursor.execute(
+                                _mysql_insert_ignore_user_state_sql(self._user_state_table),
+                                (app_name, user_id, empty_state_json),
+                            )
+                            await cursor.execute(
+                                _mysql_select_user_state_for_update_sql(self._user_state_table), (app_name, user_id)
+                            )
+                            user_row = await cursor.fetchone()
+                            current_user = (
+                                _json_dict(_row_first_value(user_row, "state"), self._json_deserializer) or {}
+                                if user_row is not None
+                                else {}
+                            )
+                            merged_user_state = {**current_user, **user_state_delta}
+                            await cursor.execute(
+                                _mysql_update_user_state_sql(self._user_state_table),
+                                (self._json_serializer(merged_user_state), app_name, user_id),
+                            )
+                        await conn.commit()
+                    except Exception:
+                        with contextlib.suppress(Exception):
+                            await conn.rollback()
+                        raise
 
-        session = _session_record_from_row(row, self._json_deserializer)
-        if merged_app_state is not None or merged_user_state is not None:
-            session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
-        return session
+            except Exception as exc:
+                if not _is_retryable_mysql_error(exc) or attempt + 1 >= max_attempts:
+                    raise
+                await asyncio.sleep(_retry_delay_seconds(attempt))
+            else:
+                session = _session_record_from_row(row, self._json_deserializer)
+                if merged_app_state is not None or merged_user_state is not None:
+                    session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+                return session
+        msg = "Failed to merge scoped state during append_event_and_update_state after retries."
+        raise DeadlockError(msg)
 
     async def get_events(
         self,
@@ -1092,6 +1128,21 @@ def _is_mysql_table_missing(exc: BaseException) -> bool:
         or "doesn't exist" in str(exc)
         or bool(args and args[0] == MYSQL_TABLE_NOT_FOUND_ERROR)
     )
+
+
+def _is_retryable_mysql_error(exc: BaseException) -> bool:
+    if isinstance(exc, DeadlockError):
+        return True
+    args = getattr(exc, "args", ())
+    errno = getattr(exc, "errno", None)
+    sqlstate = getattr(exc, "sqlstate", None)
+    return errno in _MYSQL_RETRYABLE_ERRNOS or sqlstate == "40001" or bool(args and args[0] in _MYSQL_RETRYABLE_ERRNOS)
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    base = min(0.05, 0.002 * (attempt + 1))
+    jitter = secrets.randbelow(80) / 10_000.0
+    return base + jitter
 
 
 def _json_for_storage(value: Any, serializer: "Callable[[Any], str]" = to_json) -> str:

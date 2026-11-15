@@ -139,7 +139,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             params = (session_id, app_name, user_id, state)
 
         async def _attempt(conn: Any) -> StoredSession:
-            row = await conn.fetchrow(sql, *params)
+            row = await _fetch_one(conn, sql, *params)
             if row is None:
                 msg = "Session creation failed"
                 raise RuntimeError(msg)
@@ -190,7 +190,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         try:
             async with self._provide_read_connection(primary=renew_for is not None) as conn:
-                row = await conn.fetchrow(sql, *params)
+                row = await _fetch_one(conn, sql, *params)
                 if row is None:
                     return None
 
@@ -338,7 +338,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         """
 
         async def _attempt(conn: Any) -> StoredSession:
-            row = await conn.fetchrow(update_sql, state, app_name, user_id, session_id)
+            row = await _fetch_one(conn, update_sql, state, app_name, user_id, session_id)
             if row is None:
                 msg = f"Session {session_id} not found during append_event_and_update_state."
                 raise ValueError(msg)
@@ -479,7 +479,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                row = await conn.fetchrow(sql, app_name)
+                row = await _fetch_one(conn, sql, app_name)
                 return row["state"] if row is not None else None
         except asyncpg.exceptions.UndefinedTableError:
             return None
@@ -489,7 +489,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                row = await conn.fetchrow(sql, app_name, user_id)
+                row = await _fetch_one(conn, sql, app_name, user_id)
                 return row["state"] if row is not None else None
         except asyncpg.exceptions.UndefinedTableError:
             return None
@@ -517,7 +517,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                row = await conn.fetchrow(sql, key)
+                row = await _fetch_one(conn, sql, key)
                 return row["value"] if row is not None else None
         except asyncpg.exceptions.UndefinedTableError:
             return None
@@ -545,7 +545,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         self, conn: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
     ) -> "dict[str, Any] | None":
         where_clause = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))
-        row = await conn.fetchrow(f"SELECT state FROM {table} WHERE {where_clause}", *key_values)
+        row = await _fetch_one(conn, f"SELECT state FROM {table} WHERE {where_clause}", *key_values)
         if row is None:
             return None
         return _decode_json_state(row["state"])
@@ -585,7 +585,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         await conn.execute(ensure_sql, *key_values, {})
 
         select_where = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))
-        row = await conn.fetchrow(f"SELECT state FROM {table} WHERE {select_where} FOR UPDATE", *key_values)
+        row = await _fetch_one(conn, f"SELECT state FROM {table} WHERE {select_where} FOR UPDATE", *key_values)
         existing = _decode_json_state(row["state"]) if row is not None else {}
         merged = dict(existing)
         merged.update(delta)
@@ -1095,3 +1095,8 @@ def _decode_json_state(raw: Any) -> "dict[str, Any]":
     if isinstance(raw, Mapping):
         return dict(raw)
     return {}
+
+
+async def _fetch_one(conn: Any, sql: str, *params: Any) -> Any:
+    rows = await conn.fetch(sql, *params)
+    return rows[0] if rows else None

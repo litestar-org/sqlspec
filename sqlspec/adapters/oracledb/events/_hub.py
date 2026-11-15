@@ -81,7 +81,12 @@ class OracleSyncAQHub:
                 return None
             wait_seconds = _resolve_wait_seconds(poll_interval, self._wait_ceiling)
             _apply_deq_options(
-                queue, self._visibility, self._default_visibility, wait_seconds, normalize_event_channel_name(channel)
+                queue,
+                self._visibility,
+                self._default_visibility,
+                wait_seconds,
+                normalize_event_channel_name(channel),
+                allow_condition=self._backend_name != "txeventq",
             )
             try:
                 message = queue.deqone()
@@ -217,7 +222,12 @@ class OracleAsyncAQHub:
                 return None
             wait_seconds = _resolve_wait_seconds(poll_interval, self._wait_ceiling)
             _apply_deq_options(
-                queue, self._visibility, self._default_visibility, wait_seconds, normalize_event_channel_name(channel)
+                queue,
+                self._visibility,
+                self._default_visibility,
+                wait_seconds,
+                normalize_event_channel_name(channel),
+                allow_condition=self._backend_name != "txeventq",
             )
             try:
                 message = await queue.deqone()
@@ -314,17 +324,25 @@ class OracleAsyncAQHub:
 
 
 def _apply_deq_options(
-    queue: Any, visibility: "int | None", default_visibility: "int | None", wait_seconds: float, correlation: str
+    queue: Any,
+    visibility: "int | None",
+    default_visibility: "int | None",
+    wait_seconds: float,
+    correlation: str,
+    *,
+    allow_condition: bool = True,
 ) -> None:
     """Configure a queue's dequeue options in place (python-oracledb 4.x API).
 
     Oracle AQ ``deqoptions.correlation`` interprets ``_`` and ``%`` as SQL ``LIKE``
-    wildcards, so channel names containing either character filter on exact
-    ``corrid`` equality via ``deqoptions.condition`` instead.
+    wildcards, so classic AQ channel names containing either character filter on
+    exact ``corrid`` equality via ``deqoptions.condition`` instead. Transactional
+    Event Queues (``txeventq``) reject SQL ``condition`` filters and use
+    ``deqoptions.correlation`` directly.
     """
     options = queue.deqoptions
     options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
-    if "_" in correlation or "%" in correlation:
+    if allow_condition and ("_" in correlation or "%" in correlation):
         escaped = correlation.replace("'", "''")
         options.condition = f"corrid = '{escaped}'"
     else:

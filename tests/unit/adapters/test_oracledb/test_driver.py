@@ -737,3 +737,46 @@ async def test_oracle_aq_hubs_avoid_wildcard_correlation_for_underscores(
     _apply_deq_options(direct_queue, None, None, 0.5, "a%b'c")
     assert direct_queue.deqoptions.condition == "corrid = 'a%b''c'"
     assert direct_queue.deqoptions.correlation is None
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_oracle_txeventq_hubs_use_correlation_for_underscores(is_async: bool) -> None:
+    """TxEventQ dequeue sets deqoptions.correlation directly without SQL condition filters."""
+    deqoptions = SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
+    queue = MagicMock()
+    queue.deqoptions = deqoptions
+    config = MagicMock()
+    config.get_observability_runtime.return_value = MagicMock()
+
+    if is_async:
+        queue.deqone = AsyncMock(return_value=None)
+        driver = MagicMock()
+        driver.rollback = AsyncMock()
+        hub: Any = OracleAsyncAQHub(
+            config,
+            queue_name_template="SQLSPEC_TXEVENTQ",
+            visibility=None,
+            default_visibility=None,
+            wait_ceiling=5,
+            backend_name="txeventq",
+        )
+        hub._session_driver = driver
+        hub._queues["meta_channel"] = queue
+        assert await hub.dequeue("meta_channel", 0.5) is None
+    else:
+        queue.deqone.return_value = None
+        driver = MagicMock()
+        hub = OracleSyncAQHub(
+            config,
+            queue_name_template="SQLSPEC_TXEVENTQ",
+            visibility=None,
+            default_visibility=None,
+            wait_ceiling=5,
+            backend_name="txeventq",
+        )
+        hub._session_driver = driver
+        hub._queues["meta_channel"] = queue
+        assert hub.dequeue("meta_channel", 0.5) is None
+
+    assert deqoptions.condition is None
+    assert deqoptions.correlation == "meta_channel"
