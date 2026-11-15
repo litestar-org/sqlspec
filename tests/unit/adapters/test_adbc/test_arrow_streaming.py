@@ -12,7 +12,7 @@ from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import get_statement_config
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcSelectStreamSource
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc._typing import AdbcConnection
@@ -130,8 +130,11 @@ def test_session_closes_lazy_stream_owners_before_release(kind: str, progress: s
                 assert reader.read_all().to_pydict() == {"x": [1, 2, 3]}
     assert released == [driver]
     driver.close_streams()
-    if stream is not None:
+    if stream is not None and progress == "exhausted":
         assert list(stream) == []
+    elif stream is not None:
+        with pytest.raises(ImproperConfigurationError):
+            list(stream)
 
 
 def test_lazy_fallback_stream_taints_session_before_execution() -> None:

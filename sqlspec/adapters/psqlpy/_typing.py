@@ -147,6 +147,8 @@ class PsqlpySessionContext:
     ) -> "bool | None":
         driver = self._driver
         try:
+            if driver is not None:
+                await driver._close_open_streams(error=exc_type is not None)
             if driver is not None and getattr(driver, "_transaction_active", False):
                 with contextlib.suppress(Exception):
                     await driver.rollback()

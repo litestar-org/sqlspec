@@ -99,6 +99,8 @@ class TeradataSessionContext:
         except BaseException as exc:
             driver = self._driver
             try:
+                if driver is not None:
+                    driver._close_open_streams(error=True)
                 self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
             finally:
                 self._connection = None
@@ -112,6 +114,8 @@ class TeradataSessionContext:
     ) -> "bool | None":
         driver = self._driver
         try:
+            if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
             if self._driver is not None:
                 self._driver._release_open_work()
         except BaseException as exc:

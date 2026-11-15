@@ -204,6 +204,8 @@ class SpannerSyncSessionContext:
     ) -> "bool | None":
         driver = self._driver
         try:
+            if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
             if self._connection is not None:
                 connection = self._driver.connection if self._driver is not None else self._connection
                 self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
@@ -263,6 +265,8 @@ class SpannerAsyncSessionContext:
     ) -> "bool | None":
         driver = self._driver
         try:
+            if driver is not None:
+                await driver._close_open_streams(error=exc_type is not None)
             if self._connection is not None:
                 connection = self._driver.connection if self._driver is not None else self._connection
                 await self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)

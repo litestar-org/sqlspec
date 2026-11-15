@@ -149,6 +149,8 @@ class BigQuerySessionContext:
     ) -> "bool | None":
         driver = self._driver
         try:
+            if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
             if self._driver is not None and self._driver._connection_in_transaction():
                 try:
                     self._driver.rollback()

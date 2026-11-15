@@ -175,6 +175,8 @@ class Db2SyncSessionContext:
                 driver._detach_connection()
             return None
         try:
+            if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
             if self._driver is not None:
                 self._driver._release_open_work(autocommit_baseline=self._autocommit_baseline)
         finally:
@@ -306,6 +308,8 @@ class Db2AsyncSessionContext:
                 driver._detach_connection()
             return None
         try:
+            if driver is not None:
+                await driver._close_open_streams(error=exc_type is not None)
             if self._driver is not None:
                 await self._driver._release_open_work(autocommit_baseline=self._autocommit_baseline)
         finally:

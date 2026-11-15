@@ -87,6 +87,7 @@ class SnowflakeSessionContext:
             driver = self._driver
             try:
                 if driver is not None:
+                    driver._close_open_streams(error=True)
                     with contextlib.suppress(Exception):
                         driver.close()
             finally:
@@ -106,6 +107,7 @@ class SnowflakeSessionContext:
         connection, self._connection = self._connection, None
         try:
             if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
                 driver.close()
         except BaseException as exc:
             if connection is not None:

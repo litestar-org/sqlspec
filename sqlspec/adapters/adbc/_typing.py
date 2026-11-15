@@ -133,6 +133,8 @@ class AdbcSessionContext:
             self._driver = None
             if driver is not None:
                 with contextlib.suppress(BaseException):
+                    driver._close_open_streams(error=True)
+                with contextlib.suppress(BaseException):
                     driver.close_streams()
             with contextlib.suppress(BaseException):
                 self._release_connection(
@@ -154,6 +156,8 @@ class AdbcSessionContext:
         connection = self._connection
         self._connection = None
         try:
+            if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
             first_error: BaseException | None = None
             driver_rolled_back = False
             if driver is not None:

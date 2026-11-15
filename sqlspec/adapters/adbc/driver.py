@@ -533,7 +533,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         source = AdbcSelectStreamSource(self, sql, prepared_parameters, chunk_size=chunk_size)
         stream: SyncRowStream[dict[str, Any]] = SyncRowStream(source)
-        self._stream_closers.extend((source.close, stream.close))
+        self._stream_closers.append(source.close)
         return stream
 
     @property

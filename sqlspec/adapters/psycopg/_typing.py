@@ -232,6 +232,8 @@ class PsycopgSyncSessionContext:
         driver = self._driver
         rollback_exc: BaseException | None = None
         try:
+            if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
             try:
                 if driver is not None and (
                     getattr(driver, "_transaction_active", False)
@@ -327,6 +329,8 @@ class PsycopgAsyncSessionContext:
         driver = self._driver
         rollback_exc: BaseException | None = None
         try:
+            if driver is not None:
+                await driver._close_open_streams(error=exc_type is not None)
             try:
                 if driver is not None and (
                     getattr(driver, "_transaction_active", False)

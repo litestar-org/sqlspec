@@ -129,6 +129,8 @@ class SybaseSessionContext:
     ) -> "bool | None":
         driver = self._driver
         try:
+            if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
             if self._driver is not None and (exc_type is not None or self._driver._connection_in_transaction()):
                 with contextlib.suppress(Exception):
                     self._driver.rollback()

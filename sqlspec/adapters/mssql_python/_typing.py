@@ -110,6 +110,8 @@ class MssqlPythonSessionContext:
     ) -> "bool | None":
         driver = self._driver
         try:
+            if driver is not None:
+                driver._close_open_streams(error=exc_type is not None)
             if (
                 self._driver_features.get("tenant_strategy") is None
                 and self._driver is not None
