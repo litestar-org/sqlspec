@@ -2533,7 +2533,9 @@ class CommonDriverAttributesMixin:
         if runtime is None or not runtime.has_statement_observers:
             return
         observed_sql = (
-            redact_sql_literals(sql) if runtime._redaction is not None and runtime._redaction.mask_parameters else sql
+            redact_sql_literals(sql, dialect=self.observability_db_system)
+            if runtime._redaction is not None and runtime._redaction.mask_parameters
+            else sql
         )
         runtime.emit_statement_event(
             sql=observed_sql,

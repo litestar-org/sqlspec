@@ -266,7 +266,7 @@ class StackExecutionError(SQLSpecError):
 
         pipeline_state = "enabled" if native_pipeline else "disabled"
         adapter_label = adapter or "unknown-adapter"
-        redacted_sql = redact_sql_literals(sql)
+        redacted_sql = redact_sql_literals(sql, dialect=adapter)
         preview = " ".join(redacted_sql.strip().split())
         if len(preview) > STACK_SQL_PREVIEW_LIMIT:
             preview = f"{preview[: STACK_SQL_PREVIEW_LIMIT - 3]}..."

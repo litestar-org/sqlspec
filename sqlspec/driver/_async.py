@@ -1717,7 +1717,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         driver_name = type(self).__name__
         db_system = self.observability_db_system
         observed_sql = (
-            redact_sql_literals(compiled_sql)
+            redact_sql_literals(compiled_sql, dialect=db_system)
             if is_script and runtime._redaction is not None and runtime._redaction.mask_parameters
             else compiled_sql
         )

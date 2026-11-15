@@ -32,6 +32,9 @@ _COMMON_SQL_HEAD: Final[str] = (
     f"|{_QQUOTE_PATTERN}"
     r"|(?P<equote>(?<![A-Za-z0-9_])[eE]'(?>[^'\\]+|''|\\[\s\S])*(?:'|\\?\Z))"
 )
+_DQUOTE_IDENTIFIER_ALTERNATIVE: Final[str] = r"|(?P<dquote>\"(?>[^\"]+|\"\")*(?:\"|\Z))"
+_DQUOTE_STRING_BACKSLASH_ALTERNATIVE: Final[str] = r"|(?P<dstring>\"(?>[^\"\\]+|\"\"|\\[\s\S])*(?:\"|\\?\Z))"
+_DQUOTE_STRING_ANSI_ALTERNATIVE: Final[str] = r"|(?P<dstring>\"(?>[^\"]+|\"\")*(?:\"|\Z))"
 _NUMERIC_LITERAL_PATTERN: Final[str] = (
     r"|(?P<number>(?<![A-Za-z0-9_.$:?])(?:"
     r"0[xX][0-9A-Fa-f]+(?:_[0-9A-Fa-f]+)*"
@@ -49,6 +52,17 @@ _SQL_REDACT_ANSI_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"|(?P<squote>(?:(?<![A-Za-z0-9_])[nNbBxX])?'(?>[^']+|'')*(?:'|\Z))"
     f"{_NUMERIC_LITERAL_PATTERN}"
 )
+_SQL_REDACT_DQ_STRING_BACKSLASH_PATTERN: Final[re.Pattern[str]] = re.compile(
+    _COMMON_SQL_HEAD.replace(_DQUOTE_IDENTIFIER_ALTERNATIVE, _DQUOTE_STRING_BACKSLASH_ALTERNATIVE)
+    + r"|(?P<squote>(?:(?<![A-Za-z0-9_])[nNbBxX])?'(?>[^'\\]+|''|\\[\s\S])*(?:'|\\?\Z))"
+    + _NUMERIC_LITERAL_PATTERN
+)
+_SQL_REDACT_DQ_STRING_ANSI_PATTERN: Final[re.Pattern[str]] = re.compile(
+    _COMMON_SQL_HEAD.replace(_DQUOTE_IDENTIFIER_ALTERNATIVE, _DQUOTE_STRING_ANSI_ALTERNATIVE)
+    + r"|(?P<squote>(?:(?<![A-Za-z0-9_])[nNbBxX])?'(?>[^']+|'')*(?:'|\Z))"
+    + _NUMERIC_LITERAL_PATTERN
+)
+_DQUOTE_STRING_DB_SYSTEMS: Final[frozenset[str]] = frozenset({"mysql", "mariadb", "bigquery"})
 
 _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
     ("sqlanywhere", "sqlanywhere"),
@@ -152,11 +166,27 @@ def compute_sql_hash(sql: str) -> str:
     return hashlib.sha256(sql.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
-def redact_sql_literals(sql: str) -> str:
-    """Mask string, dollar-quoted, Oracle alternative-quoted, and bare numeric SQL literals."""
-    spans, saw_bs_quote = _scan_sql_literals(sql, _SQL_REDACT_BACKSLASH_PATTERN)
+def redact_sql_literals(sql: str, *, dialect: str | None = None) -> str:
+    """Mask string, dollar-quoted, Oracle alternative-quoted, and bare numeric SQL literals.
+
+    Args:
+        sql: SQL text to redact.
+        dialect: Optional dialect, adapter, or db system name. For MySQL, MariaDB, and BigQuery,
+            double-quoted spans are string literals and are masked; otherwise they stay visible
+            as identifiers.
+
+    Returns:
+        SQL text with literal values masked.
+    """
+    if dialect is not None and resolve_db_system(dialect) in _DQUOTE_STRING_DB_SYSTEMS:
+        backslash_pattern = _SQL_REDACT_DQ_STRING_BACKSLASH_PATTERN
+        ansi_pattern = _SQL_REDACT_DQ_STRING_ANSI_PATTERN
+    else:
+        backslash_pattern = _SQL_REDACT_BACKSLASH_PATTERN
+        ansi_pattern = _SQL_REDACT_ANSI_PATTERN
+    spans, saw_bs_quote = _scan_sql_literals(sql, backslash_pattern)
     if saw_bs_quote:
-        ansi_spans, _ = _scan_sql_literals(sql, _SQL_REDACT_ANSI_PATTERN)
+        ansi_spans, _ = _scan_sql_literals(sql, ansi_pattern)
         spans = _merge_redacted_spans(spans, ansi_spans)
     return _apply_redacted_spans(sql, spans)
 
@@ -218,7 +248,9 @@ def _scan_sql_literals(sql: str, pattern: re.Pattern[str]) -> tuple[list[tuple[i
         if group == "number":
             spans.append((match.start(), match.end(), False))
             continue
-        if group == "squote" and not saw_bs_quote and "\\'" in match.group(0):
+        if not saw_bs_quote and (
+            (group == "squote" and "\\'" in match.group(0)) or (group == "dstring" and '\\"' in match.group(0))
+        ):
             saw_bs_quote = True
         spans.append((match.start(), match.end(), True))
     return spans, saw_bs_quote

@@ -50,6 +50,8 @@ observability = ObservabilityConfig(
 )
 ```
 
+Literal redaction is dialect-aware: double-quoted strings are masked for MySQL, MariaDB, and BigQuery, where `"..."` is a string literal, while other dialects keep double-quoted identifiers visible.
+
 ## OpenTelemetry, Prometheus, and Cloud Log Formatters
 
 Enable OpenTelemetry spans (`opentelemetry` extra) and Prometheus counters/histograms (`prometheus` extra) declaratively through `extension_config` on any adapter config, or format structured logs for Google Cloud Logging and AWS CloudWatch:
