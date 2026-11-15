@@ -18,7 +18,7 @@ from sqlspec.builder._parsing_utils import (
     resolve_value_expression,
     unwrap_expression_source,
 )
-from sqlspec.core.query_modifiers import parse_column_for_condition
+from sqlspec.core.query_modifiers import is_valid_parameter_name, parse_column_for_condition
 from sqlspec.exceptions import SQLBuilderError, SQLSpecError
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import schema_dump
@@ -280,7 +280,7 @@ class InsertFromSelectMixin:
                 for param_name, param_value in subquery_parameters.items():
                     target_name = (
                         builder_with_params.generate_unique_parameter_name(param_name)
-                        if param_name in existing_params
+                        if (param_name in existing_params or not is_valid_parameter_name(param_name))
                         and hasattr(builder_with_params, "generate_unique_parameter_name")
                         else param_name
                     )

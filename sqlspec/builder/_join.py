@@ -20,6 +20,7 @@ from sqlspec.builder._parsing_utils import (
 )
 from sqlspec.builder._temporal import create_temporal_version, register_version_generators
 from sqlspec.core import SQL
+from sqlspec.core.query_modifiers import is_valid_parameter_name
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_parameter_builder
 
@@ -374,7 +375,8 @@ def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProto
             for param_name, param_value in parameters.items():
                 target_name = (
                     builder.generate_unique_parameter_name(param_name)
-                    if param_name in existing_params and hasattr(builder, "generate_unique_parameter_name")
+                    if (param_name in existing_params or not is_valid_parameter_name(param_name))
+                    and hasattr(builder, "generate_unique_parameter_name")
                     else param_name
                 )
                 _, actual_name = builder.add_parameter(param_value, name=target_name)

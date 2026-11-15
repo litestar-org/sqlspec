@@ -25,6 +25,7 @@ from sqlspec.core.parameters import (
     value_fingerprint,
 )
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
+from sqlspec.core.query_modifiers import is_valid_parameter_name
 from sqlspec.core.sqlcommenter import _append_comment, _comment_attributes
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import get_value_attribute
@@ -1034,6 +1035,8 @@ class SQLProcessor:
         operation_profile = OperationProfile.empty()
 
         try:
+            if expression_override is not None:
+                validate_placeholder_names(expression_override)
             process_result = self._parameter_processor.process(
                 sql=sql,
                 parameters=parameters,
@@ -1135,6 +1138,9 @@ class SQLProcessor:
 
         except sqlspec.exceptions.SQLSpecError:
             raise
+        except RecursionError as exc:
+            msg = "Statement nesting exceeds the supported depth"
+            raise sqlspec.exceptions.SQLParsingError(msg) from exc
         except ParseError as exc:
             log_with_context(logger, logging.DEBUG, "sql.compile", error_type=type(exc).__name__, status="fallback")
             fallback_profile = OperationProfile(returns_rows=SQLProcessor._statement_text_returns_rows(sql))
@@ -1330,6 +1336,22 @@ class SQLProcessor:
     def _make_parse_cache_key(sql: str, dialect: "str | None") -> Any:
         dialect_marker = dialect or "default"
         return (dialect_marker, sql)
+
+
+def validate_placeholder_names(expression: "exp.Expr") -> None:
+    """Reject named placeholders whose text is not an ASCII identifier or positional number.
+
+    Args:
+        expression: Expression about to be rendered into SQL text.
+
+    Raises:
+        SQLBuilderError: When a placeholder name could render as SQL text.
+    """
+    for node in expression.find_all(exp.Placeholder):
+        name = node.this
+        if isinstance(name, str) and not is_valid_parameter_name(name):
+            msg = f"Invalid placeholder name {name!r}"
+            raise sqlspec.exceptions.SQLBuilderError(msg)
 
 
 def _leading_statement_keyword_and_rest(sql: str) -> "tuple[str, str] | None":

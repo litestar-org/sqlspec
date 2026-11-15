@@ -44,6 +44,7 @@ from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.core.statement import SQL, get_default_config
+from sqlspec.exceptions import SQLBuilderError, SQLParsingError
 from tests.conftest import requires_interpreted, requires_patchable_internals
 
 
@@ -1405,3 +1406,30 @@ def test_unparsable_keyword_without_operand_does_not_return_rows() -> None:
     assert SQLProcessor._statement_text_returns_rows("SELECT") is False
     assert SQLProcessor._statement_text_returns_rows("-- only a comment") is False
     assert SQLProcessor._statement_text_returns_rows("/* unclosed") is False
+
+
+def test_compiler_rejects_placeholder_with_sql_text() -> None:
+    """Expression inputs carrying a Placeholder whose name is SQL text fail compilation."""
+    expression = (
+        exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this="x OR 1=1")))
+    )
+
+    with pytest.raises(SQLBuilderError, match="Invalid placeholder name"):
+        SQL(expression, statement_config=get_default_config()).compile()
+
+
+def test_compiler_accepts_identifier_and_anonymous_placeholders() -> None:
+    expression = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this="x_1")))
+
+    compiled_sql, _ = SQL(expression, x_1=1, statement_config=get_default_config()).compile()
+
+    assert "x_1" in compiled_sql or "?" in compiled_sql
+
+
+def test_deep_sql_where_chain_raises_parsing_error() -> None:
+    """Statements nested beyond the recursion limit raise a sqlspec parsing error."""
+    statement = SQL("select * from t", statement_config=get_default_config())
+    with pytest.raises(SQLParsingError, match="nesting exceeds"):
+        for index in range(400):
+            statement = statement.where_eq(f"c{index}", index)
+        statement.compile()

@@ -20,6 +20,7 @@ import pytest
 from sqlspec import sql
 from sqlspec.builder import _parsing_utils, _select, parse_condition_expression
 from sqlspec.core import ParameterValidator
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_where_eq_uses_column_name_as_parameter() -> None:
@@ -508,3 +509,30 @@ def test_add_parameter_never_overwrites_existing_key_when_counter_lags() -> None
     assert builder.parameters["param_1"] == 300
     assert builder.parameters[next_where] == 200
     assert builder.parameters[next_plain] == 400
+
+
+@pytest.mark.parametrize("name", ["x) OR 1=1 --", "na\u00efve", "a b"])
+def test_add_parameter_rejects_non_identifier_name(name: str) -> None:
+    query = sql.select("*").from_("t")
+    with pytest.raises(SQLBuilderError, match="ASCII identifier"):
+        query.add_parameter(1, name=name)
+
+
+@pytest.mark.parametrize("name", ["tenant_id", "1", "_x"])
+def test_add_parameter_accepts_identifier_and_numeric_names(name: str) -> None:
+    _, actual = sql.select("*").from_("t").add_parameter(1, name=name)
+    assert actual == name
+
+
+def test_load_parameters_rejects_non_identifier_key() -> None:
+    query = sql.select("*").from_("t")
+    with pytest.raises(SQLBuilderError, match="ASCII identifier"):
+        query.load_parameters({"a b": 1})
+
+
+def test_deep_builder_chain_keeps_builder_error() -> None:
+    query = sql.select("*").from_("t")
+    for index in range(400):
+        query = query.where_eq(f"c{index}", index)
+    with pytest.raises(SQLBuilderError, match="recursion"):
+        query.build()

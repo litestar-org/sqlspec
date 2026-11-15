@@ -45,6 +45,7 @@ __all__ = (
     "expr_neq",
     "expr_not_like",
     "extract_column_name",
+    "is_valid_parameter_name",
     "parse_column_for_condition",
     "safe_modify_with_cte",
     "sanitize_parameter_name",
@@ -57,6 +58,7 @@ _TABLE_QUALIFIED_PARTS: Final[int] = 2
 _DATABASE_QUALIFIED_PARTS: Final[int] = 3
 _CATALOG_QUALIFIED_PARTS: Final[int] = 4
 _NON_PARAM_IDENT_RE: Final[re.Pattern[str]] = re.compile(r"[^A-Za-z0-9_]+")
+_PARAMETER_NAME_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+", re.ASCII)
 
 
 def expr_eq(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
@@ -118,6 +120,18 @@ def expr_is_not_null(col: exp.Expr, _operand: exp.Expr) -> exp.Expr:
     Note: operand is ignored but kept for consistent factory signature.
     """
     return exp.Not(this=exp.Is(this=col, expression=exp.null()))
+
+
+def is_valid_parameter_name(name: object) -> bool:
+    """Return whether a value is an ASCII identifier or a positional number usable as a bind name.
+
+    Args:
+        name: Candidate parameter name.
+
+    Returns:
+        ``True`` for strings matching ``[A-Za-z_][A-Za-z0-9_]*`` or ``[0-9]+``.
+    """
+    return isinstance(name, str) and _PARAMETER_NAME_RE.fullmatch(name) is not None
 
 
 def sanitize_parameter_name(name: str) -> str:

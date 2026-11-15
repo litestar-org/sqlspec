@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
+from sqlglot import expressions as exp
 
 from sqlspec import sql
 
@@ -476,3 +477,16 @@ def test_reusable_subquery_fragment_stays_isolated_with_outer_where_params() -> 
 
     assert sorted(first.parameters.values()) == [100, 200]
     assert sorted(second.parameters.values()) == [100, 300, 400]
+
+
+def test_merge_sanitizes_non_identifier_child_names() -> None:
+    """Merged child parameters with non-identifier names are renamed and their placeholders rewritten."""
+    outer = sql.select("*").from_("t")
+    mapping = outer._merge_parameter_dict({"a-b": 5})  # pyright: ignore[reportPrivateUsage]
+
+    assert mapping == {"a-b": "a_b"}
+    assert outer.parameters == {"a_b": 5}
+    rewritten = outer._update_placeholders(  # pyright: ignore[reportPrivateUsage]
+        exp.EQ(this=exp.column("v"), expression=exp.Placeholder(this="a-b")), mapping
+    )
+    assert rewritten.sql() == "v = :a_b"

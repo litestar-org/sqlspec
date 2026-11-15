@@ -20,7 +20,7 @@ from sqlglot.tokens import Tokenizer
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, default_nulls, ordered
-from sqlspec.core.query_modifiers import parse_column_for_condition
+from sqlspec.core.query_modifiers import is_valid_parameter_name, parse_column_for_condition
 from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.exceptions import SQLBuilderError, SQLSpecError
 from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
@@ -1112,7 +1112,7 @@ def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
         existing_params = getattr(builder, "_parameters", {})
     for param_name, param_value in parameters.items():
         target_name = param_name
-        if param_name in existing_params:
+        if param_name in existing_params or not is_valid_parameter_name(param_name):
             if hasattr(builder, "generate_unique_parameter_name"):
                 target_name = builder.generate_unique_parameter_name(param_name)  # pyright: ignore[reportAttributeAccessIssue]
             elif hasattr(builder, "_next_parameter_name"):

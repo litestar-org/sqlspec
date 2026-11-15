@@ -52,7 +52,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.hashing import _expression_cache_fingerprint
-from sqlspec.core.query_modifiers import sanitize_parameter_name
+from sqlspec.core.query_modifiers import is_valid_parameter_name, sanitize_parameter_name
 from sqlspec.data_dictionary import DialectConfig, get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
@@ -224,6 +224,8 @@ class QueryBuilder:
             tuple[Self, str]: The builder instance and the parameter name.
         """
         if name:
+            if not is_valid_parameter_name(name):
+                self._raise_builder_error(f"Parameter name {name!r} must be an ASCII identifier")
             if name in self._parameters:
                 self._raise_builder_error(f"Parameter name '{name}' already exists.")
             self._parameters[name] = value
@@ -249,6 +251,8 @@ class QueryBuilder:
             return
 
         for name, value in parameters.items():
+            if not is_valid_parameter_name(name):
+                self._raise_builder_error(f"Parameter name {name!r} must be an ASCII identifier")
             if name in self._parameters:
                 self._raise_builder_error(f"Parameter name '{name}' already exists.")
             self._parameters[name] = value
@@ -357,7 +361,10 @@ class QueryBuilder:
         self._validate_update_from(final_expression, _resolve_dialect(dialect, self.dialect))
 
         if self.enable_optimization and isinstance(final_expression, exp.Expr):
-            final_expression = self._optimize_expression(final_expression, dialect=target_dialect)
+            try:
+                final_expression = self._optimize_expression(final_expression, dialect=target_dialect)
+            except RecursionError as e:
+                self._raise_builder_error(f"Error generating SQL from expression: {e!s}", e)
 
         final_expression = self._prepare_dialect_expression(final_expression, target_dialect, dialect)
 
@@ -912,7 +919,11 @@ class QueryBuilder:
         """Merge parameter bindings into this builder without overwriting existing keys."""
         param_mapping: dict[str, str] = {}
         for old_name, value in parameters.items():
-            target_name = self._next_parameter_name(old_name) if old_name in self._parameters else old_name
+            target_name = (
+                self._next_parameter_name(old_name)
+                if old_name in self._parameters or not is_valid_parameter_name(old_name)
+                else old_name
+            )
             _, actual_name = self.add_parameter(value, name=target_name)
             if actual_name != old_name:
                 param_mapping[old_name] = actual_name

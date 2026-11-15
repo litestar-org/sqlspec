@@ -685,6 +685,9 @@ class SQL:
             )
         except sqlspec.exceptions.SQLSpecError:
             raise
+        except RecursionError as e:
+            msg = "Statement nesting exceeds the supported depth"
+            raise sqlspec.exceptions.SQLParsingError(msg) from e
         except Exception as e:
             new_state = self._handle_compile_failure(e)
 
