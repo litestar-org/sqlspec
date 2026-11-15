@@ -697,7 +697,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
 
 def source_uses_pyformat(raw_sql: str, validator: "ParameterValidator") -> bool:
-    """Report whether the caller's SQL text used psycopg ``%s`` or ``%(name)s`` placeholders.
+    """Return whether the caller's SQL text used psycopg ``%s`` or ``%(name)s`` placeholders.
 
     Args:
         raw_sql: SQL text as written by the caller.
