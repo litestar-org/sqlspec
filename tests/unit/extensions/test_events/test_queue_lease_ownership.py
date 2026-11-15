@@ -1,6 +1,5 @@
 """Lease ownership for table event queue ack and nack."""
 
-import asyncio
 import inspect
 import sqlite3
 from collections.abc import AsyncIterator
@@ -154,14 +153,16 @@ async def test_ack_twice_is_noop_second_time(harness: _Harness) -> None:
     assert await _maybe_await(owner.ack(event_id)) is False
 
 
-async def test_ack_after_lease_reclaimed_is_noop(harness: _Harness) -> None:
+async def test_ack_after_lease_reclaimed_is_noop(harness: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     harness.lease_seconds = 1
     first = harness.new_queue()
     second = harness.new_queue()
     event_id = await _maybe_await(first.publish("c", {"n": 3}))
     assert await _maybe_await(first.dequeue("c")) is not None
-    await asyncio.sleep(1.2)
-    assert await _maybe_await(second.dequeue("c")) is not None
+    after_expiry = datetime.now(UTC) + timedelta(seconds=harness.lease_seconds + 2)
+    with monkeypatch.context() as clock:
+        clock.setattr(_BaseTableEventQueue, "_utcnow", staticmethod(lambda: after_expiry))
+        assert await _maybe_await(second.dequeue("c")) is not None
 
     acked = await _maybe_await(first.ack(event_id))
 

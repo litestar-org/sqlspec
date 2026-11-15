@@ -326,6 +326,18 @@ class _BaseTableEventQueue:
     def _utcnow() -> "datetime":
         return datetime.now(UTC)
 
+    def _lease_deadline(self, now: "datetime") -> "datetime":
+        """Return the lease expiry for a claim made at ``now``, rounded up to a whole second.
+
+        The stored lease doubles as the claimer's ownership token, so it must read back exactly as
+        written. Whole seconds survive every backend's timestamp binding, including drivers that bind
+        datetimes with millisecond or second precision.
+        """
+        deadline = now + timedelta(seconds=self._lease_seconds)
+        if deadline.microsecond:
+            deadline = deadline.replace(microsecond=0) + timedelta(seconds=1)
+        return deadline
+
     @classmethod
     def _batch_insert_parameters(
         cls, events: "Sequence[tuple[str, dict[str, Any], dict[str, Any] | None]]"
@@ -488,7 +500,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                         stop_event.wait(delay)
                 return None
             now = self._utcnow()
-            leased_until = now + timedelta(seconds=self._lease_seconds)
+            leased_until = self._lease_deadline(now)
             claimed = self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
             if not claimed:
                 claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
@@ -503,7 +515,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         if row is None:
             return None
         now = self._utcnow()
-        leased_until = now + timedelta(seconds=self._lease_seconds)
+        leased_until = self._lease_deadline(now)
         claimed = self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
         if not claimed:
             claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
@@ -631,7 +643,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                     driver.rollback()
                     return None
                 now = self._utcnow()
-                leased_until = now + timedelta(seconds=self._lease_seconds)
+                leased_until = self._lease_deadline(now)
                 claimed = self._execute_with_driver(
                     driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
                 )
@@ -777,7 +789,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                     await asyncio.sleep(delay)
                 return None
             now = self._utcnow()
-            leased_until = now + timedelta(seconds=self._lease_seconds)
+            leased_until = self._lease_deadline(now)
             claimed = await self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
             if not claimed:
                 claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
@@ -792,7 +804,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         if row is None:
             return None
         now = self._utcnow()
-        leased_until = now + timedelta(seconds=self._lease_seconds)
+        leased_until = self._lease_deadline(now)
         claimed = await self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
         if not claimed:
             claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
@@ -927,7 +939,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                     await driver.rollback()
                     return None
                 now = self._utcnow()
-                leased_until = now + timedelta(seconds=self._lease_seconds)
+                leased_until = self._lease_deadline(now)
                 claimed = await self._execute_with_driver(
                     driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
                 )
