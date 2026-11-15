@@ -48,6 +48,9 @@ important operational fixes.
 * Query builders now validate table and alias strings. `from_`, `join`, `using`, `into`, `table`, and CTE names read the text with the builder's dialect and accept a dotted table name with an optional single-identifier alias (`t u` or `t AS u`), including quoted identifiers, and raise `SQLBuilderError` for any other text. Pass join conditions through `on`. DDL and statement target names accept a name only. T-SQL builders also accept a table variable such as `@tv`. Unquoted text holding whitespace other than ASCII space, tab, and line breaks, or format or control characters, raises. Table text must be trusted, because engines may resolve names to files or external sources; DuckDB users can set `enable_external_access` to `False` to block file access.
 * Framework default `commit_mode` changed from `"manual"` to `"autocommit"` across Litestar, FastAPI, Starlette, Flask, and Sanic (`"autocommit_include_redirect"` commits `2xx`–`3xx` responses for Inertia, HTMX, and HTML form redirects, and `"manual"` now explicitly rolls back uncommitted work on request release on every adapter). ([#916](https://github.com/litestar-org/sqlspec/pull/916))
 * Updated Google ADK support to `google-adk >= 2.14.1` and moved ADK scoped state merging into store transactions (`create_session` and `append_event_and_update_state` replace `app_state` / `user_state` snapshot keyword arguments with `app_state_delta` and `user_state_delta`, merge atomically via row locks, `BEGIN IMMEDIATE`, Spanner read-write transactions, or compare-and-swap retries where row locks are unavailable, and return merged state in `StoredSession["state"]`); `get_events(limit=N)` across all 24 ADK stores now returns the `N` most recent events ordered chronologically ascending. ([#916](https://github.com/litestar-org/sqlspec/pull/916))
+* FastAPI and Litestar cursor pagination requires a cursor secret (`cursor_secret`, `SQLSPEC_CURSOR_SECRET`, or `SECRET_KEY`) and raises `ImproperConfigurationError` without one. Cursor tokens are bound to the request tenant of every tenant-enabled configuration, so tokens issued earlier restart from the first page.
+* FastAPI and Litestar search providers escape `%`, `_`, and `/` in search input by default; set `search_escape_wildcards=False` in the filter config to keep wildcard matching.
+* Explicit builder parameter names passed to `add_parameter(name=...)` or `load_parameters` must be ASCII identifiers or positional numbers.
 
 **Changed:**
 
@@ -65,6 +68,8 @@ important operational fixes.
 * `StorageRegistry` resolves `file://` URIs and bare local paths to `LocalStore` (`backend="local"`) by default rather than `ObStoreBackend`, unless `backend="obstore"` or `backend="fsspec"` is explicitly requested. `LocalStore`, `ObStoreBackend`, and `FSSpecBackend` now reject unknown or conflicting `write_bytes_*` / `write_text_*` keyword arguments with `TypeError` or `ValueError` instead of silently discarding them. ([#888](https://github.com/litestar-org/sqlspec/issues/888))
 * `SQL(..., dialect=...)` statements compile faster: frozen statement configurations keep one derived configuration per dialect instead of rebuilding it on every statement.
 * DuckDB pooled connections now roll back uncommitted work when returned instead of committing it. Call `commit()` before the session ends to keep changes.
+* `execute_script` binds parameters per statement for `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `WITH`, `VALUES`, `CALL`/`EXEC`, and Oracle PL/SQL blocks. Other statements (DDL, `SET`, `PRAGMA`, `DO`, `NOTIFY`, `COPY`, `VACUUM`) still receive escaped literals.
+* `SQLFile.checksum` is a SHA-256 digest.
 
 **Fixed:**
 
@@ -114,6 +119,11 @@ important operational fixes.
 * The PyMySQL, pymssql, Sybase, SQL Anywhere, and Db2 sync pools give each asyncio task its own connection, and Snowflake and Teradata nested connection contexts no longer share a lease across tasks.
 * Litestar SQLSpec session stores use the request's open database session, so a store on the request's config no longer waits for a second connection, and session changes commit or roll back with the request.
 * Framework guides now describe when the request connection is released.
+* `select_with_total` and service `paginate` on DuckDB bind the count query's parameters to the right placeholders when the select list has parameters.
+* psycopg keeps literal `%%` unchanged in SQL written with `?` or `:name` placeholders. Placeholders inside SQLite/SQL Server bracket identifiers and nested PostgreSQL/DuckDB comments are no longer counted, and unterminated literals no longer slow down parameter scanning or statement splitting.
+* `alter_column_type(using=)`, column `check=`, CHECK constraint conditions, and partial-index `where()` accept a single expression and raise `SQLBuilderError` otherwise.
+* Inlined script literals render Enum values, valid GoogleSQL strings on Spanner, and backslash strings that are correct under MySQL `NO_BACKSLASH_ESCAPES`.
+* Forged cursor values raise `InvalidCursorError`; deeply nested statements raise `SQLParsingError`; statement splitting past the nesting limit raises `SQLParsingError`; ADBC conversion failures raise `DataError`; builder `where_in(col, [])` matches no rows instead of rendering `IN ()`; statement cache keys use 128-bit digests over the full SQL text.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
