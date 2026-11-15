@@ -54,6 +54,9 @@ important operational fixes.
 * Explicit builder parameter names passed to `add_parameter(name=...)` or `load_parameters` must be ASCII identifiers or positional numbers.
 * `upgrade` and `downgrade` refuse to run when an applied migration file no longer matches its recorded checksum. Restore the file, or review the change and set `migration_config={"verify_checksums": False}`.
 * On PostgreSQL, the migration tracking table is resolved in the configured `version_table_schema` or the session's `current_schema()`, never through `search_path`, and must be owned by the migrating role, a role it belongs to, or a superuser.
+* `delete_entries_by_session` on ADK memory stores now requires `app_name` and `user_id` and deletes only that owner's entries.
+* SQLite and aiosqlite treat a `file:` database path as a URI only when `uri=True` is set; without it the value is a plain filename.
+* `LocalStore`, `file`-protocol `FSSpecBackend`, and local `ObStoreBackend` delete directories only with `recursive=True` and refuse to delete their root.
 
 **Changed:**
 
@@ -130,6 +133,20 @@ important operational fixes.
 * Migration messages, authors, and squash descriptions containing Unicode line separators, vertical tabs, form feeds, or other control characters no longer create extra header lines.
 * Migration checksums detect every edit outside the exact single-line `-- name: migrate-<version>-up/down` and `Version:` headers, including moving an up/down header. Checksums recorded by earlier releases still verify for unchanged files and are re-recorded in the new form the next time `verify`, `upgrade`, or `downgrade` runs.
 * Schema extraction (`--from-schema`, `dump-schema`) and `squash --strategy schema` refuse tables protected by Oracle VPD or SQL Server security policies, and warn about PostgreSQL grants, functions, triggers, and domains they do not emit.
+* ADK memory entries with the same id no longer collide across apps and users.
+* SQLite and aiosqlite ADK sessions can append events right after `create_session`.
+* Table-backed event queues apply `ack` and `nack` only to events the same channel instance leased, and count only those.
+* Litestar store table names and channel prefixes with a trailing newline are rejected.
+* `without_indexes` and `drop_indexes=True` keep unique indexes in place.
+* SQLite and aiosqlite detect in-memory databases from the parsed URI.
+* Storage logs and errors no longer include URI credentials or query strings.
+* msgspec field aliases apply to top-level result columns only.
+* Environment parsing errors no longer include the raw value.
+* Literal redaction masks double-quoted strings for MySQL, MariaDB, and BigQuery.
+* The Oracle wallet key converted from `ewallet.p12` is encrypted with `wallet_password` when one is set.
+* ADK stores on SQL Server, Sybase ASE, SQL Anywhere, and Teradata match session and owner keys case- and accent-sensitively.
+* ADBC SQLite and DuckDB staged loads (`stage_table=True` or `conflict_keys`) write rows to the target table.
+* Optional extras declare minimum supported versions.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
