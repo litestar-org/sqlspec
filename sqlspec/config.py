@@ -1685,11 +1685,11 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             msg = "No read replica is configured for the requested bind"
             raise ReplicaUnavailableError(msg)
         receipt = _ReadSelectionReceipt()
-        reused = _resolve_primary_fallback_reuse(self, session=session, kwargs=kwargs)
+        reused = _get_reusable_primary_session(self, session=session, kwargs=kwargs)
         if reused is not None:
             if self.is_async:
-                return _ReadAsyncContext(_yield_reused_primary_async(reused, self, receipt), receipt)
-            return _ReadSyncContext(_yield_reused_primary_sync(reused, self, receipt), receipt)
+                return _ReadAsyncContext(_provide_reused_primary_async(reused, self, receipt), receipt)
+            return _ReadSyncContext(_provide_reused_primary_sync(reused, self, receipt), receipt)
         provider = self.provide_session if session else self.provide_connection
         context = provider(*args, **kwargs)
         if self.is_async:
@@ -3218,7 +3218,7 @@ class ReplicaGroup(Generic[ConfigT]):
         if self._fallback_to_primary and primary is not None:
             if last_error is not None and not primary._allow_replica_fallback(last_error):
                 raise last_error
-            reused = _resolve_primary_fallback_reuse(primary, session=session, kwargs=kwargs)
+            reused = _get_reusable_primary_session(primary, session=session, kwargs=kwargs)
             if reused is not None:
                 receipt.config = primary
                 yield reused
@@ -3287,7 +3287,7 @@ class ReplicaGroup(Generic[ConfigT]):
         if self._fallback_to_primary and primary is not None:
             if last_error is not None and not primary._allow_replica_fallback(last_error):
                 raise last_error
-            reused = _resolve_primary_fallback_reuse(primary, session=session, kwargs=kwargs)
+            reused = _get_reusable_primary_session(primary, session=session, kwargs=kwargs)
             if reused is not None:
                 receipt.config = primary
                 yield reused
@@ -3371,7 +3371,7 @@ def _report_template_keys(templates: Any) -> "list[str]":
     return lines
 
 
-def _resolve_primary_fallback_reuse(
+def _get_reusable_primary_session(
     primary: "DatabaseConfigProtocol[Any, Any, Any]", *, session: bool, kwargs: Mapping[str, Any]
 ) -> Any:
     if (
@@ -3382,11 +3382,11 @@ def _resolve_primary_fallback_reuse(
         or primary.driver_features.get("enable_follower_reads")
     ):
         return None
-    return RoutingContext._get_primary_fallback(primary)
+    return RoutingContext._current_reusable_primary_session(primary)
 
 
 @contextmanager
-def _yield_reused_primary_sync(
+def _provide_reused_primary_sync(
     value: Any, config: "DatabaseConfigProtocol[Any, Any, Any]", receipt: _ReadSelectionReceipt
 ) -> "Generator[Any]":
     receipt.config = config
@@ -3394,7 +3394,7 @@ def _yield_reused_primary_sync(
 
 
 @asynccontextmanager
-async def _yield_reused_primary_async(
+async def _provide_reused_primary_async(
     value: Any, config: "DatabaseConfigProtocol[Any, Any, Any]", receipt: _ReadSelectionReceipt
 ) -> "AsyncGenerator[Any]":
     receipt.config = config

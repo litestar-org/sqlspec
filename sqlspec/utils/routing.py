@@ -41,7 +41,9 @@ _MIN_PRINTABLE_ASCII: Final[int] = 32
 _ASCII_DEL: Final[int] = 127
 _COOKIE_HEADER_BYTES: Final[bytes] = b"cookie"
 _ROUTING_VAR: ContextVar["RoutingContextPayload | None"] = ContextVar("sqlspec_routing_context", default=None)
-_PRIMARY_FALLBACK_VAR: ContextVar[tuple[Any, Any] | None] = ContextVar("sqlspec_routing_primary_fallback", default=None)
+_REUSABLE_PRIMARY_SESSION_VAR: ContextVar[tuple[Any, Any] | None] = ContextVar(
+    "sqlspec_routing_reusable_primary_session", default=None
+)
 
 
 @final
@@ -250,16 +252,16 @@ class RoutingContext:
         return cls.scope(payload.with_entry(bind_key, RoutingEntry()))
 
     @classmethod
-    def _set_primary_fallback(cls, config: Any, driver: Any) -> Token[tuple[Any, Any] | None]:
-        return _PRIMARY_FALLBACK_VAR.set((config, driver))
+    def _set_reusable_primary_session(cls, config: Any, driver: Any) -> Token[tuple[Any, Any] | None]:
+        return _REUSABLE_PRIMARY_SESSION_VAR.set((config, driver))
 
     @classmethod
-    def _reset_primary_fallback(cls, token: Token[tuple[Any, Any] | None]) -> None:
-        _PRIMARY_FALLBACK_VAR.reset(token)
+    def _reset_reusable_primary_session(cls, token: Token[tuple[Any, Any] | None]) -> None:
+        _REUSABLE_PRIMARY_SESSION_VAR.reset(token)
 
     @classmethod
-    def _get_primary_fallback(cls, config: Any) -> Any:
-        active = _PRIMARY_FALLBACK_VAR.get()
+    def _current_reusable_primary_session(cls, config: Any) -> Any:
+        active = _REUSABLE_PRIMARY_SESSION_VAR.get()
         if active is not None and active[0] is config:
             return active[1]
         return None

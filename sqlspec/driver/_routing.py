@@ -279,7 +279,7 @@ class _RoutingSessionState:
                 return False
         return True
 
-    def _can_reuse_primary_fallback(self, *, strict_replica: bool) -> bool:
+    def _can_reuse_primary_session(self, *, strict_replica: bool) -> bool:
         if self._primary_driver is None or strict_replica:
             return False
         config_features = self._config.driver_features
@@ -961,12 +961,12 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             selection_receipt = getattr(context, "_selection_receipt", None)
             self._release_replica()
             entered_context: _EnteredReadSyncContext | None = None
-            if self._can_reuse_primary_fallback(strict_replica=strict_replica):
-                token = RoutingContext._set_primary_fallback(self._config, self._primary_driver)
+            if self._can_reuse_primary_session(strict_replica=strict_replica):
+                token = RoutingContext._set_reusable_primary_session(self._config, self._primary_driver)
                 try:
                     driver = context.__enter__()
                 finally:
-                    RoutingContext._reset_primary_fallback(token)
+                    RoutingContext._reset_reusable_primary_session(token)
                 if driver is self._primary_driver:
                     context.__exit__(None, None, None)
                     self._replica_driver = self._primary_driver
@@ -1688,12 +1688,12 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             selection_receipt = getattr(context, "_selection_receipt", None)
             await self._release_replica()
             entered_context: _EnteredReadAsyncContext | None = None
-            if self._can_reuse_primary_fallback(strict_replica=strict_replica):
-                token = RoutingContext._set_primary_fallback(self._config, self._primary_driver)
+            if self._can_reuse_primary_session(strict_replica=strict_replica):
+                token = RoutingContext._set_reusable_primary_session(self._config, self._primary_driver)
                 try:
                     driver = await context.__aenter__()
                 finally:
-                    RoutingContext._reset_primary_fallback(token)
+                    RoutingContext._reset_reusable_primary_session(token)
                 if driver is self._primary_driver:
                     await context.__aexit__(None, None, None)
                     self._replica_driver = self._primary_driver
