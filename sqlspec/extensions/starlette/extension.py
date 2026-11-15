@@ -215,7 +215,7 @@ class SQLSpecPlugin:
                 if config_state.config.has_replicas:
                     setattr(
                         app.state,
-                        config_state.read_pool_key,
+                        config_state.replica_pool_key,
                         config_state.config.replica_groups.get("default", config_state.config.replica_groups),
                     )
                 log_with_context(
@@ -306,7 +306,7 @@ class SQLSpecPlugin:
                     state.pool_key,
                     state.replica_session_key,
                     state.replica_connection_key,
-                    state.read_pool_key,
+                    state.replica_pool_key,
                     state.routing_session_key,
                 }:
                     return state.config
@@ -474,8 +474,8 @@ class SQLSpecPlugin:
                 "replica_connection_key",
                 "db_replica_connection" if connection_key == DEFAULT_CONNECTION_KEY else f"{connection_key}_replica",
             ),
-            "read_pool_key": framework_config.get(
-                "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
+            "replica_pool_key": framework_config.get(
+                "replica_pool_key", "db_replica_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_replica"
             ),
             "replica_session_key": framework_config.get(
                 "replica_session_key",
@@ -541,9 +541,9 @@ class SQLSpecPlugin:
                 if settings["connection_key"] == DEFAULT_CONNECTION_KEY
                 else f"{settings['connection_key']}_replica",
             ),
-            read_pool_key=settings.get(
-                "read_pool_key",
-                "read_pool" if settings["pool_key"] == DEFAULT_POOL_KEY else f"{settings['pool_key']}_read",
+            replica_pool_key=settings.get(
+                "replica_pool_key",
+                "db_replica_pool" if settings["pool_key"] == DEFAULT_POOL_KEY else f"{settings['pool_key']}_replica",
             ),
             replica_session_key=settings.get(
                 "replica_session_key",
@@ -574,7 +574,7 @@ class SQLSpecPlugin:
                     state.pool_key,
                     state.session_key,
                     state.replica_connection_key,
-                    state.read_pool_key,
+                    state.replica_pool_key,
                     state.replica_session_key,
                     state.routing_session_key,
                 )
@@ -660,7 +660,7 @@ class SQLSpecPlugin:
                     state.pool_key,
                     state.replica_session_key,
                     state.replica_connection_key,
-                    state.read_pool_key,
+                    state.replica_pool_key,
                     state.routing_session_key,
                     getattr(state.config, "bind_key", None),
                 }:

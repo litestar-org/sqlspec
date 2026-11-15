@@ -199,7 +199,7 @@ def test_starlette_commit_failure_rolls_back_and_finalizes_remaining_configs(
                 "pool_key": "a_pool",
                 "replica_session_key": "a_replica_session",
                 "replica_connection_key": "a_read_conn",
-                "read_pool_key": "a_read_pool",
+                "replica_pool_key": "a_replica_pool",
                 "routing_session_key": "a_router",
                 "commit_mode": "autocommit",
             }
@@ -216,7 +216,7 @@ def test_starlette_commit_failure_rolls_back_and_finalizes_remaining_configs(
                 "pool_key": "b_pool",
                 "replica_session_key": "b_replica_session",
                 "replica_connection_key": "b_read_conn",
-                "read_pool_key": "b_read_pool",
+                "replica_pool_key": "b_replica_pool",
                 "routing_session_key": "b_router",
                 "commit_mode": "autocommit",
             }

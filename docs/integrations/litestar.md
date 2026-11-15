@@ -87,7 +87,7 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
 | `primary_pin_cookie` | `str or None` | `None` | Optional application primary pin cookie name. Default: None. |
 | `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed primary pin cookies. Default: None. |
-| `read_pool_key` | `str` | - | Request key for the selected read pool. |
+| `replica_pool_key` | `str` | - | Request key for the selected read pool. |
 | `pagination_cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
 | `pagination_cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
 | `pagination_cursor_encrypted` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
@@ -115,7 +115,7 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, inject
 
 #### Reader and routing dependencies
 
-A config with replicas exposes `db_replica_session`, `db_replica_connection`, and `read_pool`. Rename them with `replica_session_key`, `replica_connection_key`, and `read_pool_key`. Set `routing_session_key` to opt into a routing session. A reader opens on first use. It does not open a primary session first.
+A config with replicas exposes `db_replica_session`, `db_replica_connection`, and `replica_pool`. Rename them with `replica_session_key`, `replica_connection_key`, and `replica_pool_key`. Set `routing_session_key` to opt into a routing session. A reader opens on first use. It does not open a primary session first.
 
 For direct access, use `get_db_replica_session(request)` or `provide_db_replica_session` and its `_sync`/`_async` forms. The `provide_db_routing_session*` helpers return routing sessions. Read connection helpers use the same names with `connection` in place of `session`. Pass a config or bind key to choose the database.
 

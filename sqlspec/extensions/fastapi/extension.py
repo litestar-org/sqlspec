@@ -333,8 +333,8 @@ class SQLSpecPlugin(_StarlettePlugin):
                 if framework_config.get("connection_key", "db_connection") == "db_connection"
                 else f"{framework_config['connection_key']}_replica",
             ),
-            "read_pool_key": framework_config.get(
-                "read_pool_key", "read_pool" if pool_key == "db_pool" else f"{pool_key}_read"
+            "replica_pool_key": framework_config.get(
+                "replica_pool_key", "db_replica_pool" if pool_key == "db_pool" else f"{pool_key}_replica"
             ),
             "routing_session_key": framework_config.get("routing_session_key"),
             "default_routing_mode": framework_config.get("default_routing_mode", "auto"),

@@ -196,7 +196,7 @@ class SQLSpecPlugin:
                     state.pool_key,
                     state.replica_session_key,
                     state.replica_connection_key,
-                    state.read_pool_key,
+                    state.replica_pool_key,
                     state.routing_session_key,
                 }:
                     return state.config
@@ -501,8 +501,8 @@ class SQLSpecPlugin:
                 if framework_config.get("connection_key", DEFAULT_CONNECTION_KEY) == DEFAULT_CONNECTION_KEY
                 else f"{framework_config['connection_key']}_replica",
             ),
-            "read_pool_key": framework_config.get(
-                "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
+            "replica_pool_key": framework_config.get(
+                "replica_pool_key", "db_replica_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_replica"
             ),
             "routing_session_key": framework_config.get("routing_session_key"),
             "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
@@ -557,7 +557,7 @@ class SQLSpecPlugin:
             sqlcommenter_framework=settings["sqlcommenter_framework"],
             replica_session_key=settings["replica_session_key"],
             replica_connection_key=settings["replica_connection_key"],
-            read_pool_key=settings["read_pool_key"],
+            replica_pool_key=settings["replica_pool_key"],
             routing_session_key=settings["routing_session_key"],
             default_routing_mode=settings["default_routing_mode"],
             enable_routing_middleware=settings["enable_routing_middleware"],
@@ -1274,7 +1274,7 @@ class SQLSpecPlugin:
                 if config_state.config.has_replicas:
                     set_context_value(
                         app.ctx,
-                        config_state.read_pool_key,
+                        config_state.replica_pool_key,
                         config_state.config.replica_groups.get("default", config_state.config.replica_groups),
                     )
             except Exception:
@@ -1332,7 +1332,7 @@ class SQLSpecPlugin:
                 )
             finally:
                 pop_context_value(app.ctx, config_state.pool_key)
-                pop_context_value(app.ctx, config_state.read_pool_key)
+                pop_context_value(app.ctx, config_state.replica_pool_key)
 
     def _ensure_unique_keys(self) -> None:
         """Validate that all context keys are unique across configs.
@@ -1350,7 +1350,7 @@ class SQLSpecPlugin:
                     state.session_key,
                     state.replica_session_key,
                     state.replica_connection_key,
-                    state.read_pool_key,
+                    state.replica_pool_key,
                     state.routing_session_key,
                 )
                 if key is not None
@@ -1383,7 +1383,7 @@ class SQLSpecPlugin:
                     state.pool_key,
                     state.replica_session_key,
                     state.replica_connection_key,
-                    state.read_pool_key,
+                    state.replica_pool_key,
                     state.routing_session_key,
                     getattr(state.config, "bind_key", None),
                 }:

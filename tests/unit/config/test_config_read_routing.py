@@ -123,7 +123,7 @@ def test_extension_routing_options_are_documented_optional_fields() -> None:
     for schema in (FlaskConfig, LitestarConfig, StarletteConfig, FastAPIConfig, SanicConfig):
         assert fields <= schema.__optional_keys__
     for schema in (LitestarConfig, StarletteConfig, FastAPIConfig, SanicConfig):
-        assert "read_pool_key" in schema.__optional_keys__
+        assert "replica_pool_key" in schema.__optional_keys__
     assert {"enable_replica_reads", "default_replica_group"} <= ADKConfig.__optional_keys__
 
 

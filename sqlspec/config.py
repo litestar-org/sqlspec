@@ -552,7 +552,7 @@ class LitestarConfig(TypedDict):
     """Optional application primary pin cookie name. Default: None."""
     primary_pin_secret: NotRequired[str | bytes | None]
     """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
-    read_pool_key: NotRequired[str]
+    replica_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
     pagination_cursor_secret: NotRequired[str | bytes]
     """Application-wide secret enabling HMAC-SHA256 signed pagination cursors."""
@@ -641,7 +641,7 @@ class StarletteConfig(TypedDict):
     """Optional application primary pin cookie name. Default: None."""
     primary_pin_secret: NotRequired[str | bytes | None]
     """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
-    read_pool_key: NotRequired[str]
+    replica_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
     pagination_cursor_secret: NotRequired[str | bytes]
     """Application-wide secret enabling HMAC-SHA256 signed pagination cursors."""
@@ -736,7 +736,7 @@ class SanicConfig(TypedDict):
     """Optional application primary pin cookie name. Default: None."""
     primary_pin_secret: NotRequired[str | bytes | None]
     """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
-    read_pool_key: NotRequired[str]
+    replica_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
 
 

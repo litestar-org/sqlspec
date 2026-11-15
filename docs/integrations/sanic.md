@@ -119,7 +119,7 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 | `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
 | `primary_pin_cookie` | `str or None` | `None` | Optional application primary pin cookie name. Default: None. |
 | `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed primary pin cookies. Default: None. |
-| `read_pool_key` | `str` | - | Request key for the selected read pool. |
+| `replica_pool_key` | `str` | - | Request key for the selected read pool. |
 <!-- GENERATED:END config-table:sqlspec.config.SanicConfig -->
 
 ## Read Replica and Routing Sessions

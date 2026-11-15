@@ -49,7 +49,7 @@ class SQLSpecConfigState:
     tenant_receipt_keys: tuple[str, ...] = field(default=(), init=False, repr=False, compare=False)
     replica_session_key: str = "db_replica_session"
     replica_connection_key: str = "db_replica_connection"
-    read_pool_key: str = "read_pool"
+    replica_pool_key: str = "db_replica_pool"
     routing_session_key: str | None = None
     default_routing_mode: str = "auto"
     enable_routing_middleware: bool = True

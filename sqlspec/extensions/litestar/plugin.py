@@ -54,12 +54,12 @@ from sqlspec.extensions.litestar.handlers import (
     db_connection_provider_maker,
     db_pool_provider_maker,
     db_replica_connection_provider_maker,
+    db_replica_pool_provider_maker,
     db_replica_session_provider_maker,
     db_session_provider_maker,
     has_tenant_strategy,
     lifespan_handler_maker,
     manual_handler_maker,
-    read_pool_provider_maker,
     record_request_exception,
     routing_session_provider_maker,
     tenant_payload_key,
@@ -497,7 +497,7 @@ class PluginConfigState:
     manage_lifespan: bool
     tenant_settings: TenantResolutionSettings = field(default_factory=TenantResolutionSettings)
     replica_connection_key: str = "db_replica_connection"
-    read_pool_key: str = "read_pool"
+    replica_pool_key: str = "db_replica_pool"
     replica_session_key: str = "db_replica_session"
     routing_session_key: str | None = None
     default_routing_mode: str = "auto"
@@ -686,17 +686,17 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     state.session_key: Provide(state.session_provider),
                     state.replica_connection_key: Provide(
                         db_replica_connection_provider_maker(
-                            state.config, state.pool_key, state.read_pool_key, state.replica_connection_key
+                            state.config, state.pool_key, state.replica_pool_key, state.replica_connection_key
                         )
                     ),
-                    state.read_pool_key: Provide(
-                        read_pool_provider_maker(state.config, state.pool_key, state.read_pool_key)
+                    state.replica_pool_key: Provide(
+                        db_replica_pool_provider_maker(state.config, state.pool_key, state.replica_pool_key)
                     ),
                     state.replica_session_key: Provide(
                         db_replica_session_provider_maker(
                             state.config,
                             state.pool_key,
-                            state.read_pool_key,
+                            state.replica_pool_key,
                             state.replica_connection_key,
                             state.replica_session_key,
                         )
@@ -1540,8 +1540,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 "replica_connection_key",
                 "db_replica_connection" if connection_key == DEFAULT_CONNECTION_KEY else f"{connection_key}_replica",
             ),
-            "read_pool_key": litestar_config.get(
-                "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
+            "replica_pool_key": litestar_config.get(
+                "replica_pool_key", "db_replica_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_replica"
             ),
             "replica_session_key": litestar_config.get(
                 "replica_session_key",
@@ -1586,7 +1586,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             manage_lifespan=settings["manage_lifespan"],
             tenant_settings=settings["tenant_settings"],
             replica_connection_key=settings["replica_connection_key"],
-            read_pool_key=settings["read_pool_key"],
+            replica_pool_key=settings["replica_pool_key"],
             replica_session_key=settings["replica_session_key"],
             routing_session_key=settings["routing_session_key"],
             default_routing_mode=settings["default_routing_mode"],
@@ -1598,7 +1598,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state.correlation_headers = tuple(settings["correlation_headers"])
 
         if state.manage_lifespan:
-            state.lifespan_handler = lifespan_handler_maker(config, state.pool_key, read_pool_key=state.read_pool_key)
+            state.lifespan_handler = lifespan_handler_maker(
+                config, state.pool_key, replica_pool_key=state.replica_pool_key
+            )
         if not state.disable_di:
             self._setup_di_handlers(state)
         return state
@@ -1777,7 +1779,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 state.pool_key,
                 state.session_key,
                 state.replica_connection_key,
-                state.read_pool_key,
+                state.replica_pool_key,
                 state.replica_session_key,
                 state.routing_session_key,
             }
@@ -1801,7 +1803,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     state.pool_key,
                     state.session_key,
                     state.replica_connection_key,
-                    state.read_pool_key,
+                    state.replica_pool_key,
                     state.replica_session_key,
                     state.routing_session_key,
                 }:
@@ -1835,7 +1837,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 state.pool_key,
                 state.session_key,
                 state.replica_connection_key,
-                state.read_pool_key,
+                state.replica_pool_key,
                 state.replica_session_key,
                 state.routing_session_key,
             ):

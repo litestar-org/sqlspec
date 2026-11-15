@@ -38,7 +38,7 @@ def test_store_accepts_tenant_read_and_routing_settings() -> None:
     [
         {"session_key": "same", "replica_session_key": "same"},
         {"connection_key": "db_session"},
-        {"read_pool_key": "db_replica_connection"},
+        {"replica_pool_key": "db_replica_connection"},
     ],
 )
 def test_litestar_rejects_cross_field_dependency_collisions(settings: Any) -> None:
@@ -71,7 +71,7 @@ def test_sync_read_and_routing_di_use_separate_databases(tmp_path: Any) -> None:
 
     with create_test_client([read, route], plugins=[plugin]) as client:
         assert client.get("/read").json() == {"origin": "replica"}
-        assert "read_pool" in client.app.state
+        assert "db_replica_pool" in client.app.state
         assert client.post("/route").json() == {"before": "replica", "after": "primary"}
         with config.provide_session() as session:
             assert session.select_value("SELECT origin FROM notes WHERE id=4") == "inserted"

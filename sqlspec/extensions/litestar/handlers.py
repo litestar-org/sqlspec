@@ -275,14 +275,14 @@ def autocommit_handler_maker(
 
 
 def lifespan_handler_maker(
-    config: "DatabaseConfigProtocol[Any, Any, Any]", pool_key: str, *, read_pool_key: str | None = None
+    config: "DatabaseConfigProtocol[Any, Any, Any]", pool_key: str, *, replica_pool_key: str | None = None
 ) -> "Callable[[Litestar], AbstractAsyncContextManager[None]]":
     """Create lifespan handler for managing database connection pool lifecycle.
 
     Args:
         config: The database configuration object.
         pool_key: The key under which the connection pool will be stored in `app.state`.
-        read_pool_key: Optional application state key for replica groups.
+        replica_pool_key: Optional application state key for replica groups.
 
     Returns:
         The lifespan handler function.
@@ -300,14 +300,14 @@ def lifespan_handler_maker(
         """
         db_pool: Any = await ensure_async_(config.create_pool)()
         app.state.update({pool_key: db_pool})
-        if read_pool_key is not None and config.has_replicas:
-            app.state.update({read_pool_key: config.replica_groups.get("default", config.replica_groups)})
+        if replica_pool_key is not None and config.has_replicas:
+            app.state.update({replica_pool_key: config.replica_groups.get("default", config.replica_groups)})
         try:
             yield
         finally:
             app.state.pop(pool_key, None)
-            if read_pool_key is not None:
-                app.state.pop(read_pool_key, None)
+            if replica_pool_key is not None:
+                app.state.pop(replica_pool_key, None)
             try:
                 await ensure_async_(config.close_pool)()
             except Exception as e:
@@ -508,19 +508,19 @@ def has_tenant_strategy(config: Any) -> bool:
     return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
 
 
-def read_pool_provider_maker(
-    config: Any, pool_key: str, read_pool_key: str
+def db_replica_pool_provider_maker(
+    config: Any, pool_key: str, replica_pool_key: str
 ) -> "Callable[[State, Scope], Awaitable[Any]]":
     """Build an explicitly typed DI provider for replica groups or the primary pool."""
 
-    async def provide_read_pool(state: "State", scope: "Scope") -> Any:
-        return state.get(read_pool_key, state.get(pool_key))
+    async def provide_replica_pool(state: "State", scope: "Scope") -> Any:
+        return state.get(replica_pool_key, state.get(pool_key))
 
-    return provide_read_pool
+    return provide_replica_pool
 
 
 def db_replica_connection_provider_maker(
-    config: Any, pool_key: str, read_pool_key: str, replica_connection_key: str, *, tenant_settings: Any = None
+    config: Any, pool_key: str, replica_pool_key: str, replica_connection_key: str, *, tenant_settings: Any = None
 ) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
     """Build a request-owned read connection provider with manual finalization."""
 
@@ -533,7 +533,7 @@ def db_replica_connection_provider_maker(
 def db_replica_session_provider_maker(
     config: Any,
     pool_key: str,
-    read_pool_key: str,
+    replica_pool_key: str,
     replica_connection_key: str,
     replica_session_key: str,
     *,
