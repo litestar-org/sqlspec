@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -16,6 +16,9 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
 from sqlspec.extensions.events import AsyncTableEventQueue, SyncTableEventQueue
 from sqlspec.extensions.events._queue import _BaseTableEventQueue
+
+if TYPE_CHECKING:
+    from sqlspec.config import ExtensionConfigs
 
 _QUEUE_TABLE = "evq_lease_ownership"
 
@@ -71,7 +74,7 @@ class _session:
 @pytest.fixture(params=["sqlite", "aiosqlite"])
 async def harness(request: pytest.FixtureRequest, tmp_path: Path) -> "AsyncIterator[_Harness]":
     database = str(tmp_path / "evq.db")
-    extension_config = {"events": {"queue_table": _QUEUE_TABLE}}
+    extension_config: ExtensionConfigs = {"events": {"queue_table": _QUEUE_TABLE}}
     if request.param == "sqlite":
         config: Any = SqliteConfig(connection_config={"database": database}, extension_config=extension_config)
         store: Any = SqliteEventQueueStore(config)
