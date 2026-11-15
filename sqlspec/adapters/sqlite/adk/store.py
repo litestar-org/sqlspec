@@ -136,8 +136,8 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Returns:
             Created session record.
         """
-        now = datetime.now(UTC)
-        now_julian = _datetime_to_julian(now)
+        now_julian = _datetime_to_julian(datetime.now(UTC))
+        stored_time = _julian_to_datetime(now_julian)
         state_json = to_json(state)
 
         params: tuple[Any, ...]
@@ -178,7 +178,12 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         merged_state = merge_scoped_state(state, resolved_app, resolved_user)
         return StoredSession(
-            id=session_id, app_name=app_name, user_id=user_id, state=merged_state, create_time=now, update_time=now
+            id=session_id,
+            app_name=app_name,
+            user_id=user_id,
+            state=merged_state,
+            create_time=stored_time,
+            update_time=stored_time,
         )
 
     def get_session(
