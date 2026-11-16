@@ -24,6 +24,7 @@ from sqlglot import Dialect, exp
 
 from sqlspec import dialects as _dialects
 from sqlspec.core.parameters import TypedParameter
+from sqlspec.core.query_modifiers import sanitize_parameter_name
 from sqlspec.core.type_converter import convert_iso_date, convert_iso_datetime, convert_uuid
 from sqlspec.storage import storage_registry
 from sqlspec.utils.logging import get_logger
@@ -1755,6 +1756,22 @@ def _conflict_clause(
     return exp.OnConflict(conflict_keys=keys, action=exp.var("DO UPDATE"), expressions=assignments)
 
 
+def _fixture_placeholder_map(columns: "Sequence[str]") -> "dict[str, str]":
+    """Return a collision-free mapping from fixture column names to safe placeholder names."""
+    mapping: dict[str, str] = {}
+    used: set[str] = set()
+    for column in columns:
+        base = sanitize_parameter_name(column)
+        candidate = base
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        mapping[column] = candidate
+    return mapping
+
+
 def _table_insert_statement(
     dialect: "DialectType",
     family: str,
@@ -1763,6 +1780,7 @@ def _table_insert_statement(
     conflict_keys: "tuple[str, ...]",
     table_columns: "list[_TableColumn]",
     excluded_updates: "set[str] | None" = None,
+    placeholder_names: "Mapping[str, str] | None" = None,
 ) -> str:
     """Return INSERT SQL text with a named placeholder per quoted column, upserting on conflict keys.
 
@@ -1771,10 +1789,11 @@ def _table_insert_statement(
     ``GENERATED ALWAYS`` identity columns carries ``OVERRIDING SYSTEM VALUE``.
     """
     col_map = {col.name: col for col in table_columns}
+    param_map = placeholder_names if placeholder_names is not None else _fixture_placeholder_map(columns)
     value_expressions: list[exp.Expr] = []
     for column in columns:
         col = col_map.get(column)
-        ph = exp.Placeholder(this=column)
+        ph = exp.Placeholder(this=param_map[column])
         if col is not None and family == "snowflake" and col.data_type in {"variant", "object", "array"}:
             value_expressions.append(exp.Anonymous(this="PARSE_JSON", expressions=[ph]))
         elif col is not None and family == "postgres" and _postgres_vector_kind(col.data_type):
@@ -1852,19 +1871,32 @@ def _insert_table_rows_sync(
         return 0
     _decode_row_values(rows, family, columns)
     inserted_columns = list(rows[0])
+    param_map = _fixture_placeholder_map(inserted_columns)
     statement = _table_insert_statement(
-        dialect, family, table, inserted_columns, conflict_keys, columns, excluded_updates
+        dialect,
+        family,
+        table,
+        inserted_columns,
+        conflict_keys,
+        columns,
+        excluded_updates,
+        placeholder_names=param_map,
+    )
+    bound_rows = (
+        [{param_map.get(key, key): value for key, value in row.items()} for row in rows]
+        if any(key != value for key, value in param_map.items())
+        else rows
     )
     identity_insert = _identity_insert_statements(dialect, family, table, inserted_columns, columns)
     if identity_insert is not None:
         driver.execute(identity_insert[0])
     try:
-        for start in range(0, len(rows), batch_size):
-            driver.execute_many(statement, rows[start : start + batch_size])
+        for start in range(0, len(bound_rows), batch_size):
+            driver.execute_many(statement, bound_rows[start : start + batch_size])
     finally:
         if identity_insert is not None:
             driver.execute(identity_insert[1])
-    return len(rows)
+    return len(bound_rows)
 
 
 async def _insert_table_rows_async(
@@ -1888,23 +1920,36 @@ async def _insert_table_rows_async(
         return 0
     _decode_row_values(rows, family, columns)
     inserted_columns = list(rows[0])
+    param_map = _fixture_placeholder_map(inserted_columns)
     statement = _table_insert_statement(
-        dialect, family, table, inserted_columns, conflict_keys, columns, excluded_updates
+        dialect,
+        family,
+        table,
+        inserted_columns,
+        conflict_keys,
+        columns,
+        excluded_updates,
+        placeholder_names=param_map,
+    )
+    bound_rows = (
+        [{param_map.get(key, key): value for key, value in row.items()} for row in rows]
+        if any(key != value for key, value in param_map.items())
+        else rows
     )
     identity_insert = _identity_insert_statements(dialect, family, table, inserted_columns, columns)
     if identity_insert is not None:
         await driver.execute(identity_insert[0])
     insert_error: BaseException | None = None
     try:
-        for start in range(0, len(rows), batch_size):
-            await driver.execute_many(statement, rows[start : start + batch_size])
+        for start in range(0, len(bound_rows), batch_size):
+            await driver.execute_many(statement, bound_rows[start : start + batch_size])
     except BaseException as exc:
         insert_error = exc
     if identity_insert is not None:
         await driver.execute(identity_insert[1])
     if insert_error is not None:
         raise insert_error
-    return len(rows)
+    return len(bound_rows)
 
 
 def _is_orderable_type(family: str, data_type: str) -> bool:

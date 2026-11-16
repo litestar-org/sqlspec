@@ -33,7 +33,16 @@ SCHEME_REGEX: Final = re.compile(r"([a-zA-Z0-9+.-]+)://")
 
 
 FSSPEC_ONLY_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https", "ftp", "sftp", "ssh"})
-_CLOUD_OBJECT_STORE_SCHEMES: Final[frozenset[str]] = frozenset({"s3", "gs", "gcs", "az", "azure"})
+_CLOUD_OBJECT_STORE_SCHEMES: Final[frozenset[str]] = frozenset({
+    "s3",
+    "s3a",
+    "gs",
+    "gcs",
+    "az",
+    "azure",
+    "abfs",
+    "abfss",
+})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

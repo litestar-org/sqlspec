@@ -1042,7 +1042,7 @@ def _resolve_current_schema(result: Any) -> str:
 
 
 def _validate_pg_relation_rows(rows: "Sequence[Mapping[str, Any]]", version_table: str) -> None:
-    """Validate pre-existing PostgreSQL tracking relation kind, owner, and trigger state."""
+    """Validate pre-existing PostgreSQL tracking relation kind, owner, trigger, rule, and RLS state."""
     for row in rows:
         relkind = row.get("relkind")
         if isinstance(relkind, str) and relkind.strip() not in {"r", "p"}:
@@ -1060,6 +1060,14 @@ def _validate_pg_relation_rows(rows: "Sequence[Mapping[str, Any]]", version_tabl
         has_triggers = row.get("has_user_triggers")
         if has_triggers is True or (isinstance(has_triggers, int) and has_triggers > 0):
             msg = f"Migration tracking table '{version_table}' cannot have non-internal triggers attached"
+            raise MigrationError(msg)
+        has_rules = row.get("has_rules")
+        if has_rules is True or (isinstance(has_rules, int) and has_rules > 0):
+            msg = f"Migration tracking table '{version_table}' cannot have rewrite rules attached"
+            raise MigrationError(msg)
+        has_rls = row.get("has_row_security")
+        if has_rls is True or (isinstance(has_rls, int) and has_rls > 0):
+            msg = f"Migration tracking table '{version_table}' cannot have row-level security enabled"
             raise MigrationError(msg)
 
 

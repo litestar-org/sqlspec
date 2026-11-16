@@ -315,3 +315,10 @@ def test_storage_registry_sanitizes_uri_credentials_in_logs_and_errors(caplog: p
         registry.get("nonexistent_alias?token=should-not-leak")
     assert "should-not-leak" not in str(exc_info.value)
     assert "nonexistent_alias" in str(exc_info.value)
+
+
+def test_storage_registry_preserves_s3a_abfs_and_abfss_cloud_schemes() -> None:
+    """StorageRegistry preserves s3a, abfs, and abfss cloud URIs without treating them as local paths."""
+    from sqlspec.storage.registry import _CLOUD_OBJECT_STORE_SCHEMES
+
+    assert {"s3a", "abfs", "abfss"}.issubset(_CLOUD_OBJECT_STORE_SCHEMES)

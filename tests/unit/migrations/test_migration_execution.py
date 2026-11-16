@@ -1148,3 +1148,25 @@ def test_find_project_root_stops_before_foreign_uid_ancestor(tmp_path: Path, mon
 
     monkeypatch.setattr(Path, "stat", _mock_stat_root)
     assert find_project_root(child_dir) == resolved_root_ws
+
+
+def test_find_project_root_stops_before_world_writable_and_symlink_marker(tmp_path: Path) -> None:
+    """find_project_root refuses symlinked markers and stops before world-writable parent directories."""
+    outside = tmp_path / "outside.toml"
+    outside.write_text("[project]\nname = 'outside'\n", encoding="utf-8")
+
+    symlink_root = tmp_path / "symlink_ws"
+    migrations_sym = symlink_root / "migrations"
+    migrations_sym.mkdir(parents=True)
+    (symlink_root / "pyproject.toml").symlink_to(outside)
+    assert find_project_root(migrations_sym) == migrations_sym.resolve()
+
+    world_parent = tmp_path / "world_ws"
+    migrations_world = world_parent / "migrations"
+    migrations_world.mkdir(parents=True)
+    (world_parent / "pyproject.toml").write_text("[project]\nname = 'world'\n", encoding="utf-8")
+    os.chmod(world_parent, 0o777)
+    try:
+        assert find_project_root(migrations_world) == migrations_world.resolve()
+    finally:
+        os.chmod(world_parent, 0o755)

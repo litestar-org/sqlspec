@@ -744,3 +744,13 @@ def test_parse_column_for_condition_rejects_malformed_names(column: str) -> None
 def test_parse_column_for_condition_accepts_qualified_names(column: str, expected: str) -> None:
     """One to four dotted parts build a qualified column."""
     assert parse_column_for_condition(column).sql() == expected
+
+
+@pytest.mark.parametrize(
+    "column",
+    ["a; DROP TABLE users", "bad column", "users.col--comment", "a' OR '1'='1", "col()", 'col"quote', "col/*comment*/"],
+)
+def test_parse_column_for_condition_rejects_injection_tokens(column: str) -> None:
+    """Column names containing SQL operators, whitespace, quotes, or comments raise SQLSpecError."""
+    with pytest.raises(SQLSpecError):
+        parse_column_for_condition(column)

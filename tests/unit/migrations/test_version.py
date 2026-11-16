@@ -464,3 +464,21 @@ async def test_async_quoted_and_schema_qualified_version_table_tracker() -> None
     partial_ddl = partially_quoted._tracking_table_ddl()  # pyright: ignore[reportPrivateUsage]
     assert 'CREATE TABLE IF NOT EXISTS "app"."Tracker"' in str(partial_ddl)
     assert 'CREATE TABLE IF NOT EXISTS "app"."Tracker"' in partial_ddl.to_statement(pg_config).sql
+
+
+def test_extension_version_parsing_linear_on_long_underscore_inputs() -> None:
+    """Extension parser rejects pathological underscore-heavy inputs in linear time without backtracking."""
+    import time
+
+    long_stem = "ext_" + ("a_" * 25_000) + "tail"
+    started = time.perf_counter()
+    assert parse_extension_stem(long_stem) is None
+    with pytest.raises(ValueError, match="Invalid migration version"):
+        parse_version(long_stem)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.2
+
+    assert parse_extension_stem("ext_litestar_queues_0001_init") == ("litestar_queues", "0001")
+    parsed = parse_version("ext_litestar_queues_0001")
+    assert parsed.extension == "litestar_queues"
+    assert parsed.sequence == 1

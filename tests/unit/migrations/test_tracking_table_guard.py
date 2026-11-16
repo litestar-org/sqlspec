@@ -255,3 +255,35 @@ async def test_schema_pin_is_re_resolved_per_locked_command(is_async: bool) -> N
 
     assert tracker.version_table == "second.ddl_migrations"
     assert harness.guard_calls()[-1][1] == {"schema_name": "second", "table_name": "ddl_migrations"}
+
+
+@pytest.mark.parametrize(
+    ("extra_row", "pattern"),
+    [
+        ({"has_rules": True}, "rewrite rules"),
+        ({"has_row_security": True}, "row-level security"),
+    ],
+    ids=["rules", "row-level-security"],
+)
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_guard_rejects_rules_and_row_security(
+    is_async: bool, extra_row: dict[str, Any], pattern: str
+) -> None:
+    """Tracking table guard rejects pre-existing PostgreSQL relations with rewrite rules or RLS."""
+    row = {**OWNED_ROW, **extra_row}
+    harness = _Harness(is_async=is_async, relation_rows=[row])
+
+    with pytest.raises(MigrationError, match=pattern):
+        await _ensure(_tracker(is_async), harness, is_async)
+
+
+async def test_pg_relation_guard_and_omissions_sql_contract() -> None:
+    """PostgreSQL relation guard avoids inverted superuser logic and omission check covers matviews and attacl."""
+    from sqlspec.migrations.base import _PG_RELATION_GUARD_SQL, _PG_SCHEMA_OMISSIONS_SQL
+
+    assert "WHERE r.oid = c.relowner AND r.rolsuper" in _PG_RELATION_GUARD_SQL
+    assert "pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER')" in _PG_RELATION_GUARD_SQL
+    assert "pg_catalog.pg_rewrite" in _PG_RELATION_GUARD_SQL
+    assert "c.relrowsecurity" in _PG_RELATION_GUARD_SQL
+    assert "'materialized_view'" in _PG_SCHEMA_OMISSIONS_SQL
+    assert "attacl IS NOT NULL" in _PG_SCHEMA_OMISSIONS_SQL

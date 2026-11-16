@@ -538,3 +538,81 @@ def _build_contract_driver(config: Any, monkeypatch: pytest.MonkeyPatch) -> tupl
         monkeypatch.setattr(driver_cls, "rollback", _rollback_impl)
     monkeypatch.setattr(driver_cls, "_connection_in_transaction", lambda _self: tx_active)
     return session, counts
+
+
+@pytest.mark.parametrize("framework", ["litestar", "starlette", "fastapi", "flask", "sanic"])
+def test_bigquery_defaults_to_manual_and_rejects_autocommit(framework: str) -> None:
+    """Non-transactional configs default web plugin commit_mode to manual and reject autocommit."""
+    import importlib
+
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.bigquery import BigQueryConfig
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    mod_name = "plugin" if framework == "litestar" else "extension"
+    ext = importlib.import_module(f"sqlspec.extensions.{framework}.{mod_name}")
+    plugin_cls = ext.SQLSpecPlugin
+
+    spec = SQLSpec()
+    spec.add_config(BigQueryConfig(connection_config={"project": "test-project"}))
+    plugin = plugin_cls(spec)
+    states = getattr(plugin, "_plugin_configs", None) or plugin._config_states
+    assert len(states) == 1
+    assert states[0].commit_mode == "manual"
+
+    for invalid_mode in ("autocommit", "autocommit_include_redirect"):
+        bad_spec = SQLSpec()
+        bad_spec.add_config(
+            BigQueryConfig(
+                connection_config={"project": "test-project"},
+                extension_config=cast("Any", {framework: {"commit_mode": invalid_mode}}),
+            )
+        )
+        with pytest.raises(ImproperConfigurationError, match="does not support transactions"):
+            plugin_cls(bad_spec)
+
+
+def test_litestar_get_plugin_state_raises_on_ambiguous_config_type() -> None:
+    """SQLSpecPlugin._get_plugin_state rejects duplicate config type lookups with KeyError."""
+    from litestar import Litestar
+
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.extensions.litestar import SQLSpecPlugin
+
+    spec = SQLSpec()
+    spec.add_config(
+        SqliteConfig(
+            connection_config={"database": ":memory:"},
+            bind_key="primary",
+            extension_config={"litestar": {"session_key": "s1", "connection_key": "c1", "pool_key": "p1"}},
+        )
+    )
+    spec.add_config(
+        SqliteConfig(
+            connection_config={"database": ":memory:"},
+            bind_key="secondary",
+            extension_config={"litestar": {"session_key": "s2", "connection_key": "c2", "pool_key": "p2"}},
+        )
+    )
+    plugin = SQLSpecPlugin(spec)
+    Litestar(plugins=[plugin])
+
+    with pytest.raises(KeyError, match="Multiple database configurations"):
+        plugin._get_plugin_state(SqliteConfig)
+
+
+def test_flask_execute_commit_and_rollback_skip_raw_connection_without_tx_methods() -> None:
+    """Flask autocommit commit and rollback guards ignore raw connections lacking tx methods."""
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.extensions.flask.extension import SQLSpecPlugin
+
+    spec = SQLSpec()
+    spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+    plugin = SQLSpecPlugin(spec)
+    state = plugin._config_states[0]
+
+    raw_without_tx = object()
+    plugin._execute_commit(None, state, connection=raw_without_tx)
+    plugin._execute_rollback(None, state, connection=raw_without_tx)

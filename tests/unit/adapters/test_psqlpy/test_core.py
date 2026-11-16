@@ -495,3 +495,17 @@ def test_create_mapped_exception_maps_psqlpy_connection_and_pool_base_errors(
     """Connection and pool base errors map cleanly even when the message omits generic keywords."""
     mapped = psqlpy_core.create_mapped_exception(exc_factory())
     assert type(mapped) is expected_cls
+
+
+def test_psqlpy_maps_type_error_to_data_error() -> None:
+    """PsqlpyExceptionHandler and create_mapped_exception map Python TypeError to DataError."""
+    from sqlspec.adapters.psqlpy.driver import PsqlpyExceptionHandler
+    from sqlspec.exceptions import DataError
+
+    err = TypeError("unexpected bind parameter type")
+    mapped = psqlpy_core.create_mapped_exception(err)
+    assert type(mapped) is DataError
+
+    handler = PsqlpyExceptionHandler()
+    assert handler._handle_exception(TypeError, err) is True
+    assert type(handler.pending_exception) is DataError

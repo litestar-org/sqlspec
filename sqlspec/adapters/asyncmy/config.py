@@ -385,7 +385,7 @@ class AsyncmySessionContext:
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):
     """Configuration for Asyncmy database connections."""
 
-    __slots__ = ("_initialized_connections", "_read_only", "_user_connection_hook")
+    __slots__ = ("_allow_multi_statements", "_initialized_connections", "_read_only", "_user_connection_hook")
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncmyConnection)
@@ -439,6 +439,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         replica_read_only = features_dict.pop("_replica_read_only", None)
         self._read_only: bool = (
             bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
+        )
+        raw_client_flag = connection_config.get("client_flag")
+        self._allow_multi_statements: bool = bool(
+            isinstance(raw_client_flag, int) and (raw_client_flag & _CLIENT_MULTI_STATEMENTS)
         )
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
@@ -572,13 +576,23 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             raise
 
     async def _ensure_connection(self, connection: "AsyncmyConnection") -> None:
-        """Ensure read-only session state and connection callback run once per physical connection.
+        """Disable implicit multi-statements and apply read-only / create hooks once per connection.
 
-        Uses WeakSet tracking to ensure initialization runs once per physical connection.
+        Upstream ``asyncmy`` unconditionally ORs ``CLIENT.MULTI_STATEMENTS`` during the initial
+        handshake without an opt-out keyword parameter. Unless ``CLIENT.MULTI_STATEMENTS`` is
+        explicitly requested via ``connection_config["client_flag"]``, SQLSpec sends
+        ``COM_SET_OPTION(MYSQL_OPTION_MULTI_STATEMENTS_OFF)`` once per physical connection and
+        again after ``COM_RESET_CONNECTION`` so single-statement queries cannot smuggle stacked SQL.
         """
-        if not self._read_only and self._user_connection_hook is None:
+        if self._allow_multi_statements and not self._read_only and self._user_connection_hook is None:
             return
         if connection not in self._initialized_connections:
+            if not self._allow_multi_statements:
+                try:
+                    await _disable_multi_statements(connection)
+                except Exception as exc:
+                    _raise_mapped_connection_error(exc)
+                    raise
             if self._read_only:
                 try:
                     async with AsyncmyCursor(connection) as cursor:
@@ -598,6 +612,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             self.connection_instance = None
 
 
+_COM_SET_OPTION: Final[int] = 0x1B
+_MYSQL_OPTION_MULTI_STATEMENTS_OFF: Final[bytes] = b"\x01\x00"
+_CLIENT_MULTI_STATEMENTS: Final[int] = 1 << 16
 _COM_RESET_CONNECTION: Final[int] = 0x1F
 _FALLBACK_ASYNCMY_CONNECT_PARAMS: Final[frozenset[str]] = frozenset({
     "host",
@@ -689,6 +706,20 @@ def _is_autocommit_enabled(connection: Any) -> bool:
     if callable(get_autocommit):
         return bool(get_autocommit())
     return bool(getattr(connection, "autocommit_mode", False))
+
+
+async def _disable_multi_statements(connection: Any) -> None:
+    """Send ``COM_SET_OPTION(MYSQL_OPTION_MULTI_STATEMENTS_OFF)`` when supported by the connection."""
+    execute_command = getattr(connection, "_execute_command", None)
+    read_packet = getattr(connection, "read_packet", None)
+    if not callable(execute_command) or not callable(read_packet):
+        return
+    result = execute_command(_COM_SET_OPTION, _MYSQL_OPTION_MULTI_STATEMENTS_OFF)
+    if inspect.isawaitable(result):
+        await result
+    packet = read_packet()
+    if inspect.isawaitable(packet):
+        await packet
 
 
 async def _reset_session(config: Any, connection: Any) -> None:

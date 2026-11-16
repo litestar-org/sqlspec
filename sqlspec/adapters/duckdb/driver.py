@@ -654,13 +654,22 @@ class DuckDBDriver(SyncDriverAdapterBase):
         is_reader = hasattr(source_data, "read_next_batch")
         if is_reader:
             arrow_source = source_data
+            source_schema = getattr(source_data, "schema", None)
+            source_columns: list[str] | None = list(source_schema.names) if source_schema is not None else None
         else:
             arrow_table = self._coerce_arrow_table(source_data)
             arrow_source = arrow_table
+            source_columns = list(arrow_table.column_names)
         table_name = format_identifier(table)
         temp_view = f"_sqlspec_arrow_{uuid4().hex}"
         inserted_rows = 0
         manage_transaction = overwrite and not self._connection_in_transaction()
+        columns_sql = ", ".join(format_identifier(col) for col in source_columns) if source_columns else None
+        insert_sql = (
+            f"INSERT INTO {table_name} ({columns_sql}) SELECT {columns_sql} FROM {temp_view}"
+            if columns_sql
+            else f"INSERT INTO {table_name} SELECT * FROM {temp_view}"
+        )
         exc_handler = self.handle_database_exceptions()
         with exc_handler:
             if manage_transaction:
@@ -670,7 +679,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     self.connection.execute(f"TRUNCATE TABLE {table_name}")
                 self.connection.register(temp_view, arrow_source)
                 try:
-                    insert_result = self.connection.execute(f"INSERT INTO {table_name} SELECT * FROM {temp_view}")
+                    insert_result = self.connection.execute(insert_sql)
                     inserted_rows = _resolve_duckdb_inserted_rows(insert_result)
                 finally:
                     with contextlib.suppress(Exception):

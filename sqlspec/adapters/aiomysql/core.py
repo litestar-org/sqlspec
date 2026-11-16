@@ -627,7 +627,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     dispatch = _MYSQL_DATA_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
-    if sqlstate_prefix == "22" or type(error).__name__ == "DataError":
+    if sqlstate_prefix == "22" or type(error).__name__ == "DataError" or isinstance(error, TypeError):
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["22"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 

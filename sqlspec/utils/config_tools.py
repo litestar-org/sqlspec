@@ -8,11 +8,12 @@ This module consolidates configuration-related helpers:
 
 import inspect
 import os
+import stat
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError
@@ -39,6 +40,7 @@ __all__ = (
     "parse_pyproject_config",
     "resolve_config_async",
     "resolve_config_sync",
+    "resolve_extension_commit_mode",
 )
 
 
@@ -70,19 +72,21 @@ def find_pyproject_toml() -> "Path | None":
         Path to pyproject.toml, or None if not found.
     """
     current_uid: int | None = os.getuid() if hasattr(os, "getuid") else None
-    current = Path.cwd()
+    start = Path.cwd()
+    current = start
 
     while True:
-        if not _is_owned_by_user_or_root(current, current_uid):
+        if not _is_safe_directory(current, current_uid, is_start=(current == start)):
             return None
 
         pyproject = current / "pyproject.toml"
-        if pyproject.exists():
-            if not _is_owned_by_user_or_root(pyproject, current_uid):
-                return None
+        pyproject_status = _inspect_path_trust(pyproject, current_uid)
+        if pyproject_status is True:
             return pyproject
+        if pyproject_status is False:
+            return None
 
-        if (current / ".git").exists():
+        if _path_exists_or_symlink(current / ".git"):
             return None
 
         if current == current.parent:
@@ -509,10 +513,77 @@ def _is_valid_config(config: Any) -> bool:
 
 
 def _is_owned_by_user_or_root(path: Path, current_uid: int | None) -> bool:
-    if current_uid is None:
-        return True
     try:
-        path_stat = path.stat()
+        path_stat = path.stat(follow_symlinks=False)
     except OSError:
         return False
+    mode = getattr(path_stat, "st_mode", 0)
+    if stat.S_ISLNK(mode):
+        return False
+    if current_uid is None:
+        return True
     return path_stat.st_uid in {current_uid, 0}
+
+
+def _is_safe_directory(path: Path, current_uid: int | None, *, is_start: bool) -> bool:
+    """Return True when ``path`` is a trusted, non-symlinked, non-world-writable directory."""
+    try:
+        path_stat = path.stat(follow_symlinks=False)
+    except OSError:
+        return False
+    mode = getattr(path_stat, "st_mode", 0)
+    if stat.S_ISLNK(mode):
+        return False
+    if current_uid is not None and path_stat.st_uid not in {current_uid, 0}:
+        return False
+    if mode & stat.S_IWOTH:
+        if not is_start:
+            return False
+        if current_uid is not None and current_uid != 0 and path_stat.st_uid == 0:
+            return False
+    return True
+
+
+def _inspect_path_trust(path: Path, current_uid: int | None) -> "bool | None":
+    """Return True if present and trusted, False if present and untrusted, or None if missing."""
+    try:
+        path_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return False
+    mode = getattr(path_stat, "st_mode", 0)
+    if stat.S_ISLNK(mode):
+        return False
+    return not (current_uid is not None and path_stat.st_uid not in {current_uid, 0})
+
+
+def resolve_extension_commit_mode(
+    config: Any,
+    framework_config: "Mapping[str, Any]",
+    default_commit_mode: Literal["manual", "autocommit", "autocommit_include_redirect"] = "autocommit",
+) -> Literal["manual", "autocommit", "autocommit_include_redirect"]:
+    """Resolve web extension ``commit_mode``, requiring manual mode on non-transactional configs."""
+    explicit = framework_config.get("commit_mode")
+    if not getattr(config, "supports_transactions", True):
+        if explicit is not None and explicit != "manual":
+            msg = (
+                f"{type(config).__name__} does not support transactions "
+                f"(supports_transactions=False); commit_mode={explicit!r} is not supported, use 'manual'."
+            )
+            raise ImproperConfigurationError(msg)
+        return "manual"
+    if explicit is None:
+        return default_commit_mode
+    return cast("Literal['manual', 'autocommit', 'autocommit_include_redirect']", explicit)
+
+
+def _path_exists_or_symlink(path: Path) -> bool:
+    """Return True when ``path`` exists or is a symlink (including dangling symlinks)."""
+    try:
+        path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True

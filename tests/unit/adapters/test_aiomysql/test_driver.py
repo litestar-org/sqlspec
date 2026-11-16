@@ -309,3 +309,17 @@ def test_aiomysql_maps_1040_and_bare_connection_error_classes() -> None:
     assert mapped_iface.__cause__ is iface_err
     assert type(mapped_op) is OperationalError
     assert mapped_op.__cause__ is op_err
+
+
+def test_aiomysql_maps_type_error_to_data_error() -> None:
+    """AiomysqlExceptionHandler and create_mapped_exception map Python TypeError to DataError."""
+    from sqlspec.adapters.aiomysql.driver import AiomysqlExceptionHandler
+    from sqlspec.exceptions import DataError
+
+    err = TypeError("unexpected bind parameter type")
+    mapped = create_mapped_exception(err)
+    assert type(mapped) is DataError
+
+    handler = AiomysqlExceptionHandler()
+    assert handler._handle_exception(TypeError, err) is True
+    assert type(handler.pending_exception) is DataError

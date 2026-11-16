@@ -567,7 +567,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     ):
         return _create_postgres_error(error, ReadOnlyTransactionError, "read-only transaction")
 
-    if isinstance(error, PsqlpyDataError):
+    if isinstance(error, (PsqlpyDataError, TypeError)):
         return _create_postgres_error(error, DataError, "data error")
 
     if "syntax error" in error_msg or "parse error" in error_msg:

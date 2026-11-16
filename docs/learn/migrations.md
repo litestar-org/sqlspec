@@ -123,7 +123,7 @@ Choose the squash strategy that matches your migration history:
 - `ddl`: Parses chronological DDL with SQLGlot and folds `CREATE` / `ALTER` / `DROP` / `RENAME` operations into net `CREATE TABLE`, `CREATE SEQUENCE`, and `CREATE INDEX` statements. Fails closed with `SquashValidationError` whenever a statement (such as data DML, views/triggers, dynamic PL/SQL, or destructive column rewrites) cannot be folded faithfully.
 - `schema`: Emits topological DDL reflected directly from the live database catalog via `driver.data_dictionary.get_schema_ddl(...)`.
 
-Schema extraction (`schema` squash, `create-migration --from-schema`, and `dump-schema`) emits tables, columns, indexes, and constraints. It refuses to run when an included table is protected by row-level security: PostgreSQL RLS or policies, Oracle VPD policies, or SQL Server security policies, because rebuilding the database from the dump would silently drop that protection. On PostgreSQL it also logs one `migration.schema_extraction.omitted` warning naming the grants, functions, triggers, and domains it does not emit; carry those over with `--strategy ddl` or hand-written migrations. The tracking table and its `_lock` table are ignored by these checks.
+Schema extraction (`schema` squash, `create-migration --from-schema`, and `dump-schema`) emits tables, columns, indexes, and constraints. It refuses to run when an included table is protected by row-level security: PostgreSQL RLS or policies, Oracle VPD policies, or SQL Server security policies, because rebuilding the database from the dump would silently drop that protection. On PostgreSQL it also logs one `migration.schema_extraction.omitted` warning naming the grants, materialized views, functions, triggers, and domains it does not emit; carry those over with `--strategy ddl` or hand-written migrations. The tracking table and its `_lock` table are ignored by these checks.
 
 When `upgrade()` runs against downstream environments after a squash has been committed:
 
@@ -187,7 +187,7 @@ Remaining built-in refusals and their remedies:
 ## Schema Snapshots, Verification, and Data Bootstrap
 
 - **Read-Only `verify`**: Checks applied tracker rows against migration files on disk without creating `version_table_name` on empty databases. Combine `--strict` with `--fail-on-pending` as a pre-deploy CI gate.
-- **Extraction limits**: `dump-schema` and `--from-schema` refuse tables protected by PostgreSQL RLS, Oracle VPD, or SQL Server security policies, and warn about PostgreSQL grants, functions, triggers, and domains they do not emit (see Squashing Strategies above).
+- **Extraction limits**: `dump-schema` and `--from-schema` refuse tables protected by PostgreSQL RLS, Oracle VPD, or SQL Server security policies, and warn about PostgreSQL grants, materialized views, functions, triggers, and domains they do not emit (see Squashing Strategies above).
 - **Deterministic `dump-schema`**: Exports live schema DDL excluding `version_table_name` by default (`--include-migrations-table` includes it; `--target-dialect` transpiles across SQLGlot dialects). Omitting `--output` writes pure SQL to stdout so `sqlspec dump-schema > schema.sql` produces a clean SQL script.
 
 ### How Data Bootstrap Classifies Sources

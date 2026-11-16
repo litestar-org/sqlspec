@@ -242,3 +242,15 @@ def test_load_from_arrow_overwrite_rolls_back_truncate_on_insert_failure() -> No
 
         rows = driver.execute("SELECT id FROM atomic_target ORDER BY id").get_data()
         assert rows == [{"id": 1}, {"id": 2}]
+
+
+def test_load_from_arrow_maps_columns_by_name_not_position() -> None:
+    """DuckDB load_from_arrow inserts by explicit column names when Arrow column order differs from target table."""
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE reordered_target (id INTEGER, email VARCHAR, name VARCHAR)")
+        table = pa.table({"id": [1], "name": ["Ada"], "email": ["ada@example.com"]})
+
+        driver.load_from_arrow("reordered_target", table)
+
+        rows = driver.execute("SELECT id, email, name FROM reordered_target").get_data()
+        assert rows == [{"id": 1, "email": "ada@example.com", "name": "Ada"}]

@@ -341,3 +341,51 @@ def test_find_pyproject_allows_root_owned_ancestor_directory(
 
     monkeypatch.setattr(os, "stat", _fake_stat)
     assert find_pyproject_toml() == root_pyproject
+
+
+def test_find_pyproject_refuses_symlink_and_world_writable_paths(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Discovery rejects symlinked config/markers and stops before world-writable or root-temp directories."""
+    target_cfg = tmp_path / "real_pyproject.toml"
+    target_cfg.write_text('[tool.sqlspec]\nconfig = "evil:load"\n', encoding="utf-8")
+
+    sym_dir = tmp_path / "sym_case"
+    sym_dir.mkdir()
+    (sym_dir / "pyproject.toml").symlink_to(target_cfg)
+    monkeypatch.chdir(sym_dir)
+    assert find_pyproject_toml() is None
+
+    git_sym_dir = tmp_path / "git_sym_case"
+    git_sym_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text('[tool.sqlspec]\nconfig = "outer:load"\n', encoding="utf-8")
+    (git_sym_dir / ".git").symlink_to(tmp_path)
+    monkeypatch.chdir(git_sym_dir)
+    assert find_pyproject_toml() is None
+    (tmp_path / "pyproject.toml").unlink()
+
+    world_parent = tmp_path / "world_parent"
+    app_child = world_parent / "app"
+    app_child.mkdir(parents=True)
+    (world_parent / "pyproject.toml").write_text('[tool.sqlspec]\nconfig = "evil:load"\n', encoding="utf-8")
+    os.chmod(world_parent, 0o777)
+    try:
+        monkeypatch.chdir(app_child)
+        assert find_pyproject_toml() is None
+    finally:
+        os.chmod(world_parent, 0o755)
+
+    if hasattr(os, "getuid"):
+        monkeypatch.setattr(os, "getuid", lambda: 1000)
+        real_stat = os.stat
+        resolved_sym = sym_dir.resolve()
+
+        def _fake_root_tmp(path: "str | os.PathLike[str]", *args: Any, **kwargs: Any) -> Any:
+            candidate = Path(path)
+            if candidate == sym_dir or candidate == resolved_sym:
+                return SimpleNamespace(st_uid=0, st_mode=0o041777)
+            return real_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", _fake_root_tmp)
+        monkeypatch.chdir(sym_dir)
+        assert find_pyproject_toml() is None

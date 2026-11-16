@@ -10,7 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast, final
 
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
@@ -507,7 +507,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 self._reset_empty_poll_delay(channel)
-                return self._claimed_event(row, leased_until)
+                return self._hydrate_claimed_event(row, leased_until)
         return None
 
     def dequeue_by_event_id(self, event_id: str, channel: str) -> "EventMessage | None":
@@ -521,10 +521,23 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            event = self._claimed_event(row, leased_until)
+            event = self._hydrate_claimed_event(row, leased_until)
             self._reset_empty_poll_delay(event.channel)
             return event
         return None
+
+    def _hydrate_claimed_event(self, row: "dict[str, Any]", leased_until: "datetime") -> EventMessage:
+        try:
+            return self._claimed_event(row, leased_until)
+        except (EventChannelError, ValueError, TypeError, LookupError) as exc:
+            event_id = row.get("event_id")
+            channel = row.get("channel")
+            if isinstance(event_id, str) and isinstance(channel, str):
+                self._record_lease(event_id, channel, leased_until)
+                with suppress(Exception):
+                    self.nack(event_id)
+            msg = f"Failed to decode claimed event {event_id!r}"
+            raise EventChannelError(msg) from exc
 
     def ack(self, event_id: str) -> bool:
         lease = self._take_lease(event_id)
@@ -635,6 +648,8 @@ class SyncTableEventQueue(_BaseTableEventQueue):
 
     def _claim_locked_candidate(self, channel: str) -> "EventMessage | None":
         current_time = self._utcnow()
+        claimed_row: dict[str, Any] | None = None
+        claimed_leased_until: datetime | None = None
         with cast(
             "AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session(transaction=True)
         ) as driver:
@@ -662,11 +677,15 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                     driver.rollback()
                     return None
                 driver.commit()
-                return self._claimed_event(row, leased_until)
+                claimed_row = row
+                claimed_leased_until = leased_until
             except Exception:
                 with suppress(Exception):
                     driver.rollback()
                 raise
+        if claimed_row is None or claimed_leased_until is None:
+            return None
+        return self._hydrate_claimed_event(claimed_row, claimed_leased_until)
 
     def _fetch_candidate_with_driver(
         self, driver: "SyncDriverAdapterBase", channel: str, current_time: "datetime"
@@ -802,7 +821,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 self._reset_empty_poll_delay(channel)
-                return self._claimed_event(row, leased_until)
+                return await self._hydrate_claimed_event(row, leased_until)
         return None
 
     async def dequeue_by_event_id(self, event_id: str, channel: str) -> "EventMessage | None":
@@ -816,10 +835,25 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            event = self._claimed_event(row, leased_until)
+            event = await self._hydrate_claimed_event(row, leased_until)
             self._reset_empty_poll_delay(event.channel)
             return event
         return None
+
+    async def _hydrate_claimed_event(self, row: "dict[str, Any]", leased_until: "datetime") -> EventMessage:
+        decode_error: Exception | None = None
+        try:
+            return self._claimed_event(row, leased_until)
+        except (EventChannelError, ValueError, TypeError, LookupError) as exc:
+            decode_error = exc
+        event_id = row.get("event_id")
+        channel = row.get("channel")
+        if isinstance(event_id, str) and isinstance(channel, str):
+            self._record_lease(event_id, channel, leased_until)
+            with suppress(Exception):
+                await self.nack(event_id)
+        msg = f"Failed to decode claimed event {event_id!r}"
+        raise EventChannelError(msg) from decode_error
 
     async def ack(self, event_id: str) -> bool:
         lease = self._take_lease(event_id)
@@ -954,20 +988,22 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         )
         driver = await session.__aenter__()
         claim_error: BaseException | None = None
-        event: EventMessage | None = None
+        claimed_pair: tuple[dict[str, Any], datetime] | None = None
         try:
-            event = await self._claim_candidate_with_driver(driver, channel, current_time)
+            claimed_pair = await self._claim_candidate_with_driver(driver, channel, current_time)
         except BaseException as exc:
             claim_error = exc
         if isinstance(claim_error, Exception):
             with suppress(Exception):
                 await driver.rollback()
         await exit_async_context(session, claim_error)
-        return event
+        if claimed_pair is None:
+            return None
+        return await self._hydrate_claimed_event(claimed_pair[0], claimed_pair[1])
 
     async def _claim_candidate_with_driver(
         self, driver: "AsyncDriverAdapterBase", channel: str, current_time: "datetime"
-    ) -> "EventMessage | None":
+    ) -> "tuple[dict[str, Any], datetime] | None":
         """Select, claim and commit one candidate on the given session, or roll back when none is claimed."""
         row = await self._fetch_candidate_with_driver(driver, channel, current_time)
         if row is None:
@@ -990,7 +1026,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             await driver.rollback()
             return None
         await driver.commit()
-        return self._claimed_event(row, leased_until)
+        return row, leased_until
 
     async def _fetch_candidate_with_driver(
         self, driver: "AsyncDriverAdapterBase", channel: str, current_time: "datetime"

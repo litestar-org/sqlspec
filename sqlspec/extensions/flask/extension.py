@@ -22,6 +22,7 @@ from sqlspec.extensions.flask._utils import (
     set_context_value,
     set_request_tenant,
 )
+from sqlspec.utils.config_tools import resolve_extension_commit_mode
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
@@ -413,7 +414,7 @@ class SQLSpecPlugin:
 
         session_key = flask_config.get("session_key", DEFAULT_SESSION_KEY)
         connection_key = flask_config.get("connection_key", f"sqlspec_connection_{session_key}")
-        commit_mode = flask_config.get("commit_mode", DEFAULT_COMMIT_MODE)
+        commit_mode = resolve_extension_commit_mode(config, flask_config, DEFAULT_COMMIT_MODE)
         extra_commit_statuses = flask_config.get("extra_commit_statuses")
         extra_rollback_statuses = flask_config.get("extra_rollback_statuses")
         disable_di = flask_config.get("disable_di", False)
@@ -999,12 +1000,15 @@ class SQLSpecPlugin:
         ):
             return
         try:
+            target: Any = None
             if session is not None and hasattr(session, "commit"):
                 target = session
             elif connection is not None:
                 target = connection
             else:
                 target = self.get_connection(config_state.session_key)
+            if target is None or not hasattr(target, "commit"):
+                return
             if config_state.is_async:
                 self._call_portal(config_state, target.commit)
             else:
@@ -1038,12 +1042,15 @@ class SQLSpecPlugin:
         ):
             return
         try:
+            target: Any = None
             if session is not None and hasattr(session, "rollback"):
                 target = session
             elif connection is not None:
                 target = connection
             else:
                 target = self.get_connection(config_state.session_key)
+            if target is None or not hasattr(target, "rollback"):
+                return
             if config_state.is_async:
                 self._call_portal(config_state, target.rollback)
             else:

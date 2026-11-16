@@ -28,6 +28,7 @@ from sqlspec.extensions.starlette.middleware import (
     get_request_resource_async,
     has_tenant_strategy,
 )
+from sqlspec.utils.config_tools import resolve_extension_commit_mode
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_
 
@@ -487,7 +488,7 @@ class SQLSpecPlugin:
             "routing_header": framework_config.get("routing_header"),
             "primary_pin_cookie": framework_config.get("primary_pin_cookie"),
             "primary_pin_secret": framework_config.get("primary_pin_secret"),
-            "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
+            "commit_mode": resolve_extension_commit_mode(config, framework_config, DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
             "disable_di": framework_config.get("disable_di", False),

@@ -1221,3 +1221,47 @@ def test_fsspec_file_directory_requires_recursive(tmp_path: Path) -> None:
 
     backend.delete_sync("a", recursive=True)
     assert not (tmp_path / "a").exists()
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_fsspec_prefers_cat_file_and_rm_file_for_glob_chars() -> None:
+    """Single-object read_bytes_sync and non-recursive delete_sync prefer cat_file/rm_file over globbing cat/rm."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    calls: list[tuple[str, str]] = []
+
+    class _FakeFS:
+        protocol = "memory"
+
+        def cat_file(self, path: str, **_kwargs: Any) -> bytes:
+            calls.append(("cat_file", path))
+            return b"ok"
+
+        def cat(self, path: str, **_kwargs: Any) -> bytes:
+            calls.append(("cat", path))
+            return b"glob"
+
+        def rm_file(self, path: str, **_kwargs: Any) -> None:
+            calls.append(("rm_file", path))
+
+        def rm(self, path: str, *, recursive: bool = False, **_kwargs: Any) -> None:
+            calls.append((f"rm:{recursive}", path))
+
+        def unstrip_protocol(self, path: str) -> str:
+            return path
+
+    backend = FSSpecBackend("memory://globtest")
+    backend.write_bytes_sync("dir/[meta].bin", b"real")
+    assert backend.read_bytes_sync("dir/[meta].bin") == b"real"
+    backend.delete_sync("dir/[meta].bin")
+
+    backend.fs = _FakeFS()
+    assert backend.read_bytes_sync("dir/[meta].bin") == b"ok"
+    backend.delete_sync("dir/[meta].bin")
+    backend.delete_sync("dir", recursive=True)
+
+    assert calls == [
+        ("cat_file", "dir/[meta].bin"),
+        ("rm_file", "dir/[meta].bin"),
+        ("rm:True", "dir"),
+    ]

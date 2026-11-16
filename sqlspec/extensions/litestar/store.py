@@ -475,7 +475,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         expires_in_seconds = expires_in.total_seconds() if isinstance(expires_in, timedelta) else float(expires_in)
 
         if expires_in_seconds <= 0:
-            return datetime.now(UTC) - timedelta(microseconds=1)
+            return datetime.now(UTC) - timedelta(seconds=1)
 
         return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
 

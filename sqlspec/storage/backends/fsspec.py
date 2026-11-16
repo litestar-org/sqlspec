@@ -228,10 +228,12 @@ class FSSpecBackend:
     def read_bytes_sync(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from an object synchronously."""
         resolved_path = self._resolve_path(path)
+        read_fn = getattr(self.fs, "cat_file", None)
+        reader = partial(read_fn, resolved_path, **kwargs) if callable(read_fn) else partial(self.fs.cat, resolved_path, **kwargs)
         result = cast(
             "bytes",
             execute_sync_storage_operation(
-                partial(self.fs.cat, resolved_path, **kwargs),
+                reader,
                 backend=self.backend_type,
                 operation="read_bytes",
                 path=resolved_path,
@@ -311,8 +313,14 @@ class FSSpecBackend:
         resolved_path = self._resolve_path(path)
         if self.protocol in _LOCAL_PROTOCOLS:
             check_local_delete_target(resolved_path, self.base_path, recursive=recursive)
+        rm_file_fn = None if recursive else getattr(self.fs, "rm_file", None)
+        delete_fn = (
+            partial(rm_file_fn, resolved_path, **kwargs)
+            if callable(rm_file_fn)
+            else partial(self.fs.rm, resolved_path, recursive=recursive, **kwargs)
+        )
         execute_sync_storage_operation(
-            partial(self.fs.rm, resolved_path, recursive=recursive, **kwargs),
+            delete_fn,
             backend=self.backend_type,
             operation="delete",
             path=resolved_path,

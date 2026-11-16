@@ -855,3 +855,61 @@ def test_nack_ignores_non_leased_rows_and_dequeue_skips_attempt_bound(tmp_path: 
         assert queue.dequeue("alerts") is None
     finally:
         config.close_pool()
+
+
+def test_corrupt_payload_nacks_and_raises_event_channel_error_sync(tmp_path: Any) -> None:
+    """Sync dequeue nacks malformed claimed rows so status leaves leased and transitions via retry policy."""
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "corrupt_sync.db")})
+    with config.provide_session() as driver:
+        for ddl in SqliteEventQueueStore(config).create_statements():
+            driver.execute_script(ddl)
+    queue = SyncTableEventQueue(config, max_attempts=1, retry_backoff_seconds=5.0)
+    try:
+        event_id = queue.publish("alerts", {"ok": True})
+        with config.provide_session(transaction=True) as driver:
+            driver.execute(
+                "UPDATE sqlspec_event_queue SET payload_json = '{invalid' WHERE event_id = :event_id",
+                {"event_id": event_id},
+            )
+            driver.commit()
+        with pytest.raises(EventChannelError, match="Failed to decode"):
+            queue.dequeue("alerts")
+        with config.provide_session() as driver:
+            row = driver.select_one(
+                "SELECT status, attempts, lease_expires_at FROM sqlspec_event_queue WHERE event_id = :event_id",
+                {"event_id": event_id},
+            )
+        assert row["status"] == "failed"
+        assert int(row["attempts"]) == 1
+        assert row["lease_expires_at"] is None
+    finally:
+        config.close_pool()
+
+
+async def test_corrupt_payload_nacks_and_raises_event_channel_error_async(tmp_path: Any) -> None:
+    """Async dequeue nacks malformed claimed rows with exponential backoff before reaching failed."""
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "corrupt_async.db")})
+    async with config.provide_session() as driver:
+        for ddl in AiosqliteEventQueueStore(config).create_statements():
+            await driver.execute_script(ddl)
+    queue = AsyncTableEventQueue(config, max_attempts=3, retry_backoff_seconds=5.0)
+    try:
+        event_id = await queue.publish("alerts", {"ok": True})
+        async with config.provide_session(transaction=True) as driver:
+            await driver.execute(
+                "UPDATE sqlspec_event_queue SET payload_json = '{invalid' WHERE event_id = :event_id",
+                {"event_id": event_id},
+            )
+            await driver.commit()
+        with pytest.raises(EventChannelError, match="Failed to decode"):
+            await queue.dequeue("alerts")
+        async with config.provide_session() as driver:
+            row = await driver.select_one(
+                "SELECT status, attempts, lease_expires_at FROM sqlspec_event_queue WHERE event_id = :event_id",
+                {"event_id": event_id},
+            )
+        assert row["status"] == "pending"
+        assert int(row["attempts"]) == 1
+        assert row["lease_expires_at"] is None
+    finally:
+        await config.close_pool()

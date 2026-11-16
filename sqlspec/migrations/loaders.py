@@ -8,6 +8,7 @@ import ast
 import builtins
 import inspect
 import os
+import stat
 import sys
 import types
 from collections.abc import Awaitable, Callable, Iterable, Iterator
@@ -50,34 +51,62 @@ def find_project_root(start_path: Path) -> Path:
         Path to project root or parent directory.
     """
     resolved_start = start_path.resolve()
-    allowed_uids = {os.getuid(), 0} if hasattr(os, "getuid") else None
+    current_uid = os.getuid() if hasattr(os, "getuid") else None
+    allowed_uids = {current_uid, 0} if current_uid is not None else None
     current_path = resolved_start
 
     while current_path != current_path.parent:
-        if allowed_uids is not None:
-            try:
-                owner_uid: int | None = current_path.stat().st_uid
-            except FileNotFoundError:
-                owner_uid = None
-            except OSError:
-                break
-            if owner_uid is not None and owner_uid not in allowed_uids:
-                break
+        if not _is_trusted_root_dir(current_path, allowed_uids, is_start=(current_path == resolved_start)):
+            break
         for marker in PROJECT_ROOT_MARKERS:
-            if (current_path / marker).exists():
+            marker_status = _is_trusted_marker(current_path / marker, allowed_uids)
+            if marker_status is True:
                 return current_path
+            if marker_status is False:
+                return resolved_start
         current_path = current_path.parent
 
     fallback = resolved_start.parent
-    if allowed_uids is not None:
-        try:
-            if fallback.stat().st_uid not in allowed_uids:
-                return resolved_start
-        except FileNotFoundError:
-            pass
-        except OSError:
-            return resolved_start
+    if not _is_trusted_root_dir(fallback, allowed_uids, is_start=False, allow_missing=True):
+        return resolved_start
     return fallback
+
+
+def _is_trusted_root_dir(
+    path: Path, allowed_uids: "set[int] | None", *, is_start: bool, allow_missing: bool = False
+) -> bool:
+    """Return True when a traversed root directory is non-symlinked, trusted-UID, and safe."""
+    try:
+        path_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return allow_missing
+    except OSError:
+        return False
+    mode = getattr(path_stat, "st_mode", 0)
+    if stat.S_ISLNK(mode):
+        return False
+    if allowed_uids is not None and path_stat.st_uid not in allowed_uids:
+        return False
+    if mode & stat.S_IWOTH:
+        if not is_start:
+            return False
+        if allowed_uids is not None and allowed_uids != {0} and path_stat.st_uid == 0:
+            return False
+    return True
+
+
+def _is_trusted_marker(path: Path, allowed_uids: "set[int] | None") -> "bool | None":
+    """Return True if a project marker exists and is trusted, False if untrusted, None if absent."""
+    try:
+        marker_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return False
+    mode = getattr(marker_stat, "st_mode", 0)
+    if stat.S_ISLNK(mode):
+        return False
+    return not (allowed_uids is not None and marker_stat.st_uid not in allowed_uids)
 
 
 @contextmanager

@@ -69,7 +69,7 @@ class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
         if exc_type is None:
             return False
 
-        if issubclass(exc_type, (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError)):
+        if issubclass(exc_type, (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, TypeError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -396,6 +396,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 type_casts=type_casts,
             )
         if overwrite:
+            if self._auto_begin_on_write and not await self._connection_in_transaction_async():
+                await self.begin()
             qualified = format_table_identifier(table)
             exc_handler = self.handle_database_exceptions()
             async with exc_handler, self.with_cursor(self.connection) as cursor:
@@ -406,6 +408,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
         metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
         if first_batch is not None:
+            if self._auto_begin_on_write and not await self._connection_in_transaction_async():
+                await self.begin()
             all_batches = chain((first_batch,), (b for b in batch_iter if b.num_rows > 0))
             schema_name, table_name = split_schema_and_table(table)
             use_binary_wire = bool(self.driver_features.get("enable_pgcopy_binary", False))

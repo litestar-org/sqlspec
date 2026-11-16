@@ -123,7 +123,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
                 return None
 
             expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if expires_at is not None and expires_at < datetime.now(UTC):
+            if expires_at is not None and expires_at <= datetime.now(UTC):
                 driver.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
                 if store_session.owned:
                     driver.commit()

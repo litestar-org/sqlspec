@@ -81,7 +81,7 @@ class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, AiomysqlPymysqlError):
+        if issubclass(exc_type, (AiomysqlPymysqlError, TypeError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
