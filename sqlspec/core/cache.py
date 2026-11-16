@@ -77,6 +77,11 @@ _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
     ParameterStyle.NAMED_DOLLAR.value,
     ParameterStyle.NAMED_PYFORMAT.value,
 ))
+_POSITIONAL_NUMBERED_STYLES: Final[frozenset[str]] = frozenset((
+    ParameterStyle.NUMERIC.value,
+    ParameterStyle.POSITIONAL_COLON.value,
+))
+_DEFAULT_PASSTHROUGH_TYPES: Final[tuple[type, ...]] = (str, int, float, bool, bytes, type(None))
 
 
 CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp")
@@ -191,18 +196,19 @@ class CacheNode:
 
     __slots__ = CACHE_NODE_SLOTS
 
-    def __init__(self, key: CacheKey, value: Any) -> None:
+    def __init__(self, key: CacheKey, value: Any, timestamp: float = 0.0) -> None:
         """Initialize cache node.
 
         Args:
             key: Cache key for this node
             value: Cached value
+            timestamp: Creation timestamp used when TTL eviction is configured
         """
         self.key = key
         self.value = value
         self.prev: CacheNode | None = None
         self.next: CacheNode | None = None
-        self.timestamp = time.time()
+        self.timestamp = timestamp
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -321,13 +327,14 @@ class LRUCache:
         """
         with self._lock:
             existing_node = self._cache.get(key)
+            now = time.time() if self._ttl is not None else 0.0
             if existing_node is not None:
                 existing_node.value = value
-                existing_node.timestamp = time.time()
+                existing_node.timestamp = now
                 self._move_to_head(existing_node)
                 return
 
-            new_node = CacheNode(key, value)
+            new_node = CacheNode(key, value, now)
             self._cache[key] = new_node
             self._add_to_head(new_node)
 
@@ -470,7 +477,7 @@ def reset_stats_only() -> None:
     with _holders_lock:
         holders = list(_statement_cache_holders.values())
     for holder in holders:
-        holder.query_cache.get_stats().reset()
+        holder.query_cache.reset_stats()
 
 
 def get_cache_statistics() -> "dict[str, CacheStats]":
@@ -626,6 +633,7 @@ class CachedStatement:
     """
 
     __slots__ = (
+        "_source_guard",
         "applied_wrap_types",
         "compiled_sql",
         "expression",
@@ -642,7 +650,9 @@ class CachedStatement:
         input_named_parameters: "tuple[str, ...] | None" = None,
         parameter_profile: "ParameterProfile | None" = None,
         applied_wrap_types: bool = False,
+        _source_guard: "tuple[Any, ...] | None" = None,
     ) -> None:
+        self._source_guard = _source_guard
         self.applied_wrap_types = applied_wrap_types
         self.compiled_sql = compiled_sql
         self.expression = expression
@@ -715,7 +725,7 @@ class NamespacedCache:
     predictable while avoiding stringly-typed cache access.
     """
 
-    __slots__ = ("_caches", "_config")
+    __slots__ = ("_caches", "_config", "_enabled_flags")
 
     def __init__(self, config: "CacheConfig | None" = None, ttl_seconds: int | None = DEFAULT_TTL_SECONDS) -> None:
         """Initialize namespaced cache.
@@ -724,8 +734,17 @@ class NamespacedCache:
             config: Cache configuration to apply.
             ttl_seconds: Time-to-live in seconds (None for no expiration).
         """
-        self._config = config or get_cache_config()
-        self._caches = self._build_caches(self._config, ttl_seconds)
+        cfg = config or get_cache_config()
+        self._config = cfg
+        self._caches = self._build_caches(cfg, ttl_seconds)
+        compiled_ok = bool(cfg.compiled_cache_enabled)
+        self._enabled_flags: dict[str, bool] = {
+            "statement": compiled_ok and bool(cfg.sql_cache_enabled),
+            "builder": compiled_ok and bool(cfg.sql_cache_enabled),
+            "expression": compiled_ok and bool(cfg.fragment_cache_enabled),
+            "file": compiled_ok and bool(cfg.fragment_cache_enabled),
+            "optimized": compiled_ok and bool(cfg.optimized_cache_enabled),
+        }
 
     def get_statement(self, key: str, dialect: str | None = None) -> Any | None:
         """Get cached statement data.
@@ -933,10 +952,7 @@ class NamespacedCache:
         return caches
 
     def _is_enabled(self, namespace: str) -> bool:
-        if not self._config.compiled_cache_enabled:
-            return False
-        enabled_getter = NAMESPACED_CACHE_CONFIG[namespace][0]
-        return bool(enabled_getter(self._config))
+        return self._enabled_flags.get(namespace, False)
 
     def _get(self, namespace: str, key: str, dialect: str | None = None) -> Any | None:
         """Get cached value by namespace.
@@ -1141,8 +1157,12 @@ class CachedQuery:
     param_count: int
     processed_state: "ProcessedState"
     needs_style_remap: bool
+    positional_passthrough: bool
+    simple_wire_fast_path: bool
+    _sql_hash: "str | None"
 
     __slots__ = (
+        "_sql_hash",
         "applied_wrap_types",
         "compiled_sql",
         "input_named_parameters",
@@ -1152,7 +1172,9 @@ class CachedQuery:
         "param_count",
         "parameter_casts",
         "parameter_profile",
+        "positional_passthrough",
         "processed_state",
+        "simple_wire_fast_path",
     )
 
     def __init__(
@@ -1167,6 +1189,8 @@ class CachedQuery:
         param_count: int,
         processed_state: "ProcessedState",
         needs_style_remap: bool | None = None,
+        positional_passthrough: bool | None = None,
+        simple_wire_fast_path: bool = False,
     ) -> None:
         self.compiled_sql = compiled_sql
         self.parameter_profile = parameter_profile
@@ -1177,11 +1201,27 @@ class CachedQuery:
         self.operation_profile = operation_profile
         self.param_count = param_count
         self.processed_state = processed_state
-        self.needs_style_remap = (
+        remap_needed = (
             bool(_CACHED_NAMED_STYLES.intersection(parameter_profile.styles))
             if needs_style_remap is None
             else needs_style_remap
         )
+        self.needs_style_remap = remap_needed
+        if positional_passthrough is not None:
+            self.positional_passthrough = positional_passthrough
+        elif applied_wrap_types or remap_needed:
+            self.positional_passthrough = False
+        elif not input_named_parameters or (
+            bool(parameter_profile.styles)
+            and _POSITIONAL_NUMBERED_STYLES.issuperset(parameter_profile.styles)
+            and len(input_named_parameters) == param_count
+            and input_named_parameters == tuple(str(i) for i in range(1, param_count + 1))
+        ):
+            self.positional_passthrough = True
+        else:
+            self.positional_passthrough = False
+        self.simple_wire_fast_path = simple_wire_fast_path and self.positional_passthrough
+        self._sql_hash = None
 
 
 @final
@@ -1189,13 +1229,15 @@ class CachedQuery:
 class QueryCache:
     """LRU cache for compiled query metadata (L1 per-config fast-path cache)."""
 
-    __slots__ = ("_cache", "_lock", "_max_size", "_stats")
+    __slots__ = ("_cache", "_evictions", "_hits", "_lock", "_max_size", "_misses")
 
     def __init__(self, max_size: int = STMT_CACHE_MAX_SIZE) -> None:
         self._cache: OrderedDict[str, CachedQuery] = OrderedDict()
         self._lock = threading.Lock()
         self._max_size = max_size
-        self._stats = CacheStats()
+        self._hits = 0
+        self._misses = 0
+        self._evictions = 0
 
     def __len__(self) -> int:
         with self._lock:
@@ -1206,17 +1248,19 @@ class QueryCache:
 
         Reads take no lock: the lookup and the recency update are each a single atomic
         ``OrderedDict`` operation, and an entry evicted between the two is still returned.
+        Below capacity, LRU recency promotion is skipped because eviction cannot trigger.
         """
         cache = self._cache
         entry = cache.get(sql)
         if entry is None:
-            self._stats.record_miss()
+            self._misses += 1
             return None
-        self._stats.record_hit()
-        try:
-            cache.move_to_end(sql)
-        except KeyError:
-            return entry
+        self._hits += 1
+        if len(cache) >= self._max_size:
+            try:
+                cache.move_to_end(sql)
+            except KeyError:
+                return entry
         return entry
 
     def set(self, sql: str, entry: "CachedQuery") -> None:
@@ -1227,18 +1271,52 @@ class QueryCache:
                 self._cache.move_to_end(sql)
             elif len(self._cache) >= self._max_size:
                 self._cache.popitem(last=False)
-                self._stats.record_eviction()
+                self._evictions += 1
             self._cache[sql] = entry
 
     def get_stats(self) -> CacheStats:
         """Return cache hit/miss/eviction statistics for this L1 query cache."""
-        return self._stats
+        stats = CacheStats()
+        stats.hits = self._hits
+        stats.misses = self._misses
+        stats.evictions = self._evictions
+        stats.total_operations = self._hits + self._misses
+        return stats
+
+    def reset_stats(self) -> None:
+        """Reset hit, miss, and eviction counters without clearing cached entries."""
+        self._hits = 0
+        self._misses = 0
+        self._evictions = 0
 
     def clear(self) -> None:
         """Clear all cached entries and reset statistics."""
         with self._lock:
             self._cache.clear()
-            self._stats.reset()
+            self.reset_stats()
+
+
+def _seed_passthrough_types(type_coercion_map: "dict[type, Any] | None") -> "set[type]":
+    """Build the initial set of parameter types proven safe to pass without conversion."""
+    if not type_coercion_map:
+        return set(_DEFAULT_PASSTHROUGH_TYPES)
+    seeded: set[type] = set()
+    map_keys = tuple(type_coercion_map.keys())
+    for candidate in _DEFAULT_PASSTHROUGH_TYPES:
+        if candidate in type_coercion_map:
+            continue
+        overridden = False
+        for key in map_keys:
+            if isinstance(key, type):
+                try:
+                    if issubclass(candidate, key):
+                        overridden = True
+                        break
+                except TypeError:
+                    continue
+        if not overridden:
+            seeded.add(candidate)
+    return seeded
 
 
 @final
@@ -1250,6 +1328,7 @@ class StatementCacheHolder:
     max_size: int
     query_cache: QueryCache
     rebind_processor: ParameterProcessor
+    passthrough_types: "set[type]"
     _statement_cache: "OrderedDict[str, SQL]"
     _row_count_hints: "OrderedDict[str, int]"
     _bulk_insert_sql: "OrderedDict[str, tuple[str, str]]"
@@ -1261,6 +1340,7 @@ class StatementCacheHolder:
         "_row_count_hints",
         "_statement_cache",
         "max_size",
+        "passthrough_types",
         "query_cache",
         "rebind_processor",
         "statement_config",
@@ -1276,6 +1356,7 @@ class StatementCacheHolder:
             cache_max_size=0,
             validator_cache_max_size=0,
         )
+        self.passthrough_types = _seed_passthrough_types(statement_config.parameter_config.type_coercion_map)
         self._statement_cache = OrderedDict()
         self._row_count_hints = OrderedDict()
         self._bulk_insert_sql = OrderedDict()
@@ -1283,13 +1364,17 @@ class StatementCacheHolder:
         _register_statement_cache_holder(self)
 
     def get_statement(self, sql: str) -> "SQL | None":
-        """Retrieve a cached SQL object and mark it as recently used."""
-        with self._lock:
-            entry = self._statement_cache.get(sql)
-            if entry is None:
-                return None
-            self._statement_cache.move_to_end(sql)
-            return entry
+        """Retrieve a cached SQL object without locking, eliding LRU promotion below capacity."""
+        cache = self._statement_cache
+        entry = cache.get(sql)
+        if entry is None:
+            return None
+        if len(cache) >= self.max_size:
+            try:
+                cache.move_to_end(sql)
+            except KeyError:
+                return entry
+        return entry
 
     def set_statement(self, sql: str, stmt: "SQL", max_size: int | None = None) -> None:
         """Store a prepared SQL object in the bounded LRU cache."""
@@ -1305,13 +1390,17 @@ class StatementCacheHolder:
             self._statement_cache[sql] = stmt
 
     def get_row_count_hint(self, compiled_sql: str) -> int | None:
-        """Return the last observed row count for a compiled SQL string."""
-        with self._lock:
-            entry = self._row_count_hints.get(compiled_sql)
-            if entry is None:
-                return None
-            self._row_count_hints.move_to_end(compiled_sql)
-            return entry
+        """Return the last observed row count for a compiled SQL string without locking."""
+        cache = self._row_count_hints
+        entry = cache.get(compiled_sql)
+        if entry is None:
+            return None
+        if len(cache) >= self.max_size:
+            try:
+                cache.move_to_end(compiled_sql)
+            except KeyError:
+                return entry
+        return entry
 
     def set_row_count_hint(self, compiled_sql: str, row_count: int) -> None:
         """Record the observed row count for a compiled SQL string."""
@@ -1325,13 +1414,17 @@ class StatementCacheHolder:
             self._row_count_hints[compiled_sql] = row_count
 
     def get_bulk_insert_sql(self, compiled_sql: str) -> "tuple[str, str] | None":
-        """Return cached (table_sql, columns_sql) fragments for a bulk INSERT statement."""
-        with self._lock:
-            entry = self._bulk_insert_sql.get(compiled_sql)
-            if entry is None:
-                return None
-            self._bulk_insert_sql.move_to_end(compiled_sql)
-            return entry
+        """Return cached (table_sql, columns_sql) fragments without locking."""
+        cache = self._bulk_insert_sql
+        entry = cache.get(compiled_sql)
+        if entry is None:
+            return None
+        if len(cache) >= self.max_size:
+            try:
+                cache.move_to_end(compiled_sql)
+            except KeyError:
+                return entry
+        return entry
 
     def set_bulk_insert_sql(self, compiled_sql: str, entry: "tuple[str, str]") -> None:
         """Cache (table_sql, columns_sql) fragments for a bulk INSERT statement."""

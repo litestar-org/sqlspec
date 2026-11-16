@@ -45,6 +45,7 @@ from sqlspec.core.cache import CachedQuery, QueryCache
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.parameters._declared import ParameterDeclaration
 from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
+from sqlspec.core.result import SQLResult
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import _callable_cache_key, _check_declared_parameters, run_cached_execution
 from sqlspec.driver._sync import SyncDriverAdapterBase
@@ -2055,3 +2056,87 @@ async def test_declined_async_cache_hit_runs_driver_cache_hit_method(
 
     assert (await aiosqlite_async_driver.execute("SELECT ? AS v", (2,))).get_data() == [{"v": 2}]
     assert declined == ["SELECT ? AS v"]
+
+
+def test_run_cached_execution_hits_fast_path_for_numeric_positional_params(
+    sqlite_sync_driver: Any, monkeypatch: Any
+) -> None:
+    """Contiguous $1 positional cached queries take execute_cache_hit while mapping params still rebind."""
+    param_profile = ParameterProfile([
+        ParameterInfo(name="1", style=ParameterStyle.NUMERIC, position=7, ordinal=1, placeholder_text="$1")
+    ])
+    cached = CachedQuery(
+        compiled_sql="SELECT $1 AS val",
+        parameter_profile=param_profile,
+        input_named_parameters=("1",),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
+        param_count=1,
+        processed_state=ProcessedState(compiled_sql="SELECT $1 AS val", execution_parameters=[1], operation_type="SELECT"),
+        simple_wire_fast_path=True,
+    )
+    sqlite_sync_driver._stmt_cache_enabled = True
+    sqlite_sync_driver._stmt_cache.set("SELECT $1 AS val", cached)
+
+    fast_calls: list[Any] = []
+    rebind_calls: list[Any] = []
+
+    def fake_executor(_conn: Any, sql: str, params: Any, _cached: Any, _cfg: Any, _state: Any) -> Any:
+        fast_calls.append((sql, params))
+        return SQLResult.create_cached_select(
+            sql=sql,
+            config=sqlite_sync_driver.statement_config,
+            cached_state=cached.processed_state,
+            compiled_sql=cached.compiled_sql,
+            params=params,
+            data=[(params[0],)],
+            column_names=["val"],
+            rows_affected=1,
+            row_format="tuple",
+        )
+
+    def fake_rebind(params: Any, _cached: Any) -> Any:
+        rebind_calls.append(params)
+        return [params["1"]]
+
+    monkeypatch.setattr(sqlite_sync_driver, "_cache_hit_executor", fake_executor)
+    monkeypatch.setattr(sqlite_sync_driver, "stmt_cache_rebind", fake_rebind)
+
+    result_pos = run_cached_execution(sqlite_sync_driver, "SELECT $1 AS val", (7,))
+    assert result_pos is not None
+    assert result_pos.scalar() == 7
+    assert fast_calls == [("SELECT $1 AS val", (7,))]
+    assert rebind_calls == []
+
+    monkeypatch.setattr(sqlite_sync_driver, "_cache_hit_executor", None)
+    monkeypatch.setattr(
+        sqlite_sync_driver,
+        "_execute_cached_statement",
+        lambda prepared: SQLResult(statement=prepared, data=[{"val": 9}], rows_affected=1),
+    )
+    result_map = run_cached_execution(sqlite_sync_driver, "SELECT $1 AS val", {"1": 9})
+    assert result_map is not None
+    assert result_map.scalar() == 9
+    assert rebind_calls == [{"1": 9}]
+
+
+def test_compile_statement_rejects_mismatched_source_guard_on_cache_hit(sqlite_sync_driver: Any) -> None:
+    """L2 CachedStatement source guard rejects entries whose raw SQL disagrees with the requested statement."""
+    clear_all_caches()
+    config = sqlite_sync_driver.statement_config
+    stmt = SQL("SELECT 1 AS ok", statement_config=config)
+    cache_key = sqlite_sync_driver._compile_cache_key(stmt, config, False)
+    poisoned = CachedStatement(
+        compiled_sql="SELECT 999 AS ok",
+        parameters=(),
+        expression=None,
+        _source_guard=("SELECT 999 AS ok", False, False, False, config),
+    )
+    get_cache().put_statement(cache_key, poisoned, None)
+
+    compiled_stmt, _ = sqlite_sync_driver._compiled_statement(stmt, config)
+    assert "999" not in compiled_stmt.compiled_sql
+    assert "1" in compiled_stmt.compiled_sql
+    clear_all_caches()

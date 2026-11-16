@@ -3,7 +3,8 @@
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
-from types import BuiltinFunctionType, FunctionType
+from functools import partial
+from types import BuiltinFunctionType, FunctionType, MethodType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import sqlglot
@@ -1779,6 +1780,8 @@ class StatementConfig:
 
     __slots__ = (
         *SQL_CONFIG_SLOTS,
+        "_cached_pipeline",
+        "_cached_pipeline_epoch",
         "_dialect_variants",
         "_has_output_transformer",
         "_has_transformers",
@@ -1886,6 +1889,8 @@ class StatementConfig:
         self._fingerprint_cache: str | None = None
         self._hash_cache: int | None = None
         self._is_frozen = False
+        self._cached_pipeline: Any | None = None
+        self._cached_pipeline_epoch: int = 0
         self._dialect_variants: dict[str, StatementConfig] | None = None
         self._script_variant: StatementConfig | None = None
         self._has_transformers = bool(self._user_statement_transformers)
@@ -2208,15 +2213,34 @@ def _raw_condition(condition: str, dialect: "str | None" = None) -> exp.Expr:
 
 
 def _is_uncacheable_callable(func: Any) -> bool:
-    if func is None:
-        return False
-    if isinstance(func, (FunctionType, BuiltinFunctionType)):
-        qualname = getattr(func, "__qualname__", "") or ""
-        return "<locals>" in qualname or getattr(func, "__closure__", None) is not None
-    func_type = type(func)
-    return (
-        getattr(func_type, "__hash__", None) is object.__hash__ or getattr(func_type, "__eq__", None) is object.__eq__
-    )
+    pending: list[Any] = [func]
+    seen_ids: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current is None:
+            continue
+        obj_id = id(current)
+        if obj_id in seen_ids:
+            continue
+        seen_ids.add(obj_id)
+        if isinstance(current, (FunctionType, BuiltinFunctionType)):
+            qualname = getattr(current, "__qualname__", "") or ""
+            if "<locals>" in qualname or getattr(current, "__closure__", None) is not None:
+                return True
+            continue
+        if isinstance(current, MethodType):
+            pending.append(current.__self__)
+            pending.append(current.__func__)
+            continue
+        if isinstance(current, partial):
+            return True
+        current_type = type(current)
+        if (
+            getattr(current_type, "__hash__", None) is object.__hash__
+            or getattr(current_type, "__eq__", None) is object.__eq__
+        ):
+            return True
+    return False
 
 
 def _config_has_uncacheable_transformers(

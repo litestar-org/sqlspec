@@ -1009,3 +1009,96 @@ def test_l1_statement_cache_holder_lifecycle_and_statistics_coordination() -> No
 
     clear_all_caches()
     assert len(holder.query_cache) == 0
+
+
+def test_cached_query_positional_passthrough_numeric_and_positional_colon() -> None:
+    """Numeric ($1, $2) and positional colon (:1) styles set positional_passthrough when contiguous."""
+    from sqlspec.core.parameters import ParameterInfo, ParameterStyle
+
+    op_profile = OperationProfile(returns_rows=True, modifies_rows=False)
+    numeric_profile = ParameterProfile([
+        ParameterInfo(name="1", style=ParameterStyle.NUMERIC, position=0, ordinal=1, placeholder_text="$1"),
+        ParameterInfo(name="2", style=ParameterStyle.NUMERIC, position=8, ordinal=2, placeholder_text="$2"),
+    ])
+    numeric_cached = cache_module.CachedQuery(
+        compiled_sql="SELECT $1, $2",
+        parameter_profile=numeric_profile,
+        input_named_parameters=("1", "2"),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=op_profile,
+        param_count=2,
+        processed_state=ProcessedState(compiled_sql="SELECT $1, $2", execution_parameters=[], operation_type="SELECT"),
+    )
+    assert numeric_cached.positional_passthrough is True
+
+    colon_profile = ParameterProfile([
+        ParameterInfo(name="1", style=ParameterStyle.POSITIONAL_COLON, position=7, ordinal=1, placeholder_text=":1")
+    ])
+    colon_cached = cache_module.CachedQuery(
+        compiled_sql="SELECT :1",
+        parameter_profile=colon_profile,
+        input_named_parameters=("1",),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=op_profile,
+        param_count=1,
+        processed_state=ProcessedState(compiled_sql="SELECT :1", execution_parameters=[], operation_type="SELECT"),
+    )
+    assert colon_cached.positional_passthrough is True
+
+    gapped_cached = cache_module.CachedQuery(
+        compiled_sql="SELECT $1, $3",
+        parameter_profile=numeric_profile,
+        input_named_parameters=("1", "3"),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=op_profile,
+        param_count=2,
+        processed_state=ProcessedState(compiled_sql="SELECT $1, $3", execution_parameters=[], operation_type="SELECT"),
+    )
+    assert gapped_cached.positional_passthrough is False
+
+    named_profile = ParameterProfile([
+        ParameterInfo(name="id", style=ParameterStyle.NAMED_COLON, position=7, ordinal=1, placeholder_text=":id")
+    ])
+    named_cached = cache_module.CachedQuery(
+        compiled_sql="SELECT :id",
+        parameter_profile=named_profile,
+        input_named_parameters=("id",),
+        applied_wrap_types=False,
+        parameter_casts={},
+        operation_type="SELECT",
+        operation_profile=op_profile,
+        param_count=1,
+        processed_state=ProcessedState(compiled_sql="SELECT :id", execution_parameters=[], operation_type="SELECT"),
+    )
+    assert named_cached.positional_passthrough is False
+
+
+def test_statement_pipeline_epoch_invalidates_frozen_config_cache_on_reset() -> None:
+    """StatementPipelineRegistry.reset() advances the epoch so frozen StatementConfig drops stale pipeline."""
+    from sqlspec.core._pipeline import StatementPipelineRegistry
+
+    registry = StatementPipelineRegistry()
+    cfg = StatementConfig()
+    registry.compile(cfg, "SELECT 1", None)
+    first_pipeline = cfg._cached_pipeline
+    first_epoch = cfg._cached_pipeline_epoch
+    assert first_pipeline is not None
+    assert first_epoch > 0
+
+    registry.compile(cfg, "SELECT 2", None)
+    assert cfg._cached_pipeline is first_pipeline
+
+    registry.reset()
+    assert cfg._cached_pipeline is None
+    assert cfg._cached_pipeline_epoch == 0
+
+    registry.compile(cfg, "SELECT 1", None)
+    assert cfg._cached_pipeline is not None
+    assert cfg._cached_pipeline is not first_pipeline
+    assert cfg._cached_pipeline_epoch > first_epoch
