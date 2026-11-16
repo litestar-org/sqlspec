@@ -643,6 +643,7 @@ class Db2AsyncConnectionPool:
             connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(self._dsn, "", "", "", "", options)
         except Db2Error as exc:
             raise create_mapped_exception(exc) from exc
+        setup_error: BaseException | None = None
         try:
             schema = self._connection_parameters.get("current_schema")
             if schema is not None:
@@ -652,11 +653,13 @@ class Db2AsyncConnectionPool:
                 if inspect.isawaitable(result):
                     await result
         except BaseException as exc:
+            setup_error = exc
+        if setup_error is not None:
             with contextlib.suppress(BaseException):
                 await connection.close()
-            if isinstance(exc, Db2Error):
-                raise create_mapped_exception(exc) from exc
-            raise
+            if isinstance(setup_error, Db2Error):
+                raise create_mapped_exception(setup_error) from setup_error
+            raise setup_error
         return connection
 
     async def acquire(self) -> Any:
@@ -724,11 +727,14 @@ class Db2AsyncConnectionPool:
                 await self.discard(connection)
                 return
             if not self._autocommit:
+                rollback_error: BaseException | None = None
                 try:
                     await connection.rollback()
-                except BaseException:
+                except BaseException as exc:
+                    rollback_error = exc
+                if rollback_error is not None:
                     await self.discard(connection)
-                    raise
+                    raise rollback_error
         record = self._checked_out.pop(conn_id, None)
         if record is None:
             return
@@ -794,12 +800,15 @@ class Db2AsyncConnectionPool:
         """Pop a reusable idle connection, or open a new one when none is left."""
         while self._idle:
             record = self._idle.pop()
+            reuse_error: BaseException | None = None
             try:
                 if await self._is_reusable(record):
                     return record
-            except BaseException:
+            except BaseException as exc:
+                reuse_error = exc
+            if reuse_error is not None:
                 await self._close_connection(record.connection)
-                raise
+                raise reuse_error
             await self._close_connection(record.connection)
         connection = await self.new_connection()
         now = time.monotonic()

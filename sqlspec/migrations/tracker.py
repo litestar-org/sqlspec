@@ -1356,11 +1356,14 @@ class _AsyncMigrationLockContext:
                     "SELECT pg_try_advisory_lock(:lock_id) AS acquired", {"lock_id": self._lock_id}
                 )
                 if _is_postgres_lock_acquired(lock_result):
+                    recheck_error: MigrationError | None = None
                     try:
                         await self._tracker._recheck_tracking_relation_async(self._driver)
-                    except MigrationError:
+                    except MigrationError as exc:
+                        recheck_error = exc
+                    if recheck_error is not None:
                         await self._release_postgres_lock(True)
-                        raise
+                        raise recheck_error
                     return
                 remaining = deadline - _monotonic()
                 if remaining <= 0:

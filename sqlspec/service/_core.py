@@ -419,14 +419,17 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
             self._nested = nested
             return driver
         stack = AsyncExitStack()
+        enter_error: BaseException | None = None
         try:
             driver = await stack.enter_async_context(service.provide_session())
             await stack.enter_async_context(driver.transaction())
             state, token = _bind_transaction(key, driver)
             stack.callback(_release_transaction, state, token)
-        except BaseException:
-            await stack.__aexit__(*sys.exc_info())
-            raise
+        except BaseException as exc:
+            enter_error = exc
+        if enter_error is not None:
+            await stack.__aexit__(type(enter_error), enter_error, enter_error.__traceback__)
+            raise enter_error
         self._stack = stack
         self._state = state
         return driver
@@ -462,15 +465,18 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
             if exc_type is not None:
                 await service.rollback()
                 return False
+            commit_error: BaseException | None = None
             try:
                 await service.commit()
                 RoutingContext.mark_write(session.observability.bind_key)
-            except BaseException:
+            except BaseException as error:
+                commit_error = error
+            if commit_error is not None:
                 try:
                     await service.rollback()
                 except Exception:
                     logger.debug("Rollback after a failed commit also failed", exc_info=True)
-                raise
+                raise commit_error
             return False
         finally:
             if session._transaction_depth > 0:

@@ -355,9 +355,11 @@ class AiosqliteConnectionPool:
             raise
 
         pragma_lines: list[str] = []
+        setup_error: BaseException | None = None
 
         try:
             is_memory_db, is_shared_cache = _classify_memory_mode(self._connection_parameters)
+            configure_failed = False
             try:
                 if self._enable_optimizations:
                     if is_memory_db:
@@ -388,6 +390,8 @@ class AiosqliteConnectionPool:
             except sqlite3.OperationalError:
                 raise
             except Exception:
+                configure_failed = True
+            if configure_failed:
                 log_with_context(
                     logger,
                     logging.WARNING,
@@ -415,9 +419,11 @@ class AiosqliteConnectionPool:
 
             if self._on_connection_create is not None:
                 await self._on_connection_create(connection)
-        except BaseException:
+        except BaseException as exc:
+            setup_error = exc
+        if setup_error is not None:
             await self._discard_connection(connection)
-            raise
+            raise setup_error
 
         return connection
 
@@ -470,28 +476,32 @@ class AiosqliteConnectionPool:
             await self._retire_connection(connection, reason="unhealthy")
             return
 
+        reset_error: BaseException | None = None
         try:
             await end_transaction(raw_conn, commit=False)
             await self._reset_connection(raw_conn)
             connection.idle_since = time.time()
             self._queue.put_nowait(connection)
         except BaseException as e:
-            if isinstance(e, Exception):
-                log_with_context(
-                    logger,
-                    logging.WARNING,
-                    "pool.connection.reset.error",
-                    adapter=_ADAPTER_NAME,
-                    pool_id=self._pool_id,
-                    connection_id=connection.id,
-                    error=str(e),
-                )
-                connection.mark_unhealthy()
-                await self._retire_connection(connection)
-                return
+            reset_error = e
+        if reset_error is None:
+            return
+        if isinstance(reset_error, Exception):
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "pool.connection.reset.error",
+                adapter=_ADAPTER_NAME,
+                pool_id=self._pool_id,
+                connection_id=connection.id,
+                error=str(reset_error),
+            )
             connection.mark_unhealthy()
             await self._retire_connection(connection)
-            raise
+            return
+        connection.mark_unhealthy()
+        await self._retire_connection(connection)
+        raise reset_error
 
     def get_connection(self) -> "AiosqlitePoolConnectionContext":
         """Get a connection with automatic release."""
@@ -1020,13 +1030,16 @@ class AiosqliteConnectionPool:
                 if idle_time <= self._health_check_interval and connection.is_healthy:
                     connection.idle_since = None
                     return connection
+            claim_error: BaseException | None = None
             try:
                 if await self._claim_if_healthy(connection):
                     return connection
-            except BaseException:
+            except BaseException as exc:
+                claim_error = exc
+            if claim_error is not None:
                 if not connection.is_closed and connection.id in self._connection_registry:
                     await self._retire_connection(connection)
-                raise
+                raise claim_error
 
         if len(self._connection_registry) + self._in_flight_creations < self._pool_size:
             new_connection = await self._try_provision_new_connection()
@@ -1104,6 +1117,7 @@ def _quote_identifier(name: str) -> str:
 
 async def _attempt_wal_switch(connection: "AiosqliteConnection", attempt: int) -> bool:
     """Attempt a single WAL mode switch, returning True on success."""
+    locked = False
     try:
         cursor = await connection.execute("PRAGMA journal_mode = WAL")
         if cursor is not None and callable(getattr(cursor, "close", None)):
@@ -1112,6 +1126,8 @@ async def _attempt_wal_switch(connection: "AiosqliteConnection", attempt: int) -
     except sqlite3.OperationalError as exc:
         if "locked" not in str(exc) or attempt == SQLITE_WAL_SWITCH_ATTEMPTS - 1:
             raise
+        locked = True
+    if locked:
         await asyncio.sleep(SQLITE_WAL_SWITCH_DELAY)
         return False
     return True

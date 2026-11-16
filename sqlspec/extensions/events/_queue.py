@@ -933,6 +933,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         async with cast(
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
         ) as driver:
+            claim_error: Exception | None = None
             try:
                 row = await self._fetch_candidate_with_driver(driver, channel, current_time)
                 if row is None:
@@ -958,10 +959,13 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                     return None
                 await driver.commit()
                 return self._claimed_event(row, leased_until)
-            except Exception:
+            except Exception as exc:
+                claim_error = exc
+            if claim_error is not None:
                 with suppress(Exception):
                     await driver.rollback()
-                raise
+                raise claim_error
+        return None
 
     async def _fetch_candidate_with_driver(
         self, driver: "AsyncDriverAdapterBase", channel: str, current_time: "datetime"

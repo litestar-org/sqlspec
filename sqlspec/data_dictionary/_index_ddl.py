@@ -321,11 +321,14 @@ class AsyncWithoutIndexesContext:
             )
             drop_sql = build_drop_index_sql(dialect, idx, ddl_table, schema=ddl_schema)
             if drop_sql and create_sql:
+                drop_error: BaseException | None = None
                 try:
                     await self._driver.execute(drop_sql)
-                except BaseException:
+                except BaseException as exc:
+                    drop_error = exc
+                if drop_error is not None:
                     await self._restore_dropped_indexes()
-                    raise
+                    raise drop_error
                 self._rebuild_statements.append(create_sql)
         return self
 

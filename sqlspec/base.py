@@ -1030,6 +1030,7 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
             driver: Any = None
             raw_connection: Any | None = None
             connection_created = False
+            enter_error: BaseException | None = None
             try:
                 prepared: Any = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
                 driver = prepared
@@ -1039,10 +1040,12 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                     connection_created = True
                 await self._runtime.emit_session_start_async(prepared)
             except BaseException as exc:
+                enter_error = exc
+            if enter_error is not None:
                 self._value = None
                 try:
                     try:
-                        await self._context.__aexit__(type(exc), exc, exc.__traceback__)
+                        await self._context.__aexit__(type(enter_error), enter_error, enter_error.__traceback__)
                     finally:
                         if (
                             connection_created
@@ -1053,16 +1056,19 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                 finally:
                     if driver is not None:
                         driver._mark_closed()
-                raise
+                raise enter_error
             self._value = prepared
             return cast("ContextValueT", prepared)
 
+        create_error: BaseException | None = None
         try:
             await self._runtime.emit_connection_create_async(value)
         except BaseException as exc:
+            create_error = exc
+        if create_error is not None:
             self._value = None
-            await self._context.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
+            await self._context.__aexit__(type(create_error), create_error, create_error.__traceback__)
+            raise create_error
         self._value = value
         return cast("ContextValueT", value)
 
@@ -1179,6 +1185,7 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
         runtime = selected.get_observability_runtime()
         connection = value.connection if self._session else value
         connection_created = False
+        enter_error: BaseException | None = None
         try:
             if connection is not None and connection is not _CLOSED_CONNECTION:
                 await runtime.emit_connection_create_async(connection)
@@ -1186,18 +1193,20 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
             if self._session:
                 await runtime.emit_session_start_async(value)
         except BaseException as exc:
+            enter_error = exc
+        if enter_error is not None:
             self._value = None
             self._runtime = None
             try:
                 try:
-                    await self._context.__aexit__(type(exc), exc, exc.__traceback__)
+                    await self._context.__aexit__(type(enter_error), enter_error, enter_error.__traceback__)
                 finally:
                     if connection_created and connection is not None and connection is not _CLOSED_CONNECTION:
                         await runtime.emit_connection_destroy_async(connection)
             finally:
                 if self._session:
                     value._mark_closed()
-            raise
+            raise enter_error
         self._runtime = runtime
         self._value = value
         return cast("ContextValueT", value)

@@ -1736,6 +1736,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                     raise wrapped
                 raise step_error
         else:
+            reconcile_error: BaseException | None = None
             try:
                 if default_schema:
                     await driver.set_migration_non_transactional_schema(default_schema)
@@ -1743,14 +1744,16 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 await self._commit_nontransactional_if_needed(driver)
                 execution_time = int((time.perf_counter() - start_time) * 1000)
             except BaseException as exc:
+                reconcile_error = exc
+            if reconcile_error is not None:
                 await self._recover_failed_migration(driver, in_transaction=False, schema_active=bool(default_schema))
-                if isinstance(exc, Exception):
-                    wrapped = self._wrap_reconciler_error(descriptor, exc)
+                if isinstance(reconcile_error, Exception):
+                    wrapped = self._wrap_reconciler_error(descriptor, reconcile_error)
                     self._finish_migration_span_error(
                         span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
                     )
                     raise wrapped
-                raise
+                raise reconcile_error
 
         try:
             if default_schema:
@@ -1835,6 +1838,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             return execution_time
 
         schema_reset = False
+        script_error: BaseException | None = None
         try:
             if default_schema:
                 await driver.set_migration_non_transactional_schema(default_schema)
@@ -1847,11 +1851,13 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                     await driver.reset_migration_session_schema()
                     schema_reset = True
                 await on_success(execution_time)
-        except BaseException:
+        except BaseException as exc:
+            script_error = exc
+        if script_error is not None:
             await self._recover_failed_migration(
                 driver, in_transaction=False, schema_active=bool(default_schema) and not schema_reset
             )
-            raise
+            raise script_error
         if default_schema and not schema_reset:
             await driver.reset_migration_session_schema()
         return execution_time

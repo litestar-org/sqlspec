@@ -1400,6 +1400,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             except NotImplementedError:
                 caller_in_transaction = False
 
+            stack_failure: Exception | None = None
             try:
                 if single_transaction and not caller_in_transaction:
                     await self.begin()
@@ -1440,13 +1441,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
                 if started_transaction:
                     await self._commit_stack_success()
-            except Exception:
+            except Exception as exc:
+                stack_failure = exc
+            if stack_failure is not None:
                 if started_transaction:
                     try:
                         await self.rollback()
                     except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after stack failure failed: %s", rollback_error)
-                raise
+                raise stack_failure
 
         return tuple(results)
 
@@ -1749,12 +1752,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         span = runtime.start_query_span(observed_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
         started = perf_counter()
         self._pending_statement_profile = None
+        run_error: Exception | None = None
         try:
             result = await runner(**runner_kwargs)
         except Exception as exc:
+            run_error = exc
+        if run_error is not None:
             self._pending_statement_profile = None
-            runtime.span_manager.end_span(span, error=exc)
-            await runtime.emit_error_async(exc, **query_context)
+            runtime.span_manager.end_span(span, error=run_error)
+            await runtime.emit_error_async(run_error, **query_context)
             runtime.emit_statement_event(
                 sql=observed_sql,
                 parameters=execution_parameters,
@@ -1772,7 +1778,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 profile=None,
                 db_system=db_system,
             )
-            raise
+            raise run_error
         profile = self._consume_statement_profile()
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
@@ -3170,14 +3176,17 @@ class _AsyncDriverTransaction(Generic[_AsyncDriverT]):
             if exc_type is not None:
                 await driver.rollback()
                 return False
+            commit_error: BaseException | None = None
             try:
                 await driver.commit()
-            except BaseException:
+            except BaseException as error:
+                commit_error = error
+            if commit_error is not None:
                 try:
                     await driver.rollback()
                 except Exception:
                     logger.debug("Rollback after a failed commit also failed", exc_info=True)
-                raise
+                raise commit_error
             return False
         finally:
             if entered and driver._transaction_depth > 0:
