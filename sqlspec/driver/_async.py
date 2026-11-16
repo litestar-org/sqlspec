@@ -1407,13 +1407,16 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                     started_transaction = True
 
                 for index, operation in enumerate(stack.operations):
+                    operation_error: Exception | None = None
                     try:
                         result = await self._execute_stack_operation(operation)
                     except Exception as exc:  # pragma: no cover
+                        operation_error = exc
+                    if operation_error is not None:
                         stack_error = StackExecutionError(
                             index,
                             describe_stack_statement(operation.statement),
-                            exc,
+                            operation_error,
                             adapter=type(self).__name__,
                             mode="continue-on-error" if continue_on_error else "fail-fast",
                         )
@@ -1432,14 +1435,16 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                             results.append(StackResult.from_error(stack_error))
                             continue
 
-                        raise stack_error from exc
+                        stack_error.__cause__ = operation_error
+                        stack_failure = stack_error
+                        break
 
                     results.append(StackResult(result=result))
 
                     if continue_on_error and not caller_in_transaction:
                         await self._commit_stack_success()
 
-                if started_transaction:
+                if stack_failure is None and started_transaction:
                     await self._commit_stack_success()
             except Exception as exc:
                 stack_failure = exc
@@ -2031,6 +2036,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         cursor_entered = False
         exit_suppressed = False
         error: Exception | None = None
+        interruption: BaseException | None = None
         execution_result: ExecutionResult | None = None
         result: SQLResult | None = None
         try:
@@ -2053,12 +2059,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 result = self.build_statement_result(statement, execution_result)
         except Exception as exc:
             error = exc
-        finally:
-            if cursor_entered:
-                if error is None:
-                    await cursor_manager.__aexit__(None, None, None)
-                else:
-                    exit_suppressed = bool(await cursor_manager.__aexit__(type(error), error, error.__traceback__))
+        except BaseException as exc:
+            interruption = exc
+        if cursor_entered:
+            if error is None:
+                await cursor_manager.__aexit__(None, None, None)
+            else:
+                exit_suppressed = bool(await cursor_manager.__aexit__(type(error), error, error.__traceback__))
+        if interruption is not None:
+            raise interruption
         if error is not None and not exit_suppressed:
             raise error
         assert result is not None

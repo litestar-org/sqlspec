@@ -218,6 +218,7 @@ class PsqlpyListenerHub:
             queues[consumer_task] = consumer_queue
         self._queues[channel] = queues
         self._callbacks[channel] = callback
+        subscribe_error: BaseException | None = None
         try:
             await listener.add_callback(channel=channel, callback=callback.__call__)
             if self._listener_started:
@@ -225,12 +226,14 @@ class PsqlpyListenerHub:
             listener.listen()
             self._listener_started = True
             await self._wait_until_ready(channel, timeout=ready_timeout)
-        except BaseException:
+        except BaseException as exc:
+            subscribe_error = exc
+        if subscribe_error is not None:
             self._queues.pop(channel, None)
             self._callbacks.pop(channel, None)
             with contextlib.suppress(Exception):
                 await listener.clear_channel_callbacks(channel=channel)
-            raise
+            raise subscribe_error
         return consumer_queue
 
     def _resolve_listener_config(self) -> "PsqlpyConfig":
@@ -276,14 +279,17 @@ class PsqlpyListenerHub:
         listener = pool.listener()
         await listener.startup()
         self._listener = listener
+        callback_error: Exception | None = None
         try:
             for channel, callback in self._callbacks.items():
                 await listener.add_callback(channel=channel, callback=callback.__call__)
-        except Exception:
+        except Exception as exc:
+            callback_error = exc
+        if callback_error is not None:
             self._listener = None
             with contextlib.suppress(Exception):
                 await listener.shutdown()
-            raise
+            raise callback_error
         if self._callbacks:
             listener.listen()
             self._listener_started = True

@@ -4,7 +4,7 @@ import contextlib
 import math
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -307,14 +307,18 @@ class MysqlConnectorAsyncStreamSource:
         self._cursor = None
         connection = self._driver.connection
         raw_connection = getattr(connection, "_cnx", None) or connection
+        consume_error: BaseException | None = None
         try:
             with contextlib.suppress(Exception):
                 if getattr(raw_connection, "unread_result", False):
                     await raw_connection.consume_results()
-        finally:
-            if cursor is not None:
-                with contextlib.suppress(Exception):
-                    await cursor.close()
+        except BaseException as exc:
+            consume_error = exc
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                await cursor.close()
+        if consume_error is not None:
+            raise consume_error
 
     async def _start(self) -> None:
         start_error: BaseException | None = None
@@ -668,39 +672,50 @@ async def execute_cache_hit_async(
     deserializer, json_type_codes, cursor_options = state
     try:
         cursor = await (connection.cursor() if cursor_options is None else connection.cursor(**cursor_options))
+        error: BaseException | None = None
+        result: SQLResult | None = None
         try:
             if params:
                 await cursor.execute(compiled_sql, params)
             else:
                 await cursor.execute(compiled_sql)
             if not cached.operation_profile.returns_rows:
-                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
-            fetched_data = await cursor.fetchall()
-            rows, column_names, _row_format = collect_rows(
-                fetched_data, resolve_row_plan(cursor.description or None, json_type_codes), deserializer, logger=logger
-            )
-            return SQLResult.create_cached_select(
-                sql,
-                statement_config,
-                cached.processed_state,
-                compiled_sql,
-                params,
-                rows,
-                column_names,
-                len(rows),
-                resolve_row_format(rows),
-            )
-        finally:
-            raw_connection = getattr(connection, "_cnx", None) or connection
-            with contextlib.suppress(Exception):
-                if getattr(raw_connection, "unread_result", False):
-                    await raw_connection.consume_results()
-            with contextlib.suppress(Exception):
-                await cursor.close()
+                result = DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            else:
+                fetched_data = await cursor.fetchall()
+                rows, column_names, _row_format = collect_rows(
+                    fetched_data,
+                    resolve_row_plan(cursor.description or None, json_type_codes),
+                    deserializer,
+                    logger=logger,
+                )
+                result = SQLResult.create_cached_select(
+                    sql,
+                    statement_config,
+                    cached.processed_state,
+                    compiled_sql,
+                    params,
+                    rows,
+                    column_names,
+                    len(rows),
+                    resolve_row_format(rows),
+                )
+        except BaseException as cleanup_trigger:
+            error = cleanup_trigger
+        raw_connection = getattr(connection, "_cnx", None) or connection
+        with contextlib.suppress(Exception):
+            if getattr(raw_connection, "unread_result", False):
+                await raw_connection.consume_results()
+        with contextlib.suppress(Exception):
+            await cursor.close()
+        if error is not None:
+            raise error
     except MysqlConnectorError as exc:
         mapped_error = create_mapped_exception(exc)
         mapped_error.__cause__ = exc
         raise mapped_error from exc
+    else:
+        return cast("SQLResult", result)
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:

@@ -229,11 +229,14 @@ class OracleAsyncAQHub:
                 format_aq_correlation(channel, self._backend_name),
                 allow_condition=self._backend_name != "txeventq",
             )
+            dequeue_error: Exception | None = None
             try:
                 message = await queue.deqone()
             except Exception as error:
-                if not isinstance(error, OracleDatabaseError):
-                    raise
+                dequeue_error = error
+            if dequeue_error is not None:
+                if not isinstance(dequeue_error, OracleDatabaseError):
+                    raise dequeue_error
                 log_with_context(
                     logger,
                     logging.WARNING,
@@ -241,7 +244,7 @@ class OracleAsyncAQHub:
                     adapter_name="oracledb",
                     backend_name=self._backend_name,
                     mode="async",
-                    error_type=type(error).__name__,
+                    error_type=type(dequeue_error).__name__,
                     status="failed",
                 )
                 with contextlib.suppress(Exception):

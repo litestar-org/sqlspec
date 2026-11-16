@@ -191,14 +191,17 @@ class PsycopgAsyncTenantLease(AsyncTenantLease):
             await current.__aexit__(None, None, None)
 
     async def _invalidate(self, connection: Any) -> None:
+        close_error: BaseException | None = None
         try:
             await connection.close()
-        except BaseException as close_error:
+        except BaseException as exc:
+            close_error = exc
+        if close_error is not None:
             try:
                 await self._pool.close(timeout=0)
             except BaseException as quarantine_error:
                 raise _quarantine_error(close_error, quarantine_error)
-            raise
+            raise close_error
         await self._release(connection)
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:

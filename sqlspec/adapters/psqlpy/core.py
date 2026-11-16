@@ -352,12 +352,15 @@ class PsqlpyStreamSource:
             with contextlib.suppress(Exception):
                 cursor.close()
         if transaction is not None:
+            finish_error: Exception | None = None
             try:
                 if error:
                     await transaction.rollback()
                 else:
                     await transaction.commit()
-            except Exception:
+            except Exception as exc:
+                finish_error = exc
+            if finish_error is not None:
                 with contextlib.suppress(Exception):
                     await transaction.rollback()
 

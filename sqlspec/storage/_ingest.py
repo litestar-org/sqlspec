@@ -190,6 +190,7 @@ async def execute_staged_load_async(
     execute_ddl = driver.execute_script if dialect in SAP_DIALECTS else driver.execute
     for ddl in build_stage_table_ddl(dialect, table, resolved_stage, multi_worker=multi_worker):
         await execute_ddl(ddl)
+    load_error: BaseException | None = None
     try:
         if overwrite and not conflict_keys:
             await driver.execute(
@@ -218,11 +219,14 @@ async def execute_staged_load_async(
             else:
                 await driver.execute(merge_sql)
         job.telemetry["destination"] = table
-        return job
-    finally:
-        if drop_stage_table:
-            with contextlib.suppress(Exception):
-                await driver.execute(build_drop_stage_table_sql(dialect, resolved_stage))
+    except BaseException as exc:
+        load_error = exc
+    if drop_stage_table:
+        with contextlib.suppress(Exception):
+            await driver.execute(build_drop_stage_table_sql(dialect, resolved_stage))
+    if load_error is not None:
+        raise load_error
+    return job
 
 
 def execute_load_from_storage_sync(
@@ -361,11 +365,7 @@ def execute_load_from_storage_sync(
                     )
                 continue
             shard_cols = list(shard_table.column_names) if hasattr(shard_table, "column_names") else []
-            if not observed_columns:
-                observed_columns = shard_cols
-            elif shard_cols != observed_columns:
-                msg = f"Shard {shard_uri!r} columns {shard_cols} do not match expected columns {observed_columns}"
-                raise SQLSpecError(msg)
+            observed_columns = _matching_shard_columns(shard_uri, shard_cols, observed_columns)
             w0 = perf_counter()
             shard_overwrite = bool(
                 overwrite and not wrote_first_non_empty_shard and resolved_stage is None and not conflict_keys
@@ -419,6 +419,20 @@ def execute_load_from_storage_sync(
     telemetry_payload["destination"] = table
     attach_partition_telemetry(telemetry_payload, partitioner)
     return create_storage_job(telemetry_payload)
+
+
+def _matching_shard_columns(shard_uri: str, shard_columns: list[str], observed_columns: list[str]) -> list[str]:
+    """Return the columns every shard must share, taken from the first non-empty shard.
+
+    Raises:
+        SQLSpecError: The shard's columns differ from the columns already observed.
+    """
+    if not observed_columns:
+        return shard_columns
+    if shard_columns != observed_columns:
+        msg = f"Shard {shard_uri!r} columns {shard_columns} do not match expected columns {observed_columns}"
+        raise SQLSpecError(msg)
+    return observed_columns
 
 
 async def execute_load_from_storage_async(
@@ -537,6 +551,7 @@ async def execute_load_from_storage_async(
     wrote_first_non_empty_shard = False
     start_wall = perf_counter()
 
+    load_error: BaseException | None = None
     try:
         if overwrite and pending_shards and not conflict_keys:
             await driver.execute(
@@ -573,11 +588,7 @@ async def execute_load_from_storage_async(
                     )
                 continue
             shard_cols = list(shard_table.column_names) if hasattr(shard_table, "column_names") else []
-            if not observed_columns:
-                observed_columns = shard_cols
-            elif shard_cols != observed_columns:
-                msg = f"Shard {shard_uri!r} columns {shard_cols} do not match expected columns {observed_columns}"
-                raise SQLSpecError(msg)
+            observed_columns = _matching_shard_columns(shard_uri, shard_cols, observed_columns)
             w0 = perf_counter()
             shard_overwrite = bool(
                 overwrite and not wrote_first_non_empty_shard and resolved_stage is None and not conflict_keys
@@ -613,10 +624,13 @@ async def execute_load_from_storage_async(
             else:
                 await driver.execute(merge_sql)
             write_duration += perf_counter() - w0
-    finally:
-        if resolved_stage is not None and drop_stage_table:
-            with contextlib.suppress(Exception):
-                await driver.execute(build_drop_stage_table_sql(dialect, resolved_stage))
+    except BaseException as exc:
+        load_error = exc
+    if resolved_stage is not None and drop_stage_table:
+        with contextlib.suppress(Exception):
+            await driver.execute(build_drop_stage_table_sql(dialect, resolved_stage))
+    if load_error is not None:
+        raise load_error
 
     telemetry_payload = ingest_telemetry_from_batches(
         total_rows,

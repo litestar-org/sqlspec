@@ -579,6 +579,8 @@ async def execute_cache_hit_async(
     if compiled_sql.count("%") != (cached.parameter_profile.total_count if params else 0):
         return None
     cursor: Any = None
+    error: BaseException | None = None
+    result: SQLResult | None = None
     try:
         cursor = connection.cursor()
         if params:
@@ -586,31 +588,36 @@ async def execute_cache_hit_async(
         else:
             await cursor.execute(compiled_sql)
         if not cached.operation_profile.returns_rows:
-            return DMLResult(cached.operation_type, resolve_rowcount(cursor))
-        fetched = await cursor.fetchall()
-        data: list[Any] = fetched or []
-        description = cursor.description
-        column_names: list[str] = [column.name for column in description] if description else []
-        return SQLResult.create_cached_select(
-            sql,
-            statement_config,
-            cached.processed_state,
-            compiled_sql,
-            params,
-            data,
-            column_names,
-            len(data),
-            resolve_row_format(data),
-            None,
-        )
+            result = DMLResult(cached.operation_type, resolve_rowcount(cursor))
+        else:
+            fetched = await cursor.fetchall()
+            data: list[Any] = fetched or []
+            description = cursor.description
+            column_names: list[str] = [column.name for column in description] if description else []
+            result = SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                params,
+                data,
+                column_names,
+                len(data),
+                resolve_row_format(data),
+                None,
+            )
     except psycopg.Error as exc:
         mapped_error = create_mapped_exception(exc)
         mapped_error.__cause__ = exc
-        raise mapped_error from exc
-    finally:
-        if cursor is not None:
-            with contextlib.suppress(Exception):
-                await cursor.close()
+        error = mapped_error
+    except BaseException as cleanup_trigger:
+        error = cleanup_trigger
+    if cursor is not None:
+        with contextlib.suppress(Exception):
+            await cursor.close()
+    if error is not None:
+        raise error
+    return result
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:

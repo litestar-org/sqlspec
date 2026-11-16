@@ -1894,12 +1894,16 @@ async def _insert_table_rows_async(
     identity_insert = _identity_insert_statements(dialect, family, table, inserted_columns, columns)
     if identity_insert is not None:
         await driver.execute(identity_insert[0])
+    insert_error: BaseException | None = None
     try:
         for start in range(0, len(rows), batch_size):
             await driver.execute_many(statement, rows[start : start + batch_size])
-    finally:
-        if identity_insert is not None:
-            await driver.execute(identity_insert[1])
+    except BaseException as exc:
+        insert_error = exc
+    if identity_insert is not None:
+        await driver.execute(identity_insert[1])
+    if insert_error is not None:
+        raise insert_error
     return len(rows)
 
 

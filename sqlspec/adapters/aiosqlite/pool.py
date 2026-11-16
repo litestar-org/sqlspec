@@ -583,9 +583,12 @@ class AiosqliteConnectionPool:
             connection.mark_unhealthy()
             await self._retire_connection(connection, reason="unhealthy")
             return
+        reset_error: Exception | None = None
         try:
             await self._reset_connection(connection.connection)
         except Exception as e:
+            reset_error = e
+        if reset_error is not None:
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -593,7 +596,7 @@ class AiosqliteConnectionPool:
                 adapter=_ADAPTER_NAME,
                 pool_id=self._pool_id,
                 connection_id=connection.id,
-                error_type=type(e).__name__,
+                error_type=type(reset_error).__name__,
             )
             connection.mark_unhealthy()
             await self._retire_connection(connection, reason="reset_failed")
@@ -759,6 +762,7 @@ class AiosqliteConnectionPool:
         """
         connection = await self.new_connection()
         registered = False
+        register_error: BaseException | None = None
         try:
             pool_connection = AiosqlitePoolConnection(connection)
             pool_connection.mark_as_idle()
@@ -781,11 +785,14 @@ class AiosqliteConnectionPool:
                             self._anchor_connection = sqlite3.connect(**sqlite_kwargs)
                     self._connection_registry[pool_connection.id] = pool_connection
                     registered = True
-        finally:
-            if not registered:
-                await self._discard_connection(connection)
-                if self.is_closed:
-                    await self._join_abandoned_workers()
+        except BaseException as exc:
+            register_error = exc
+        if not registered:
+            await self._discard_connection(connection)
+            if self.is_closed:
+                await self._join_abandoned_workers()
+        if register_error is not None:
+            raise register_error
 
         if not registered:
             msg = "Pool closed during connection creation"
@@ -814,12 +821,15 @@ class AiosqliteConnectionPool:
             return False
 
         if connection.idle_time > self._health_check_interval:
+            health_timeout: TimeoutError | None = None
             try:
                 is_alive = await asyncio.wait_for(connection.is_alive(), timeout=self._operation_timeout)
                 if not is_alive:
                     await self._retire_connection(connection, reason="health_check_failed")
                     return False
-            except TimeoutError:
+            except TimeoutError as exc:
+                health_timeout = exc
+            if health_timeout is not None:
                 await self._retire_connection(connection, reason="health_check_timeout")
                 return False
 
@@ -846,19 +856,23 @@ class AiosqliteConnectionPool:
         async with self._lock:
             self._connection_registry.pop(connection.id, None)
 
+        close_timed_out = False
         try:
-            await asyncio.wait_for(connection.close(), timeout=self._operation_timeout)
-        except TimeoutError:
-            log_with_context(
-                logger,
-                logging.WARNING,
-                "pool.connection.close.timeout",
-                adapter=_ADAPTER_NAME,
-                pool_id=self._pool_id,
-                connection_id=connection.id,
-                timeout_seconds=self._operation_timeout,
-            )
-            await self._force_stop_connection(connection, reason="retire_close_timeout")
+            try:
+                await asyncio.wait_for(connection.close(), timeout=self._operation_timeout)
+            except TimeoutError:
+                close_timed_out = True
+            if close_timed_out:
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "pool.connection.close.timeout",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    connection_id=connection.id,
+                    timeout_seconds=self._operation_timeout,
+                )
+                await self._force_stop_connection(connection, reason="retire_close_timeout")
         finally:
             self._detach_worker(connection.connection)
 
@@ -873,9 +887,13 @@ class AiosqliteConnectionPool:
                 return None
             self._in_flight_creations += 1
 
+        created: AiosqlitePoolConnection | None = None
+        create_error: BaseException | None = None
         try:
-            connection = await self._create_connection()
-        except BaseException:
+            created = await self._create_connection()
+            created.mark_as_in_use()
+        except BaseException as exc:
+            create_error = exc
             log_with_context(
                 logger,
                 logging.WARNING,
@@ -886,13 +904,11 @@ class AiosqliteConnectionPool:
                 pool_size=len(self._connection_registry),
                 max_size=self._pool_size,
             )
-            raise
-        else:
-            connection.mark_as_in_use()
-            return connection
-        finally:
-            async with self._lock:
-                self._in_flight_creations -= 1
+        async with self._lock:
+            self._in_flight_creations -= 1
+        if create_error is not None:
+            raise create_error
+        return created
 
     async def _wait_for_healthy_connection(self) -> AiosqlitePoolConnection:
         """Wait for a healthy connection to become available.
@@ -908,6 +924,8 @@ class AiosqliteConnectionPool:
             pool_closed_task = asyncio.create_task(self._closed_event.wait())
             pending: set[asyncio.Task[Any]] = {get_connection_task, pool_closed_task}
             claimed = False
+            claimed_connection: AiosqlitePoolConnection | None = None
+            wait_error: BaseException | None = None
 
             try:
                 done, pending = await asyncio.wait(
@@ -916,31 +934,36 @@ class AiosqliteConnectionPool:
 
                 if pool_closed_task in done:
                     msg = "Pool closed during connection acquisition"
-                    raise AiosqlitePoolClosedError(msg)
+                    wait_error = AiosqlitePoolClosedError(msg)
+                else:
+                    connection = get_connection_task.result()
+                    if await self._claim_if_healthy(connection):
+                        claimed = True
+                        claimed_connection = connection
 
-                connection = get_connection_task.result()
-                if await self._claim_if_healthy(connection):
-                    claimed = True
-                    return connection
-
-            finally:
-                for task in pending:
-                    task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await task
-                if (
-                    not claimed
-                    and get_connection_task.done()
-                    and not get_connection_task.cancelled()
-                    and get_connection_task.exception() is None
-                ):
-                    unclaimed = get_connection_task.result()
-                    if not unclaimed.is_closed and unclaimed.id in self._connection_registry:
-                        if self._closed_event.is_set():
-                            await self._retire_connection(unclaimed)
-                        else:
-                            with suppress(asyncio.QueueFull):
-                                self._queue.put_nowait(unclaimed)
+            except BaseException as exc:
+                wait_error = exc
+            for task in pending:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            if (
+                not claimed
+                and get_connection_task.done()
+                and not get_connection_task.cancelled()
+                and get_connection_task.exception() is None
+            ):
+                unclaimed = get_connection_task.result()
+                if not unclaimed.is_closed and unclaimed.id in self._connection_registry:
+                    if self._closed_event.is_set():
+                        await self._retire_connection(unclaimed)
+                    else:
+                        with suppress(asyncio.QueueFull):
+                            self._queue.put_nowait(unclaimed)
+            if wait_error is not None:
+                raise wait_error
+            if claimed_connection is not None:
+                return claimed_connection
 
     async def _warm_pool(self) -> None:
         """Pre-create minimum connections for pool warming.
@@ -963,6 +986,7 @@ class AiosqliteConnectionPool:
                 return
             self._in_flight_creations += connections_needed
 
+        warm_error: BaseException | None = None
         try:
             log_with_context(
                 logger,
@@ -989,9 +1013,12 @@ class AiosqliteConnectionPool:
                         pool_id=self._pool_id,
                         error=str(result),
                     )
-        finally:
-            async with self._lock:
-                self._in_flight_creations -= connections_needed
+        except BaseException as exc:
+            warm_error = exc
+        async with self._lock:
+            self._in_flight_creations -= connections_needed
+        if warm_error is not None:
+            raise warm_error
 
     def _try_acquire_idle_connection(self) -> "AiosqlitePoolConnection | None":
         """Synchronously claim a warm, recently-idle connection when available."""
@@ -1195,11 +1222,15 @@ async def _apply_runtime_setup(connection: "AiosqliteConnection", runtime_setup:
     extensions = runtime_setup.get("extensions")
     if extensions:
         await connection.enable_load_extension(True)
+        load_error: BaseException | None = None
         try:
             for extension_path in extensions:
                 await connection.load_extension(extension_path)
-        finally:
-            await connection.enable_load_extension(False)
+        except BaseException as exc:
+            load_error = exc
+        await connection.enable_load_extension(False)
+        if load_error is not None:
+            raise load_error
 
     for function_config in runtime_setup.get("custom_functions", ()):
         await connection.create_function(

@@ -516,35 +516,46 @@ async def execute_cache_hit(
     deserializer, json_type_codes = state
     try:
         cursor = await connection.cursor()
+        error: BaseException | None = None
+        result: SQLResult | None = None
         try:
             if params:
                 await cursor.execute(compiled_sql, params)
             else:
                 await cursor.execute(compiled_sql)
             if not cached.operation_profile.returns_rows:
-                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
-            fetched_data = await cursor.fetchall()
-            rows, column_names, _row_format = collect_rows(
-                fetched_data, resolve_row_plan(cursor.description or None, json_type_codes), deserializer, logger=logger
-            )
-            return SQLResult.create_cached_select(
-                sql,
-                statement_config,
-                cached.processed_state,
-                compiled_sql,
-                params,
-                rows,
-                column_names,
-                len(rows),
-                resolve_row_format(rows),
-            )
-        finally:
-            with contextlib.suppress(Exception):
-                await cursor.close()
+                result = DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            else:
+                fetched_data = await cursor.fetchall()
+                rows, column_names, _row_format = collect_rows(
+                    fetched_data,
+                    resolve_row_plan(cursor.description or None, json_type_codes),
+                    deserializer,
+                    logger=logger,
+                )
+                result = SQLResult.create_cached_select(
+                    sql,
+                    statement_config,
+                    cached.processed_state,
+                    compiled_sql,
+                    params,
+                    rows,
+                    column_names,
+                    len(rows),
+                    resolve_row_format(rows),
+                )
+        except BaseException as cleanup_trigger:
+            error = cleanup_trigger
+        with contextlib.suppress(Exception):
+            await cursor.close()
+        if error is not None:
+            raise error
     except AiomysqlPymysqlError as exc:
         mapped_error = create_mapped_exception(exc)
         mapped_error.__cause__ = exc
         raise mapped_error from exc
+    else:
+        return result
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:

@@ -217,17 +217,20 @@ class AsyncpgListenerHub:
         self._connection_cm = connection_cm
         self._connection = connection
         listener_connection = cast("Any", connection)
+        listen_error: Exception | None = None
         try:
             for channel, callback in self._callbacks.items():
                 validated = normalize_event_channel_name(channel)
                 await listener_connection.execute(f"LISTEN {_quote_channel_identifier(validated)}")
                 await listener_connection.add_listener(channel, callback)
-        except Exception:
+        except Exception as exc:
+            listen_error = exc
+        if listen_error is not None:
             self._connection = None
             self._connection_cm = None
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
-            raise
+            raise listen_error
         _record_listener_lifecycle(self._config, self._backend_name, "acquire")
         if reconnecting:
             _record_listener_lifecycle(self._config, self._backend_name, "reconnect")

@@ -1044,18 +1044,16 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
             if enter_error is not None:
                 self._value = None
                 try:
+                    await self._context.__aexit__(type(enter_error), enter_error, enter_error.__traceback__)
+                except BaseException as exc:
+                    enter_error = exc
+                if connection_created and raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                     try:
-                        await self._context.__aexit__(type(enter_error), enter_error, enter_error.__traceback__)
-                    finally:
-                        if (
-                            connection_created
-                            and raw_connection is not None
-                            and raw_connection is not _CLOSED_CONNECTION
-                        ):
-                            await self._runtime.emit_connection_destroy_async(raw_connection)
-                finally:
-                    if driver is not None:
-                        driver._mark_closed()
+                        await self._runtime.emit_connection_destroy_async(raw_connection)
+                    except BaseException as exc:
+                        enter_error = exc
+                if driver is not None:
+                    driver._mark_closed()
                 raise enter_error
             self._value = prepared
             return cast("ContextValueT", prepared)
@@ -1077,23 +1075,31 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
     ) -> "bool | None":
         value = self._value
         raw_connection = value.connection if value is not None and self._config is not None else None
+        exit_error: BaseException | None = None
+        suppressed: bool | None = None
         try:
-            return await self._context.__aexit__(exc_type, exc_val, exc_tb)
-        finally:
-            self._value = None
-            if value is not None:
-                if self._config is None:
-                    if value is not _CLOSED_CONNECTION:
-                        await self._runtime.emit_connection_destroy_async(value)
-                else:
+            suppressed = await self._context.__aexit__(exc_type, exc_val, exc_tb)
+        except BaseException as exc:
+            exit_error = exc
+        self._value = None
+        if value is not None:
+            if self._config is None:
+                if value is not _CLOSED_CONNECTION:
+                    await self._runtime.emit_connection_destroy_async(value)
+            else:
+                try:
+                    await self._runtime.emit_session_end_async(value)
+                except BaseException as exc:
+                    exit_error = exc
+                if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                     try:
-                        try:
-                            await self._runtime.emit_session_end_async(value)
-                        finally:
-                            if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
-                                await self._runtime.emit_connection_destroy_async(raw_connection)
-                    finally:
-                        value._mark_closed()
+                        await self._runtime.emit_connection_destroy_async(raw_connection)
+                    except BaseException as exc:
+                        exit_error = exc
+                value._mark_closed()
+        if exit_error is not None:
+            raise exit_error
+        return suppressed
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1198,14 +1204,16 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
             self._value = None
             self._runtime = None
             try:
+                await self._context.__aexit__(type(enter_error), enter_error, enter_error.__traceback__)
+            except BaseException as exc:
+                enter_error = exc
+            if connection_created and connection is not None and connection is not _CLOSED_CONNECTION:
                 try:
-                    await self._context.__aexit__(type(enter_error), enter_error, enter_error.__traceback__)
-                finally:
-                    if connection_created and connection is not None and connection is not _CLOSED_CONNECTION:
-                        await runtime.emit_connection_destroy_async(connection)
-            finally:
-                if self._session:
-                    value._mark_closed()
+                    await runtime.emit_connection_destroy_async(connection)
+                except BaseException as exc:
+                    enter_error = exc
+            if self._session:
+                value._mark_closed()
             raise enter_error
         self._runtime = runtime
         self._value = value
@@ -1217,19 +1225,27 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
         value = self._value
         runtime = self._runtime
         connection = value.connection if self._session and value is not None else value
+        exit_error: BaseException | None = None
+        suppressed: bool | None = None
         try:
-            return await self._context.__aexit__(exc_type, exc_val, exc_tb)
-        finally:
-            self._value = None
-            self._runtime = None
-            try:
-                if runtime is not None:
-                    try:
-                        if self._session and value is not None:
-                            await runtime.emit_session_end_async(value)
-                    finally:
-                        if connection is not None and connection is not _CLOSED_CONNECTION:
-                            await runtime.emit_connection_destroy_async(connection)
-            finally:
-                if self._session and value is not None:
-                    value._mark_closed()
+            suppressed = await self._context.__aexit__(exc_type, exc_val, exc_tb)
+        except BaseException as exc:
+            exit_error = exc
+        self._value = None
+        self._runtime = None
+        if runtime is not None:
+            if self._session and value is not None:
+                try:
+                    await runtime.emit_session_end_async(value)
+                except BaseException as exc:
+                    exit_error = exc
+            if connection is not None and connection is not _CLOSED_CONNECTION:
+                try:
+                    await runtime.emit_connection_destroy_async(connection)
+                except BaseException as exc:
+                    exit_error = exc
+        if self._session and value is not None:
+            value._mark_closed()
+        if exit_error is not None:
+            raise exit_error
+        return suppressed

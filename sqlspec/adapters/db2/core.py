@@ -4,7 +4,7 @@ import contextlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from sqlspec.adapters.db2._typing import Db2Error
@@ -460,33 +460,41 @@ async def execute_cache_hit_async(
     compiled_sql = cached.compiled_sql
     try:
         cursor = await connection.cursor()
+        error: BaseException | None = None
+        result: SQLResult | None = None
         try:
             if parameters:
                 await cursor.execute(compiled_sql, parameters)
             else:
                 await cursor.execute(compiled_sql)
             if not cached.operation_profile.returns_rows:
-                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
-            fetched_data = await cursor.fetchall()
-            column_names = resolve_column_names(cursor.description or None, state[0], lowercase=state[1])
-            return SQLResult.create_cached_select(
-                sql,
-                statement_config,
-                cached.processed_state,
-                compiled_sql,
-                parameters,
-                fetched_data,
-                column_names,
-                len(fetched_data),
-                resolve_row_format(fetched_data),
-            )
-        finally:
-            with contextlib.suppress(Exception):
-                await cursor.close()
+                result = DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            else:
+                fetched_data = await cursor.fetchall()
+                column_names = resolve_column_names(cursor.description or None, state[0], lowercase=state[1])
+                result = SQLResult.create_cached_select(
+                    sql,
+                    statement_config,
+                    cached.processed_state,
+                    compiled_sql,
+                    parameters,
+                    fetched_data,
+                    column_names,
+                    len(fetched_data),
+                    resolve_row_format(fetched_data),
+                )
+        except BaseException as cleanup_trigger:
+            error = cleanup_trigger
+        with contextlib.suppress(Exception):
+            await cursor.close()
+        if error is not None:
+            raise error
     except Db2Error as exc:
         mapped_error = create_mapped_exception(exc, logger=logger)
         mapped_error.__cause__ = exc
         raise mapped_error from exc
+    else:
+        return cast("SQLResult", result)
 
 
 def _close_cursor(cursor: Any) -> None:

@@ -152,19 +152,27 @@ class Db2AsyncGlobalVariableStrategy(_Db2GlobalVariables):
     async def checkout(self, connection: Any, payload: "TenantContextPayload") -> TenantLeaseState:
         """Capture the previous values, assign the payload, and verify the server values."""
         names, values = self._assignments(payload)
+        cursor: Any = None
+        assign_error: BaseException | None = None
         try:
             cursor = await connection.cursor()
+            await cursor.execute(_read_sql(names))
+            prior = _row_values(await cursor.fetchone(), len(names))
+            await cursor.execute(_assign_sql(names), values)
+            await cursor.execute(_read_sql(names))
+            current = _row_values(await cursor.fetchone(), len(names))
+        except BaseException as exc:
+            assign_error = exc
+        if cursor is not None:
             try:
-                await cursor.execute(_read_sql(names))
-                prior = _row_values(await cursor.fetchone(), len(names))
-                await cursor.execute(_assign_sql(names), values)
-                await cursor.execute(_read_sql(names))
-                current = _row_values(await cursor.fetchone(), len(names))
-            finally:
                 await cursor.close()
-        except Exception as exc:
-            msg = "Db2 tenant global variables could not be set"
-            raise with_cause(TenantContextError(msg), exc)
+            except BaseException as exc:
+                assign_error = exc
+        if assign_error is not None:
+            if isinstance(assign_error, Exception):
+                msg = "Db2 tenant global variables could not be set"
+                raise with_cause(TenantContextError(msg), assign_error)
+            raise assign_error
         if current != values:
             msg = "Db2 tenant global variable verification failed"
             raise TenantContextError(msg)
@@ -176,17 +184,25 @@ class Db2AsyncGlobalVariableStrategy(_Db2GlobalVariables):
             return
         names = tuple(state.baseline)
         values = tuple(state.baseline.values())
+        cursor: Any = None
+        restore_error: BaseException | None = None
         try:
             cursor = await connection.cursor()
+            await cursor.execute(_assign_sql(names), values)
+            await cursor.execute(_read_sql(names))
+            restored = _row_values(await cursor.fetchone(), len(names))
+        except BaseException as exc:
+            restore_error = exc
+        if cursor is not None:
             try:
-                await cursor.execute(_assign_sql(names), values)
-                await cursor.execute(_read_sql(names))
-                restored = _row_values(await cursor.fetchone(), len(names))
-            finally:
                 await cursor.close()
-        except Exception as exc:
-            msg = "Db2 tenant global variables could not be restored"
-            raise with_cause(TenantCleanupError(msg), exc)
+            except BaseException as exc:
+                restore_error = exc
+        if restore_error is not None:
+            if isinstance(restore_error, Exception):
+                msg = "Db2 tenant global variables could not be restored"
+                raise with_cause(TenantCleanupError(msg), restore_error)
+            raise restore_error
         if restored != values:
             msg = "Db2 tenant global variable restore verification failed"
             raise TenantCleanupError(msg)

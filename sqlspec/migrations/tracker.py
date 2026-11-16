@@ -1399,9 +1399,12 @@ class _AsyncMigrationLockContext:
     async def _enter_lease(self) -> None:
         tracker = self._tracker
         target = tracker._lock_schema_target()
+        lease_error: SQLSpecError | None = None
         try:
             await ensure_schema_async(self._driver, [target], manage_schema=True, commit=True)
-        except SQLSpecError:
+        except SQLSpecError as exc:
+            lease_error = exc
+        if lease_error is not None:
             with suppress(Exception):
                 if await _driver_in_transaction_async(self._driver):
                     await self._driver.rollback()
@@ -1412,11 +1415,14 @@ class _AsyncMigrationLockContext:
         lease_ms = tracker.lock_lease_seconds * _MILLISECONDS_PER_SECOND
         while True:
             now_ms = _wall_clock_ms()
+            claim_error: IntegrityError | None = None
             try:
                 await self._driver.execute(tracker._lease_delete_expired(self._lock_name, now_ms))
                 await self._driver.execute(tracker._lease_insert(self._lock_name, owner_token, now_ms + lease_ms))
                 await tracker._safe_commit(self._driver)
-            except IntegrityError:
+            except IntegrityError as exc:
+                claim_error = exc
+            if claim_error is not None:
                 with suppress(Exception):
                     if await _driver_in_transaction_async(self._driver):
                         await self._driver.rollback()

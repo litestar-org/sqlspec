@@ -126,12 +126,16 @@ class CockroachAsyncpgTenantLease(AsyncTenantLease):
         await await_owned_release(self._pool.release(connection, timeout=timeout))
 
     async def _invalidate(self, connection: Any) -> None:
+        terminate_error: BaseException | None = None
         try:
             connection.terminate()
         except CockroachAsyncpgInterfaceError:
             pass
-        finally:
-            await self._release(connection)
+        except BaseException as exc:
+            terminate_error = exc
+        await self._release(connection)
+        if terminate_error is not None:
+            raise terminate_error
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         self._cleanup_deadline = asyncio.get_running_loop().time() + DEFAULT_TENANT_CLEANUP_TIMEOUT

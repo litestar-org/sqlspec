@@ -675,15 +675,18 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         priority = options.transaction_priority if options is not None else None
         if priority is None:
             priority = configured_priority
+        priority_error: BaseException | None = None
         try:
             self._initial_priority = get_oracle_transaction_priority(
                 connection, configured_priority=configured_priority
             )
             if priority is not None:
                 apply_oracle_transaction_priority(connection, priority)
-        except BaseException:
+        except BaseException as exc:
+            priority_error = exc
+        if priority_error is not None:
             await await_owned_disposal(self._invalidate(connection))
-            raise
+            raise priority_error
         bypass = payload.is_bypass
         hook = self._config.driver_features.get("session_context_hook") if bypass else None
         if hook is not None:
