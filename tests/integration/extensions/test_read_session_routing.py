@@ -1,5 +1,6 @@
 """Five-framework lazy read sessions against native PostgreSQL row policies."""
 
+import socket
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -258,8 +259,10 @@ def test_sanic_lazy_replica_sessions_keep_rls_and_checkout_ownership(
     async def blocked(request: Any) -> Any:
         return response.json(await _refuse_write(plugin.get_db_replica_session(request), table))
 
+    server_socket = socket.socket()
+    server_socket.bind(("127.0.0.1", 0))
     try:
-        with reusable_client(app) as client:
+        with reusable_client(app, port=server_socket.getsockname()[1], server_kwargs={"sock": server_socket}) as client:
             for method, path, tenant, expected, owner in [
                 ("get", "/", "a", {"values": [1], "read_only": "on"}, "replica"),
                 ("post", "/", "b", {"written": True}, "primary"),

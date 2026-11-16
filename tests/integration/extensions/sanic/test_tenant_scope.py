@@ -1,5 +1,6 @@
 """Sanic request tenant scopes against PostgreSQL policies."""
 
+import socket
 from typing import Any
 from uuid import uuid4
 
@@ -63,7 +64,9 @@ def test_sanic_tenant_isolation_and_failed_request_cleanup(
         await session.execute(f'INSERT INTO "{table}" VALUES (:tenant, :value)', {"tenant": "a", "value": 99})
         raise ValueError("handler failed")
 
-    client: Any = ReusableClient(app)
+    server_socket = socket.socket()
+    server_socket.bind(("127.0.0.1", 0))
+    client: Any = ReusableClient(app, port=server_socket.getsockname()[1], server_kwargs={"sock": server_socket})
     try:
         with client:
             pid = None
