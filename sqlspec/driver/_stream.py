@@ -220,17 +220,24 @@ class AsyncRowStream(Generic[RowT]):
             raise _StopAsync
         if not self._started:
             self._started = True
+            start_error: BaseException | None = None
             try:
                 await self._source.start()
-            except BaseException:
+            except BaseException as exc:
+                start_error = exc
+            if start_error is not None:
                 await self._aclose(error=True)
-                raise
+                raise start_error
         if self._buffer_index >= len(self._buffer):
+            chunk: list[dict[str, Any]] = []
+            fetch_error: BaseException | None = None
             try:
                 chunk = await self._source.fetch_chunk()
-            except BaseException:
+            except BaseException as exc:
+                fetch_error = exc
+            if fetch_error is not None:
                 await self._aclose(error=True)
-                raise
+                raise fetch_error
             if not chunk:
                 await self.aclose()
                 raise _StopAsync
