@@ -109,11 +109,11 @@ def test_execute_uses_fast_path_when_eligible(sqlite_sync_driver, monkeypatch) -
     sentinel = object()
     called: dict[str, object] = {}
 
-    def _fake_try(statement: str, params: tuple[Any, ...] | list[Any]) -> object:
+    def _fake_try(driver: Any, statement: str, params: tuple[Any, ...] | list[Any]) -> object:
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(sqlite_sync_driver, "_cached_execution", _fake_try)
+    monkeypatch.setattr("sqlspec.driver._sync.run_cached_execution", _fake_try)
     sqlite_sync_driver._stmt_cache_enabled = True
 
     result = sqlite_sync_driver.execute("SELECT ?", (1,))
@@ -126,11 +126,11 @@ def test_execute_uses_fast_path_with_dict_payload(sqlite_sync_driver, monkeypatc
     sentinel = object()
     called: dict[str, object] = {}
 
-    def _fake_try(statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
+    def _fake_try(driver: Any, statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(sqlite_sync_driver, "_cached_execution", _fake_try)
+    monkeypatch.setattr("sqlspec.driver._sync.run_cached_execution", _fake_try)
     sqlite_sync_driver._stmt_cache_enabled = True
 
     result = sqlite_sync_driver.execute("SELECT :id", {"id": 1})
@@ -143,11 +143,11 @@ def test_execute_uses_fast_path_with_kwargs_payload(sqlite_sync_driver, monkeypa
     sentinel = object()
     called: dict[str, object] = {}
 
-    def _fake_try(statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
+    def _fake_try(driver: Any, statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(sqlite_sync_driver, "_cached_execution", _fake_try)
+    monkeypatch.setattr("sqlspec.driver._sync.run_cached_execution", _fake_try)
     sqlite_sync_driver._stmt_cache_enabled = True
 
     result = sqlite_sync_driver.execute("SELECT :id", id=1)
@@ -159,12 +159,12 @@ def test_execute_uses_fast_path_with_kwargs_payload(sqlite_sync_driver, monkeypa
 def test_execute_skips_fast_path_with_statement_config_override(sqlite_sync_driver, monkeypatch) -> None:
     called = False
 
-    def _fake_try(statement: str, params: tuple[Any, ...] | list[Any]) -> object:
+    def _fake_try(driver: Any, statement: str, params: tuple[Any, ...] | list[Any]) -> object:
         nonlocal called
         called = True
         return object()
 
-    monkeypatch.setattr(sqlite_sync_driver, "_cached_execution", _fake_try)
+    monkeypatch.setattr("sqlspec.driver._sync.run_cached_execution", _fake_try)
     sqlite_sync_driver._stmt_cache_enabled = True
 
     statement_config = sqlite_sync_driver.statement_config.replace()
@@ -1018,13 +1018,13 @@ def test_fast_path_shapes_sync(sqlite_sync_driver: Any, monkeypatch: Any) -> Non
     sqlite_sync_driver.execute("INSERT INTO t_shapes (id, label) VALUES (?, ?)", (1, "one"))
 
     cache_hits: list[str] = []
-    original_hit = sqlite_sync_driver._execute_cache_hit
+    original_hit = sqlite_sync_driver._cache_hit_executor
 
-    def tracked_hit(sql: str, params: Any, cached: CachedQuery) -> Any:
+    def tracked_hit(connection: Any, sql: str, params: Any, cached: CachedQuery, config: Any, state: Any) -> Any:
         cache_hits.append(sql)
-        return original_hit(sql, params, cached)
+        return original_hit(connection, sql, params, cached, config, state)
 
-    monkeypatch.setattr(sqlite_sync_driver, "_execute_cache_hit", tracked_hit)
+    monkeypatch.setattr(sqlite_sync_driver, "_cache_hit_executor", tracked_hit)
 
     r1_no_param = sqlite_sync_driver.execute("SELECT 1 AS v")
     r2_no_param = sqlite_sync_driver.execute("SELECT 1 AS v")
@@ -1140,13 +1140,15 @@ def test_statement_cache_shared_across_sessions(tmp_path: Any, monkeypatch: Any)
             assert session2._cache_holder is holder1
 
             hit_calls: list[str] = []
-            original_hit = type(session2)._execute_cache_hit
+            original_hit = cast("Any", session2._cache_hit_executor)
 
-            def tracked_hit(self_driver: Any, sql: str, params: Any, cached: CachedQuery) -> Any:
+            def tracked_hit(
+                connection: Any, sql: str, params: Any, cached: CachedQuery, config: Any, state: Any
+            ) -> Any:
                 hit_calls.append(sql)
-                return original_hit(self_driver, sql, params, cached)
+                return original_hit(connection, sql, params, cached, config, state)
 
-            monkeypatch.setattr(type(session2), "_execute_cache_hit", tracked_hit)
+            monkeypatch.setattr(session2, "_cache_hit_executor", tracked_hit)
             r2 = session2.select_one("SELECT id, name FROM items WHERE id = ?", 2)
             assert r2 == {"id": 2, "name": "beta"}
             assert hit_calls == ["SELECT id, name FROM items WHERE id = ?"]

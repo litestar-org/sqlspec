@@ -14,6 +14,7 @@ from sqlglot import exp
 
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -35,16 +36,18 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
-from sqlspec.utils.type_guards import has_sqlite_error
+from sqlspec.utils.type_guards import has_sqlite_error, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from sqlspec.adapters.sqlite._typing import SqliteConnection
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.compiler import OperationType
 
 __all__ = (
     "JULIAN_EPOCH",
+    "ROWID_SAFE_OPERATIONS",
     "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "SqliteStreamSource",
@@ -62,6 +65,7 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "end_transaction",
+    "execute_cache_hit",
     "extension_pragma_statements",
     "format_identifier",
     "is_read_only_sqlite_config",
@@ -76,6 +80,7 @@ __all__ = (
 )
 
 JULIAN_EPOCH = 2440587.5
+ROWID_SAFE_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"})
 SECONDS_PER_DAY = 86400.0
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
@@ -333,6 +338,93 @@ def resolve_lastrowid(
     if not supports_rowid:
         return None
     return normalize_lastrowid(cursor, operation_type, rowcount)
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    rowid_target_cache: "dict[tuple[str | None, str], bool]",
+) -> "SQLResult":
+    """Execute a cached statement on a SQLite connection and build its result.
+
+    Args:
+        connection: SQLite connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        rowid_target_cache: Driver-local rowid eligibility cache, cleared when the statement can change schema.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any ``sqlite3.Error`` the statement raises.
+    """
+    operation_type = cached.operation_type
+    if operation_type not in ROWID_SAFE_OPERATIONS:
+        rowid_target_cache.clear()
+    try:
+        cursor = connection.execute(cached.compiled_sql, params or ())
+    except sqlite3.Error as exc:
+        raise create_mapped_exception(exc) from exc
+    try:
+        if not cached.operation_profile.returns_rows:
+            rowcount = cursor.rowcount
+            affected_rows: int = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+            return DMLResult(
+                operation_type,
+                affected_rows,
+                resolve_lastrowid(
+                    connection,
+                    cursor,
+                    operation_type,
+                    affected_rows,
+                    cached.processed_state.parsed_expression,
+                    rowid_target_cache,
+                ),
+            )
+        fetched_data: list[Any] = cursor.fetchall()
+        last_inserted_id: int | None = None
+        if operation_type != "SELECT":
+            effective_rowcount = resolve_rowcount(cursor) or (len(fetched_data) if operation_type == "INSERT" else 0)
+            last_inserted_id = resolve_lastrowid(
+                connection,
+                cursor,
+                operation_type,
+                effective_rowcount,
+                cached.processed_state.parsed_expression,
+                rowid_target_cache,
+            )
+        description = cursor.description
+        column_names: list[str] = [column[0] for column in description] if description else []
+        return SQLResult.create_cached_select(
+            sql,
+            statement_config,
+            cached.processed_state,
+            cached.compiled_sql,
+            params,
+            fetched_data,
+            column_names,
+            len(fetched_data),
+            resolve_row_format(fetched_data),
+            last_inserted_id,
+        )
+    except sqlite3.Error as exc:
+        raise create_mapped_exception(exc) from exc
+    finally:
+        _close_cursor(cursor)
 
 
 def require_python_version(feature: str, minimum: "tuple[int, int]") -> None:

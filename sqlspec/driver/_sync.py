@@ -46,6 +46,7 @@ from sqlspec.driver._common import (
     describe_stack_statement,
     handle_single_row_error,
     operation_requires_transaction,
+    run_cached_execution,
     validate_savepoint_name,
 )
 from sqlspec.driver._exception_handler import _run_with_sync_exception_handler
@@ -538,7 +539,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         ):
             if self._auto_begin_on_write:
                 self._ensure_transaction_for_cached_sql(statement, fast_params)
-            fast_result = self._cached_execution(statement, fast_params)
+            fast_result = run_cached_execution(self, statement, fast_params)
             if fast_result is not None:
                 return cast("SQLResult", fast_result)
         sql_statement = self.prepare_statement(

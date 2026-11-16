@@ -52,6 +52,7 @@ TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 _EXECUTE_MANY_SAMPLE_THRESHOLD: Final[int] = 10
 _EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3
 _FALLBACK_CACHE_MAX_SIZE: Final[int] = 256
+_NONE_TYPE: Final[type] = type(None)
 
 _TYPE_COERCION_DISPATCHERS: Final[dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]] = {}
 _TYPE_COERCION_DISPATCHERS_BY_ID: Final[
@@ -1196,6 +1197,40 @@ def _coerce_parameter_set(
     return _coerce_parameter_value(param_set, type_coercion_map, fallback_items)
 
 
+def _row_passes_through(
+    param_set: object,
+    type_coercion_map: "dict[type, Callable[[Any], Any]]",
+    dispatcher: "TypeDispatcher[Callable[[Any], Any]] | None",
+    passthrough_types: "set[type]",
+) -> bool:
+    """Return whether a batch row needs no coercion, judged by the types of its values.
+
+    Rows of one batch usually repeat the same value types, so each type is checked against the
+    coercion map once and remembered in ``passthrough_types``. Only exact ``tuple``, ``list``, and
+    ``dict`` rows qualify.
+    """
+    row_type = type(param_set)
+    if row_type is tuple:
+        values: Any = param_set
+    elif row_type is list:
+        values = param_set
+    elif row_type is dict:
+        values = cast("dict[Any, Any]", param_set).values()
+    else:
+        return False
+    for value in values:
+        value_type = type(value)
+        if value_type in passthrough_types:
+            continue
+        if value_type is not _NONE_TYPE:
+            if value_type is TypedParameter or value_type in type_coercion_map:
+                return False
+            if dispatcher is not None and dispatcher.resolve_type(value_type) is not None:
+                return False
+        passthrough_types.add(value_type)
+    return True
+
+
 def _coerce_parameters_payload(
     parameters: "ParameterPayload",
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
@@ -1208,7 +1243,12 @@ def _coerce_parameters_payload(
         seq_params = cast("list[Any]", parameters)
         if is_many:
             updated_many: list[Any] | None = None
+            passthrough_types: set[type] = set()
             for idx, param_set in enumerate(seq_params):
+                if _row_passes_through(param_set, type_coercion_map, dispatcher, passthrough_types):
+                    if updated_many is not None:
+                        updated_many.append(param_set)
+                    continue
                 coerced_set = _coerce_parameter_set(param_set, type_coercion_map, fallback_items, dispatcher)
                 if updated_many is None:
                     if coerced_set is param_set:
@@ -1222,8 +1262,11 @@ def _coerce_parameters_payload(
     if param_type is tuple:
         tuple_params = cast("tuple[Any, ...]", parameters)
         if is_many:
+            tuple_passthrough_types: set[type] = set()
             return [
-                _coerce_parameter_set(param_set, type_coercion_map, fallback_items, dispatcher)
+                param_set
+                if _row_passes_through(param_set, type_coercion_map, dispatcher, tuple_passthrough_types)
+                else _coerce_parameter_set(param_set, type_coercion_map, fallback_items, dispatcher)
                 for param_set in tuple_params
             ]
         coerced_tuple = _coerce_sequence_if_needed(tuple_params, type_coercion_map, fallback_items, dispatcher)
@@ -1572,7 +1615,9 @@ def _mapping_rows_to_positional(
 ) -> "ConvertedParameters":
     if is_many and isinstance(parameters, (list, tuple)):
         return [
-            _mapping_row_to_positional(row, cached_param_info) if isinstance(row, Mapping) else row
+            row
+            if type(row) is tuple or type(row) is list
+            else (_mapping_row_to_positional(row, cached_param_info) if isinstance(row, Mapping) else row)
             for row in parameters
         ]
     if isinstance(parameters, Mapping):

@@ -1826,6 +1826,8 @@ class CommonDriverAttributesMixin:
 
     __slots__ = (
         "_auto_begin_on_write",
+        "_cache_hit_executor",
+        "_cache_hit_state",
         "_cache_holder",
         "_observability",
         "_open_streams",
@@ -1886,6 +1888,10 @@ class CommonDriverAttributesMixin:
         self._stmt_cache: QueryCache = self._cache_holder.query_cache
         self._stmt_cache_rebind_processor: ParameterProcessor = self._cache_holder.rebind_processor
         self._stmt_cache_enabled = False
+        self._cache_hit_executor: (
+            abc.Callable[[Any, str, Any, CachedQuery, StatementConfig, Any], SQLResult | Awaitable[SQLResult]] | None
+        ) = None
+        self._cache_hit_state: Any = None
         self._statement_pool = get_sql_pool()
         self._processed_state_pool = get_processed_state_pool()
         self._refresh_statement_cache_state()
@@ -2573,71 +2579,7 @@ class CommonDriverAttributesMixin:
             SQLResult (sync) or Awaitable[SQLResult] (async) if cache hit,
             None if cache miss.
         """
-        if not self._stmt_cache_enabled:
-            return None
-        cached = self._stmt_cache.get(statement)
-        if cached is None or cached.param_count != len(params):
-            return None
-
-        config = self.statement_config
-        param_config = config.parameter_config
-        if param_config.ast_transformer is not None:
-            return None
-
-        needs_rebind = bool(
-            cached.input_named_parameters
-            or cached.applied_wrap_types
-            or cached.needs_style_remap
-            or _is_mapping_parameters(params)
-        )
-        if not needs_rebind and params:
-            param_values = _cache_param_values(params)
-            needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
-
-        if not needs_rebind and not config._has_output_transformer:
-            effective_cached = cached
-            if config.enable_sqlcommenter:
-                wire_sql = self._format_wire_sql(cached.compiled_sql)
-                if wire_sql != cached.compiled_sql:
-                    effective_cached = CachedQuery(
-                        compiled_sql=wire_sql,
-                        parameter_profile=cached.parameter_profile,
-                        input_named_parameters=cached.input_named_parameters,
-                        applied_wrap_types=cached.applied_wrap_types,
-                        parameter_casts=cached.parameter_casts,
-                        operation_type=cached.operation_type,
-                        operation_profile=cached.operation_profile,
-                        param_count=cached.param_count,
-                        processed_state=cached.processed_state,
-                        needs_style_remap=cached.needs_style_remap,
-                    )
-            runtime = self._observability
-            if runtime is not None and not runtime.is_idle:
-                return self._execute_cache_hit_observed(statement, params, effective_cached)
-            return self._execute_cache_hit(statement, params, effective_cached)
-
-        if needs_rebind:
-            rebound_params = self.stmt_cache_rebind(params, cached)
-            params_are_simple = False
-        else:
-            rebound_params = params
-            params_are_simple = True
-
-        compiled_sql = self._format_wire_sql(cached.compiled_sql)
-        output_transformer = config.output_transformer
-        if output_transformer is not None:
-            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
-            params_are_simple = False
-
-        prepared = self._cached_statement(
-            statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
-        )
-        runtime = self._observability
-        if runtime is not None and not runtime.is_idle:
-            return self._execute_cached_statement_observed(
-                prepared, compiled_sql, rebound_params, cached.operation_type
-            )
-        return self._execute_cached_statement(prepared)
+        return run_cached_execution(self, statement, params)
 
     def _execute_cached_statement(self, statement: "SQL") -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
@@ -3702,6 +3644,94 @@ class CommonDriverAttributesMixin:
     _execute_load_from_storage_async = staticmethod(execute_load_from_storage_async)
 
 
+_PASSTHROUGH_TYPES_MAX_SIZE: Final[int] = 256
+_PASSTHROUGH_TYPES_CACHE: "dict[int, tuple[dict[type, Any], int, set[type]]]" = {}
+
+
+def run_cached_execution(
+    driver: "CommonDriverAttributesMixin", statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
+) -> "SQLResult | Awaitable[SQLResult | None] | None":
+    """Execute a raw SQL string through the driver's compiled-statement cache.
+
+    A driver that registers a cache-hit executor has it called with the connection, the raw SQL,
+    the parameters, the cached query, the statement configuration, and the driver's executor state.
+
+    Args:
+        driver: Driver owning the statement cache and connection.
+        statement: Raw SQL string.
+        params: Query parameters.
+
+    Returns:
+        SQLResult (sync) or Awaitable[SQLResult] (async) if cache hit, None if cache miss.
+    """
+    if not driver._stmt_cache_enabled:
+        return None
+    cached = driver._stmt_cache.get(statement)
+    if cached is None or cached.param_count != len(params):
+        return None
+
+    config = driver.statement_config
+    param_config = config.parameter_config
+    if param_config.ast_transformer is not None:
+        return None
+
+    needs_rebind = bool(
+        cached.input_named_parameters
+        or cached.applied_wrap_types
+        or cached.needs_style_remap
+        or _is_mapping_parameters(params)
+    )
+    if not needs_rebind and params:
+        param_values = _cache_param_values(params)
+        needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
+
+    if not needs_rebind and not config._has_output_transformer:
+        effective_cached = cached
+        if config.enable_sqlcommenter:
+            wire_sql = driver._format_wire_sql(cached.compiled_sql)
+            if wire_sql != cached.compiled_sql:
+                effective_cached = CachedQuery(
+                    compiled_sql=wire_sql,
+                    parameter_profile=cached.parameter_profile,
+                    input_named_parameters=cached.input_named_parameters,
+                    applied_wrap_types=cached.applied_wrap_types,
+                    parameter_casts=cached.parameter_casts,
+                    operation_type=cached.operation_type,
+                    operation_profile=cached.operation_profile,
+                    param_count=cached.param_count,
+                    processed_state=cached.processed_state,
+                    needs_style_remap=cached.needs_style_remap,
+                )
+        runtime = driver._observability
+        if runtime is not None and not runtime.is_idle:
+            return driver._execute_cache_hit_observed(statement, params, effective_cached)
+        executor = driver._cache_hit_executor
+        if executor is not None:
+            return executor(driver.connection, statement, params, effective_cached, config, driver._cache_hit_state)
+        return driver._execute_cache_hit(statement, params, effective_cached)
+
+    if needs_rebind:
+        rebound_params = driver.stmt_cache_rebind(params, cached)
+        params_are_simple = False
+    else:
+        rebound_params = params
+        params_are_simple = True
+
+    compiled_sql = driver._format_wire_sql(cached.compiled_sql)
+    output_transformer = config.output_transformer
+    if output_transformer is not None:
+        compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        params_are_simple = False
+
+    prepared = driver._cached_statement(
+        statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
+    )
+    runtime = driver._observability
+    if runtime is not None and not runtime.is_idle:
+        return driver._execute_cached_statement_observed(prepared, compiled_sql, rebound_params, cached.operation_type)
+    return driver._execute_cached_statement(prepared)
+
+
 def parameter_values_need_processing(
     values: "tuple[Any, ...] | list[Any]",
     type_coercion_map: "dict[type, Any] | None",
@@ -3713,16 +3743,44 @@ def parameter_values_need_processing(
         if len(values) == 1:
             return type(values[0]) is TypedParameter
         return any(type(value) is TypedParameter for value in values)
-    if fallback_items is None:
-        fallback_items = type_coercion_fallbacks(type_coercion_map)
-    dispatcher = type_coercion_dispatcher(fallback_items)
+    if fallback_items is not None:
+        dispatcher = type_coercion_dispatcher(fallback_items)
+        for value in values:
+            value_type = type(value)
+            if value_type is TypedParameter or value_type in type_coercion_map:
+                return True
+            if dispatcher.resolve_type(value_type) is not None:
+                return True
+        return False
+    passthrough_types = _passthrough_types(type_coercion_map)
     for value in values:
         value_type = type(value)
+        if value_type in passthrough_types:
+            continue
         if value_type is TypedParameter or value_type in type_coercion_map:
             return True
-        if dispatcher.resolve_type(value_type) is not None:
+        if type_coercion_dispatcher(type_coercion_fallbacks(type_coercion_map)).resolve_type(value_type) is not None:
             return True
+        if len(passthrough_types) < _PASSTHROUGH_TYPES_MAX_SIZE:
+            passthrough_types.add(value_type)
     return False
+
+
+def _passthrough_types(type_coercion_map: "dict[type, Any]") -> "set[type]":
+    """Return the value types already proven to need no coercion under ``type_coercion_map``.
+
+    The set is remembered per map object and discarded when the map's size changes.
+    """
+    map_id = id(type_coercion_map)
+    map_len = len(type_coercion_map)
+    cached = _PASSTHROUGH_TYPES_CACHE.get(map_id)
+    if cached is not None and cached[0] is type_coercion_map and cached[1] == map_len:
+        return cached[2]
+    if len(_PASSTHROUGH_TYPES_CACHE) >= _PASSTHROUGH_TYPES_MAX_SIZE:
+        _PASSTHROUGH_TYPES_CACHE.clear()
+    passthrough_types: set[type] = set()
+    _PASSTHROUGH_TYPES_CACHE[map_id] = (type_coercion_map, map_len, passthrough_types)
+    return passthrough_types
 
 
 def parameter_value_needs_processing(

@@ -11,7 +11,7 @@ from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, def
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import json_converter, register_type_handlers, unregister_type_handlers
 from sqlspec.core.compiler import OperationType
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
@@ -505,3 +505,26 @@ def test_sqlite_non_insert_operations_do_not_query_rowid_metadata() -> None:
             assert insert_res.last_inserted_id == 1
         finally:
             session.connection.set_trace_callback(None)
+
+
+def test_cached_select_maps_errors_raised_while_fetching_rows() -> None:
+    def fail_on_second_row(value: int) -> int:
+        if value == 2:
+            msg = "row two is unreadable"
+            raise ValueError(msg)
+        return value
+
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.connection.create_function("checked", 1, fail_on_second_row)
+            session.execute("CREATE TABLE checked_rows (id INTEGER PRIMARY KEY)")
+            session.execute("INSERT INTO checked_rows (id) VALUES (?)", (1,))
+            statement = "SELECT checked(id) FROM checked_rows ORDER BY id"
+            assert session.execute(statement).get_data() == [{"checked(id)": 1}]
+            session.execute("INSERT INTO checked_rows (id) VALUES (?)", (2,))
+
+            with pytest.raises(SQLSpecError):
+                session.execute(statement)
+    finally:
+        config.close_pool()
