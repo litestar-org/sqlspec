@@ -16,7 +16,9 @@ from sqlspec.adapters.teradata.core import (
     split_schema_and_table,
 )
 from sqlspec.adapters.teradata.migrations import build_guarded_drop_table
+from sqlspec.exceptions import SerializationConflictError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, metadata_has_index, run_drop_statements_sync
 from sqlspec.utils.serializers import from_json, to_json
@@ -34,6 +36,29 @@ TERADATA_TABLE_NOT_FOUND_SQLCODE: Final[int] = 3807
 JSON_COLUMN_TYPE: Final[str] = "JSON"
 _DUPLICATE_KEY_CODES: Final[frozenset[int]] = frozenset({2801, 2802, 2803})
 _EVENT_ID_CHUNK_SIZE: Final[int] = 500
+_MAX_STATE_MERGE_ATTEMPTS: Final[int] = 8
+
+
+def _exact_key_predicate(column: str, parameter: str = "?") -> str:
+    return f"{column} = {parameter} AND {column} (CASESPECIFIC) = {parameter}"
+
+
+def _exact_column_predicate(left: str, right: str) -> str:
+    return f"{left} = {right} AND {left} (CASESPECIFIC) = {right}"
+
+
+def _exact_where(*columns: str) -> str:
+    return " AND ".join(_exact_key_predicate(column) for column in columns)
+
+
+def _exact_params(*values: Any) -> "tuple[Any, ...]":
+    return tuple(item for value in values for item in (value, value))
+
+
+_APP_KEY_WHERE: Final = _exact_where("app_name")
+_USER_KEY_WHERE: Final = _exact_where("app_name", "user_id")
+_SESSION_KEY_WHERE: Final = _exact_where("app_name", "user_id", "id")
+_EVENT_SESSION_KEY_WHERE: Final = _exact_where("app_name", "user_id", "session_id")
 
 
 class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
@@ -81,9 +106,17 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         self.reconcile_schema(assume_existing=True)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new ADK session."""
+        """Create a new ADK session and optionally merge scoped state deltas."""
         owner_column = f", {format_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_param = ", ?" if self._owner_id_column_name else ""
         insert_sql = f"""
@@ -95,42 +128,103 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         select_sql = f"""
         SELECT TOP 1 id, app_name, user_id, state, create_time, update_time
         FROM {format_table_ref(self._session_table)}
-        WHERE app_name = ? AND user_id = ? AND id = ?
+        WHERE {_SESSION_KEY_WHERE}
         """
+        session_state = dict(state)
         params: tuple[Any, ...]
         if self._owner_id_column_name:
-            params = (session_id, app_name, user_id, owner_id, to_json(state))
+            params = (session_id, app_name, user_id, owner_id, to_json(session_state))
         else:
-            params = (session_id, app_name, user_id, to_json(state))
-        self._execute(insert_sql, params, commit=True)
-        row = self._execute_fetchone(select_sql, (app_name, user_id, session_id))
-        if row is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        return _session_record_from_row(row)
+            params = (session_id, app_name, user_id, to_json(session_state))
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            try:
+                with _transaction(self._config) as (conn, cursor):
+                    cursor.execute(insert_sql, params)
+                    cursor.execute(select_sql, _exact_params(app_name, user_id, session_id))
+                    row = cursor.fetchone()
+                    row = _require_created_session_row(row)
+                    scoped_started = True
+                    current_app_state = (
+                        self._apply_state_delta(
+                            cursor,
+                            table=self._app_state_table,
+                            where_sql=_APP_KEY_WHERE,
+                            columns="app_name",
+                            placeholders="?",
+                            key_params=(app_name,),
+                            delta=app_state_delta,
+                        )
+                        if app_state_delta
+                        else self._select_state(
+                            cursor,
+                            f"SELECT TOP 1 state FROM {format_table_ref(self._app_state_table)} WHERE {_APP_KEY_WHERE}",
+                            _exact_params(app_name),
+                        )
+                    )
+                    if app_state_delta and current_app_state is None:
+                        conn.rollback()
+                        continue
+                    current_user_state = (
+                        self._apply_state_delta(
+                            cursor,
+                            table=self._user_state_table,
+                            where_sql=_USER_KEY_WHERE,
+                            columns="app_name, user_id",
+                            placeholders="?, ?",
+                            key_params=(app_name, user_id),
+                            delta=user_state_delta,
+                        )
+                        if user_state_delta
+                        else self._select_state(
+                            cursor,
+                            f"""
+                            SELECT TOP 1 state
+                            FROM {format_table_ref(self._user_state_table)}
+                            WHERE {_USER_KEY_WHERE}
+                            """,
+                            _exact_params(app_name, user_id),
+                        )
+                    )
+                    if user_state_delta and current_user_state is None:
+                        conn.rollback()
+                        continue
+                    conn.commit()
+                    record = _session_record_from_row(row)
+                    record["state"] = merge_scoped_state(record["state"], current_app_state, current_user_state)
+                    return record
+            except Exception as exc:
+                if scoped_started and _is_unique_violation(exc) and attempt + 1 < max_attempts:
+                    continue
+                raise
+        msg = f"Failed to merge scoped state during create_session after {max_attempts} CAS attempts."
+        raise SerializationConflictError(msg)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
-            if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            if self._is_renewal_requested(renew_for):
                 self._execute(
                     f"""
                     UPDATE {format_table_ref(self._session_table)}
                     SET update_time = CURRENT_TIMESTAMP(6)
-                    WHERE app_name = ? AND user_id = ? AND id = ?
+                    WHERE {_SESSION_KEY_WHERE}
                     """,
-                    (app_name, user_id, session_id),
+                    _exact_params(app_name, user_id, session_id),
                     commit=True,
                 )
             row = self._execute_fetchone(
                 f"""
                 SELECT TOP 1 id, app_name, user_id, state, create_time, update_time
                 FROM {format_table_ref(self._session_table)}
-                WHERE app_name = ? AND user_id = ? AND id = ?
+                WHERE {_SESSION_KEY_WHERE}
                 """,
-                (app_name, user_id, session_id),
+                _exact_params(app_name, user_id, session_id),
+                read=renew_for is None,
             )
         except Exception as exc:
             if _is_teradata_table_missing(exc):
@@ -144,9 +238,9 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             f"""
             UPDATE {format_table_ref(self._session_table)}
             SET state = ?, update_time = CURRENT_TIMESTAMP(6)
-            WHERE app_name = ? AND user_id = ? AND id = ?
+            WHERE {_SESSION_KEY_WHERE}
             """,
-            (to_json(state), app_name, user_id, session_id),
+            (to_json(state), *_exact_params(app_name, user_id, session_id)),
             commit=True,
         )
 
@@ -169,7 +263,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except Exception as exc:
             if _is_teradata_table_missing(exc):
                 return []
@@ -180,18 +274,28 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         """Delete tenant-scoped child events before their session atomically."""
         with _transaction(self._config) as (conn, cursor):
             cursor.execute(
-                f"DELETE FROM {format_table_ref(self._events_table)} WHERE app_name = ? AND user_id = ? AND session_id = ?",
-                (app_name, user_id, session_id),
+                f"DELETE FROM {format_table_ref(self._events_table)} WHERE {_EVENT_SESSION_KEY_WHERE}",
+                _exact_params(app_name, user_id, session_id),
             )
             cursor.execute(
-                f"DELETE FROM {format_table_ref(self._session_table)} WHERE app_name = ? AND user_id = ? AND id = ?",
-                (app_name, user_id, session_id),
+                f"DELETE FROM {format_table_ref(self._session_table)} WHERE {_SESSION_KEY_WHERE}",
+                _exact_params(app_name, user_id, session_id),
             )
             conn.commit()
 
     def append_event(self, event_record: StoredEvent) -> None:
-        """Append an event to a session."""
-        self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
+        """Append an event to a session after verifying session ownership."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        ownership_sql = f"SELECT TOP 1 1 FROM {format_table_ref(self._session_table)} WHERE {_exact_where('id', 'app_name', 'user_id')}"
+        with _transaction(self._config) as (conn, cursor):
+            cursor.execute(ownership_sql, _exact_params(session_id, app_name, user_id))
+            if cursor.fetchone() is None:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
+            cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+            conn.commit()
 
     def append_event_and_update_state(
         self,
@@ -201,35 +305,73 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
+        session_state = dict(state)
         update_sql = f"""
         UPDATE {format_table_ref(self._session_table)}
         SET state = ?, update_time = CURRENT_TIMESTAMP(6)
-        WHERE app_name = ? AND user_id = ? AND id = ?
+        WHERE {_SESSION_KEY_WHERE}
         """
         select_sql = f"""
         SELECT TOP 1 id, app_name, user_id, state, create_time, update_time
         FROM {format_table_ref(self._session_table)}
-        WHERE app_name = ? AND user_id = ? AND id = ?
+        WHERE {_SESSION_KEY_WHERE}
         """
-        with _transaction(self._config) as (conn, cursor):
-            cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
-            cursor.execute(select_sql, (app_name, user_id, session_id))
-            row = cursor.fetchone()
-            if row is None:
-                _raise_session_not_found(session_id)
-            cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
-            if app_state is not None:
-                app_json = to_json(app_state)
-                cursor.execute(self._upsert_app_state_sql(), (app_name, app_json))
-            if user_state is not None:
-                user_json = to_json(user_state)
-                cursor.execute(self._upsert_user_state_sql(), (app_name, user_id, user_json))
-            conn.commit()
-        return _session_record_from_row(row)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            try:
+                with _transaction(self._config) as (conn, cursor):
+                    cursor.execute(update_sql, (to_json(session_state), *_exact_params(app_name, user_id, session_id)))
+                    cursor.execute(select_sql, _exact_params(app_name, user_id, session_id))
+                    row = cursor.fetchone()
+                    if row is None:
+                        _raise_session_not_found(session_id)
+                    cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                    scoped_started = True
+                    merged_app_state: dict[str, Any] | None = None
+                    if app_state_delta:
+                        merged_app_state = self._apply_state_delta(
+                            cursor,
+                            table=self._app_state_table,
+                            where_sql=_APP_KEY_WHERE,
+                            columns="app_name",
+                            placeholders="?",
+                            key_params=(app_name,),
+                            delta=app_state_delta,
+                        )
+                        if merged_app_state is None:
+                            conn.rollback()
+                            continue
+                    merged_user_state: dict[str, Any] | None = None
+                    if user_state_delta:
+                        merged_user_state = self._apply_state_delta(
+                            cursor,
+                            table=self._user_state_table,
+                            where_sql=_USER_KEY_WHERE,
+                            columns="app_name, user_id",
+                            placeholders="?, ?",
+                            key_params=(app_name, user_id),
+                            delta=user_state_delta,
+                        )
+                        if merged_user_state is None:
+                            conn.rollback()
+                            continue
+                    conn.commit()
+                    record = _session_record_from_row(row)
+                    record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
+                    return record
+            except Exception as exc:
+                if scoped_started and _is_unique_violation(exc) and attempt + 1 < max_attempts:
+                    continue
+                raise
+        msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} CAS attempts."
+        raise SerializationConflictError(msg)
 
     def get_events(
         self,
@@ -240,15 +382,20 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
         """Return events for a scoped session ordered by event timestamp."""
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
         if limit == 0:
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except Exception as exc:
             if _is_teradata_table_missing(exc):
                 return []
             raise
+        if limit is not None:
+            rows = list(reversed(rows))
         return [_event_record_from_row(row) for row in rows]
 
     def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
@@ -256,8 +403,8 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         sql = f"DELETE FROM {format_table_ref(self._events_table)} WHERE timestamp < ?"
         params: list[Any] = [before]
         if app_name is not None:
-            sql += " AND app_name = ?"
-            params.append(app_name)
+            sql += f" AND {_exact_key_predicate('app_name')}"
+            params.extend(_exact_params(app_name))
         try:
             return self._execute(sql, tuple(params), commit=True)
         except Exception as exc:
@@ -270,8 +417,8 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         where = "update_time < ?"
         params: tuple[Any, ...] = (updated_before,)
         if app_name is not None:
-            where += " AND app_name = ?"
-            params = (*params, app_name)
+            where += f" AND {_exact_key_predicate('app_name')}"
+            params = (*params, *_exact_params(app_name))
         try:
             with _transaction(self._config) as (conn, cursor):
                 cursor.execute(
@@ -292,8 +439,8 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         sql = f"DELETE FROM {format_table_ref(self._user_state_table)} WHERE update_time < ?"
         params: list[Any] = [updated_before]
         if app_name is not None:
-            sql += " AND app_name = ?"
-            params.append(app_name)
+            sql += f" AND {_exact_key_predicate('app_name')}"
+            params.extend(_exact_params(app_name))
         try:
             return self._execute(sql, tuple(params), commit=True)
         except Exception as exc:
@@ -305,7 +452,8 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         """Return app-scoped state."""
         try:
             row = self._execute_fetchone(
-                f"SELECT TOP 1 state FROM {format_table_ref(self._app_state_table)} WHERE app_name = ?", (app_name,)
+                f"SELECT TOP 1 state FROM {format_table_ref(self._app_state_table)} WHERE {_APP_KEY_WHERE}",
+                _exact_params(app_name),
             )
         except Exception as exc:
             if _is_teradata_table_missing(exc):
@@ -320,9 +468,9 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                 f"""
                 SELECT TOP 1 state
                 FROM {format_table_ref(self._user_state_table)}
-                WHERE app_name = ? AND user_id = ?
+                WHERE {_USER_KEY_WHERE}
                 """,
-                (app_name, user_id),
+                _exact_params(app_name, user_id),
             )
         except Exception as exc:
             if _is_teradata_table_missing(exc):
@@ -356,6 +504,16 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         """Set an ADK metadata value."""
         self._execute(_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
 
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return ordered Teradata ADK session-store SchemaTarget definitions."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Teradata ADK session and event companion indexes without committing."""
+        for index_name, index_table, columns in self._index_specs():
+            _create_missing_index(driver, index_table, index_name, columns)
+
     def _index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for session and event indexes."""
         return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
@@ -370,16 +528,6 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             (self._metadata_table, self._metadata_table_ddl()),
         )
         return [_schema_target(table, ddl) for table, ddl in ddl_targets]
-
-    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
-        """Return ordered Teradata ADK session-store SchemaTarget definitions."""
-        del driver
-        return self._schema_targets()
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing Teradata ADK session and event companion indexes without committing."""
-        for index_name, index_table, columns in self._index_specs():
-            _create_missing_index(driver, index_table, index_name, columns)
 
     def _sessions_table_ddl(self) -> str:
         """Return Teradata DDL for the ADK session table."""
@@ -433,20 +581,76 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "tuple[str, tuple[Any, ...]]":
-        return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
+        return _events_query(
+            self._events_table, self._session_table, app_name, user_id, session_id, after_timestamp, limit
+        )
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = ()) -> "Any | None":
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
+    def _select_state(self, cursor: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
+        try:
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+        except Exception as exc:
+            if _is_teradata_table_missing(exc):
+                return None
+            raise
+        return _json_dict(_row_value(row, "state", 0)) if row is not None else None
+
+    def _apply_state_delta(
+        self,
+        cursor: Any,
+        *,
+        table: str,
+        where_sql: str,
+        columns: str,
+        placeholders: str,
+        key_params: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any] | None":
+        predicate_params = _exact_params(*key_params)
+        cursor.execute(
+            f"SELECT TOP 1 state, update_time FROM {format_table_ref(table)} WHERE {where_sql}", predicate_params
+        )
+        row = cursor.fetchone()
+        if row is None:
+            merged = dict(delta)
+            cursor.execute(
+                f"INSERT INTO {format_table_ref(table)} ({columns}, state, update_time) "
+                f"VALUES ({placeholders}, ?, CURRENT_TIMESTAMP(6))",
+                (*key_params, to_json(merged)),
+            )
+            return merged
+        existing = _json_dict(_row_value(row, "state", 0))
+        expected_update_time = _row_value(row, "update_time", 1)
+        merged = {**existing, **delta}
+        new_update_time = _next_monotonic_timestamp(expected_update_time)
+        if expected_update_time is None:
+            cursor.execute(
+                f"UPDATE {format_table_ref(table)} SET state = ?, update_time = ? "
+                f"WHERE {where_sql} AND update_time IS NULL",
+                (to_json(merged), new_update_time, *predicate_params),
+            )
+        else:
+            cursor.execute(
+                f"UPDATE {format_table_ref(table)} SET state = ?, update_time = ? "
+                f"WHERE {where_sql} AND update_time = ?",
+                (to_json(merged), new_update_time, *predicate_params, expected_update_time),
+            )
+        if resolve_rowcount(cursor) <= 0:
+            return None
+        return merged
+
+    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "Any | None":
+        with self._provide_replica_connection(primary=not read) as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             return cursor.fetchone()
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_replica_connection(primary=not read) as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
+        with self._provide_replica_connection(primary=not read) as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
             if commit and getattr(conn, "autocommit", True) is False:
@@ -485,24 +689,6 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             driver.commit()
         self.reconcile_schema(assume_existing=True)
 
-    def _memory_insert_params(self, entry: "StoredMemory", owner_id: "object | None") -> "tuple[Any, ...]":
-        params: tuple[Any, ...] = (
-            entry["id"],
-            entry["session_id"],
-            entry["app_name"],
-            entry["user_id"],
-            entry.get("scope", "user"),
-            entry["event_id"],
-            entry.get("author"),
-            entry["timestamp"],
-            to_json(entry["content_json"]),
-            entry["content_text"],
-            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
-        )
-        if self._owner_id_column_name:
-            return (*params, owner_id)
-        return params
-
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with event-id deduplication and TERA rollback recovery."""
         if not self._enabled:
@@ -512,11 +698,11 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             return 0
 
         deduped_entries: list[StoredMemory] = []
-        seen_event_ids: set[str] = set()
+        seen_keys: set[tuple[str, str, str]] = set()
         for entry in entries:
-            event_id = entry["event_id"]
-            if event_id not in seen_event_ids:
-                seen_event_ids.add(event_id)
+            key = (entry["app_name"], entry["user_id"], entry["event_id"])
+            if key not in seen_keys:
+                seen_keys.add(key)
                 deduped_entries.append(entry)
 
         table_ref = format_table_ref(self._memory_table)
@@ -529,19 +715,25 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{owner_value})
         """
 
-        existing_event_ids: set[str] = set()
-        all_event_ids = [entry["event_id"] for entry in deduped_entries]
+        existing_keys: set[tuple[str, str, str]] = set()
+        all_event_ids = list(dict.fromkeys(entry["event_id"] for entry in deduped_entries))
         for start in range(0, len(all_event_ids), _EVENT_ID_CHUNK_SIZE):
             chunk = all_event_ids[start : start + _EVENT_ID_CHUNK_SIZE]
             placeholders = ", ".join("?" for _ in chunk)
             rows = self._execute_fetchall(
-                f"SELECT event_id FROM {table_ref} WHERE event_id IN ({placeholders})", tuple(chunk)
+                f"SELECT app_name, user_id, event_id FROM {table_ref} WHERE event_id IN ({placeholders})", tuple(chunk)
             )
             for row in rows:
-                val = _row_value(row, "event_id", 0)
-                if val is not None:
-                    existing_event_ids.add(str(val))
-        candidates = [entry for entry in deduped_entries if entry["event_id"] not in existing_event_ids]
+                app_val = _row_value(row, "app_name", 0)
+                user_val = _row_value(row, "user_id", 1)
+                ev_val = _row_value(row, "event_id", 2)
+                if app_val is not None and user_val is not None and ev_val is not None:
+                    existing_keys.add((str(app_val), str(user_val), str(ev_val)))
+        candidates = [
+            entry
+            for entry in deduped_entries
+            if (entry["app_name"], entry["user_id"], entry["event_id"]) not in existing_keys
+        ]
         if not candidates:
             return 0
 
@@ -570,14 +762,10 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
                     inserted += row_delta
             except Exception as item_exc:
                 if extract_error_code(item_exc) not in _DUPLICATE_KEY_CODES or not self._event_id_exists(
-                    table_ref, entry["event_id"]
+                    table_ref, entry["app_name"], entry["user_id"], entry["event_id"]
                 ):
                     raise
         return inserted
-
-    def _event_id_exists(self, table_ref: str, event_id: str) -> bool:
-        """Return whether a memory row already stores ``event_id``."""
-        return self._execute_fetchall(f"SELECT event_id FROM {table_ref} WHERE event_id = ?", (event_id,)) != []
 
     def search_entries(
         self,
@@ -610,17 +798,20 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         ORDER BY timestamp DESC
         """
         try:
-            rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%"))
+            rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%"), read=True)
         except Exception as exc:
             if _is_teradata_table_missing(exc):
                 return []
             raise
         return [_memory_record_from_row(row) for row in rows]
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
+        where_sql = _exact_where("session_id", "app_name", "user_id")
         return self._execute(
-            f"DELETE FROM {format_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,), commit=True
+            f"DELETE FROM {format_table_ref(self._memory_table)} WHERE {where_sql}",
+            _exact_params(session_id, app_name, user_id),
+            commit=True,
         )
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -628,8 +819,8 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         clauses = ["inserted_at < ?"]
         params: list[Any] = [datetime.now(UTC) - timedelta(days=days)]
         if app_name is not None:
-            clauses.append("app_name = ?")
-            params.append(app_name)
+            clauses.append(_exact_key_predicate("app_name"))
+            params.extend(_exact_params(app_name))
         if scope is not None:
             clauses.append("scope = ?")
             params.append(scope)
@@ -638,17 +829,57 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             f"DELETE FROM {format_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True
         )
 
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return Teradata ADK memory-store SchemaTarget definitions when enabled."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Teradata ADK memory companion indexes without committing."""
+        if not self._enabled:
+            return
+        for index_name, index_table, columns in self._memory_index_specs():
+            _create_missing_index(driver, index_table, index_name, columns)
+
+    def _memory_insert_params(self, entry: "StoredMemory", owner_id: "object | None") -> "tuple[Any, ...]":
+        params: tuple[Any, ...] = (
+            entry["id"],
+            entry["session_id"],
+            entry["app_name"],
+            entry["user_id"],
+            entry.get("scope", "user"),
+            entry["event_id"],
+            entry.get("author"),
+            entry["timestamp"],
+            to_json(entry["content_json"]),
+            entry["content_text"],
+            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+        )
+        if self._owner_id_column_name:
+            return (*params, owner_id)
+        return params
+
+    def _event_id_exists(self, table_ref: str, app_name: str, user_id: str, event_id: str) -> bool:
+        """Return whether a memory row already stores ``(app_name, user_id, event_id)``."""
+        return (
+            self._execute_fetchall(
+                f"SELECT app_name, user_id, event_id FROM {table_ref} WHERE {_exact_where('app_name', 'user_id', 'event_id')}",
+                _exact_params(app_name, user_id, event_id),
+            )
+            != []
+        )
+
     def _memory_table_ddl(self) -> str:
         owner_line = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         table_ref = format_table_ref(self._memory_table)
         return (
             f"CREATE MULTISET TABLE {table_ref} ("
-            "id VARCHAR(128) NOT NULL, "
-            "session_id VARCHAR(128) NOT NULL, "
-            "app_name VARCHAR(128) NOT NULL, "
-            "user_id VARCHAR(128) NOT NULL, "
+            "id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+            "session_id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+            "app_name VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+            "user_id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
             "scope VARCHAR(16) DEFAULT 'user' NOT NULL, "
-            "event_id VARCHAR(128) NOT NULL, "
+            "event_id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
             "author VARCHAR(256) NULL, "
             "timestamp TIMESTAMP(6) WITH TIME ZONE NOT NULL, "
             f"content_json {JSON_COLUMN_TYPE} NOT NULL, "
@@ -656,7 +887,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             f"metadata_json {JSON_COLUMN_TYPE} NULL, "
             f"inserted_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL{owner_line}, "
             f"CONSTRAINT {_constraint_ref('pk', self._memory_table, 'id')} PRIMARY KEY (id), "
-            f"CONSTRAINT {_constraint_ref('uq', self._memory_table, 'event_id')} UNIQUE (event_id)"
+            f"CONSTRAINT {_constraint_ref('uq', self._memory_table, 'event_id')} UNIQUE (app_name, user_id, event_id)"
             ");"
         )
 
@@ -676,23 +907,11 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             return []
         return [_schema_target(self._memory_table, self._memory_table_ddl())]
 
-    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
-        """Return Teradata ADK memory-store SchemaTarget definitions when enabled."""
-        del driver
-        return self._schema_targets()
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing Teradata ADK memory companion indexes without committing."""
-        if not self._enabled:
-            return
-        for index_name, index_table, columns in self._memory_index_specs():
-            _create_missing_index(driver, index_table, index_name, columns)
-
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE {format_table_ref(self._memory_table)}"]
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_replica_connection(primary=not read) as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
@@ -710,9 +929,9 @@ def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: 
     table_ref = format_table_ref(table)
     return (
         f"CREATE MULTISET TABLE {table_ref} ("
-        "id VARCHAR(128) NOT NULL, "
-        "app_name VARCHAR(128) NOT NULL, "
-        f"user_id VARCHAR(128) NOT NULL{owner_line}, "
+        "id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+        "app_name VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+        f"user_id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL{owner_line}, "
         f"state {json_column_type} NOT NULL, "
         "create_time TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
         "update_time TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
@@ -734,10 +953,10 @@ def _events_table_ddl(table: str, session_table: str, json_column_type: str) -> 
     session_ref = format_table_ref(session_table)
     return (
         f"CREATE MULTISET TABLE {table_ref} ("
-        "id VARCHAR(128) NOT NULL, "
-        "app_name VARCHAR(128) NOT NULL, "
-        "user_id VARCHAR(128) NOT NULL, "
-        "session_id VARCHAR(128) NOT NULL, "
+        "id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+        "app_name VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+        "user_id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+        "session_id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
         "invocation_id VARCHAR(256) NOT NULL, "
         "timestamp TIMESTAMP(6) WITH TIME ZONE NOT NULL, "
         f"event_data {json_column_type} NOT NULL, "
@@ -766,7 +985,7 @@ def _app_states_table_ddl(table: str, json_column_type: str) -> str:
     table_ref = format_table_ref(table)
     return (
         f"CREATE MULTISET TABLE {table_ref} ("
-        "app_name VARCHAR(128) NOT NULL, "
+        "app_name VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
         f"state {json_column_type} NOT NULL, "
         "update_time TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
         f"CONSTRAINT {_constraint_ref('pk', table, 'app_name')} PRIMARY KEY (app_name)"
@@ -778,8 +997,8 @@ def _user_states_table_ddl(table: str, json_column_type: str) -> str:
     table_ref = format_table_ref(table)
     return (
         f"CREATE MULTISET TABLE {table_ref} ("
-        "app_name VARCHAR(128) NOT NULL, "
-        "user_id VARCHAR(128) NOT NULL, "
+        "app_name VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
+        "user_id VARCHAR(128) CHARACTER SET UNICODE CASESPECIFIC NOT NULL, "
         f"state {json_column_type} NOT NULL, "
         "update_time TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
         f"CONSTRAINT {_constraint_ref('pk', table, 'app_user')} PRIMARY KEY (app_name, user_id)"
@@ -817,7 +1036,9 @@ def _upsert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
     source = ", ".join(
         f"CAST(? AS {'JSON' if col == 'state' else 'VARCHAR(128)'}) AS {format_identifier(col)}" for col in columns
     )
-    join = " AND ".join(f"t.{format_identifier(col)} = s.{format_identifier(col)}" for col in key_columns)
+    join = " AND ".join(
+        _exact_column_predicate(f"t.{format_identifier(col)}", f"s.{format_identifier(col)}") for col in key_columns
+    )
     names = ", ".join(format_identifier(col) for col in (*columns, "update_time"))
     values = ", ".join(f"s.{format_identifier(col)}" for col in columns)
     return (
@@ -837,18 +1058,29 @@ def _upsert_metadata_sql(table: str) -> str:
 
 
 def _events_query(
-    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
+    table: str,
+    session_table: str,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+    after_timestamp: "datetime | None",
+    limit: "int | None",
 ) -> "tuple[str, tuple[Any, ...]]":
-    params: list[Any] = [app_name, user_id, session_id]
+    params: list[Any] = list(_exact_params(app_name, user_id, session_id))
     after_clause = ""
     if after_timestamp is not None:
-        after_clause = " AND timestamp > ?"
+        after_clause = " AND e.timestamp > ?"
         params.append(after_timestamp)
+    order_by = "ORDER BY e.timestamp DESC, e.id DESC" if limit is not None else "ORDER BY e.timestamp ASC, e.id ASC"
     sql = f"""
-    SELECT {f"TOP {int(limit)} " if limit is not None else ""}id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-    FROM {format_table_ref(table)}
-    WHERE app_name = ? AND user_id = ? AND session_id = ?{after_clause}
-    ORDER BY timestamp ASC
+    SELECT {f"TOP {int(limit)} " if limit is not None else ""}e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
+    FROM {format_table_ref(table)} e
+    JOIN {format_table_ref(session_table)} s ON {_exact_column_predicate("e.session_id", "s.id")}
+        AND {_exact_column_predicate("e.app_name", "s.app_name")}
+        AND {_exact_column_predicate("e.user_id", "s.user_id")}
+    WHERE {_exact_key_predicate("s.app_name")} AND {_exact_key_predicate("s.user_id")}
+        AND {_exact_key_predicate("s.id")}{after_clause}
+    {order_by}
     """
     return sql, tuple(params)
 
@@ -944,6 +1176,14 @@ def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     return format_identifier(f"{prefix}_{table_name}_{suffix}")
 
 
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
+    expected_scope = (app_name, user_id, session_id)
+    if record_scope != expected_scope:
+        msg = f"event_record scope {record_scope!r} does not match {expected_scope!r}"
+        raise ValueError(msg)
+
+
 def _raise_session_not_found(session_id: str) -> None:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
@@ -953,10 +1193,14 @@ def _build_teradata_scope_where(
     app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
 ) -> tuple[str, tuple[Any, ...]]:
     if scope_filter == "all":
-        return "app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app')", (app_name, user_id)
+        user_scope = f"(scope = 'user' AND {_exact_key_predicate('user_id')}) OR scope = 'app'"
+        return f"{_exact_key_predicate('app_name')} AND ({user_scope})", _exact_params(app_name, user_id)
     if scope_filter == "user":
-        return "app_name = ? AND scope = 'user' AND user_id = ?", (app_name, user_id)
-    return "app_name = ? AND scope = 'app'", (app_name,)
+        return (
+            f"{_exact_key_predicate('app_name')} AND scope = 'user' AND {_exact_key_predicate('user_id')}",
+            _exact_params(app_name, user_id),
+        )
+    return f"{_exact_key_predicate('app_name')} AND scope = 'app'", _exact_params(app_name)
 
 
 def _escape_like_pattern(value: str) -> str:
@@ -966,11 +1210,11 @@ def _escape_like_pattern(value: str) -> str:
 def _session_list_query(
     table: str, app_name: str, user_id: str | None, column: str, direction: str, limit: int | None, offset: int
 ) -> tuple[str, tuple[Any, ...]]:
-    params: list[Any] = [app_name]
-    where = "app_name = ?"
+    params: list[Any] = list(_exact_params(app_name))
+    where = _exact_key_predicate("app_name")
     if user_id is not None:
-        where += " AND user_id = ?"
-        params.append(user_id)
+        where += f" AND {_exact_key_predicate('user_id')}"
+        params.extend(_exact_params(user_id))
     order = f"{column} {direction}, id {direction}"
     top = f"TOP {int(limit)} " if limit is not None and not offset else ""
     page = ""
@@ -1033,3 +1277,24 @@ def _transaction(config: "TeradataConfig") -> Iterator[tuple[Any, Any]]:
 def _schema_target(table_name: str, ddl: str) -> SchemaTarget:
     schema, table = split_schema_and_table(table_name)
     return SchemaTarget.from_ddl(table, ddl, schema=schema, dialect="vantage")
+
+
+def _next_monotonic_timestamp(previous: Any) -> datetime:
+    now = datetime.now(UTC)
+    if not isinstance(previous, datetime):
+        return now
+    comparable = previous if previous.tzinfo is not None else previous.replace(tzinfo=UTC)
+    if now <= comparable:
+        return comparable + timedelta(microseconds=1)
+    return now
+
+
+def _is_unique_violation(exc: BaseException) -> bool:
+    return extract_error_code(exc) in _DUPLICATE_KEY_CODES
+
+
+def _require_created_session_row(row: Any) -> Any:
+    if row is None:
+        msg = "Failed to fetch created session"
+        raise RuntimeError(msg)
+    return row

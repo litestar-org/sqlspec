@@ -3,7 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,8 +24,15 @@ from sqlspec.adapters.oracledb.core import (
     truncate_utf8_bytes,
 )
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.adapters.oracledb.events._hub import (
+    OracleAsyncAQHub,
+    OracleSyncAQHub,
+    _apply_deq_options,
+    format_aq_correlation,
+)
+from sqlspec.adapters.oracledb.events.backend import OracleAsyncTxEventQEventBackend, OracleSyncTxEventQEventBackend
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, SQLSpecError
 from sqlspec.storage.pipeline import ResolvedStorageTarget
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.serializers import from_json
@@ -48,6 +55,8 @@ def test_apply_oracle_session_trace_attributes_ecid_fallback() -> None:
     """apply_oracle_session_trace_attributes falls back to conn.ecid when conn.econtext_id is absent."""
 
     class _StrictConn:
+        thin = False
+
         __slots__ = ("action", "client_identifier", "ecid", "module")
 
         def __init__(self) -> None:
@@ -71,7 +80,7 @@ async def test_oracle_sync_and_async_driver_piggyback_trace_attributes_on_slow_a
     """OracleSyncDriver and OracleAsyncDriver piggyback trace attributes on slow and cached fast paths without SQL comments."""
     sync_executed: list[tuple[str, dict[str, str | None]]] = []
     sync_conn: Any = SimpleNamespace(
-        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False
+        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False, thin=False
     )
 
     class _SyncFakeCursor:
@@ -147,7 +156,7 @@ async def test_oracle_sync_and_async_driver_piggyback_trace_attributes_on_slow_a
 
     async_executed: list[tuple[str, dict[str, str | None]]] = []
     async_conn: Any = SimpleNamespace(
-        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False
+        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False, thin=False
     )
 
     class _AsyncFakeCursor:
@@ -593,7 +602,7 @@ def test_oracle_dispatch_execute_script_ignores_colons_in_literals_and_slices_po
     res = driver.dispatch_execute_script(cursor, stmt)
     assert res.statement_count == 2
     assert len(executed_statements) == 2
-    assert executed_statements[0][1] == []
+    assert not executed_statements[0][1]
     assert executed_statements[1][1] == [101, "Alice"]
 
 
@@ -669,3 +678,198 @@ def test_oracle_aq_commit_at_dequeue_and_noop_ack_nack() -> None:
     backend._hub = hub
     backend.ack("ev-pinned")
     backend.nack("ev-pinned")
+
+
+def test_oracle_thin_trace_context_uses_native_api_without_ecid() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.oracledb.core import apply_oracle_session_trace_attributes, clear_oracle_otel_trace_context
+
+    setter = Mock()
+    connection = SimpleNamespace(thin=True, supports_opentelemetry_tracing=True, set_opentelemetry_trace_context=setter)
+    with SQLCommenterContext.scope({"traceparent": "00-parent", "tracestate": "vendor=state"}):
+        apply_oracle_session_trace_attributes(
+            connection, econtext_id="ecid", enable_session_attributes=False, enable_otel_trace_context=True
+        )
+    setter.assert_called_once_with("00-parent", "vendor=state")
+    clear_oracle_otel_trace_context(connection)
+    assert setter.call_args.args == (None,)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("channel", "expected_condition", "expected_correlation"),
+    [("user_1", "corrid = 'user_1'", None), ("OrderEvents", None, "OrderEvents")],
+    ids=["underscore-exact-condition", "plain-correlation"],
+)
+async def test_oracle_aq_hubs_avoid_wildcard_correlation_for_underscores(
+    is_async: bool, channel: str, expected_condition: str | None, expected_correlation: str | None
+) -> None:
+    """AQ dequeue avoids LIKE wildcard matching when normalized channel names contain '_'."""
+    deqoptions = SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
+    queue = MagicMock()
+    queue.deqoptions = deqoptions
+    config = MagicMock()
+    config.get_observability_runtime.return_value = MagicMock()
+
+    if is_async:
+        queue.deqone = AsyncMock(return_value=None)
+        driver = MagicMock()
+        driver.rollback = AsyncMock()
+        hub: Any = OracleAsyncAQHub(
+            config, queue_name_template="SQLSPEC_EVENTS_QUEUE", visibility=None, default_visibility=None, wait_ceiling=5
+        )
+        hub._session_driver = driver
+        hub._queues[channel] = queue
+        assert await hub.dequeue(channel, 0.5) is None
+    else:
+        queue.deqone.return_value = None
+        driver = MagicMock()
+        hub = OracleSyncAQHub(
+            config, queue_name_template="SQLSPEC_EVENTS_QUEUE", visibility=None, default_visibility=None, wait_ceiling=5
+        )
+        hub._session_driver = driver
+        hub._queues[channel] = queue
+        assert hub.dequeue(channel, 0.5) is None
+
+    assert deqoptions.condition == expected_condition
+    assert deqoptions.correlation == expected_correlation
+
+    direct_queue = SimpleNamespace(
+        deqoptions=SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
+    )
+    _apply_deq_options(direct_queue, None, None, 0.5, "a%b'c")
+    assert direct_queue.deqoptions.condition == "corrid = 'a%b''c'"
+    assert direct_queue.deqoptions.correlation is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_oracle_txeventq_hubs_translate_underscore_correlation(is_async: bool) -> None:
+    """TxEventQ publish and dequeue map '_' to '-' in correlation without SQL condition filters."""
+    assert format_aq_correlation("meta_channel", "txeventq") == "meta-channel"
+    assert format_aq_correlation("meta_channel", "aq") == "meta_channel"
+    assert format_aq_correlation("notifications", "txeventq") == "notifications"
+
+    deqoptions = SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
+    queue = MagicMock()
+    queue.deqoptions = deqoptions
+    config = MagicMock()
+    config.is_async = is_async
+    config.get_observability_runtime.return_value = MagicMock()
+
+    recorded_props: list[dict[str, Any]] = []
+    pub_queue = MagicMock()
+
+    def _msgproperties(**kwargs: Any) -> SimpleNamespace:
+        recorded_props.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    pub_conn = MagicMock()
+    pub_conn.msgproperties.side_effect = _msgproperties
+    pub_conn.queue.return_value = pub_queue
+    pub_driver = MagicMock()
+    pub_driver.connection = pub_conn
+
+    if is_async:
+        pub_queue.enqone = AsyncMock()
+        pub_driver.commit = AsyncMock()
+        pub_cm = MagicMock()
+        pub_cm.__aenter__ = AsyncMock(return_value=pub_driver)
+        pub_cm.__aexit__ = AsyncMock(return_value=None)
+        config.provide_session.return_value = pub_cm
+
+        with patch("sqlspec.adapters.oracledb.events.backend.resolve_adapter_name", return_value="oracledb"):
+            backend: Any = OracleAsyncTxEventQEventBackend(config)
+            await backend.publish("meta_channel", {"action": "with_meta"})
+
+        queue.deqone = AsyncMock(return_value=None)
+        driver = MagicMock()
+        driver.rollback = AsyncMock()
+        hub: Any = OracleAsyncAQHub(
+            config,
+            queue_name_template="SQLSPEC_TXEVENTQ",
+            visibility=None,
+            default_visibility=None,
+            wait_ceiling=5,
+            backend_name="txeventq",
+        )
+        hub._session_driver = driver
+        hub._queues["meta_channel"] = queue
+        assert await hub.dequeue("meta_channel", 0.5) is None
+    else:
+        pub_cm = MagicMock()
+        pub_cm.__enter__ = MagicMock(return_value=pub_driver)
+        pub_cm.__exit__ = MagicMock(return_value=None)
+        config.provide_session.return_value = pub_cm
+
+        with patch("sqlspec.adapters.oracledb.events.backend.resolve_adapter_name", return_value="oracledb"):
+            backend = OracleSyncTxEventQEventBackend(config)
+            backend.publish("meta_channel", {"action": "with_meta"})
+
+        queue.deqone.return_value = None
+        driver = MagicMock()
+        hub = OracleSyncAQHub(
+            config,
+            queue_name_template="SQLSPEC_TXEVENTQ",
+            visibility=None,
+            default_visibility=None,
+            wait_ceiling=5,
+            backend_name="txeventq",
+        )
+        hub._session_driver = driver
+        hub._queues["meta_channel"] = queue
+        assert hub.dequeue("meta_channel", 0.5) is None
+
+    assert recorded_props[0]["correlation"] == "meta-channel"
+    assert recorded_props[0]["payload"]["channel"] == "meta_channel"
+    assert deqoptions.condition is None
+    assert deqoptions.correlation == "meta-channel"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("pattern", ["raw_underscore", "events%all"], ids=["underscore", "percent"])
+async def test_oracle_txeventq_apply_deq_options_rejects_raw_wildcards(is_async: bool, pattern: str) -> None:
+    """Direct _apply_deq_options with allow_condition=False rejects raw LIKE wildcards and invalid channels fail dequeue."""
+    deqoptions = SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
+    queue = MagicMock()
+    queue.deqoptions = deqoptions
+    config = MagicMock()
+    config.get_observability_runtime.return_value = MagicMock()
+
+    with pytest.raises(EventChannelError, match="LIKE wildcards"):
+        _apply_deq_options(queue, None, None, 0.5, pattern, allow_condition=False)
+
+    assert deqoptions.condition is None
+    assert deqoptions.correlation is None
+
+    if pattern == "events%all":
+        if is_async:
+            hub: Any = OracleAsyncAQHub(
+                config,
+                queue_name_template="SQLSPEC_TXEVENTQ",
+                visibility=None,
+                default_visibility=None,
+                wait_ceiling=5,
+                backend_name="txeventq",
+            )
+            hub._session_driver = MagicMock()
+            hub._queues[pattern] = queue
+            with pytest.raises(EventChannelError, match="Invalid events channel name"):
+                await hub.dequeue(pattern, 0.5)
+        else:
+            hub = OracleSyncAQHub(
+                config,
+                queue_name_template="SQLSPEC_TXEVENTQ",
+                visibility=None,
+                default_visibility=None,
+                wait_ceiling=5,
+                backend_name="txeventq",
+            )
+            hub._session_driver = MagicMock()
+            hub._queues[pattern] = queue
+            with pytest.raises(EventChannelError, match="Invalid events channel name"):
+                hub.dequeue(pattern, 0.5)

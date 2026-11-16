@@ -97,6 +97,20 @@ Every `LifecycleContext` dictionary includes `"config"` (`str`), plus `"bind_key
 | `on_query_complete` | Immediately after wire statement execution succeeds | `sql`, `parameters`, `driver`, `operation`, `is_many`, `is_script`, `rows_affected` |
 | `on_error` | When statement execution raises an exception | `exception`, `sql`, `parameters`, `driver`, `operation`, `is_many`, `is_script` |
 
+## Session Reset on Release
+
+Pooled connections are reused, so a temporary table, attached database, or changed setting from one session can still be present when the next session gets the same connection. Set `driver_features["reset_session_on_release"] = True` to run a built-in reset every time a connection is released. The reset runs after any open transaction is rolled back. If it fails, the connection is closed instead of being reused.
+
+| Adapter | What the reset removes or restores |
+| --- | --- |
+| SQLite, aiosqlite | Detaches every database except `main` and `temp`, drops every object in the temp schema, restores the `foreign_keys`, `query_only`, `trusted_schema`, `cell_size_check`, and `recursive_triggers` settings, then re-applies the pool's configured PRAGMAs |
+| psycopg, cockroach_psycopg | Runs `DISCARD ALL` through the pool `reset` callback, then your own `reset` callback |
+| asyncpg, cockroach_asyncpg, psqlpy | Closes cursors, restores session authorization, resets settings, unlistens, releases session-level locks, and discards plans, temp objects, and sequences, without `DEALLOCATE ALL`, so the client statement cache stays valid. CockroachDB runs only the cursor, authorization, and settings statements |
+| pymysql, aiomysql, asyncmy | Sends `COM_RESET_CONNECTION`, then re-applies read-only session mode and `on_connection_create`. A driver without a command path closes the connection so the pool opens a new one |
+| DuckDB | Drops temporary tables, views, sequences, and macros, detaches databases that were not attached when the connection opened, then runs `on_connection_create` again |
+
+mysqlconnector keeps its native `pool_reset_session` option, which is on by default. The option is off by default. Custom resets keep using each driver's native pool callbacks, and the built-in reset runs first when both are set.
+
 ## Startup Warmup and Shutdown Cleanup
 
 In long-running web workers or CLI tools, verify connectivity and pre-initialize migration commands during startup, and always close the pool during shutdown:
@@ -106,6 +120,24 @@ In long-running web workers or CLI tools, verify connectivity and pre-initialize
 ```
 
 When you integrate SQLSpec through `SQLSpecPlugin` (Litestar), an ASGI lifespan context manager (FastAPI / Starlette), or Dishka `Scope.APP` providers, pool creation and `close_pool()` are handled for you automatically.
+
+## Read Replicas and Pool Derivation
+
+Add `replicas=` to a primary config for reader endpoints. Pass a DSN, a list, per-reader overrides, weighted `ReplicaSpec` values, named groups, or a `ReplicaGroup`. Use `True` only where the adapter defines a native read intent or local-reader shortcut.
+
+```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://app:secret@writer/app"},
+    replicas=["postgresql://app:secret@reader/app"],
+)
+reader = config.derive_pool(host="reporting", is_replica=True)
+```
+
+`derive_pool()` is available on pooled and no-pool configs. It creates a fresh config with the chosen overrides and no open socket. It keeps hooks, tenant setup, and statement settings. It does not create a remote database or replicate its data.
+
+Use `config.provide_replica_session()` or `spec.provide_replica_session(config)` for the read path. They keep the concrete driver type. The generic path falls back to primary if no group is configured. Owned readers share pool startup, shutdown, and trace hooks; `await spec.close_all_pools()` closes the topology. `spec.telemetry_snapshot()` labels readers separately, including named groups. See [Read Replicas](recipes/read-replicas.md) for selection and failover.
 
 ## Recap
 

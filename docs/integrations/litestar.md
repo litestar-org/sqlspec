@@ -66,7 +66,7 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in ASGI scope. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in application state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in ASGI scope. Default: 'db_session' |
-| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual' |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` | Transaction commit mode. Default: 'autocommit' |
 | `enable_correlation_middleware` | `bool` | `True` | Enable request correlation ID middleware. Default: True |
 | `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
 | `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
@@ -79,6 +79,18 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `manage_schema` | `bool` | `True` | Apply additive session-table reconciliation. Default: True. |
 | `create_schema` | `bool` | `True` | Create a missing session table during managed reconciliation. Default: True. |
 | `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
+| `replica_session_key` | `str` | - | Request key for a replica session. |
+| `replica_connection_key` | `str` | - | Request key for a replica connection. |
+| `routing_session_key` | `str` | - | Request key for a routing session. |
+| `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
+| `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
+| `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
+| `primary_pin_cookie` | `str or None` | `None` | Optional application primary pin cookie name. Default: None. |
+| `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed primary pin cookies. Default: None. |
+| `replica_pool_key` | `str` | - | Request key for the selected replica pool. |
+| `pagination_cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
+| `pagination_cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
+| `pagination_cursor_encrypted` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
 <!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
 
 ## Multi-Database Dependency Keys
@@ -91,15 +103,23 @@ When an application connects to multiple databases (for example, a transactional
 
 ## On-Demand Session and Connection Acquisition
 
-In custom guards, middleware, streaming iterators, or event hooks where standard route dependency injection is not active, `SQLSpecPlugin` exposes direct scope-backed session and connection accessors. Connections acquired before `http.response.start` are finalized in `before_send`, while connections acquired after `http.response.start` (such as inside `Stream` responses or `after_response` hooks) are finalized by `ConnectionCleanupMiddleware` when the ASGI request completes:
+In custom guards, middleware, streaming iterators, or event hooks where standard route dependency injection is not active, `SQLSpecPlugin` exposes direct scope-backed session and connection accessors. `ConnectionCleanupMiddleware` stays outer to application middleware so inner `before_send` hooks evaluate `commit_mode` on `http.response.start` and release non-streaming HTTP responses on the terminal `http.response.body` (`more_body=False`) (or immediately on `http.response.start` if finalization raises), while streaming responses (`more_body=True`, `Stream` responses, or connections acquired after `http.response.start`) defer cleanup to `ConnectionCleanupMiddleware` when the ASGI request completes or cancels. Once released, the request session detaches its underlying connection and raises `ImproperConfigurationError` if accessed after teardown:
 
-- `plugin.provide_request_session(key, state, scope)` and `plugin.provide_request_connection(key, state, scope)` (when the connection already exists in ASGI scope). For an async configuration whose connection is not open yet, `provide_request_session` returns a session that acquires it on the first awaited call, with the same tenant resolution and commit handling as `provide_request_session_async`; `provide_request_connection` raises `ImproperConfigurationError` naming the async accessor.
-- `plugin.provide_request_session_sync(key, state, scope)` and `plugin.provide_request_connection_sync(key, state, scope)` (acquires a sync connection on demand if not yet present in `scope`; async configurations behave as `provide_request_session` and `provide_request_connection`).
-- `await plugin.provide_request_session_async(key, state, scope)` and `await plugin.provide_request_connection_async(key, state, scope)` (acquires an async connection on demand if not yet present in `scope`).
+- `plugin.provide_db_session(key, state, scope)` and `plugin.provide_db_connection(key, state, scope)` (when the connection already exists in ASGI scope). For an async configuration whose connection is not open yet, `provide_db_session` returns a session that acquires it on the first awaited call, with the same tenant resolution and commit handling as `provide_db_session_async`; `provide_db_connection` raises `ImproperConfigurationError` naming the async accessor.
+- `plugin.provide_db_session_sync(key, state, scope)` and `plugin.provide_db_connection_sync(key, state, scope)` (acquires a sync connection on demand if not yet present in `scope`; async configurations behave as `provide_db_session` and `provide_db_connection`).
+- `await plugin.provide_db_session_async(key, state, scope)` and `await plugin.provide_db_connection_async(key, state, scope)` (acquires an async connection on demand if not yet present in `scope`).
 
 ## Tenant-Aware Requests
 
 With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, injected `db_session` and `db_connection` dependencies and `guards=[require_tenant()]` resolve the request tenant from verified authentication state, using the selector and user attribute names set once in `extension_config["litestar"]`. Mark public routes with `opt={"tenant_bypass": True}`. See [Litestar Multi-Tenancy](../learn/recipes/multi-tenancy-litestar.md) for JWT, server-side session, separate auth database, and `litestar-security` examples, and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
+
+#### Reader and routing dependencies
+
+A config with replicas exposes `db_replica_session`, `db_replica_connection`, and `replica_pool`. Rename them with `replica_session_key`, `replica_connection_key`, and `replica_pool_key`. Set `routing_session_key` to opt into a routing session. A reader opens on first use. It does not open a primary session first.
+
+For direct access, use `get_db_replica_session(request)` or `provide_db_replica_session` and its `_sync`/`_async` forms. The `provide_db_routing_session*` helpers return routing sessions. Read connection helpers use the same names with `connection` in place of `session`. Pass a config or bind key to choose the database.
+
+Tenant middleware binds the captured `TenantContextPayload` around each physical checkout, including readers. `SQLSpecRoutingMiddleware` scopes primary pins and reads stateless hints. Check tenant access in the normal request path. See [Read Replicas](../learn/recipes/read-replicas.md) for fallback and freshness choices.
 
 ## Automatic HTTP 404 and 409 Exception Mapping
 
@@ -114,34 +134,36 @@ Configure `commit_mode` inside `extension_config["litestar"]` to control how req
 
 | Commit Mode | Commits On | Rolls Back On | Best For |
 | --- | --- | --- | --- |
-| `"manual"` (default) | Explicit `session.commit()` calls only | Unhandled or mapped exceptions and request cancellations | Explicit service-layer transaction boundaries |
-| `"autocommit"` | Clean HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`), any raised exception (including mapped `2xx` responses), or cancellation | JSON REST APIs where every `2xx` handler mutates state |
-| `"autocommit_include_redirect"` | Clean HTTP `200`–`399` responses | HTTP `>= 400` responses, any raised exception (including mapped `2xx`/`3xx` responses), or cancellation | HTML / HTMX form handlers that commit and return `302` / `303` redirects |
+| `"autocommit"` (default) | Clean HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`), any raised exception (including mapped `2xx` responses), or cancellation | JSON REST APIs where every `2xx` handler mutates state |
+| `"autocommit_include_redirect"` | Clean HTTP `200`–`399` responses | HTTP `>= 400` responses, any raised exception (including mapped `2xx`/`3xx` responses), or cancellation | HTML, HTMX, and Inertia.js form handlers that commit and return `302` / `303` redirects |
+| `"manual"` | Explicit `session.commit()` calls only | Uncommitted handler work on clean return, unhandled or mapped exceptions, and request cancellations | Explicit service-layer transaction boundaries |
 
 ```python
 --8<-- "docs/examples/frameworks/litestar/commit_modes.py:example"
 ```
 
-Add `extra_commit_statuses` or `extra_rollback_statuses` in `LitestarConfig` when specific status codes require custom commit or rollback treatment.
+Add `extra_commit_statuses` or `extra_rollback_statuses` in `LitestarConfig` when `"autocommit"` or `"autocommit_include_redirect"` requires custom commit or rollback status overrides.
+
+On `adbc`, `arrow_odbc`, `asyncpg`, `cockroach_asyncpg`, `db2`, `duckdb`, `psqlpy`, `snowflake`, `sybase`, and `teradata`, requests running under `"manual"`, `"autocommit"`, or `"autocommit_include_redirect"` open their transaction lazily on the first write statement rather than issuing an eager `BEGIN` at request start, eliminating extra transaction round trips on read-only handlers.
 
 ## Request Failure Handling
 
 Litestar manages request connections across two distinct paths, and both forward exceptions and cancellations to the adapter's connection context exit (`__aexit__`):
 
-- **Injected dependencies (`db_session` / `db_connection`)**: The dependency generator owns the connection context while the route handler executes. If the handler raises `BaseException`, the generator exits the connection context immediately with `(exc_type, exc_val, exc_tb)` before Litestar renders an exception response. When an HTTP handler returns normally before `http.response.start`, the generator hands the open context to ASGI scope so `before_send` applies `commit_mode` against the response status and exits the context. If `asyncio.CancelledError` or an error in `after_request`, response serialization, or an exception handler aborts the request before `http.response.start`, `ConnectionCleanupMiddleware` rolls back uncommitted work and exits the context.
-- **On-demand accessors (`provide_request_session_*` / `provide_request_connection_*`)**: Connections live directly in ASGI scope. Whenever a handler or hook raises an exception, Litestar's `after_exception` hook runs `record_request_exception` to store the exception in scope before sending the error response. Both `before_send` (under `autocommit` and `manual` modes) and `ConnectionCleanupMiddleware` check this recorded exception before inspecting HTTP status codes, rolling back uncommitted writes and passing `(exc_type, exc_val, exc_tb)` to `__aexit__`.
+- **Injected dependencies (`db_session` / `db_connection`)**: The dependency generator owns the connection context while the route handler executes. If the handler raises `BaseException`, the generator exits the connection context immediately with `(exc_type, exc_val, exc_tb)` before Litestar renders an exception response. When an HTTP handler returns normally before `http.response.start`, the generator hands the open context to ASGI scope so inner `before_send` applies `commit_mode` against the response status and exits the context immediately for non-streaming responses, deferring streaming responses (`Stream`) until the stream completes or cancels in the outer `ConnectionCleanupMiddleware`. If `asyncio.CancelledError` or an error in `after_request`, response serialization, or an exception handler aborts the request before `http.response.start`, `ConnectionCleanupMiddleware` rolls back uncommitted work and exits the context. After finalization, the closed session raises `ImproperConfigurationError` on further queries instead of reading a returned pool connection.
+- **On-demand accessors (`provide_db_session_*` / `provide_db_connection_*`)**: Connections live directly in ASGI scope. Whenever a handler or hook raises an exception, Litestar's `after_exception` hook runs `record_request_exception` to store the exception in scope before sending the error response. Both `before_send` (under `autocommit` and `manual` modes) and `ConnectionCleanupMiddleware` check this recorded exception before inspecting HTTP status codes, rolling back uncommitted writes and passing `(exc_type, exc_val, exc_tb)` to `__aexit__`.
 
 Both unhandled exceptions and exceptions mapped to HTTP responses by Litestar `exception_handlers` (such as `HTTPException`, `NotFoundError`, `IntegrityError`, or custom handlers returning `4xx` or `2xx` fallback responses) record the exception via `after_exception` and roll back uncommitted work. By contrast, Starlette, FastAPI, and Flask treat exceptions already converted into responses by inner framework exception handlers as normal responses at the middleware boundary unless status-based rollback applies.
 
-When a route handler in `"manual"` mode returns cleanly without calling `commit()` or `rollback()`, the outcome for open uncommitted work depends on the adapter:
+In `"manual"` mode, uncommitted handler writes roll back consistently before releasing the connection back to the pool (only adapters without session-level multi-statement transactions—such as `bigquery` outside explicit session transactions and non-transactional `spanner` snapshots—are outside DB-API session rollback).
 
-| Clean return with uncommitted work (`manual` mode) | Adapters |
-| --- | --- |
-| Commits open transaction on context exit | `sqlite`, `aiosqlite`, `duckdb`, `psycopg`, `cockroach_psycopg`, `spanner` |
-| Rolls back uncommitted transaction on pool release or close | `pymysql`, `aiomysql`, `asyncmy`, `mysqlconnector`, `oracledb`, `mssql_python`, `adbc` |
-| Autocommits single statements; rolls back open `BEGIN` blocks on pool release | `asyncpg`, `cockroach_asyncpg` |
-| Autocommits single statements by default (explicit `BEGIN` or `autocommit=False` requires explicit commit or `commit_mode`; `teradata` and `snowflake` roll back uncommitted `autocommit=False` work on pool release) | `psqlpy`, `db2`, `teradata`, `snowflake`, `arrow_odbc`, `bigquery` |
-| Retains open transaction on thread-local connection until explicit `commit()` / `rollback()` (discards connection on exception) | `pymssql`, `sybase`, `sqlanywhere` |
+In short, the request connection's lifetime depends on the response type:
+
+- **Normal responses**: The request connection is committed or rolled back when the response starts and released after the final body frame.
+- **Streaming responses**: The connection stays held until the stream finishes or the client disconnects, so the request session works inside a `Stream` body.
+- **Background work**: A background task runs after the connection is released. Open a new session with `config.provide_session()` inside the task.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
 
 ## Declarative Query Filter Providers
 
@@ -189,7 +211,7 @@ async def list_users(
     )
 ```
 
-For bidirectional keyset pagination (`CursorPagination`), set `pagination_type="cursor"` and `cursor_keys="id"` (or pass `CursorKey` specs) on `FilterConfig`; see [Filtering and Pagination](../learn/filtering-and-pagination.md).
+For bidirectional keyset pagination (`CursorPagination`), set `pagination_type="cursor"` and `pagination_cursor_keys="id"` (or pass `CursorKey` specs) on `FilterConfig`; see [Filtering and Pagination](../learn/filtering-and-pagination.md). Configure application-wide cursor signing (`pagination_cursor_secret`), expiration (`pagination_cursor_ttl`), and payload encryption (`pagination_cursor_encrypted`) once via `LitestarConfig` or `SQLSpecPlugin(..., pagination_cursor_secret=..., pagination_cursor_ttl=..., pagination_cursor_encrypted=...)` (falling back to `SQLSPEC_PAGINATION_CURSOR_SECRET` / `SECRET_KEY` environment variables when omitted); `create_filter_dependencies(...)` inherits those settings from application state automatically and derives per-endpoint signing keys without duplicating configuration per controller. A cursor secret is required: cursor requests raise `ImproperConfigurationError` when none resolves. Tokens are bound to the request tenant of every tenant-enabled configuration, so a token from one tenant is rejected for another. Search filters escape `%`, `_`, and `/` by default; set `search_escape_wildcards=False` in `FilterConfig` to opt out.
 
 ## Server-Side Session Stores
 
@@ -200,6 +222,17 @@ Supported database adapters export a Litestar `Store` implementation under `sqls
 ```
 
 Call `await store.create_table()` during application startup (or configure `session_table=True` in `extension_config["litestar"]`, which auto-includes the `litestar_session` table in migrations) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
+
+While a request holds an open database session for the store's configuration, session writes made by the request itself (including the writes Litestar's session middleware makes when the response starts) run on that session and do not take a second connection, so a one-connection pool cannot deadlock on its own session writes. This holds however the request session is resolved: through `db_session` injection, inside a group of sibling dependencies, or from a sync handler running in a worker thread. No extra configuration is needed.
+
+How the write commits depends on the commit mode:
+
+- **`autocommit` and `autocommit_include_redirect`:** the write joins the request's transaction. It commits with a successful response and rolls back with an error response or an unhandled exception, including on adapters whose connections autocommit by default (such as asyncpg, psqlpy, and DuckDB).
+- **`manual`:** if the handler left uncommitted work open, the write joins it and rolls back with it when the request ends. If no transaction is open (for example, because the handler already committed), the store begins its own transaction on the request session and commits the write immediately.
+
+If a request fails after it has released its database session, later session writes from that request are rolled back.
+
+A store call made outside a request, such as from startup code or a CLI command, opens its own short session and commits itself. So do calls from tasks the request spawns (for example, with `asyncio.create_task`), calls made after a successful request has released its session, and stores bound to a different configuration. These writes are independent of the request's outcome. The BigQuery and Spanner stores always open their own session.
 
 SQL Server, Oracle, and Arrow ODBC session stores accept schema-qualified `session_table` names (such as `"auth.litestar_session"`, `"[auth].[litestar_session]"`, or `"APP.litestar_session"`). The schema must already exist.
 

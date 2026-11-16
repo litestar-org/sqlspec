@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.adapters.db2.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, split_db2_table_name, to_db_timestamp, utc_now
 from sqlspec.adapters.db2.migrations import build_guarded_drop_table
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
-from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
@@ -76,14 +75,6 @@ def session_index_ddl(table: str) -> str:
     if schema is not None:
         return f"CREATE INDEX {quote_identifier(schema)}.{quote_identifier(idx_name)} ON {table}(expires_at)"
     return f"CREATE INDEX {idx_name} ON {table}(expires_at)"
-
-
-def _session_companion_index(table_name: str) -> CompanionIndex:
-    """Build the catalog-probed Db2 session expiry index definition."""
-    schema, table = session_catalog_names(table_name)
-    return CompanionIndex(
-        name=session_index_name(table_name), table=table, schema=schema, ddl=session_index_ddl(table_name)
-    )
 
 
 def select_session_sql(table: str) -> str:
@@ -245,52 +236,52 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key."""
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value."""
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
         """Delete a session by key."""
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired."""
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires."""
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions."""
-        return await async_(self._delete_expired)()
-
-    def _table_ddl(self) -> str:
-        """Get Db2 CREATE TABLE SQL."""
-        return session_table_ddl(self._table_name)
+        return await self._run_sync(self._delete_expired)
 
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return the catalog-probed Db2 session expiry companion index."""
         return [_session_companion_index(self._table_name)]
 
-    def _drop_table_sql(self) -> "list[str]":
-        """Get Db2 DROP TABLE statements."""
-        return [drop_session_table_sql(self._table_name)]
-
     def downgrade_drops(self) -> "list[DropStatement]":
         """Return the catalog-probed drop for the session table."""
         return [build_guarded_drop_table(self._table_name, drop_session_table_sql(self._table_name))]
+
+    def _table_ddl(self) -> str:
+        """Get Db2 CREATE TABLE SQL."""
+        return session_table_ddl(self._table_name)
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get Db2 DROP TABLE statements."""
+        return [drop_session_table_sql(self._table_name)]
 
     def _create_table(self) -> None:
         """Create the table and its expiry index when the catalog does not list them."""
@@ -305,47 +296,57 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Retrieve session data by key, extending its expiry when requested."""
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             row = driver.select_one_or_none(select_session_sql(self._table_name), (key, utc_now()))
             if row is None:
                 return None
-            if renew_for is not None and row["expires_at"] is not None:
+            if self._is_renewal_requested(renew_for) and row["expires_at"] is not None:
                 new_expires_at = to_db_timestamp(self._calculate_expires_at(renew_for))
                 if new_expires_at is not None:
                     driver.execute(renew_session_sql(self._table_name), (new_expires_at, utc_now(), key))
-                    driver.commit()
+                    if store_session.owned:
+                        driver.commit()
             return _coerce_bytes(row["data"])
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Upsert session data using an atomic MERGE."""
         data = self._value_to_bytes(value)
         expires_at = to_db_timestamp(self._calculate_expires_at(expires_in))
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             driver.execute(upsert_session_sql(self._table_name), (key, data, expires_at, utc_now()))
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
 
     def _delete(self, key: str) -> None:
         """Delete session by key."""
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             driver.execute(delete_session_sql(self._table_name), (key,))
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
 
     def _delete_all(self) -> None:
         """Delete every session row."""
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             driver.execute(delete_all_sql(self._table_name))
-            driver.commit()
+            if store_session.owned:
+                driver.commit()
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
         """Check that an unexpired session exists."""
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             row = driver.select_one_or_none(exists_session_sql(self._table_name), (key, utc_now()))
         return row is not None
 
     def _expires_in(self, key: str) -> "int | None":
         """Calculate seconds until session expiration."""
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             expires_at = _normalize_utc(driver.select_value_or_none(expires_at_sql(self._table_name), (key,)))
         if expires_at is None:
             return None
@@ -354,10 +355,12 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
 
     def _delete_expired(self) -> int:
         """Remove expired sessions and return the deleted row count."""
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             result = driver.execute(delete_expired_sql(self._table_name), (utc_now(),))
-            driver.commit()
-        count = max(result.rows_affected, 0)
+            if store_session.owned:
+                driver.commit()
+        count = int(max(result.rows_affected, 0))
         if count > 0:
             self._log_delete_expired(count)
         return count
@@ -386,47 +389,57 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Retrieve session data by key, extending its expiry when requested."""
-        async with self._config.provide_session() as driver:
+        async with self._store_session() as store_session:
+            driver = store_session.session
             row = await driver.select_one_or_none(select_session_sql(self._table_name), (key, utc_now()))
             if row is None:
                 return None
-            if renew_for is not None and row["expires_at"] is not None:
+            if self._is_renewal_requested(renew_for) and row["expires_at"] is not None:
                 new_expires_at = to_db_timestamp(self._calculate_expires_at(renew_for))
                 if new_expires_at is not None:
                     await driver.execute(renew_session_sql(self._table_name), (new_expires_at, utc_now(), key))
-                    await driver.commit()
+                    if store_session.owned:
+                        await driver.commit()
             return _coerce_bytes(row["data"])
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Upsert session data using an atomic MERGE."""
         data = self._value_to_bytes(value)
         expires_at = to_db_timestamp(self._calculate_expires_at(expires_in))
-        async with self._config.provide_session() as driver:
+        async with self._store_session() as store_session:
+            driver = store_session.session
             await driver.execute(upsert_session_sql(self._table_name), (key, data, expires_at, utc_now()))
-            await driver.commit()
+            if store_session.owned:
+                await driver.commit()
 
     async def delete(self, key: str) -> None:
         """Delete a session by key."""
-        async with self._config.provide_session() as driver:
+        async with self._store_session() as store_session:
+            driver = store_session.session
             await driver.execute(delete_session_sql(self._table_name), (key,))
-            await driver.commit()
+            if store_session.owned:
+                await driver.commit()
 
     async def delete_all(self) -> None:
         """Delete every session row."""
-        async with self._config.provide_session() as driver:
+        async with self._store_session() as store_session:
+            driver = store_session.session
             await driver.execute(delete_all_sql(self._table_name))
-            await driver.commit()
+            if store_session.owned:
+                await driver.commit()
         self._log_delete_all()
 
     async def exists(self, key: str) -> bool:
         """Check that an unexpired session exists."""
-        async with self._config.provide_session() as driver:
+        async with self._store_session() as store_session:
+            driver = store_session.session
             row = await driver.select_one_or_none(exists_session_sql(self._table_name), (key, utc_now()))
         return row is not None
 
     async def expires_in(self, key: str) -> "int | None":
         """Calculate seconds until session expiration."""
-        async with self._config.provide_session() as driver:
+        async with self._store_session() as store_session:
+            driver = store_session.session
             expires_at = _normalize_utc(await driver.select_value_or_none(expires_at_sql(self._table_name), (key,)))
         if expires_at is None:
             return None
@@ -435,29 +448,31 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
 
     async def delete_expired(self) -> int:
         """Remove expired sessions and return the deleted row count."""
-        async with self._config.provide_session() as driver:
+        async with self._store_session() as store_session:
+            driver = store_session.session
             result = await driver.execute(delete_expired_sql(self._table_name), (utc_now(),))
-            await driver.commit()
-        count = max(result.rows_affected, 0)
+            if store_session.owned:
+                await driver.commit()
+        count = int(max(result.rows_affected, 0))
         if count > 0:
             self._log_delete_expired(count)
         return count
-
-    def _table_ddl(self) -> str:
-        """Get Db2 CREATE TABLE SQL."""
-        return session_table_ddl(self._table_name)
 
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return the catalog-probed Db2 session expiry companion index."""
         return [_session_companion_index(self._table_name)]
 
-    def _drop_table_sql(self) -> "list[str]":
-        """Get Db2 DROP TABLE statements."""
-        return [drop_session_table_sql(self._table_name)]
-
     def downgrade_drops(self) -> "list[DropStatement]":
         """Return the catalog-probed drop for the session table."""
         return [build_guarded_drop_table(self._table_name, drop_session_table_sql(self._table_name))]
+
+    def _table_ddl(self) -> str:
+        """Get Db2 CREATE TABLE SQL."""
+        return session_table_ddl(self._table_name)
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get Db2 DROP TABLE statements."""
+        return [drop_session_table_sql(self._table_name)]
 
     async def _create_table(self) -> None:
         """Create the table and its expiry index when the catalog does not list them."""
@@ -472,6 +487,14 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
                 await driver.execute(session_index_ddl(self._table_name))
             await driver.commit()
         self._log_table_created()
+
+
+def _session_companion_index(table_name: str) -> CompanionIndex:
+    """Build the catalog-probed Db2 session expiry index definition."""
+    schema, table = session_catalog_names(table_name)
+    return CompanionIndex(
+        name=session_index_name(table_name), table=table, schema=schema, ddl=session_index_ddl(table_name)
+    )
 
 
 def _coerce_bytes(value: Any) -> "bytes | None":

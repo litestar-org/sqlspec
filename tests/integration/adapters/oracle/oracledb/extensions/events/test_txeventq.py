@@ -312,3 +312,38 @@ async def test_txeventq_async_concurrent_multi_channel(
             await channel.shutdown()
             if config.connection_instance is not None:
                 await config.close_pool()
+
+
+def test_txeventq_underscore_channel_isolation(oracle_txeventq_config: OracleSyncConfig) -> None:
+    """Underscore channels on a shared TxEventQ queue must not wildcard-match other channels."""
+
+    spec = SQLSpec()
+    spec.add_config(oracle_txeventq_config)
+    channel = spec.event_channel(oracle_txeventq_config)
+
+    other_id = channel.publish("axb", {"tag": "axb"})
+
+    received_ab: list[Any] = []
+
+    def _handler(message: Any) -> None:
+        received_ab.append(message)
+
+    listener = channel.listen("a_b", _handler, poll_interval=0.1)
+    time.sleep(0.5)
+    assert received_ab == []
+
+    other_msg = next(channel.iter_events("axb", poll_interval=1.0))
+    assert other_msg.event_id == other_id
+    assert other_msg.payload == {"tag": "axb"}
+    channel.ack(other_msg.event_id)
+
+    target_id = channel.publish("a_b", {"tag": "a_b"})
+    _sync_wait_for_message(received_ab)
+    channel.stop_listener(listener.id)
+
+    assert received_ab, "listener did not receive message for underscore channel"
+    assert received_ab[0].event_id == target_id
+    assert received_ab[0].channel == "a_b"
+    assert received_ab[0].payload == {"tag": "a_b"}
+
+    channel.shutdown()

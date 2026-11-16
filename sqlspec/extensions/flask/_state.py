@@ -7,6 +7,7 @@ from typing import Any, Final, Literal
 
 from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.utils.routing import validate_routing_middleware_settings
 from sqlspec.utils.tenant import TenantExtractorValue
 
 __all__ = ("FlaskConfigState",)
@@ -47,9 +48,27 @@ class FlaskConfigState:
     correlation_headers: "tuple[str, ...] | None" = None
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
+    replica_session_key: str = "db_replica_session"
+    replica_connection_key: str = "db_replica_connection"
+    routing_session_key: str | None = None
+    default_routing_mode: str = "auto"
+    enable_routing_middleware: bool = True
+    routing_header: str | None = None
+    primary_pin_cookie: str | None = None
+    primary_pin_secret: str | bytes | None = None
 
     def __post_init__(self) -> None:
         """Validate status configuration and synchronous tenant extractor signature."""
+        enable_routing, normalized_header, normalized_cookie, normalized_secret = validate_routing_middleware_settings(
+            enable_routing_middleware=self.enable_routing_middleware,
+            routing_header=self.routing_header,
+            primary_pin_cookie=self.primary_pin_cookie,
+            primary_pin_secret=self.primary_pin_secret,
+        )
+        self.enable_routing_middleware = enable_routing
+        self.routing_header = normalized_header
+        self.primary_pin_cookie = normalized_cookie
+        self.primary_pin_secret = normalized_secret
         bind_key = getattr(self.config, "bind_key", None)
         keys = [tenant_receipt_key(self.session_key), tenant_receipt_key(self.connection_key)]
         if isinstance(bind_key, str) and bind_key:
@@ -89,6 +108,8 @@ class FlaskConfigState:
         Returns:
             True if status should trigger commit, False otherwise.
         """
+        if self.commit_mode == "manual":
+            return False
         if self.extra_commit_statuses and status_code in self.extra_commit_statuses:
             return True
         if self.extra_rollback_statuses and status_code in self.extra_rollback_statuses:
@@ -102,7 +123,8 @@ class FlaskConfigState:
     def should_rollback(self, status_code: int) -> bool:
         """Determine if HTTP status code should trigger rollback.
 
-        In autocommit modes, anything that doesn't commit should rollback.
+        Manual mode always rolls back uncommitted handler work, and autocommit
+        modes roll back any status code that does not trigger a commit.
 
         Args:
             status_code: HTTP response status code.
@@ -110,4 +132,4 @@ class FlaskConfigState:
         Returns:
             True if status should trigger rollback, False otherwise.
         """
-        return self.commit_mode != "manual" and not self.should_commit(status_code)
+        return not self.should_commit(status_code)

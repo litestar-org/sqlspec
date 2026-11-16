@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for DuckDB ADK store extension configuration."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
@@ -11,6 +11,8 @@ import duckdb
 import pytest
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
+from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc.adk import AdbcADKStore
 from sqlspec.adapters.duckdb.adk import DuckDBADKMemoryStore, DuckDBADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.adapters.duckdb.litestar.store import DuckDBStore
@@ -403,14 +405,14 @@ def test_duckdb_companions_restore_dropped_session_index(tmp_path: Path) -> None
         store.create_session("s1", "app", "user", {})
 
         with config.provide_session() as driver:
-            driver.execute("DROP INDEX idx_adk_session_update_time")
+            driver.execute("DROP INDEX idx_adk_session_app_user")
             driver.commit()
             store.reconcile_companion_objects_sync(driver)
             store.reconcile_companion_objects_sync(driver)
             driver.commit()
             rows = driver.select("SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", ("adk_session",))
 
-        assert "idx_adk_session_update_time" in {str(row["index_name"]) for row in rows}
+        assert "idx_adk_session_app_user" in {str(row["index_name"]) for row in rows}
         session = store.get_session("app", "user", "s1")
         assert session is not None and session["id"] == "s1"
     finally:
@@ -426,14 +428,14 @@ def test_duckdb_companions_do_not_commit(tmp_path: Path) -> None:
         store.create_tables()
 
         with config.provide_session() as driver:
-            driver.execute("DROP INDEX idx_adk_session_update_time")
+            driver.execute("DROP INDEX idx_adk_session_app_user")
             driver.commit()
             driver.begin()
             store.reconcile_companion_objects_sync(driver)
             driver.rollback()
             rows = driver.select("SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", ("adk_session",))
 
-        assert "idx_adk_session_update_time" not in {str(row["index_name"]) for row in rows}
+        assert "idx_adk_session_app_user" not in {str(row["index_name"]) for row in rows}
     finally:
         config.close_pool()
 
@@ -677,3 +679,634 @@ def test_duckdb_fts_companion_skips_disabled_fts() -> None:
 
     assert not any("information_schema.schemata" in sql for sql, _ in select_calls)
     assert len(executed) == 3
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_touch"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-positive"),
+    ],
+)
+def test_duckdb_get_session_renews_only_for_positive_duration(
+    tmp_path: Path, renew_for: int | timedelta | None, expect_touch: bool
+) -> None:
+    """DuckDB get_session updates update_time only when renew_for is positive."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "renew.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        created = store.create_session("s1", "app", "u1", {"k": 1})
+        baseline_time = datetime(2020, 1, 1, tzinfo=UTC)
+        with config.provide_connection() as conn:
+            conn.execute("UPDATE adk_session SET update_time = ? WHERE id = ?", (baseline_time, "s1"))
+            conn.commit()
+
+        fetched = store.get_session("app", "u1", "s1", renew_for=renew_for)
+        assert fetched is not None
+        assert fetched["id"] == created["id"]
+        if expect_touch:
+            assert fetched["update_time"] > baseline_time
+        else:
+            assert fetched["update_time"] == baseline_time
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("event_app", "event_user", "should_succeed"),
+    [
+        pytest.param("app_a", "user_1", True, id="owning-pair"),
+        pytest.param("app_b", "user_1", False, id="wrong-app"),
+        pytest.param("app_a", "user_2", False, id="wrong-user"),
+    ],
+)
+def test_duckdb_append_event_enforces_session_ownership(
+    tmp_path: Path, event_app: str, event_user: str, should_succeed: bool
+) -> None:
+    """append_event writes an event only when (app_name, user_id) owns session_id."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "append_scope.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        store.create_session("s1", "app_a", "user_1", {})
+        event = {
+            "id": "e1",
+            "app_name": event_app,
+            "user_id": event_user,
+            "session_id": "s1",
+            "invocation_id": "inv1",
+            "timestamp": datetime.now(UTC),
+            "event_data": {"msg": "hello"},
+        }
+        if should_succeed:
+            store.append_event(cast("Any", event))
+            events = store.get_events("app_a", "user_1", "s1")
+            assert [item["id"] for item in events] == ["e1"]
+        else:
+            with pytest.raises(ValueError, match="Session s1 not found"):
+                store.append_event(cast("Any", event))
+            with config.provide_connection() as conn:
+                count = conn.execute("SELECT COUNT(*) FROM adk_event").fetchone()
+            assert count == (0,)
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_append_event_and_update_state_validates_scope_and_orders_update_first(tmp_path: Path) -> None:
+    """append_event_and_update_state rejects mismatched scope before connecting and leaves events empty on missing session."""
+    store_mock, conn_mock = _session_store_with_connection()
+    mismatched_event = {
+        "id": "e1",
+        "app_name": "other_app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv1",
+        "timestamp": datetime.now(UTC),
+        "event_data": {},
+    }
+    with pytest.raises(ValueError, match="does not match target"):
+        store_mock.append_event_and_update_state(cast("Any", mismatched_event), "app", "u1", "s1", {"x": 1})
+    assert conn_mock.calls == []
+
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "atomic_state.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        valid_event = {
+            "id": "e1",
+            "app_name": "app",
+            "user_id": "u1",
+            "session_id": "missing_session",
+            "invocation_id": "inv1",
+            "timestamp": datetime.now(UTC),
+            "event_data": {"ok": True},
+        }
+        with pytest.raises(ValueError, match="Session missing_session not found"):
+            store.append_event_and_update_state(cast("Any", valid_event), "app", "u1", "missing_session", {"x": 1})
+        with config.provide_connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM adk_event").fetchone()
+        assert count == (0,)
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_delete_session_is_scoped_and_rolls_back_on_failure(tmp_path: Path) -> None:
+    """delete_session preserves cross-tenant sessions, cascades events on DuckDB 2.0, and fails cleanly on external FK pins."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "delete_tx.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        store.create_session("s1", "app", "user_b", {"owner": "b"})
+        store.create_session("s2", "app", "user_b", {"owner": "b"})
+        now = datetime.now(UTC)
+        store.append_event({
+            "id": "e_b",
+            "app_name": "app",
+            "user_id": "user_b",
+            "session_id": "s1",
+            "invocation_id": "inv_b",
+            "timestamp": now,
+            "event_data": {"text": "keep"},
+        })
+        store.append_event({
+            "id": "e_s2",
+            "app_name": "app",
+            "user_id": "user_b",
+            "session_id": "s2",
+            "invocation_id": "inv_s2",
+            "timestamp": now,
+            "event_data": {"text": "cascade"},
+        })
+        with config.provide_connection() as conn:
+            conn.execute(
+                "INSERT INTO adk_event (id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("e_other_owner", "app", "user_a", "s1", "inv_a", now, '{"text":"mismatched"}'),
+            )
+            conn.commit()
+
+        assert [item["id"] for item in store.get_events("app", "user_b", "s1")] == ["e_b"]
+
+        store.delete_session("app", "user_a", "s1")
+        assert store.get_session("app", "user_b", "s1") is not None
+        assert [item["id"] for item in store.get_events("app", "user_b", "s1")] == ["e_b"]
+
+        store.delete_session("app", "user_b", "s2")
+        assert store.get_session("app", "user_b", "s2") is None
+        assert store.get_events("app", "user_b", "s2") == []
+
+        with config.provide_connection() as conn:
+            conn.execute("CREATE TABLE session_pin (sid VARCHAR REFERENCES adk_session(id))")
+            conn.execute("INSERT INTO session_pin VALUES ('s1')")
+            conn.commit()
+
+        with pytest.raises(Exception):
+            store.delete_session("app", "user_b", "s1")
+
+        assert store.get_session("app", "user_b", "s1") is not None
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_delete_idle_sessions_cascades_events_on_duckdb(tmp_path: Path) -> None:
+    """_delete_idle_sessions deletes child events and parent sessions across both DuckDB and ADBC DuckDB."""
+    cutoff = datetime(2030, 1, 1, tzinfo=UTC)
+    event_ts = datetime(2026, 1, 1, tzinfo=UTC)
+
+    duckdb_cfg = DuckDBConfig(connection_config={"database": str(tmp_path / "idle_duck.duckdb")})
+    adbc_cfg = AdbcConfig(connection_config={"driver_name": "duckdb", "path": str(tmp_path / "idle_adbc.duckdb")})
+    try:
+        duck_store = DuckDBADKStore(duckdb_cfg)
+        duck_store.create_tables()
+        duck_store.create_session("s1", "app", "user_1", {})
+        duck_store.append_event({
+            "id": "e1",
+            "app_name": "app",
+            "user_id": "user_1",
+            "session_id": "s1",
+            "invocation_id": "inv1",
+            "timestamp": event_ts,
+            "event_data": {"text": "old"},
+        })
+        assert duck_store.delete_idle_sessions(cutoff) == 1
+        assert duck_store.get_session("app", "user_1", "s1") is None
+        assert duck_store.get_events("app", "user_1", "s1") == []
+
+        adbc_store = AdbcADKStore(adbc_cfg)
+        adbc_store.create_tables()
+        adbc_store.create_session("s1", "app", "user_1", {})
+        adbc_store.append_event({
+            "id": "e1",
+            "app_name": "app",
+            "user_id": "user_1",
+            "session_id": "s1",
+            "invocation_id": "inv1",
+            "timestamp": event_ts,
+            "event_data": {"text": "old"},
+        })
+        assert adbc_store.delete_idle_sessions(cutoff) == 1
+        assert adbc_store.get_session("app", "user_1", "s1") is None
+        assert adbc_store.get_events("app", "user_1", "s1") == []
+    finally:
+        duckdb_cfg.close_pool()
+        adbc_cfg.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("second_app", "second_user", "expected_second_inserted", "expected_total"),
+    [
+        pytest.param("app_a", "user_1", 0, 1, id="same-owner-duplicate"),
+        pytest.param("app_b", "user_1", 1, 2, id="cross-app-same-event-id"),
+        pytest.param("app_a", "user_2", 1, 2, id="cross-user-same-event-id"),
+    ],
+)
+def test_duckdb_memory_deduplicates_by_app_user_and_event_id(
+    tmp_path: Path, second_app: str, second_user: str, expected_second_inserted: int, expected_total: int
+) -> None:
+    """Memory inserts deduplicate on (app_name, user_id, event_id) and allow cross-owner reuse."""
+    config = DuckDBConfig(
+        connection_config={"database": str(tmp_path / "mem_dedup.duckdb")},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    try:
+        mem_store = DuckDBADKMemoryStore(config)
+        mem_store.create_tables()
+        now = datetime.now(UTC)
+        first = {
+            "id": "m1",
+            "session_id": "s1",
+            "app_name": "app_a",
+            "user_id": "user_1",
+            "scope": "user",
+            "event_id": "shared_evt",
+            "author": "agent",
+            "timestamp": now,
+            "content_json": {"text": "alpha"},
+            "content_text": "alpha",
+            "metadata_json": None,
+            "inserted_at": now,
+            "embedding": None,
+        }
+        second = {**first, "id": "m2", "app_name": second_app, "user_id": second_user}
+        assert mem_store.insert_memory_entries([cast("Any", first)]) == 1
+        assert mem_store.insert_memory_entries([cast("Any", second)]) == expected_second_inserted
+        with config.provide_connection() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM adk_memory").fetchone()
+        assert total == (expected_total,)
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("filter_app", "filter_user", "expected_deleted", "expected_remaining_ids"),
+    [pytest.param("app_a", "user_1", 1, ["m2", "m3"], id="app-and-user-scoped")],
+)
+def test_duckdb_delete_entries_by_session_scoping(
+    tmp_path: Path, filter_app: str, filter_user: str, expected_deleted: int, expected_remaining_ids: list[str]
+) -> None:
+    """delete_entries_by_session supports optional app_name and user_id scoping."""
+    config = DuckDBConfig(
+        connection_config={"database": str(tmp_path / "mem_del.duckdb")},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    try:
+        mem_store = DuckDBADKMemoryStore(config)
+        mem_store.create_tables()
+        now = datetime.now(UTC)
+        base = {
+            "session_id": "s1",
+            "scope": "user",
+            "author": "agent",
+            "timestamp": now,
+            "content_json": {"text": "note"},
+            "content_text": "note",
+            "metadata_json": None,
+            "inserted_at": now,
+            "embedding": None,
+        }
+        entries = [
+            {**base, "id": "m1", "app_name": "app_a", "user_id": "user_1", "event_id": "e1"},
+            {**base, "id": "m2", "app_name": "app_a", "user_id": "user_2", "event_id": "e2"},
+            {**base, "id": "m3", "app_name": "app_b", "user_id": "user_1", "event_id": "e3"},
+        ]
+        assert mem_store.insert_memory_entries(cast("Any", entries)) == 3
+        deleted = mem_store.delete_entries_by_session("s1", app_name=filter_app, user_id=filter_user)
+        assert deleted == expected_deleted
+        with config.provide_connection() as conn:
+            remaining = [row[0] for row in conn.execute("SELECT id FROM adk_memory ORDER BY id").fetchall()]
+        assert remaining == expected_remaining_ids
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_fts_search_isolates_applications(tmp_path: Path) -> None:
+    """DuckDB FTS subquery scopes match_bm25 to the target app_name."""
+    captured_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _RecordingFtsConn:
+        description = [("id",)]
+
+        def execute(self, sql: str, params: Any = ()) -> "_RecordingFtsConn":
+            captured_calls.append((_normalized(sql), tuple(params)))
+            return self
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+        def __enter__(self) -> "Self":
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    mock_cfg = _mock_config({"enable_memory": True, "memory_use_fts": True})
+    mock_cfg.provide_connection = lambda *_a, **_k: _RecordingFtsConn()
+    fts_store = DuckDBADKMemoryStore(mock_cfg)
+    fts_store.search_entries("quarterly", "app_a", "user_1", limit=5)
+
+    fts_queries = [(sql, params) for sql, params in captured_calls if "match_bm25" in sql]
+    assert len(fts_queries) == 1
+    fts_sql, fts_params = fts_queries[0]
+    assert "FROM adk_memory WHERE app_name = ? ) fts ON m.id = fts.id" in fts_sql
+    assert fts_params == ("quarterly", "app_a", "app_a", "user_1", 5)
+
+    config = DuckDBConfig(
+        connection_config={"database": str(tmp_path / "fts_isolation.duckdb")},
+        extension_config={"adk": {"enable_memory": True, "memory_use_fts": True}},
+    )
+    try:
+        live_store = DuckDBADKMemoryStore(config)
+        live_store.create_tables()
+        now = datetime.now(UTC)
+        entries = [
+            {
+                "id": "m_a",
+                "session_id": "s1",
+                "app_name": "app_a",
+                "user_id": "user_1",
+                "scope": "user",
+                "event_id": "e1",
+                "author": "agent",
+                "timestamp": now,
+                "content_json": {"text": "zephyr forecast"},
+                "content_text": "zephyr forecast",
+                "metadata_json": None,
+                "inserted_at": now,
+                "embedding": None,
+            },
+            {
+                "id": "m_b",
+                "session_id": "s1",
+                "app_name": "app_b",
+                "user_id": "user_1",
+                "scope": "user",
+                "event_id": "e1",
+                "author": "agent",
+                "timestamp": now,
+                "content_json": {"text": "zephyr confidential"},
+                "content_text": "zephyr confidential",
+                "metadata_json": None,
+                "inserted_at": now,
+                "embedding": None,
+            },
+        ]
+        assert live_store.insert_memory_entries(cast("Any", entries)) == 2
+        results = live_store.search_entries("zephyr", "app_a", "user_1", limit=10)
+        assert [row["id"] for row in results] == ["m_a"]
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_repeated_event_appends_and_state_updates_preserve_fk_integrity(tmp_path: Path) -> None:
+    """Repeated session updates after child events exist satisfy DuckDB 2.0 foreign key checks."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "fk_repeated.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+        store.create_session("s1", "app", "user", {"step": 0})
+
+        event_1 = {
+            "id": "e1",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "user",
+            "invocation_id": "inv-1",
+            "author": "user",
+            "timestamp": base,
+            "event_data": {"id": "e1", "author": "user"},
+        }
+        event_2 = {
+            "id": "e2",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "user",
+            "invocation_id": "inv-2",
+            "author": "agent",
+            "timestamp": datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC),
+            "event_data": {"id": "e2", "author": "agent"},
+        }
+        event_3 = {
+            "id": "e3",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "user",
+            "invocation_id": "inv-3",
+            "author": "agent",
+            "timestamp": datetime(2026, 1, 1, 12, 0, 2, tzinfo=UTC),
+            "event_data": {"id": "e3", "author": "agent"},
+        }
+
+        store.append_event_and_update_state(cast("Any", event_1), "app", "user", "s1", {"step": 1})
+        store.append_event_and_update_state(cast("Any", event_2), "app", "user", "s1", {"step": 2})
+        store.update_session_state("app", "user", "s1", {"step": 3})
+        renewed = store.get_session("app", "user", "s1", renew_for=60)
+        assert renewed is not None
+        assert renewed["state"] == {"step": 3}
+
+        store.append_event_and_update_state(cast("Any", event_3), "app", "user", "s1", {"step": 4})
+        events = store.get_events("app", "user", "s1")
+        assert [event["id"] for event in events] == ["e1", "e2", "e3"]
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("limit", "after_ts", "expected_ids"),
+    [
+        (3, None, ["e3", "e4", "e5"]),
+        (2, None, ["e4", "e5"]),
+        (2, datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC), ["e4", "e5"]),
+        (5, None, ["e1", "e2", "e3", "e4", "e5"]),
+    ],
+)
+def test_duckdb_get_events_limit_returns_newest_in_chronological_order(
+    tmp_path: Path, limit: int, after_ts: datetime | None, expected_ids: list[str]
+) -> None:
+    """get_events(limit=N) returns the newest N events in chronological order, including tied timestamps."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "newest_events.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        store.create_session("s1", "app", "user", {})
+        tied_ts = datetime(2026, 1, 1, 12, 0, 2, tzinfo=UTC)
+        seed_events = [
+            ("e1", datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)),
+            ("e2", datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC)),
+            ("e3", tied_ts),
+            ("e4", tied_ts),
+            ("e5", datetime(2026, 1, 1, 12, 0, 3, tzinfo=UTC)),
+        ]
+        _seed_event(store, seed_events[0][0], seed_events[0][1])
+        _seed_event(store, seed_events[1][0], seed_events[1][1])
+        _seed_event(store, seed_events[2][0], seed_events[2][1])
+        _seed_event(store, seed_events[3][0], seed_events[3][1])
+        _seed_event(store, seed_events[4][0], seed_events[4][1])
+        events = store.get_events("app", "user", "s1", after_timestamp=after_ts, limit=limit)
+        assert [event["id"] for event in events] == expected_ids
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "expected_state", "expected_app_db", "expected_user_db"),
+    [
+        pytest.param(
+            None,
+            None,
+            {"local": 1, "app:seed": "a", "user:seed": "u"},
+            {"app:seed": "a"},
+            {"user:seed": "u"},
+            id="none-deltas",
+        ),
+        pytest.param(
+            {},
+            {},
+            {"local": 1, "app:seed": "a", "user:seed": "u"},
+            {"app:seed": "a"},
+            {"user:seed": "u"},
+            id="empty-deltas",
+        ),
+        pytest.param(
+            {"app:flag": False, "app:cleared": None},
+            {"user:zero": 0, "user:blank": ""},
+            {
+                "local": 1,
+                "app:seed": "a",
+                "app:flag": False,
+                "app:cleared": None,
+                "user:seed": "u",
+                "user:zero": 0,
+                "user:blank": "",
+            },
+            {"app:seed": "a", "app:flag": False, "app:cleared": None},
+            {"user:seed": "u", "user:zero": 0, "user:blank": ""},
+            id="falsy-and-null-deltas",
+        ),
+    ],
+)
+def test_duckdb_create_session_merges_and_preserves_falsy_scoped_state(
+    tmp_path: Path,
+    app_delta: dict[str, Any] | None,
+    user_delta: dict[str, Any] | None,
+    expected_state: dict[str, Any],
+    expected_app_db: dict[str, Any],
+    expected_user_db: dict[str, Any],
+) -> None:
+    """create_session keeps session rows session-only and merges scoped state cleanly."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "create_scoped.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        store.upsert_app_state("app", {"app:seed": "a"})
+        store.upsert_user_state("app", "user", {"user:seed": "u"})
+
+        created = store.create_session(
+            "s1", "app", "user", {"local": 1}, app_state_delta=app_delta, user_state_delta=user_delta
+        )
+
+        assert created["state"] == expected_state
+        fetched = store.get_session("app", "user", "s1")
+        assert fetched is not None and fetched["state"] == {"local": 1}
+        assert store.get_app_state("app") == expected_app_db
+        assert store.get_user_state("app", "user") == expected_user_db
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_append_event_and_update_state_concurrent_cas_merges_all_keys(tmp_path: Path) -> None:
+    """Eight concurrent writers merge disjoint app and user state deltas without losing updates."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    db_path = str(tmp_path / "concurrent_cas.duckdb")
+    seed_config = DuckDBConfig(connection_config={"database": db_path})
+    try:
+        seed_store = DuckDBADKStore(seed_config)
+        seed_store.create_tables()
+        seed_store.create_session("s0", "app", "user", {"session": 0})
+        seed_store.create_session("s1", "app", "user", {"session": 1})
+        seed_store.create_session("s2", "app", "user", {"session": 2})
+        seed_store.create_session("s3", "app", "user", {"session": 3})
+        seed_store.create_session("s4", "app", "user", {"session": 4})
+        seed_store.create_session("s5", "app", "user", {"session": 5})
+        seed_store.create_session("s6", "app", "user", {"session": 6})
+        seed_store.create_session("s7", "app", "user", {"session": 7})
+
+        def _worker(worker_id: int) -> dict[str, Any]:
+            worker_config = DuckDBConfig(connection_config={"database": db_path})
+            try:
+                worker_store = DuckDBADKStore(worker_config)
+                event = cast(
+                    "Any",
+                    {
+                        "id": f"ev-{worker_id}",
+                        "session_id": f"s{worker_id}",
+                        "app_name": "app",
+                        "user_id": "user",
+                        "invocation_id": f"inv-{worker_id}",
+                        "author": "agent",
+                        "timestamp": datetime(2026, 1, 1, 12, 0, worker_id, tzinfo=UTC),
+                        "event_data": {"worker": worker_id},
+                    },
+                )
+                return worker_store.append_event_and_update_state(
+                    event,
+                    "app",
+                    "user",
+                    f"s{worker_id}",
+                    {"session": worker_id},
+                    app_state_delta={f"app:w{worker_id}": False if worker_id == 0 else worker_id},
+                    user_state_delta={f"user:w{worker_id}": None if worker_id == 1 else worker_id},
+                )["state"]
+            finally:
+                worker_config.close_pool()
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(_worker, range(8)))
+
+        assert len(results) == 8
+        assert seed_store.get_app_state("app") == {
+            "app:w0": False,
+            "app:w1": 1,
+            "app:w2": 2,
+            "app:w3": 3,
+            "app:w4": 4,
+            "app:w5": 5,
+            "app:w6": 6,
+            "app:w7": 7,
+        }
+        assert seed_store.get_user_state("app", "user") == {
+            "user:w0": 0,
+            "user:w1": None,
+            "user:w2": 2,
+            "user:w3": 3,
+            "user:w4": 4,
+            "user:w5": 5,
+            "user:w6": 6,
+            "user:w7": 7,
+        }
+    finally:
+        seed_config.close_pool()
+
+
+def _seed_event(store: DuckDBADKStore, event_id: str, ts: datetime) -> None:
+    store.append_event(
+        cast(
+            "Any",
+            {
+                "id": event_id,
+                "session_id": "s1",
+                "app_name": "app",
+                "user_id": "user",
+                "invocation_id": f"inv-{event_id}",
+                "author": "agent",
+                "timestamp": ts,
+                "event_data": {"id": event_id},
+            },
+        )
+    )

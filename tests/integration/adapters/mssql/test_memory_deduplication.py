@@ -131,8 +131,8 @@ def test_memory_search_scopes_limits_and_retention(mssql_service: MSSQLService) 
             driver.execute(sql.update(table).set(inserted_at=expired_at))
             driver.commit()
         assert store.delete_entries_older_than(30, app_name="app", scope="app") == 1
-        assert store.delete_entries_by_session("session-0") == 1
-        assert store.delete_entries_by_session("session-0") == 0
+        assert store.delete_entries_by_session("session-0", "app", "user") == 1
+        assert store.delete_entries_by_session("session-0", "app", "user") == 0
         assert store.delete_entries_older_than(30) == 2
         assert store.search_entries("searchable", "app", "user") == []
     finally:

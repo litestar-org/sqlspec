@@ -390,8 +390,8 @@ async def test_sanic_sqlite_manual_rolls_back_on_raise() -> None:
         assert res_data.json == {"names": ["initial"]}
 
 
-async def test_sanic_sqlite_manual_commits_on_clean_return() -> None:
-    """Sanic manual mode with SQLite should commit uncommitted work on clean 200 return."""
+async def test_sanic_sqlite_manual_rolls_back_clean_return_and_persists_explicit_commit() -> None:
+    """Sanic manual mode with SQLite rolls back uncommitted writes on clean 200 and keeps explicit commit()."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
         config = SqliteConfig(
@@ -400,7 +400,7 @@ async def test_sanic_sqlite_manual_commits_on_clean_return() -> None:
         )
         sqlspec.add_config(config)
         plugin = SQLSpecPlugin(sqlspec)
-        app = _create_sanic_app("SQLSpecSanicManualSqliteCommit")
+        app = _create_sanic_app("SQLSpecSanicManualSqliteRollback")
 
         @app.post("/setup")
         async def setup(request: Request):
@@ -409,10 +409,17 @@ async def test_sanic_sqlite_manual_commits_on_clean_return() -> None:
             db.commit()
             return response.json({"created": True})
 
-        @app.post("/insert-clean")
-        async def insert_clean(request: Request):
+        @app.post("/insert-uncommitted")
+        async def insert_uncommitted(request: Request):
             db = plugin.get_session(request, "db")
-            db.execute("INSERT INTO test (name) VALUES (?)", ("clean_row",))
+            db.execute("INSERT INTO test (name) VALUES (?)", ("uncommitted_row",))
+            return response.json({"success": True})
+
+        @app.post("/insert-committed")
+        async def insert_committed(request: Request):
+            db = plugin.get_session(request, "db")
+            db.execute("INSERT INTO test (name) VALUES (?)", ("committed_row",))
+            db.commit()
             return response.json({"success": True})
 
         @app.get("/data")
@@ -426,12 +433,15 @@ async def test_sanic_sqlite_manual_commits_on_clean_return() -> None:
         _, res_setup = await app.asgi_client.post("/setup")
         assert res_setup.status == 200
 
-        _, res_clean = await app.asgi_client.post("/insert-clean")
+        _, res_clean = await app.asgi_client.post("/insert-uncommitted")
         assert res_clean.status == 200
+
+        _, res_committed = await app.asgi_client.post("/insert-committed")
+        assert res_committed.status == 200
 
         _, res_data = await app.asgi_client.get("/data")
         assert res_data.status == 200
-        assert res_data.json == {"names": ["clean_row"]}
+        assert res_data.json == {"names": ["committed_row"]}
 
 
 async def test_sanic_psycopg_manual_rolls_back_on_raise(postgres_service: "PostgresService") -> None:

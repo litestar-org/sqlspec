@@ -104,6 +104,17 @@ def test_memory_entry_to_record_generates_unique_event_id_when_missing() -> None
     assert record_a["session_id"] == "__unknown_session_id__"
 
 
+def test_memory_entry_to_record_keeps_caller_id_in_event_id() -> None:
+    entry = MemoryEntry(id="profile", content=types.Content(parts=[types.Part(text="Profile data")]))
+
+    record = memory_entry_to_record(entry, app_name="app", user_id="user")
+
+    assert record is not None
+    assert record["event_id"] == "profile"
+    assert record["id"] != "profile"
+    assert record_to_memory_entry(record).id == "profile"
+
+
 def test_sync_memory_service_add_events_and_add_memory() -> None:
     store = _MockSyncMemoryStore()
     service = SQLSpecSyncMemoryService(store)  # type: ignore[arg-type]

@@ -1,4 +1,4 @@
-"""Live Oracle Autonomous Database Free 23ai mTLS wallet_zip and DBMS_CLOUD integration tests."""
+"""Live Oracle Autonomous Database Free 26ai mTLS wallet_zip and DBMS_CLOUD integration tests."""
 
 import zipfile
 from typing import TYPE_CHECKING
@@ -8,7 +8,6 @@ import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OraclePoolParams, OracleSyncConfig
 from sqlspec.exceptions import SQLSpecError
-from tests.integration.fixtures.oracle import resolve_oracle_adb_mtls_alias
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -58,7 +57,8 @@ def test_oracle_adb_extracted_wallet_dir_service_name(
     oracle_adb_service: "OracleADBService", oracle_adb_wallet_dir: "Path"
 ) -> None:
     """Verify direct extracted wallet directory connection using TNS alias resolution."""
-    tns_alias = resolve_oracle_adb_mtls_alias(oracle_adb_service, oracle_adb_wallet_dir)
+    tns_alias = oracle_adb_service.mtls_alias
+    assert isinstance(tns_alias, str)
     config = OracleSyncConfig(
         connection_config=OraclePoolParams(
             dsn=tns_alias,

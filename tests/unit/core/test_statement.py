@@ -63,7 +63,7 @@ from sqlspec.core.splitter import (
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.core.statement import _parse_order_item
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.typing import Empty
 from tests.conftest import is_compiled, requires_interpreted
 
@@ -1560,7 +1560,7 @@ def test_fingerprint_call_count_structural_fingerprint_called_once_per_fresh_com
     assert call_count == 1
 
 
-def test_fingerprint_call_count_static_script_path_does_not_forward_structural_fingerprint() -> None:
+def test_fingerprint_call_count_static_script_path_skips_fingerprinting_embedded_parameters() -> None:
     config = _make_config(needs_static_script_compilation=True)
     statement = SQL("SELECT :id", statement_config=config, id=1)
     value_fingerprint_calls = 0
@@ -1572,7 +1572,7 @@ def test_fingerprint_call_count_static_script_path_does_not_forward_structural_f
 
     with patch("sqlspec.core.compiler.value_fingerprint", side_effect=counting_value_fingerprint):
         statement.compile()
-    assert value_fingerprint_calls >= 1
+    assert value_fingerprint_calls == 0
 
 
 def test_native_layout_wave3_stack_and_correlation_classes_keep_normal_runtime_behavior() -> None:
@@ -1811,13 +1811,13 @@ def test_shared_expression_skips_ast_copy_on_cache_hit_and_rebind() -> None:
         for i in range(5):
             hit_stmt = SQL(cte_sql, i, i + 10, statement_config=config)
             hit_stmt.compile()
-            assert hit_stmt._peek_expression() is not None
+            assert hit_stmt._get_shared_expression() is not None
         assert copy_calls == 0
 
         for i in range(5):
             rebound = warm_stmt.copy(parameters=(i, i + 20))
             rebound.compile()
-            assert rebound._peek_expression() is not None
+            assert rebound._get_shared_expression() is not None
         assert copy_calls == 0
 
 
@@ -1835,14 +1835,14 @@ def test_copy_on_access_expression_isolates_cached_and_rebound_statements() -> N
     rebound = stmt1.copy(parameters=(3,))
     rebound.compile()
 
-    assert stmt1._peek_expression() is stmt2._peek_expression()
-    assert stmt1._peek_expression() is rebound._peek_expression()
+    assert stmt1._get_shared_expression() is stmt2._get_shared_expression()
+    assert stmt1._get_shared_expression() is rebound._get_shared_expression()
 
     owned1 = stmt1.expression
     assert owned1 is not None
     assert stmt1.expression is owned1
     assert stmt1.statement_expression is owned1
-    assert owned1 is not stmt2._peek_expression()
+    assert owned1 is not stmt2._get_shared_expression()
 
     owned1.set("limit", exp.Limit(expression=exp.Literal.number(1)))
 
@@ -1885,3 +1885,207 @@ def test_statement_dialects_on_shared_default_config_stay_independent() -> None:
         assert snowflake_sql == "SELECT ? || ?"
         assert list(snowflake_params) == ["a", "b"]
         assert "::" in postgres_sql
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "expected_sql"),
+    [
+        ("first-name", "Ada", 'SELECT * FROM t WHERE "first-name" = ?'),
+        ("u.first-name", "Ada", 'SELECT * FROM t WHERE u."first-name" = ?'),
+        ("2fa", 7, 'SELECT * FROM t WHERE "2fa" = ?'),
+    ],
+)
+def test_sql_where_eq_binds_non_identifier_column_names(column: str, value: Any, expected_sql: str) -> None:
+    """Columns that are not identifiers still produce bindable parameter names."""
+    sql, parameters = SQL("SELECT * FROM t").where_eq(column, value).compile()
+
+    assert sql == expected_sql
+    assert tuple(parameters) == (value,)
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "",
+        "   ",
+        "id = 1\x00",
+        "id !!~ 1; DELETE FROM t",
+        "a = 1 /* ' */ ; DROP TABLE t",
+        "a = 1 -- it's\n; DROP TABLE t",
+        "DROP TABLE t",
+        "DELETE FROM t",
+    ],
+)
+def test_sql_where_rejects_conditions_that_are_not_single_expressions(condition: str) -> None:
+    """Empty conditions, statements, and fragments holding a statement separator are rejected."""
+    with pytest.raises(SQLParsingError):
+        SQL("SELECT * FROM t").where(condition)
+
+
+@pytest.mark.parametrize(
+    "condition", ["note !!~ 'a;b'", "[a;b] = 1", "a = 1 /* ; */", "a = 1 -- note; fine", "a = $$;$$", "a = 'it\\'s; x'"]
+)
+def test_sql_where_keeps_separator_inside_comments_and_quotes_of_unparsed_condition(condition: str) -> None:
+    """A separator inside a comment, quote, dollar quote, or bracket identifier does not split a condition."""
+    stmt = SQL("SELECT * FROM t", statement_config=StatementConfig(enable_parsing=False)).where(condition)
+
+    assert condition in stmt.sql
+
+
+def test_sql_where_rejects_statement_expressions() -> None:
+    """A statement expression is not a condition."""
+    with pytest.raises(SQLParsingError):
+        SQL("SELECT * FROM t").where(exp.Delete(this=exp.to_table("t")))
+
+
+def test_sql_order_by_rejects_nul_characters() -> None:
+    """ORDER BY items must not contain NUL characters."""
+    with pytest.raises(SQLParsingError):
+        SQL("SELECT * FROM t").order_by("id\x00")
+
+
+def test_static_script_compilation_does_not_cache_embedded_parameter_values() -> None:
+    """Scripts compiled with embedded values leave compile and parse caches unchanged."""
+    reset_pipeline_registry()
+    statement_config = get_default_config()
+    observed: set[tuple[tuple[int, int], ...]] = set()
+    for value in range(25):
+        script = SQL("UPDATE t SET a = :a WHERE id = 1", statement_config=statement_config, a=value).as_script()
+        sql, parameters = script.compile()
+        assert sql == f"UPDATE t SET a = {value} WHERE id = 1"
+        assert parameters is None
+        observed.add(tuple((entry["size"], entry["parse_size"]) for entry in get_pipeline_metrics()))
+    assert len(observed) == 1
+
+
+@pytest.mark.parametrize(
+    ("text", "args", "kwargs", "dialect", "explain_kwargs", "expected_params", "expected_tokens"),
+    [
+        (
+            "SELECT * FROM users WHERE id = ? AND status = ?",
+            (42, "active"),
+            {},
+            "sqlite",
+            {},
+            (42, "active"),
+            ("EXPLAIN QUERY PLAN", "?"),
+        ),
+        (
+            "SELECT * FROM users WHERE id = $1",
+            ([42],),
+            {},
+            "postgres",
+            {"analyze": True, "format": "json"},
+            (42,),
+            ("EXPLAIN", "ANALYZE", "FORMAT JSON", "$1"),
+        ),
+        (
+            "SELECT * FROM users WHERE id = ? AND org = :org",
+            (7,),
+            {"org": "acme"},
+            "postgres",
+            {},
+            (7, "acme"),
+            ("EXPLAIN", "$1", "$2"),
+        ),
+    ],
+)
+def test_sql_explain_preserves_positional_and_mixed_parameters(
+    text: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    dialect: str,
+    explain_kwargs: dict[str, Any],
+    expected_params: tuple[Any, ...],
+    expected_tokens: tuple[str, ...],
+) -> None:
+    numeric_config = StatementConfig(
+        dialect=dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC if dialect == "postgres" else ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+            default_execution_parameter_style=ParameterStyle.NUMERIC if dialect == "postgres" else ParameterStyle.QMARK,
+            supported_execution_parameter_styles={
+                ParameterStyle.NUMERIC if dialect == "postgres" else ParameterStyle.QMARK
+            },
+        ),
+    )
+    stmt = SQL(text, *args, statement_config=numeric_config, **kwargs)
+    explained = stmt.explain(**explain_kwargs)
+    compiled_sql, compiled_params = explained.compile()
+    assert tuple(compiled_params) == expected_params
+    assert all(token in compiled_sql for token in expected_tokens)
+
+
+def test_sql_explain_preserves_execute_many_positional_parameters() -> None:
+    stmt = SQL("INSERT INTO t (a, b) VALUES (?, ?)", [(1, 2), (3, 4)], is_many=True)
+    explained = stmt.explain()
+    compiled_sql, compiled_params = explained.compile()
+    assert compiled_sql.startswith("EXPLAIN")
+    assert compiled_params == [(1, 2), (3, 4)]
+
+
+def test_statement_config_with_script_mode_caches_frozen_variant() -> None:
+    """Frozen StatementConfig caches its static script compilation variant across SQL.as_script() calls."""
+    frozen = StatementConfig(dialect="sqlite")
+    frozen.freeze()
+    script_cfg_1 = frozen._with_script_mode()
+    script_cfg_2 = frozen._with_script_mode()
+    assert script_cfg_1 is script_cfg_2
+    assert script_cfg_1 is not frozen
+    assert script_cfg_1._is_frozen is True
+    assert script_cfg_1.parameter_config.needs_static_script_compilation is True
+    assert script_cfg_1._with_script_mode() is script_cfg_1
+
+    stmt_1 = SQL("SELECT ?", 1, statement_config=frozen).as_script()
+    stmt_2 = SQL("SELECT ?", 2, statement_config=frozen).as_script()
+    assert stmt_1.statement_config is script_cfg_1
+    assert stmt_2.statement_config is script_cfg_1
+
+    unfrozen = StatementConfig(dialect="sqlite")
+    unfrozen_script_1 = unfrozen._with_script_mode()
+    unfrozen_script_2 = unfrozen._with_script_mode()
+    assert unfrozen_script_1 is not unfrozen
+    assert unfrozen_script_1 is not unfrozen_script_2
+    assert unfrozen_script_1._is_frozen is False
+    assert unfrozen_script_1.parameter_config.needs_static_script_compilation is True
+
+
+def _static_output_transformer(sql: str, params: Any) -> tuple[str, Any]:
+    return sql, params
+
+
+def _static_stmt_transformer(expr: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
+    return expr, params
+
+
+def test_statement_config_precomputes_uncacheable_transformers() -> None:
+    """StatementConfig._has_uncacheable_transformers reflects AST and dynamic transformers at init."""
+    static_cfg = StatementConfig(
+        output_transformer=_static_output_transformer, statement_transformers=(_static_stmt_transformer,)
+    )
+    assert static_cfg._has_uncacheable_transformers is False
+
+    def local_output(sql: str, params: Any) -> tuple[str, Any]:
+        return sql, params
+
+    def local_stmt(expr: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
+        return expr, params
+
+    def ast_transformer(expr: exp.Expr, params: Any, _profile: Any, _is_many: bool) -> tuple[exp.Expr, Any]:
+        return expr, params
+
+    assert StatementConfig(output_transformer=local_output)._has_uncacheable_transformers is True
+    assert StatementConfig(statement_transformers=(local_stmt,))._has_uncacheable_transformers is True
+    assert (
+        StatementConfig(
+            parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=local_output)
+        )._has_uncacheable_transformers
+        is True
+    )
+    assert (
+        StatementConfig(
+            parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=ast_transformer)
+        )._has_uncacheable_transformers
+        is True
+    )

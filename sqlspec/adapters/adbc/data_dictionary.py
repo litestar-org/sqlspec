@@ -101,7 +101,7 @@ _SNOWFLAKE_DATABASE_QUALIFIED_PARTS: Final = 3
 _OPTIONAL_FILTER_PATTERN: Final = re.compile(
     r"(?:CAST\(\s*)?(?<![:\w]):(\w+)(?:\s+AS\s+\w+(?:\s*\(\s*\d+\s*\))?\s*\))?\s+IS\s+NULL\b", re.IGNORECASE
 )
-_SNOWFLAKE_IDENTIFIER_PART: Final = re.compile(r'\s*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)\s*(\.|$)')
+_SNOWFLAKE_IDENTIFIER_PART: Final = re.compile(r'[ \t]*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)[ \t]*(\.|\Z)')
 
 
 _ADBC_STATISTIC_NAMES: dict[int, str] = {

@@ -17,7 +17,6 @@ from sqlspec.extensions.litestar.store import (
     CompanionIndex,
 )
 from sqlspec.migrations.schema import SchemaTarget
-from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
@@ -29,51 +28,6 @@ _MAX_TABLE_NAME_PARTS: Final = 2
 _MIN_QUOTED_SEGMENT_LENGTH: Final = 2
 
 
-def _unwrap_tsql_segment(segment: str) -> str | None:
-    if not segment or segment != segment.strip():
-        return None
-    if segment.startswith("["):
-        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith("]"):
-            return None
-        inner = segment[1:-1]
-        if "[" in inner or "]" in inner.replace("]]", ""):
-            return None
-        return inner.replace("]]", "]")
-    if segment.startswith('"'):
-        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith('"'):
-            return None
-        inner = segment[1:-1]
-        if '"' in inner.replace('""', ""):
-            return None
-        return inner.replace('""', '"')
-    return segment
-
-
-def _validate_session_table_name(table_name: str) -> None:
-    """Raise ValueError unless table_name is a valid 1- or 2-part T-SQL table name."""
-    if not table_name or not table_name.strip():
-        msg = "Table name must not be empty"
-        raise ValueError(msg)
-    if table_name != table_name.strip():
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-    raw_segments = table_name.split(".")
-    if len(raw_segments) > _MAX_TABLE_NAME_PARTS:
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-    unwrapped: list[str] = []
-    for raw_segment in raw_segments:
-        segment = _unwrap_tsql_segment(raw_segment)
-        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.match(segment):
-            msg = f"Invalid table name: {table_name!r}"
-            raise ValueError(msg)
-        unwrapped.append(segment)
-    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=True)
-    if parts != tuple(unwrapped):
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-
-
 class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
     """SQL Server-backed session store using mssql-python sync sessions."""
 
@@ -82,51 +36,41 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
 
-    @staticmethod
-    def _ensure_table_name(table_name: str) -> None:
-        """Validate 1- or 2-part T-SQL session table name."""
-        _validate_session_table_name(table_name)
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key."""
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value."""
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
         """Delete a session by key."""
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired."""
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires."""
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions."""
-        return await async_(self._delete_expired)()
-
-    def _schema_target(self) -> SchemaTarget:
-        """Build the SQL Server session SchemaTarget scoped to dbo or explicit schema."""
-        schema_name, bare_table = split_schema_and_table(self._table_name)
-        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="tsql")
+        return await self._run_sync(self._delete_expired)
 
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return the filtered SQL Server session expiry index metadata and guarded DDL."""
@@ -148,6 +92,16 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         END;
         """
         return [CompanionIndex(name=raw_index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part T-SQL session table name."""
+        _validate_session_table_name(table_name)
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the SQL Server session SchemaTarget scoped to dbo or explicit schema."""
+        schema_name, bare_table = split_schema_and_table(self._table_name)
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="tsql")
 
     def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
@@ -194,7 +148,8 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with MssqlPythonCursor(conn) as cursor:
                 cursor.execute(sql, (key,))
                 row = cursor.fetchone()
@@ -203,7 +158,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                 return None
 
             expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if renew_for is not None and expires_at is not None:
+            if self._is_renewal_requested(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     with MssqlPythonCursor(conn) as update_cursor:
@@ -215,7 +170,8 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                             """,
                             (new_expires_at, key),
                         )
-                    conn.commit()
+                    if store_connection.owned:
+                        conn.commit()
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
@@ -236,21 +192,30 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             INSERT (session_id, data, expires_at)
             VALUES (src.session_id, src.data, src.expires_at);
         """
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(sql, (key, data, expires_at))
-            conn.commit()
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(sql, (key, data, expires_at))
+                if store_connection.owned:
+                    conn.commit()
 
     def _delete(self, key: str) -> None:
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
-            conn.commit()
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
+                if store_connection.owned:
+                    conn.commit()
 
     def _delete_all(self) -> None:
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"TRUNCATE TABLE {table_ref}")
-            conn.commit()
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(f"TRUNCATE TABLE {table_ref}")
+                if store_connection.owned:
+                    conn.commit()
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
@@ -261,15 +226,19 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(sql, (key,))
-            return cursor.fetchone() is not None
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(sql, (key,))
+                return cursor.fetchone() is not None
 
     def _expires_in(self, key: str) -> "int | None":
         table_ref = _table_ref(self._table_name)
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"SELECT expires_at FROM {table_ref} WHERE session_id = ?", (key,))
-            row = cursor.fetchone()
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(f"SELECT expires_at FROM {table_ref} WHERE session_id = ?", (key,))
+                row = cursor.fetchone()
 
         if row is None:
             return None
@@ -286,13 +255,61 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         WHERE expires_at IS NOT NULL
           AND expires_at < SYSUTCDATETIME()
         """
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(sql)
-            count = resolve_rowcount(cursor)
-            conn.commit()
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
+            with MssqlPythonCursor(conn) as cursor:
+                cursor.execute(sql)
+                count = resolve_rowcount(cursor)
+                if store_connection.owned:
+                    conn.commit()
         if count > 0:
             self._log_delete_expired(count)
         return count
+
+
+def _unwrap_tsql_segment(segment: str) -> str | None:
+    if not segment or segment != segment.strip():
+        return None
+    if segment.startswith("["):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith("]"):
+            return None
+        inner = segment[1:-1]
+        if "[" in inner or "]" in inner.replace("]]", ""):
+            return None
+        return inner.replace("]]", "]")
+    if segment.startswith('"'):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith('"'):
+            return None
+        inner = segment[1:-1]
+        if '"' in inner.replace('""', ""):
+            return None
+        return inner.replace('""', '"')
+    return segment
+
+
+def _validate_session_table_name(table_name: str) -> None:
+    """Raise ValueError unless table_name is a valid 1- or 2-part T-SQL table name."""
+    if not table_name or not table_name.strip():
+        msg = "Table name must not be empty"
+        raise ValueError(msg)
+    if table_name != table_name.strip():
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    raw_segments = table_name.split(".")
+    if len(raw_segments) > _MAX_TABLE_NAME_PARTS:
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    unwrapped: list[str] = []
+    for raw_segment in raw_segments:
+        segment = _unwrap_tsql_segment(raw_segment)
+        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.fullmatch(segment):
+            msg = f"Invalid table name: {table_name!r}"
+            raise ValueError(msg)
+        unwrapped.append(segment)
+    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=True)
+    if parts != tuple(unwrapped):
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
 
 
 def _table_ref(table_name: str) -> str:

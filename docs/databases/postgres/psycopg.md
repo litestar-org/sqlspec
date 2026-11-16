@@ -84,7 +84,9 @@ Pass `PsycopgConnectionParams` and `PsycopgPoolParams` keys inside `connection_c
 | --- | --- | --- | --- |
 | `conninfo` | `str` | - | PostgreSQL libpq connection URI or keyword/value conninfo string. |
 | `host` | `str` | - | Database server hostname or Unix socket directory. |
-| `port` | `int` | `5432` | Database server TCP port (defaults to `5432`). |
+| `port` | `int or str` | `5432` | Server port or comma-separated multi-host ports (defaults to `5432`). |
+| `target_session_attrs` | `Literal['any', 'read-write', 'read-only', 'primary', 'standby', 'prefer-standby']` | - | Required server role for multi-host libpq connections. |
+| `load_balance_hosts` | `Literal['disable', 'random']` | - | Host connection ordering policy across multi-host targets. |
 | `user` | `str` | - | PostgreSQL role name used for authentication. |
 | `password` | `str` | - | Password or token for `user`. |
 | `auth_token_provider` | `Callable[[], str] or Callable[[], Awaitable[str]]` | - | Callable returning a fresh authentication password or IAM token on each connection attempt. |
@@ -135,6 +137,7 @@ Pass `PsycopgDriverFeatures` keys inside `driver_features={...}` on `PsycopgSync
 | `json_serializer` | `Callable[[Any], str]` | - | Custom JSON serializer applied to statement parameters and Psycopg JSON dumpers. |
 | `json_deserializer` | `Callable[[str], Any]` | - | Custom JSON deserializer applied to Psycopg JSON/JSONB loaders. |
 | `on_connection_create` | `Callable[..., Any]` | - | Sync or async callback invoked with each raw Psycopg connection after internal setup. |
+| `reset_session_on_release` | `bool` | `False` | Run `DISCARD ALL` on each connection before it returns to the pool (defaults to `False`). |
 | `enable_events` | `bool` | `True` | Enable SQLSpec event channel pub/sub support (defaults to `True` when `events` is configured). |
 | `events_backend` | `Literal['notify', 'notify_queue', 'poll_queue']` | - | Event transport backend (`notify` for LISTEN/NOTIFY, `notify_queue`, or `poll_queue`). |
 | `enable_alloydb` | `bool` | `False` | Route sync connections through `google-cloud-alloydb-connector` (defaults to `False`). |
@@ -164,6 +167,12 @@ Pass `PsycopgDriverFeatures` keys inside `driver_features={...}` on `PsycopgSync
 - **Placeholder Compilation**: Named `:param` and positional `?` placeholders compile to Psycopg's `%s` / `%(param)s` styles automatically while escaping literal `%` characters in SQL strings.
 - **Built-In executemany Pipelining**: Psycopg 3's `cursor.executemany` enters pipeline mode internally, so `session.execute_many(...)` batches multi-row writes over a single network pipeline without extra configuration.
 - **Bounded COPY Streaming and LISTEN/NOTIFY**: `session.load_from_arrow(...)` and `COPY` operations stream data in bounded memory chunks rather than materializing entire tables into Python strings, and `EventChannel` supports native `LISTEN/NOTIFY` wakeup notifications.
+
+## Read Replicas and Multi-Host Routing
+
+Both sync and async configs accept `replicas=` for reader pools. Native libpq options such as `target_session_attrs="prefer-standby"` and `load_balance_hosts="random"` select among hosts. Explicit derived overrides take precedence over inherited aliases and DSN fields.
+
+`current_wal_lsn`, `has_replayed_wal_lsn`, and `wait_for_wal_lsn` provide a writer-position freshness check. Use the writer position after commit and await the helpers on the async driver. Replica checkout failure can fall back to primary when the group permits it; SQL already yielded to a caller is never replayed. See [Read Replicas](../../learn/recipes/read-replicas.md).
 
 ## See Also
 

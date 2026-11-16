@@ -32,57 +32,61 @@ Issue = "https://github.com/litestar-org/sqlspec/issues/"
 Source = "https://github.com/litestar-org/sqlspec"
 
 [project.optional-dependencies]
-adbc = ["adbc_driver_manager", "pyarrow"]
-adk = ["google-adk>=2.10.0"]
-aiomysql = ["aiomysql"]
-aiosqlite = ["aiosqlite"]
-alloydb = ["google-cloud-alloydb-connector"]
-arrow-odbc = ["arrow-odbc>=10.4", "pyarrow"]
+adbc = ["adbc_driver_manager>=1.5.0", "pyarrow>=14.0.1"]
+adk = ["google-adk>=2.14.1"]
+aiomysql = ["aiomysql>=0.2.0"]
+aiosqlite = ["aiosqlite>=0.20.0"]
+alloydb = ["google-cloud-alloydb-connector>=1.4.0"]
+arrow-odbc = ["arrow-odbc>=10.4", "pyarrow>=14.0.1"]
 asyncmy = ["asyncmy>=0.2.13"]
-asyncpg = ["asyncpg"]
-attrs = ["attrs", "cattrs"]
-bigquery = ["google-cloud-bigquery", "google-cloud-bigquery-storage", "google-cloud-storage"]
-cloud-sql = ["cloud-sql-python-connector"]
-cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
+asyncpg = ["asyncpg>=0.30.0"]
+attrs = ["attrs>=23.1.0", "cattrs>=23.1.0"]
+bigquery = [
+  "google-cloud-bigquery>=3.25.0",
+  "google-cloud-bigquery-storage>=2.25.0",
+  "google-cloud-storage>=2.18.0",
+]
+cloud-sql = ["cloud-sql-python-connector>=1.12.0"]
+cockroachdb = ["psycopg[binary,pool]>=3.2.0", "asyncpg>=0.30.0"]
 db2 = ["ibm_db>=3.3.0"]
-duckdb = ["duckdb", "pytz", "pyarrow"]
-fastapi = ["fastapi"]
-flask = ["flask"]
-fsspec = ["fsspec"]
+duckdb = ["duckdb>=1.1.0", "pytz>=2023.3", "pyarrow>=14.0.1"]
+fastapi = ["fastapi>=0.115.3"]
+flask = ["flask>=3.0.0"]
+fsspec = ["fsspec>=2024.2.0"]
 litestar = ["litestar>=2.23.0"]
-msgspec = ["msgspec"]
+msgspec = ["msgspec>=0.18.6"]
 mssql-python = ["mssql-python>=1.13"]
 mypyc = ["sqlglot[c]>=30.13.0"]
 mysql-connector = [
-  "mysql-connector-python; python_version < '3.12'",
-  "mysql-connector-python<9.7.0; python_version >= '3.12'",
+  "mysql-connector-python>=9.0.0; python_version < '3.12'",
+  "mysql-connector-python>=9.0.0,<9.7.0; python_version >= '3.12'",
 ]
 nanoid = ["fastnanoid>=0.4.1"]
-obstore = ["obstore"]
-opentelemetry = ["opentelemetry-instrumentation"]
+obstore = ["obstore>=0.8.0"]
+opentelemetry = ["opentelemetry-api>=1.45.2", "opentelemetry-instrumentation>=0.50b0"]
 oracledb = ["oracledb>=3.4"]
-orjson = ["orjson"]
-pandas = ["pandas", "pyarrow"]
-performance = ["librt>=0.10.0", "msgspec"]
-polars = ["polars", "pyarrow"]
-prometheus = ["prometheus-client"]
+orjson = ["orjson>=3.10.0"]
+pandas = ["pandas>=2.0.0", "pyarrow>=14.0.1"]
+performance = ["librt>=0.10.0", "msgspec>=0.18.6"]
+polars = ["polars>=1.0.0", "pyarrow>=14.0.1"]
+prometheus = ["prometheus-client>=0.20.0"]
 psqlpy = ["psqlpy>=0.12.1"]
-psycopg = ["psycopg[binary,pool]"]
-pydantic = ["pydantic", "pydantic-extra-types"]
-pymssql = ["pymssql"]
-pymysql = ["pymysql"]
-sanic = ["sanic"]
-snowflake = ["snowflake-connector-python>=4.0.0", "pyarrow"]
+psycopg = ["psycopg[binary,pool]>=3.2.0"]
+pydantic = ["pydantic>=2.7.0", "pydantic-extra-types>=2.7.0"]
+pymssql = ["pymssql>=2.3.0"]
+pymysql = ["pymysql>=1.1.1"]
+sanic = ["sanic>=23.12.0"]
+snowflake = ["snowflake-connector-python>=4.0.0", "pyarrow>=14.0.1"]
 spanner = ["google-cloud-spanner>=3.64.0"]
 sqlanywhere = ["sqlanydb>=1.0.14"]
-starlette = ["starlette"]
-sybase = ["pymssql"]
+starlette = ["starlette>=0.40.0"]
+sybase = ["pymssql>=2.3.0"]
 teradata = ["teradatasql>=20.0.0"]
 uuid = ["uuid-utils>=0.17.0"]
 
 [dependency-groups]
 benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "duckdb-engine>=0.17.0"]
-build = ["bump-my-version", "hatch-mypyc", "mypy>=2.0.0", "pydantic-settings"]
+build = ["bump-my-version", "cibuildwheel", "hatch-mypyc", "hatchling", "mypy>=2.0.0"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -102,7 +106,7 @@ extras = [
   "adbc_driver_manager",
   "fsspec[s3]",
   "pgvector",
-  "pyarrow",
+  "pyarrow>=14.0.1",
   "polars",
   "adbc_driver_sqlite",
   "adbc_driver_postgresql",
@@ -143,7 +147,7 @@ test = [
   "pytest>=8.0.0,<9.2",
 
   "pytest-cov>=5.0.0",
-  "pytest-databases>=0.20.0b1",
+  "pytest-databases>=0.20.0b3",
   "pytest-mock>=3.14.0",
   "pytest-sugar>=1.0.0",
   "pytest-xdist>=3.6.1",
@@ -171,14 +175,17 @@ exclude-newer = "7 days"
 # Override dependency metadata for every source that requests mysql-connector-python.
 # Keep the uncapped dependency on Python <3.12, and force the cap on Python >=3.12
 # so the SQLSpec mysql-connector extra resolves to an existing wheel.
+# Cap pymysql<=1.2.0 for aiomysql compatibility with internal pymysql connection/cursor APIs.
 override-dependencies = [
-  "mysql-connector-python; python_version < '3.12'",
-  "mysql-connector-python<9.7.0; python_version >= '3.12'",
-  "pymysql<=1.2.0",
+  "mysql-connector-python>=9.0.0; python_version < '3.12'",
+  "mysql-connector-python>=9.0.0,<9.7.0; python_version >= '3.12'",
+  "pymysql>=1.1.1,<=1.2.0",
 ]
+constraint-dependencies = ["opentelemetry-sdk>=1.45.2"]
 
 [tool.uv.exclude-newer-package]
 advanced-alchemy = false
+google-adk = false
 litestar = false
 litestar-asyncapi = false
 litestar-asyncpg = false
@@ -205,7 +212,7 @@ requires = ["hatchling", "hatch-mypyc"]
 
 [tool.hatch.build.targets.sdist]
 dev-mode-dirs = ["."]
-exclude = ["/.github", "/docs"]
+exclude = ["/.github", "/docs", "/tests", "/tools", "/uv.lock"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -213,14 +220,8 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["sqlspec"]
 
-[tool.setuptools]
-# Standalone `uv run mypyc ...` generates a setuptools setup.py in the repo root.
-# Keep that smoke build from auto-discovering ignored scratch directories.
-packages = []
-
-
 [tool.hatch.build.targets.wheel.hooks.mypyc]
-dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=2.0.0"]
+dependencies = ["hatch-mypyc", "mypy>=2.0.0"]
 enable-by-default = false
 exclude = [
   "tests/**",                               # Test files
@@ -232,6 +233,7 @@ exclude = [
   "sqlspec/config.py",                      # Main config
   "sqlspec/**/__init__.py",                 # Init files (usually just imports)
   "sqlspec/protocols.py",                   # Protocol definitions
+  "sqlspec/driver/_routing.py",             # interpreted: generic routing facades retain typed Python context and streaming boundaries
   "sqlspec/migrations/commands.py",         # interpreted: inspect.signature/functools.wraps on coroutines
   "sqlspec/dialects/postgres/_pgvector.py", # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/postgres/_paradedb.py", # interpreted: Dialect subclass needs sqlglot's metaclass
@@ -250,7 +252,6 @@ exclude = [
 include = [
   "sqlspec/base.py",                               # SQLSpec registry/session manager
   "sqlspec/core/**/*.py",                          # Core module
-  "sqlspec/core/capabilities.py",                  # Introspectable type coercion capabilities
   "sqlspec/builder/**/*.py",                       # Builder module
   "sqlspec/exceptions.py",                         # Exceptions module
   "sqlspec/loader.py",                             # Loader module
@@ -536,7 +537,6 @@ warn_unused_ignores = true
 ignore_missing_imports = true
 module = [
   "orjson",
-  "uvicorn.*",
   "uvloop.*",
   "aiomysql",
   "aiomysql.*",
@@ -551,22 +551,18 @@ module = [
   "pyarrow",
   "pyarrow.*",
   "opentelemetry.*",
-  "opentelemetry.instrumentation.*",
   "opentelemetry",
   "prometheus_client",
   "prometheus_client.*",
   "fsspec",
   "fsspec.*",
   "ibm_db",
-  "ibm_db.*",
   "ibm_db_dbi",
   "ibm_db_dbi.*",
   "sqlanydb",
   "sqlanydb.*",
   "snowflake",
   "snowflake.*",
-  "teradatasql",
-  "teradatasql.*",
   "sqlglot",
   "sqlglot.*",
 ]
@@ -592,6 +588,7 @@ reportTypedDictNotRequiredAccess = false
 reportUnknownArgumentType = false
 reportUnnecessaryCast = false
 venv = ".venv"
+venvPath = "."
 
 [tool.slotscheck]
 strict-imports = false
@@ -700,7 +697,6 @@ split-on-trailing-comma = false
 [tool.ruff.lint.per-file-ignores]
 "docs/examples/**" = ["B", "DTZ", "PLR2004", "RET", "S", "T201", "TC"]
 "sqlspec/adapters/spanner/config.py" = ["PLC2801"]
-"sqlspec/extensions/adk/converters.py" = ["S403"]
 "sqlspec/migrations/utils.py" = ["S404"]
 "tests/**/*.*" = [
   "A",
@@ -736,7 +732,6 @@ split-on-trailing-comma = false
   "ANN",
 ]
 "tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127", "PLR0911"]
-"tools/prepare_release.py" = ["S603", "S607"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 # Disallow all relative imports.

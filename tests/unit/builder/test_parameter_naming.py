@@ -14,12 +14,15 @@ Tests cover:
 """
 
 import string
+from typing import Any
 
 import pytest
+from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.builder import _parsing_utils, _select, parse_condition_expression
 from sqlspec.core import ParameterValidator
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_where_eq_uses_column_name_as_parameter() -> None:
@@ -464,3 +467,90 @@ def test_parameter_validator_singleton_parameter_validator_singleton_reuses_scan
     first = _parsing_utils._PARAMETER_VALIDATOR.extract_parameters("id = :id")
     second = _parsing_utils._PARAMETER_VALIDATOR.extract_parameters("id = :id")
     assert second == first
+
+
+@pytest.mark.parametrize(
+    ("column_key", "expected_param"),
+    [("first-name", "first_name"), ("123col", "p_123col"), ("user.email-addr", "email_addr")],
+)
+def test_builder_sanitizes_non_identifier_parameter_names(column_key: str, expected_param: str) -> None:
+    """Hyphenated and digit-leading column keys produce sanitized parameter names."""
+    stmt = sql.insert("users").values({column_key: "val"}).build()
+    assert expected_param in stmt.parameters
+    assert stmt.parameters[expected_param] == "val"
+    assert f":{expected_param}" in stmt.sql
+
+
+@pytest.mark.parametrize(
+    ("existing_name", "expected_next_index"),
+    [("param_1", 2), ("where_param_1", 2), ("having_param_2", 3), ("cte_where_param_3", 4)],
+)
+def test_update_parameter_counter_recognizes_prefixed_param_names(existing_name: str, expected_next_index: int) -> None:
+    """_update_parameter_counter advances _parameter_counter past <prefix>_param_<N> names."""
+    builder = sql.select("*").from_("tasks")
+    builder.add_parameter(100, name=existing_name)
+
+    next_name = builder._add_parameter(200, context="where")
+
+    assert next_name == f"where_param_{expected_next_index}"
+    assert builder.parameters == {existing_name: 100, next_name: 200}
+
+
+def test_add_parameter_never_overwrites_existing_key_when_counter_lags() -> None:
+    """Both add_parameter and _add_parameter skip pre-existing keys even if counter lags behind."""
+    builder = sql.select("*").from_("tasks")
+    builder._parameters["where_param_1"] = 100
+    builder._parameters["param_1"] = 300
+
+    next_where = builder._add_parameter(200, context="where")
+    _, next_plain = builder.add_parameter(400)
+
+    assert next_where != "where_param_1"
+    assert next_plain != "param_1"
+    assert builder.parameters["where_param_1"] == 100
+    assert builder.parameters["param_1"] == 300
+    assert builder.parameters[next_where] == 200
+    assert builder.parameters[next_plain] == 400
+
+
+@pytest.mark.parametrize("name", ["x) OR 1=1 --", "na\u00efve", "a b"])
+def test_add_parameter_rejects_non_identifier_name(name: str) -> None:
+    query = sql.select("*").from_("t")
+    with pytest.raises(SQLBuilderError, match="ASCII identifier"):
+        query.add_parameter(1, name=name)
+
+
+@pytest.mark.parametrize("name", ["tenant_id", "1", "_x"])
+def test_add_parameter_accepts_identifier_and_numeric_names(name: str) -> None:
+    _, actual = sql.select("*").from_("t").add_parameter(1, name=name)
+    assert actual == name
+
+
+def test_load_parameters_rejects_non_identifier_key() -> None:
+    query = sql.select("*").from_("t")
+    with pytest.raises(SQLBuilderError, match="ASCII identifier"):
+        query.load_parameters({"a b": 1})
+
+
+def test_build_reports_generation_recursion_as_builder_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recursion overflow while generating SQL raises ``SQLBuilderError``, not ``RecursionError``.
+
+    Whether a given chain overflows depends on the interpreter and on whether sqlglot's generator is
+    compiled, so the generation step raises the overflow directly.
+    """
+
+    def overflow(self: Any, sql_string: str, dialect: object = None) -> str:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    query = sql.select("*").from_("t").where_eq("a", 1)
+    monkeypatch.setattr(type(query), "_postprocess_built_sql", overflow)
+
+    with pytest.raises(SQLBuilderError, match="recursion"):
+        query.build()
+
+
+def test_build_rejects_hand_built_placeholder_with_sql_text() -> None:
+    query = sql.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this="x OR 1=1")))
+
+    with pytest.raises(SQLBuilderError, match="Invalid placeholder name"):
+        query.build()

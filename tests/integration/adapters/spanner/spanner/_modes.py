@@ -14,7 +14,7 @@ T = TypeVar("T")
 SpannerModeConfig = SpannerSyncConfig | SpannerAsyncConfig
 SpannerModeDriver = SpannerSyncDriver | SpannerAsyncDriver
 
-_PROVIDERS = {"session": "provide_session", "read": "provide_read_session", "write": "provide_write_session"}
+_PROVIDERS = {"session": "provide_session", "read": "provide_replica_session", "write": "provide_write_session"}
 
 
 async def invoke(result: "T | Awaitable[T]") -> T:

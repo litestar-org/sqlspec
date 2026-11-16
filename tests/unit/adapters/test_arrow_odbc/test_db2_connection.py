@@ -15,11 +15,13 @@ from tests.unit.adapters.test_arrow_odbc._db2_fakes import FakeArrowOdbcConnecti
 _DB2_FIELDS = {"driver": "{IBM DB2 ODBC DRIVER}", "host": "h", "port": 50000, "database": "d", "uid": "u", "pwd": "p"}
 
 
-def _captured_connection_string(monkeypatch: pytest.MonkeyPatch, connection_config: "dict[str, Any]") -> str:
-    captured: list[str] = []
+def _captured_connection_call(
+    monkeypatch: pytest.MonkeyPatch, connection_config: "dict[str, Any]"
+) -> tuple[str, dict[str, Any]]:
+    captured: list[tuple[str, dict[str, Any]]] = []
 
-    def fake_connect(connection_string: str, **_: Any) -> FakeArrowOdbcConnection:
-        captured.append(connection_string)
+    def fake_connect(connection_string: str, **kwargs: Any) -> FakeArrowOdbcConnection:
+        captured.append((connection_string, kwargs))
         return FakeArrowOdbcConnection()
 
     monkeypatch.setattr("sqlspec.adapters.arrow_odbc.config.arrow_odbc_connect", fake_connect)
@@ -28,17 +30,17 @@ def _captured_connection_string(monkeypatch: pytest.MonkeyPatch, connection_conf
 
 
 def test_db2_discrete_fields_use_cli_keywords(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Discrete fields for a Db2 driver render the IBM CLI Hostname/Port/Protocol keywords."""
-    connection_string = _captured_connection_string(monkeypatch, dict(_DB2_FIELDS))
+    """Discrete fields for a Db2 driver render CLI keywords while routing credentials out-of-band."""
+    connection_string, connect_kwargs = _captured_connection_call(monkeypatch, dict(_DB2_FIELDS))
 
-    assert (
-        connection_string == "Driver={IBM DB2 ODBC DRIVER};Hostname=h;Port=50000;Protocol=TCPIP;Database=d;UID=u;PWD=p;"
-    )
+    assert connection_string == "Driver={IBM DB2 ODBC DRIVER};Hostname=h;Port=50000;Protocol=TCPIP;Database=d;"
+    assert connect_kwargs["user"] == "u"
+    assert connect_kwargs["password"] == "p"
 
 
 def test_db2_connection_string_merge_uses_cli_keywords(monkeypatch: pytest.MonkeyPatch) -> None:
     """Host and port overrides merged into a Db2 connection string replace Hostname and add Port."""
-    connection_string = _captured_connection_string(
+    connection_string, _ = _captured_connection_call(
         monkeypatch,
         {
             "connection_string": "Driver={IBM DB2 ODBC DRIVER};Hostname=old;Database=d;Protocol=TCPIP;",
@@ -74,8 +76,8 @@ def test_db2_requires_a_connection_option() -> None:
 
 
 def test_mssql_connection_string_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SQL Server discrete fields keep the Server=host,port form."""
-    connection_string = _captured_connection_string(
+    """SQL Server discrete fields keep Server=host,port while routing credentials out-of-band."""
+    connection_string, connect_kwargs = _captured_connection_call(
         monkeypatch,
         {
             "driver": "{ODBC Driver 18 for SQL Server}",
@@ -88,9 +90,12 @@ def test_mssql_connection_string_unchanged(monkeypatch: pytest.MonkeyPatch) -> N
         },
     )
 
-    assert connection_string == (
-        "Driver={ODBC Driver 18 for SQL Server};Server=h,1433;Database=d;UID=u;PWD=p;TrustServerCertificate=yes;"
+    assert (
+        connection_string
+        == "Driver={ODBC Driver 18 for SQL Server};Server=h,1433;Database=d;TrustServerCertificate=yes;"
     )
+    assert connect_kwargs["user"] == "u"
+    assert connect_kwargs["password"] == "p"
 
 
 @pytest.mark.parametrize(

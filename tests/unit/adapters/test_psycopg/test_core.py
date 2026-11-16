@@ -437,9 +437,25 @@ async def test_psycopg_async_stream_source_and_cockroach_delegation() -> None:
     await with_resolver_async.close()
 
     underlying_double = SimpleNamespace(column_types={"a": "int64"})
-    sync_wrapper = CockroachPsycopgSyncStreamSource(cast("Any", object()), cast("Any", underlying_double), False)
+    sync_wrapper = CockroachPsycopgSyncStreamSource(
+        cast("Any", SimpleNamespace(connection=None)), cast("Any", underlying_double), False
+    )
     async_wrapper = CockroachPsycopgAsyncStreamSource(
         cast("Any", object()), cast("Any", object()), cast("Any", underlying_double)
     )
     assert sync_wrapper.column_types == {"a": "int64"}
     assert async_wrapper.column_types == {"a": "int64"}
+
+
+def test_read_only_transaction_maps_native_error_with_cause() -> None:
+    from psycopg.errors import ReadOnlySqlTransaction
+
+    from sqlspec.adapters.psycopg.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = ReadOnlySqlTransaction("cannot write")
+
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+    assert "read-only transaction" in str(mapped).lower()

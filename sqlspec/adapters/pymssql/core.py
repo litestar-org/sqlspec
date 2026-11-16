@@ -4,33 +4,40 @@ import re
 from collections.abc import Callable, Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from sqlspec.adapters.pymssql._typing import PymssqlError
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
+    ReplicaUnavailableError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from logging import Logger
 
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.parameters import ParameterValidator
 
 __all__ = (
@@ -45,6 +52,7 @@ __all__ = (
     "driver_profile",
     "escape_literal_percent",
     "escape_sql_literal",
+    "execute_cache_hit",
     "extract_error_number",
     "format_identifier",
     "normalize_execute_many_parameters",
@@ -56,8 +64,11 @@ __all__ = (
     "split_schema_and_table",
 )
 
+logger = get_logger("sqlspec.adapters.pymssql")
+
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
+_MSSQL_REPLICA_UNAVAILABLE: Final[int] = 976
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ODBC_SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "08S01": (DatabaseConnectionError, "communication link failure"),
@@ -153,7 +164,7 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     """Escape literal percent characters before driver-side interpolation."""
     if not parameters or "%" not in sql:
         return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
+    keep = {info.position for info in validator.extract_parameters(sql, dialect="tsql")}
     result: list[str] = []
     for index, char in enumerate(sql):
         if char == "%" and index not in keep:
@@ -253,6 +264,12 @@ def extract_sqlstate(error: BaseException) -> str | None:
 
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a SQL Server exception to SQLSpec's exception hierarchy."""
+    code = extract_error_number(error)
+    if getattr(error, "sqlstate", None) == "25006" or "25006" in str(error) or code in {3906, 3908, 978, 976}:
+        error_type = ReplicaUnavailableError if code == _MSSQL_REPLICA_UNAVAILABLE else ReadOnlyTransactionError
+        mapped_reader_error = error_type(str(error))
+        mapped_reader_error.__cause__ = error
+        return mapped_reader_error
     sqlstate = extract_sqlstate(error)
     if sqlstate is not None and sqlstate in _ODBC_SQLSTATE_MAP:
         error_class, description = _ODBC_SQLSTATE_MAP[sqlstate]
@@ -335,6 +352,76 @@ def resolve_rowcount(cursor: Any) -> int:
     return 0
 
 
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    column_name_cache: "dict[int, tuple[Any, list[str]]]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a pymssql connection and build its result.
+
+    Args:
+        connection: pymssql connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        column_name_cache: Session-local cache of resolved column names.
+
+    Returns:
+        The statement result, or ``None`` when the statement has no parameters or the compiled SQL
+        holds a literal percent that needs escaping.
+
+    Raises:
+        SQLSpecError: Mapped from any pymssql error the statement raises.
+    """
+    parameters = tuple(params) if isinstance(params, list) else params
+    if not parameters:
+        return None
+    compiled_sql = cached.compiled_sql
+    if "%" in compiled_sql:
+        param_count = len(parameters) if isinstance(parameters, (list, tuple)) else -1
+        if (param_count < 0 or compiled_sql.count("%") != param_count) and (
+            escape_literal_percent(compiled_sql, parameters, statement_config.parameter_validator) != compiled_sql
+        ):
+            return None
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(compiled_sql, parameters)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            rows, column_names, _row_format = collect_rows(fetched_data, cursor.description or None, column_name_cache)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                rows,
+                column_names,
+                len(rows),
+                resolve_row_format(rows),
+            )
+        finally:
+            _close_cursor(cursor)
+    except PymssqlError as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
+
+
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:
     """Resolve executemany rowcount using cursor metadata with payload fallback."""
     rowcount = resolve_rowcount(cursor)
@@ -388,7 +475,13 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         for extra_key, extra_value in extra.items():
             if extra_value is not None:
                 config.setdefault(str(extra_key), extra_value)
-    config.setdefault("server", config.pop("host", "localhost"))
+    for canonical, alias in (("server", "host"), ("database", "db"), ("user", "username")):
+        present = [key for key in config if key in {canonical, alias}]
+        if present:
+            value = config[present[-1]]
+            config.pop(alias, None)
+            config[canonical] = value
+    config.setdefault("server", "localhost")
     config.setdefault("port", 1433)
     db_alias = config.pop("db", None)
     if "database" not in config and db_alias is not None:
@@ -396,6 +489,9 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     user_alias = config.pop("username", None)
     if "user" not in config and user_alias is not None:
         config["user"] = user_alias
+    if config.get("read_only") and not str(config.get("database") or "").strip():
+        msg = "SQL Server read-only intent requires a target database"
+        raise ImproperConfigurationError(msg)
     return config
 
 

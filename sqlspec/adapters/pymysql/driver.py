@@ -17,6 +17,7 @@ from sqlspec.adapters.pymysql._typing import (
 from sqlspec.adapters.pymysql.core import (
     PyMysqlStreamSource,
     _resolve_column_types,
+    build_gtid_wait_query,
     build_insert_statement,
     build_load_data_statement,
     can_use_local_infile_records,
@@ -26,6 +27,7 @@ from sqlspec.adapters.pymysql.core import (
     driver_profile,
     encode_records_for_local_infile,
     escape_literal_percent,
+    execute_cache_hit,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -37,6 +39,7 @@ from sqlspec.adapters.pymysql.core import (
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -94,12 +97,29 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         self._json_deserializer: Callable[[Any], Any] = cast(
             "Callable[[Any], Any]", features.get("json_deserializer", from_json)
         )
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), PyMysqlDriver) else None
+        self._cache_hit_state = (self._json_deserializer, PYMYSQL_JSON_TYPE_CODES)
 
     @property
     def data_dictionary(self) -> "PyMysqlDataDictionary":
         if self._data_dictionary is None:
             self._data_dictionary = PyMysqlDataDictionary()
         return self._data_dictionary
+
+    def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
+        """Wait for the server to apply a GTID set within a bounded timeout.
+
+        Args:
+            gtid_set: Native GTID position to await.
+            timeout: Nonnegative wait duration in seconds.
+            mariadb: Use MariaDB's native GTID wait function.
+
+        Returns:
+            Whether the server reached the requested position.
+        """
+        query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
+        result = self.select_value(query, (gtid_set, timeout))
+        return bool(result == 0)
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
@@ -290,17 +310,6 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
-        with self.with_cursor(self.connection) as cursor:
-            if parameters is None:
-                cursor.execute(statement)
-            else:
-                cursor.execute(statement, parameters)
-
-    def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
-        with self.with_cursor(self.connection) as cursor:
-            cursor.executemany(statement, parameters)
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect PyMySQL rows for the direct execution path."""
         description = cursor.description or None
@@ -311,6 +320,17 @@ class PyMysqlDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from PyMySQL cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
+        with self.with_cursor(self.connection) as cursor:
+            if parameters is None:
+                cursor.execute(statement)
+            else:
+                cursor.execute(statement, parameters)
+
+    def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
+        with self.with_cursor(self.connection) as cursor:
+            cursor.executemany(statement, parameters)
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"

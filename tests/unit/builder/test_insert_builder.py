@@ -684,3 +684,31 @@ def test_conflict_update_binds_plain_string_values(value: str) -> None:
 
     assert _normalized_sql(statement) == f'{CONFLICT_PREFIX_POSTGRES}"a" = %(a)s'
     assert statement.parameters == {"id": 1, "a": value}
+
+
+def test_insert_mapping_aligns_to_declared_column_order() -> None:
+    """Keyword or mapping values reorder to match previously declared columns."""
+    stmt = sql.insert("users").columns("a", "b").values({"b": 2, "a": 1}).build()
+    assert _normalized_sql(stmt) == 'INSERT INTO "users" ( "a", "b" ) VALUES (:a, :b)'
+    assert stmt.parameters == {"a": 1, "b": 2}
+
+
+def test_insert_mapping_key_mismatch_with_declared_columns_raises() -> None:
+    """Mapping keys that do not match declared columns raise SQLBuilderError."""
+    with pytest.raises(SQLBuilderError, match="do not match the declared columns"):
+        sql.insert("users").columns("a", "b").values({"a": 1, "c": 2})
+
+
+def test_conflict_builder_splits_table_qualified_columns() -> None:
+    """Conflict target and SET columns split table-qualified dotted names."""
+    stmt = (
+        sql
+        .insert("users", dialect="postgres")
+        .columns("id", "name")
+        .values(1, "Alice")
+        .on_conflict("users.id")
+        .do_update(**{"users.name": "Bob"})
+        .build()
+    )
+    assert 'ON CONFLICT("users"."id") DO UPDATE SET "users"."name" = %(name_1)s' in _normalized_sql(stmt)
+    assert stmt.parameters["name_1"] == "Bob"

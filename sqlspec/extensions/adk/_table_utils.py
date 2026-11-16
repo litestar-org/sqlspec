@@ -4,11 +4,18 @@ import re
 from collections.abc import Callable
 from typing import Final
 
-__all__ = ("ensure_table_name", "owner_id_column_name", "reset_drop_sql", "unique_statements")
+__all__ = (
+    "ensure_table_name",
+    "owner_id_column_name",
+    "reset_drop_sql",
+    "unique_statements",
+    "validate_owner_id_column_ddl",
+)
 
 _VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-_COLUMN_NAME_PATTERN: Final = re.compile(r"^(\w+)")
+_VALID_COLUMN_NAME_PATTERN: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_TABLE_NAME_LENGTH: Final = 63
+_DISALLOWED_COLUMN_DDL_TOKENS: Final = ("\x00", ";", "--", "/*", "*/", "'", '"', "`")
 
 
 def unique_statements(statements: list[str]) -> list[str]:
@@ -22,13 +29,64 @@ def unique_statements(statements: list[str]) -> list[str]:
     return result
 
 
+def validate_owner_id_column_ddl(owner_id_column_ddl: str) -> str:
+    """Validate that ``owner_id_column_ddl`` defines a single unquoted column.
+
+    Args:
+        owner_id_column_ddl: Raw column DDL fragment from ``extension_config["adk"]``.
+
+    Returns:
+        Stripped column DDL definition.
+
+    Raises:
+        ValueError: If the definition is empty, contains statement/comment/quote
+            tokens, has unbalanced parentheses or top-level commas, or does not
+            begin with a valid column identifier followed by a type definition.
+    """
+    stripped = owner_id_column_ddl.strip()
+    if not stripped:
+        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with column name and type."
+        raise ValueError(msg)
+
+    for token in _DISALLOWED_COLUMN_DDL_TOKENS:
+        if token in stripped:
+            msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Contains disallowed token {token!r}."
+            raise ValueError(msg)
+
+    depth = 0
+    for char in stripped:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Unbalanced parentheses."
+                raise ValueError(msg)
+        elif char == "," and depth == 0:
+            msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must define a single column."
+            raise ValueError(msg)
+
+    if depth != 0:
+        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Unbalanced parentheses."
+        raise ValueError(msg)
+
+    parts = stripped.split(None, 1)
+    if len(parts) == 1 or not parts[1]:
+        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must include a column type definition."
+        raise ValueError(msg)
+
+    column_name = parts[0]
+    if len(column_name) > _MAX_TABLE_NAME_LENGTH or not _VALID_COLUMN_NAME_PATTERN.fullmatch(column_name):
+        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with a valid column name."
+        raise ValueError(msg)
+
+    return stripped
+
+
 def owner_id_column_name(owner_id_column_ddl: str) -> str:
     """Extract column name from owner ID column DDL definition."""
-    match = _COLUMN_NAME_PATTERN.match(owner_id_column_ddl.strip())
-    if not match:
-        msg = f"Invalid owner_id_column DDL: {owner_id_column_ddl!r}. Must start with column name."
-        raise ValueError(msg)
-    return match.group(1)
+    validated = validate_owner_id_column_ddl(owner_id_column_ddl)
+    return validated.split(None, 1)[0]
 
 
 def reset_drop_sql(

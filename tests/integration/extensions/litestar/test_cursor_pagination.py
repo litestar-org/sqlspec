@@ -53,7 +53,8 @@ def cursor_client(tmp_path: Path) -> Generator[TestClient, None, None]:
     spec.add_config(AiosqliteConfig(connection_config={"database": str(database)}))
     dependencies = create_filter_dependencies({
         "pagination_type": "cursor",
-        "cursor_keys": [CursorKey("id")],
+        "pagination_cursor_keys": [CursorKey("id")],
+        "pagination_cursor_secret": "integration-test-secret",
         "pagination_size": 2,
     })
 

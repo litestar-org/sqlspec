@@ -8,10 +8,11 @@ from typing import Any
 
 import msgspec
 import pytest
+import sqlglot
 
 from sqlspec import SQL
 from sqlspec.adapters.sqlite.driver import SqliteDriver
-from sqlspec.core import StatementConfig, get_default_config
+from sqlspec.core import OffsetPagination, ParameterStyle, ParameterStyleConfig, StatementConfig, get_default_config
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.conftest import requires_interpreted
@@ -1142,3 +1143,394 @@ def test_extract_total_from_rows_handles_mixed_row_representations(mock_driver: 
     clean_rows, total = mock_driver._extract_total_from_rows(rows)
     assert total == 5
     assert clean_rows == [{"id": 1}, {"id": 2}]
+
+
+@pytest.mark.parametrize(
+    ("query_sql", "param_arg"),
+    [("SELECT id FROM users WHERE org_id = ?", (1,)), ("SELECT id FROM users WHERE org_id = :org", {"org": 1})],
+)
+def test_count_query_skips_redundant_reparse_without_pagination_clauses(
+    mock_driver: "MockSyncDriver", monkeypatch: pytest.MonkeyPatch, query_sql: str, param_arg: Any
+) -> None:
+    """_count_query does not re-parse raw_sql when no stripped clauses or named parameters exist."""
+    sql = mock_driver.prepare_statement(SQL(query_sql, param_arg), statement_config=mock_driver.statement_config)
+    sql.compile()
+    assert sql.statement_expression is not None
+
+    parse_calls: list[str] = []
+    orig_parse_one = sqlglot.parse_one
+
+    def spy_parse_one(sql_text: str, *args: Any, **kwargs: Any) -> Any:
+        parse_calls.append(sql_text)
+        return orig_parse_one(sql_text, *args, **kwargs)
+
+    monkeypatch.setattr("sqlglot.parse_one", spy_parse_one)
+    count_sql = mock_driver._count_query(sql)
+    assert "count(*)" in count_sql.sql.lower()
+    assert parse_calls == []
+
+
+@pytest.mark.parametrize(
+    ("dialect", "param_config", "query_sql", "param_arg", "expected_params", "expected_token", "expect_zero_reparses"),
+    [
+        (
+            "bigquery",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NAMED_AT,
+                supported_parameter_styles={ParameterStyle.NAMED_AT},
+                default_execution_parameter_style=ParameterStyle.NAMED_AT,
+                supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
+            ),
+            "SELECT id FROM t WHERE org = @org ORDER BY id LIMIT @lim",
+            {"org": "a", "lim": 5},
+            {"org": "a"},
+            "@org",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "SELECT id FROM t WHERE org = $1 ORDER BY id LIMIT $2 OFFSET $3",
+            (7, 10, 20),
+            [7],
+            "$1",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "WITH c AS (SELECT id FROM t WHERE a = $1) SELECT id FROM c ORDER BY id LIMIT $2",
+            (7, 10),
+            [7],
+            "$1",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "SELECT id, $1 AS tag FROM t ORDER BY id LIMIT $2",
+            ("x", 10),
+            [],
+            None,
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "SELECT id, $1 AS tag FROM t WHERE org = $2 ORDER BY id LIMIT $3",
+            ("x", 7, 10),
+            [7],
+            "$1",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "SELECT id, $1 AS tag FROM t WHERE org = $1 ORDER BY id LIMIT $2",
+            ("x", 10),
+            ["x"],
+            "$1",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+                preserve_parameter_format=True,
+            ),
+            "SELECT id, :tag AS tag FROM t WHERE org = :org ORDER BY id LIMIT :lim",
+            {"tag": "x", "org": "a", "lim": 5},
+            ["a"],
+            "$1",
+            False,
+        ),
+        (
+            "oracle",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK,
+                supported_parameter_styles={ParameterStyle.QMARK},
+                default_execution_parameter_style=ParameterStyle.POSITIONAL_COLON,
+                supported_execution_parameter_styles={ParameterStyle.POSITIONAL_COLON},
+            ),
+            "SELECT id FROM t WHERE org = ? ORDER BY id OFFSET ? ROWS",
+            (7, 10),
+            [7],
+            ":1",
+            True,
+        ),
+        (
+            "oracle",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NAMED_COLON,
+                supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC, ParameterStyle.QMARK},
+                default_execution_parameter_style=ParameterStyle.NAMED_COLON,
+                supported_execution_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
+                preserve_parameter_format=True,
+            ),
+            "SELECT id FROM t WHERE org = :1 ORDER BY id OFFSET :2 ROWS",
+            (7, 10),
+            {"param_0": 7},
+            ":param_0",
+            True,
+        ),
+    ],
+)
+def test_count_query_handles_parameter_nodes_for_named_at_numeric_and_colon(
+    mock_driver: "MockSyncDriver",
+    monkeypatch: pytest.MonkeyPatch,
+    dialect: str,
+    param_config: ParameterStyleConfig,
+    query_sql: str,
+    param_arg: Any,
+    expected_params: Any,
+    expected_token: str | None,
+    expect_zero_reparses: bool,
+) -> None:
+    """_count_query preserves retained parameters and renumbers numeric ordinals across parameter styles."""
+    cfg = StatementConfig(dialect=dialect, parameter_config=param_config)
+    mock_driver.statement_config = cfg
+    sql = (
+        mock_driver.prepare_statement(SQL(query_sql, statement_config=cfg, **param_arg), statement_config=cfg)
+        if isinstance(param_arg, dict)
+        else mock_driver.prepare_statement(SQL(query_sql, param_arg, statement_config=cfg), statement_config=cfg)
+    )
+    sql.compile()
+
+    parse_calls: list[str] = []
+    orig_parse_one = sqlglot.parse_one
+
+    def spy_parse_one(sql_text: str, *args: Any, **kwargs: Any) -> Any:
+        parse_calls.append(sql_text)
+        return orig_parse_one(sql_text, *args, **kwargs)
+
+    monkeypatch.setattr("sqlglot.parse_one", spy_parse_one)
+    count_sql = mock_driver._count_query(sql)
+    compiled_sql, compiled_params = count_sql.compile()
+    assert "count(*)" in compiled_sql.lower()
+    if expected_token is not None:
+        assert expected_token in compiled_sql
+    assert compiled_params == expected_params
+    if expect_zero_reparses:
+        assert parse_calls == []
+
+
+@pytest.mark.parametrize(
+    ("query_sql", "param_arg", "expected_params"),
+    [
+        ("SELECT TOP (?) id, name FROM items WHERE tenant_id = ?", (10, "acme"), ["acme"]),
+        ("SELECT TOP (?) id, name FROM items WHERE tenant_id = ? ORDER BY ?", (5, "acme", "id"), ["acme"]),
+        ("SELECT TOP (?) tenant_id FROM items WHERE active = ? GROUP BY tenant_id", (3, True), [True]),
+        (
+            "WITH recent AS (SELECT id FROM logs WHERE org_id = ?) SELECT TOP (?) id FROM recent WHERE active = ?",
+            ("org-1", 5, True),
+            ["org-1", True],
+        ),
+        (
+            "SELECT TOP (:lim) id FROM items WHERE tenant_id = :tenant_id",
+            {"lim": 10, "tenant_id": "acme"},
+            {"tenant_id": "acme"},
+        ),
+    ],
+)
+def test_count_query_strips_tsql_leading_top_placeholders(
+    mock_driver: "MockSyncDriver", query_sql: str, param_arg: Any, expected_params: Any
+) -> None:
+    """_count_query strips T-SQL TOP placeholders from leading parameters instead of trailing parameters."""
+    param_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+    )
+    if isinstance(param_arg, dict):
+        param_config = param_config.replace(
+            default_execution_parameter_style=ParameterStyle.NAMED_COLON,
+            supported_execution_parameter_styles={ParameterStyle.NAMED_COLON},
+        )
+    cfg = StatementConfig(dialect="tsql", parameter_config=param_config)
+    mock_driver.statement_config = cfg
+    sql = (
+        mock_driver.prepare_statement(SQL(query_sql, statement_config=cfg, **param_arg), statement_config=cfg)
+        if isinstance(param_arg, dict)
+        else mock_driver.prepare_statement(SQL(query_sql, param_arg, statement_config=cfg), statement_config=cfg)
+    )
+    sql.compile()
+
+    count_sql = mock_driver._count_query(sql)
+    compiled_sql, compiled_params = count_sql.compile()
+    assert "count(*)" in compiled_sql.lower()
+    assert "TOP" not in compiled_sql.upper()
+    assert compiled_params == expected_params
+
+
+def _profile_config(profile: str) -> "StatementConfig":
+    from sqlspec.adapters.asyncpg.core import default_statement_config as asyncpg_config
+    from sqlspec.adapters.duckdb.core import default_statement_config as duckdb_config
+    from sqlspec.adapters.mssql_python.core import default_statement_config as mssql_config
+    from sqlspec.adapters.snowflake.core import default_statement_config as snowflake_config
+    from sqlspec.adapters.teradata.core import default_statement_config as teradata_config
+
+    return {
+        "mssql": mssql_config,
+        "duckdb": duckdb_config,
+        "teradata": teradata_config,
+        "snowflake": snowflake_config,
+        "asyncpg": asyncpg_config,
+    }[profile]
+
+
+@pytest.mark.parametrize(
+    ("profile", "query_sql", "positional", "named", "expected_sql", "expected_params"),
+    [
+        (
+            "mssql",
+            "SELECT TOP (?) id, name FROM items WHERE tenant_id = ?",
+            (50, 7),
+            {},
+            "SELECT COUNT(*) FROM items WHERE tenant_id = ?",
+            [7],
+        ),
+        (
+            "mssql",
+            "SELECT TOP (?) id, ? AS lbl FROM items WHERE tenant_id = ? AND x = ?",
+            (50, "L", 7, 8),
+            {},
+            "SELECT COUNT(*) FROM items WHERE tenant_id = ? AND x = ?",
+            [7, 8],
+        ),
+        (
+            "teradata",
+            "SELECT TOP ? id FROM items WHERE tenant_id = ?",
+            (50, 7),
+            {},
+            "SELECT COUNT(*) FROM items WHERE tenant_id = ?",
+            [7],
+        ),
+        (
+            "snowflake",
+            "SELECT TOP 5 id, ? FROM items WHERE tenant_id = ?",
+            ("L", 7),
+            {},
+            "SELECT COUNT(*) FROM items WHERE tenant_id = ?",
+            [7],
+        ),
+        (
+            "duckdb",
+            "select :label as label, id from docs where tenant_id = :tenant_id",
+            (),
+            {"label": 10, "tenant_id": 1},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = ?",
+            [1],
+        ),
+        (
+            "duckdb",
+            "select $1 as label, id from docs where tenant_id = $2",
+            (10, 1),
+            {},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = $1",
+            [1],
+        ),
+        (
+            "duckdb",
+            "select id from docs where tenant_id = :t limit :n",
+            (),
+            {"t": 1, "n": 5},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = ?",
+            [1],
+        ),
+        (
+            "asyncpg",
+            "select :label as label, id from docs where tenant_id = :tenant_id",
+            (),
+            {"label": 10, "tenant_id": 1},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = $1",
+            [1],
+        ),
+        (
+            "asyncpg",
+            "select $1 as label, id from docs where tenant_id = $2",
+            (10, 1),
+            {},
+            "SELECT COUNT(*) FROM docs WHERE tenant_id = $1",
+            [1],
+        ),
+    ],
+)
+def test_count_query_profiles(
+    sqlite_driver: "SqliteDriver",
+    profile: str,
+    query_sql: str,
+    positional: tuple[Any, ...],
+    named: "dict[str, Any]",
+    expected_sql: str,
+    expected_params: "list[Any]",
+) -> None:
+    """Count queries bind each retained value to its own placeholder on every adapter profile."""
+    config = _profile_config(profile)
+    statement = SQL(query_sql, *positional, statement_config=config, **named)
+    compiled_sql, compiled_params = sqlite_driver._count_query(statement).compile()
+    assert compiled_sql == expected_sql
+    assert list(compiled_params) == expected_params
+
+
+@pytest.mark.parametrize("label", [10, 11])
+def test_duckdb_paginate_total_counts_own_tenant(label: int) -> None:
+    """DuckDB pagination totals count the caller's tenant rows regardless of the selected label value."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+    from sqlspec.service import SQLSpecSyncService
+
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as session:
+        session.execute("create table docs(id int primary key, tenant_id int, title text, price int)")
+        rows = [(1, 1, "a", 1), (2, 1, "b", 1)]
+        rows += [(100 + i, 10, f"t{i}", 1) for i in range(7)]
+        rows += [(200 + i, 11, f"u{i}", 1) for i in range(13)]
+        session.execute_many("insert into docs values (?, ?, ?, ?)", rows)
+        page = SQLSpecSyncService(session).paginate(
+            SQL("select :label as label, id, title from docs where tenant_id = :tenant_id", label=label, tenant_id=1)
+        )
+    assert isinstance(page, OffsetPagination)
+    assert page.total == 2
+    assert sorted(item["id"] for item in page.items) == [1, 2]
+
+
+def test_select_with_total_handles_unicode_named_parameter(sqlite_driver: "SqliteDriver") -> None:
+    sqlite_driver.connection.executescript("""
+        CREATE TABLE unicode_bind_items (id INTEGER PRIMARY KEY, a INTEGER);
+        INSERT INTO unicode_bind_items (id, a) VALUES (1, 1), (2, 1), (3, 2);
+    """)
+
+    rows, total = sqlite_driver.select_with_total(
+        "SELECT id FROM unicode_bind_items WHERE a = :naïve ORDER BY id LIMIT 1", naïve=1
+    )
+
+    assert total == 2
+    assert [row["id"] for row in rows] == [1]

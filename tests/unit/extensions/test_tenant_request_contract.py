@@ -90,7 +90,7 @@ def _litestar(tenant: bool, asynchronous: bool) -> Iterator[Harness]:
     from litestar.response import Response, Stream
     from litestar.testing import TestClient
 
-    from sqlspec.extensions.litestar import SQLSpecPlugin, set_connection_tenant
+    from sqlspec.extensions.litestar import SQLSpecPlugin, set_request_tenant
 
     calls: list[str] = []
 
@@ -110,7 +110,7 @@ def _litestar(tenant: bool, asynchronous: bool) -> Iterator[Harness]:
 
     @get("/receipt")
     async def receipt(request: Any) -> dict[str, bool]:
-        set_connection_tenant(request, "receipt")
+        set_request_tenant(request, "receipt")
         await direct()
         return {"ok": True}
 

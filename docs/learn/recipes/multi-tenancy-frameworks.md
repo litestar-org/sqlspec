@@ -28,14 +28,14 @@ one, the plugin installs no tenant handling and adds no per-request work.
   lease, `provide_session()`, a `SQLSpec*Service(config=...)`, or
   `TenantContext.get()` / `TenantContext.require()` needs it, once per
   database configuration. Async extractors resolve at async access points; use
-  `await TenantContext.aget()` instead of the synchronous `get()` when your
+  `await TenantContext.get_async()` instead of the synchronous `get()` when your
   extractor is asynchronous.
 - **Precedence** (highest first):
     1. `provide_session(tenant=...)` or `provide_session(bypass_tenant=True)`.
     2. A `TenantContext.scope(...)` or `TenantContext.bypass()` entered inside the handler.
     3. Route resolution: the `tenant_bypass` route marker (or Litestar
        `opt={"tenant_bypass": True}`), the request receipt from
-       `set_request_tenant(...)` / `set_connection_tenant(...)`, the configured
+       `set_request_tenant(...)`, the configured
        `tenant_extractor`, and, on Litestar, verified auth resolution.
     4. A `TenantContext` scope bound outside the request, such as
        `SQLSpecTenantMiddleware` installed in front of the application.
@@ -51,7 +51,7 @@ one, the plugin installs no tenant handling and adds no per-request work.
   configuration.
 - **Sync accessors on async configurations**: The synchronous session accessor
   (`plugin.get_session(request)`, or Litestar's
-  `plugin.provide_request_session(key, state, scope)`) returns a session that
+  `plugin.provide_db_session(key, state, scope)`) returns a session that
   opens the connection under the request tenant on its first awaited call.
   Flask's `plugin.get_session()` blocks on the plugin's portal instead.
 - **Ambient middleware placement**: Register an outer tenant source (Flask and
@@ -166,7 +166,7 @@ per configuration per request.
   extractor, so an auth database without an extractor and tenant databases with
   distinct extractors coexist in one `SQLSpecPlugin`.
 - **Receipts first**: A request receipt for the same configuration
-  (`set_request_tenant(...)`, or `set_connection_tenant(...)` on Litestar) takes
+  (`set_request_tenant(...)`) takes
   precedence over its extractor.
 
 ## Bare ASGI Applications
@@ -209,10 +209,10 @@ app = SQLSpecTenantMiddleware(inner_app, extractor=verified_tenant)
   checkin.
 - **Streaming and background tasks**: The tenant resolved for the request stays
   in effect for streaming bodies and background tasks in every framework.
-  Starlette and FastAPI also hold request leases open through streaming bodies
-  and `BackgroundTask` completion; Litestar and Sanic release the request
-  connection when the response starts, so open a new session inside the stream
-  or task.
+  Starlette and FastAPI hold request leases open through streaming bodies and
+  `BackgroundTask` completion. Litestar, Sanic, and Flask hold them through
+  streaming bodies and release them when the stream finishes, so open a new
+  session inside background tasks that run afterwards.
 - **Detached workers**: Never pass a request session to work outliving the HTTP
   response; pass the verified `tenant_id` and open
   `config.provide_session(tenant=tenant_id)` in the worker (see

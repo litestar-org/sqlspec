@@ -1,8 +1,8 @@
 """Data dictionary SQL query loader and domain resolver."""
 
-from importlib import resources
+from importlib import import_module, resources
 from importlib.resources import as_file
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -15,7 +15,6 @@ from sqlspec.data_dictionary._types import (
     MetadataSource,
     MetadataSupport,
 )
-from sqlspec.loader import SQLFileLoader
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
@@ -23,6 +22,7 @@ if TYPE_CHECKING:
     from importlib.resources.abc import Traversable
 
     from sqlspec.data_dictionary._types import DialectConfig, VersionInfo
+    from sqlspec.loader import SQLFileLoader
 
 __all__ = ("DataDictionaryLoader", "get_data_dictionary_loader")
 
@@ -196,7 +196,8 @@ class DataDictionaryLoader:
         key = (dialect, domain, mode)
         loader = self._domain_loaders.get(key)
         if loader is None:
-            loader = SQLFileLoader()
+            sql_file_loader_cls = import_module("sqlspec.loader").SQLFileLoader
+            loader = cast("SQLFileLoader", sql_file_loader_cls())
             self._domain_loaders[key] = loader
         return loader
 

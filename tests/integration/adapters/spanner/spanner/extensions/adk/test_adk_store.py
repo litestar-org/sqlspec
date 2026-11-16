@@ -16,6 +16,7 @@ from sqlspec.extensions.adk.memory import StoredMemory
 from tests.integration.adapters._shared.adk_behaviors import (
     assert_adk_append_and_get_events_contract,
     assert_adk_append_event_and_update_state_contract,
+    assert_adk_concurrent_state_merge_contract,
     assert_adk_create_tables_idempotent_contract,
     assert_adk_delete_session_cascade_contract,
     assert_adk_get_events_filtering_contract,
@@ -38,6 +39,7 @@ ADK_CONTRACTS = (
     assert_adk_delete_session_cascade_contract,
     assert_adk_append_and_get_events_contract,
     assert_adk_append_event_and_update_state_contract,
+    assert_adk_concurrent_state_merge_contract,
     assert_adk_get_events_filtering_contract,
 )
 
@@ -84,7 +86,7 @@ async def test_spanner_adk_memory_store_round_trip(
         matches = await _resolve(store.search_entries("coffee", "app", "user"))
         assert [match["id"] for match in matches] == ["memory-1"]
 
-        assert await _resolve(store.delete_entries_by_session("session-memory")) == 1
+        assert await _resolve(store.delete_entries_by_session("session-memory", "app", "user")) == 1
         assert await _resolve(store.search_entries("coffee", "app", "user")) == []
     finally:
         await _resolve(config.close_pool())

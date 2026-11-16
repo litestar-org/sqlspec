@@ -3,7 +3,12 @@
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.config import SanicConfig
-from sqlspec.extensions.sanic import SanicConfigState, SQLSpecPlugin, get_connection_from_request, get_or_create_session
+from sqlspec.extensions.sanic import (
+    SanicConfigState,
+    SQLSpecPlugin,
+    get_connection_from_request,
+    get_or_create_db_session,
+)
 
 
 def test_sanic_config_typing_is_exported() -> None:
@@ -24,7 +29,7 @@ def test_sanic_public_api_imports_without_sanic_dependency() -> None:
     assert SQLSpecPlugin is not None
     assert SanicConfigState is not None
     assert callable(get_connection_from_request)
-    assert callable(get_or_create_session)
+    assert callable(get_or_create_db_session)
 
 
 def test_sanic_plugin_reads_sanic_extension_config() -> None:

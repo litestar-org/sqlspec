@@ -49,7 +49,7 @@ def get_sqlspec_group() -> "Group":
         The SQLSpec CLI group.
     """
 
-    @click.group(name="sqlspec")
+    @click.group(name="sqlspec", cls=_SQLSpecGroup, context_settings={"help_option_names": ["-h", "--help"]})
     @click.option(
         "--config",
         help="Dotted path to SQLSpec config(s) or callable function (env: SQLSPEC_CONFIG)",
@@ -71,6 +71,9 @@ def get_sqlspec_group() -> "Group":
         """
         console = get_console()
         ctx.ensure_object(dict)
+
+        if _should_skip_config_resolution(ctx):
+            return
 
         if config is None:
             config = discover_config_from_pyproject()
@@ -843,12 +846,18 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @database_group.command(help="Stamp the revision table with the given revision")
     @click.argument("revision", type=str)
     @bind_key_option
-    def stamp(bind_key: str | None, revision: str) -> None:  # pyright: ignore[reportUnusedFunction]
+    @no_prompt_option
+    def stamp(bind_key: str | None, revision: str, no_prompt: bool) -> None:  # pyright: ignore[reportUnusedFunction]
         """Stamp the revision table with the given revision."""
         ctx = _ensure_click_context()
-
-        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        _dispatch_migration_call(sqlspec_config, "stamp", revision=revision)
+        input_confirmed = (
+            True
+            if no_prompt
+            else Confirm.ask(f"[bold]Are you sure you want to stamp the database to the `{revision}` revision?[/]")
+        )
+        if input_confirmed:
+            sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+            _dispatch_migration_call(sqlspec_config, "stamp", revision=revision)
 
     @database_group.command(name="init", help="Initialize migrations for the project.")
     @bind_key_option
@@ -1402,6 +1411,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             console.print("[yellow]No ADK configurations found.[/]")
             return
 
+        failed_configs: list[str] = []
         for cfg in configs:
             config_name = cfg.bind_key or "default"
             if not _is_adk_memory_enabled(cfg):
@@ -1429,8 +1439,21 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 console.print(f"[green]✓[/] {config_name}: memory table reachable")
             except Exception as exc:
                 console.print(f"[red]✗[/] {config_name}: {exc}")
+                failed_configs.append(config_name)
+
+        if failed_configs:
+            msg = f"Memory table verification failed for: {', '.join(failed_configs)}"
+            raise click.ClickException(msg)
 
     return database_group
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily construct the root Click command group for CLI documentation tools."""
+    if name == "cli":
+        return add_migration_commands()
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
 
 
 _BACKTICK_QUOTE_DIALECTS: frozenset[str] = frozenset({"mysql", "mariadb", "bigquery", "spanner"})
@@ -1590,12 +1613,26 @@ def _quote_verified_table_identifier(config: Any, memory_table: str, dialect: st
     return _quote_identifier_for_dialect(memory_table, dialect)
 
 
-def __getattr__(name: str) -> Any:
-    """Lazily construct the root Click command group for CLI documentation tools."""
-    if name == "cli":
-        return add_migration_commands()
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
+class _SQLSpecGroup(click.RichGroup):
+    """Click group that records raw CLI arguments prior to subcommand resolution."""
+
+    def parse_args(self, ctx: "click.Context", args: "list[str]") -> "list[str]":
+        ctx.ensure_object(dict)
+        raw_args = args[: args.index("--")] if "--" in args else args
+        ctx.obj["_raw_cli_args"] = tuple(raw_args)
+        return super().parse_args(ctx, args)
+
+
+def _should_skip_config_resolution(ctx: "click.Context") -> bool:
+    if ctx.resilient_parsing:
+        return True
+    help_flags = set(ctx.help_option_names) | {"--help", "-h"}
+    raw_args = ctx.obj.get("_raw_cli_args") if isinstance(ctx.obj, dict) else None
+    if raw_args is not None:
+        return any(arg in help_flags for arg in raw_args)
+    argv_tail = sys.argv[1:]
+    argv_args = argv_tail[: argv_tail.index("--")] if "--" in argv_tail else argv_tail
+    return any(arg in help_flags for arg in argv_args)
 
 
 def _safe_group_command(

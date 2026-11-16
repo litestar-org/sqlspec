@@ -10,10 +10,12 @@ Concrete subclasses implement the abstract methods with dialect-specific SQL.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_artifact_store_config
 from sqlspec.extensions.adk._table_utils import ensure_table_name
+from sqlspec.extensions.adk.store import _provide_adk_read_context, _resolve_adk_read_settings
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -34,18 +36,36 @@ logger = get_logger("sqlspec.extensions.adk.artifact.store")
 class _ADKArtifactStoreCommon(Generic[ConfigT]):
     """Shared non-async ADK store state and helpers."""
 
-    __slots__ = ("_artifact_table", "_config")
+    __slots__ = ("_artifact_table", "_config", "_default_replica_group", "_enable_replica_reads", "_read_config")
 
-    def __init__(self, config: ConfigT) -> None:
+    def __init__(self, config: ConfigT, *, read_config: ConfigT | None = None) -> None:
         """Initialize the async ADK artifact store.
 
         Args:
             config: SQLSpec database configuration.
+            read_config: Optional compatible configuration for pure reads.
         """
         self._config = config
+        self._read_config = read_config
+        self._enable_replica_reads, self._default_replica_group = _resolve_adk_read_settings(config, read_config)
         store_config = _adk_artifact_store_config(self._config)
         self._artifact_table: str = store_config["artifact_table"]
         ensure_table_name(self._artifact_table)
+
+    @property
+    def read_config(self) -> ConfigT | None:
+        """Return the explicitly configured reader, when supplied."""
+        return self._read_config
+
+    @property
+    def enable_replica_reads(self) -> bool:
+        """Return whether this store opts into pure-read offload."""
+        return self._enable_replica_reads
+
+    @property
+    def default_replica_group(self) -> str | None:
+        """Return the configured named replica group for ADK reads."""
+        return self._default_replica_group
 
     @property
     def config(self) -> ConfigT:
@@ -56,6 +76,32 @@ class _ADKArtifactStoreCommon(Generic[ConfigT]):
     def artifact_table(self) -> str:
         """Return the artifact versions table name."""
         return self._artifact_table
+
+    def _provide_replica_connection(
+        self, *, primary: bool = False, **kwargs: Any
+    ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+        return _provide_adk_read_context(
+            self._config,
+            self._read_config,
+            self._enable_replica_reads,
+            self._default_replica_group,
+            primary,
+            False,
+            kwargs,
+        )
+
+    def _provide_replica_session(
+        self, *, primary: bool = False, **kwargs: Any
+    ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+        return _provide_adk_read_context(
+            self._config,
+            self._read_config,
+            self._enable_replica_reads,
+            self._default_replica_group,
+            primary,
+            True,
+            kwargs,
+        )
 
     def _schema_management_flags(self) -> tuple[bool, bool]:
         extension_config = getattr(self._config, "extension_config", {})
@@ -234,6 +280,12 @@ class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
             artifact_table=self._artifact_table,
         )
 
+    def _provide_replica_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_replica_connection(primary=primary, **kwargs))
+
+    def _provide_replica_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_replica_session(primary=primary, **kwargs))
+
 
 class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     """Base class for sync SQLSpec-backed ADK artifact metadata stores.
@@ -384,3 +436,9 @@ class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
             db_system=resolve_db_system(type(self).__name__),
             artifact_table=self._artifact_table,
         )
+
+    def _provide_replica_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_replica_connection(primary=primary, **kwargs))
+
+    def _provide_replica_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_replica_session(primary=primary, **kwargs))

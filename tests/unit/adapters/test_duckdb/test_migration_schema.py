@@ -18,10 +18,10 @@ class FakeDuckDBConnection:
         self.executed.append((sql, parameters))
         return self
 
-    def fetchone(self) -> tuple[Any] | None:
+    def fetchall(self) -> list[tuple[Any]]:
         if self.executed[-1][0] == "SELECT current_setting('search_path')":
-            return (self.search_path,)
-        return (1,) if self.schema_exists else None
+            return [(self.search_path,)]
+        return [(1,)] if self.schema_exists else []
 
 
 CAPTURE = ("SELECT current_setting('search_path')", None)

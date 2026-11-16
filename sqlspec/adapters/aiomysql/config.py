@@ -1,7 +1,8 @@
 """aiomysql database configuration."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+import inspect
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 from weakref import WeakSet
 
 from mypy_extensions import mypyc_attr
@@ -12,15 +13,28 @@ from sqlspec.adapters.aiomysql._typing import (
     AiomysqlDictCursor,
     AiomysqlModule,
     AiomysqlPool,
+    AiomysqlPymysqlMySQLError,
     AiomysqlRawCursor,
     AiomysqlSessionContext,
 )
-from sqlspec.adapters.aiomysql.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.aiomysql.core import (
+    apply_driver_features,
+    create_mapped_exception,
+    default_statement_config,
+    merge_derive_overrides,
+    parse_mysql_replica_shorthand,
+)
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver, AiomysqlExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
@@ -41,6 +55,7 @@ __all__ = (
     "build_connection_config",
 )
 
+_COM_RESET_CONNECTION: Final[int] = 0x1F
 _POOL_ONLY_CONFIG_KEYS = frozenset({"maxsize", "minsize", "pool_recycle"})
 aiomysql: "AiomysqlModule" = cast("AiomysqlModule", AiomysqlModule)
 
@@ -138,6 +153,8 @@ class AiomysqlDriverFeatures(TypedDict):
     """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[AiomysqlConnection], Awaitable[None]]]"
     """Async callback invoked once per physical ``aiomysql`` connection acquired from the pool."""
+    reset_session_on_release: NotRequired[bool]
+    """Send ``COM_RESET_CONNECTION`` and re-initialize each connection when it is released (defaults to ``False``)."""
     enable_events: NotRequired[bool]
     """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
@@ -185,9 +202,13 @@ class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
         self._contexts: dict[int, Any] = {}
 
     async def acquire_connection(self) -> "AiomysqlConnection":
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
-        connection = cast("AiomysqlConnection", await ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            ctx = pool.acquire()
+            connection = cast("AiomysqlConnection", await ctx.__aenter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._contexts[id(connection)] = ctx
         try:
             ensure_conn = self._config._ensure_connection
@@ -201,11 +222,20 @@ class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "AiomysqlConnection", **kwargs: Any) -> None:
         ctx = self._contexts.pop(id(_conn), None)
-        if ctx is not None:
-            if hasattr(_conn, "get_transaction_status") and _conn.get_transaction_status():
-                with contextlib.suppress(Exception):
-                    await _conn.rollback()
-            await ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+        if ctx is None:
+            return
+        exc_type = kwargs.get("exc_type")
+        try:
+            if _conn is not None:
+                try:
+                    await _rollback_before_release(_conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+                if self._config.driver_features.get("reset_session_on_release", False):
+                    await _reset_session(self._config, _conn)
+        finally:
+            await ctx.__aexit__(exc_type, kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
 class AiomysqlConnectionContext(AsyncPoolConnectionContext):
@@ -219,10 +249,14 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
         self._connection: AiomysqlConnection | None = None
 
     async def __aenter__(self) -> AiomysqlConnection:
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
+        try:
+            pool = await self._config.provide_pool()
+            ctx = pool.acquire()
+            connection = cast("AiomysqlConnection", await ctx.__aenter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._ctx = ctx
-        connection = cast("AiomysqlConnection", await ctx.__aenter__())
         self._connection = connection
         try:
             ensure_conn = self._config._ensure_connection
@@ -240,21 +274,29 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
     ) -> bool | None:
         conn = self._connection
         self._connection = None
-        if conn is not None and hasattr(conn, "get_transaction_status") and conn.get_transaction_status():
-            with contextlib.suppress(Exception):
-                await conn.rollback()
-        if self._ctx:
-            ctx = self._ctx
-            self._ctx = None
-            return cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
-        return None
+        ctx = self._ctx
+        self._ctx = None
+        exit_result: bool | None = None
+        try:
+            if conn is not None:
+                try:
+                    await _rollback_before_release(conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+                if self._config.driver_features.get("reset_session_on_release", False):
+                    await _reset_session(self._config, conn)
+        finally:
+            if ctx is not None:
+                exit_result = cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
+        return exit_result
 
 
 @mypyc_attr(native_class=False)
 class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", AiomysqlDriver]):
     """Configuration for aiomysql database connections."""
 
-    __slots__ = ("_initialized_connections", "_user_connection_hook")
+    __slots__ = ("_initialized_connections", "_read_only", "_user_connection_hook")
 
     driver_type: ClassVar[type[AiomysqlDriver]] = AiomysqlDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AiomysqlConnection)
@@ -306,6 +348,10 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         self._user_connection_hook: Callable[[AiomysqlConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
+        replica_read_only = features_dict.pop("_replica_read_only", None)
+        self._read_only: bool = (
+            bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
+        )
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
         features_dict.setdefault("enable_local_infile_bulk_load", connection_config["local_infile"])
@@ -334,7 +380,11 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         Returns:
             An aiomysql connection instance.
         """
-        connection = await aiomysql.connect(**self._connection_kwargs())
+        try:
+            connection = await aiomysql.connect(**self._connection_kwargs())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             await self._ensure_connection(connection)
         except BaseException:
@@ -381,6 +431,32 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_derive_overrides(config, overrides, clear_pool_name=False)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        values = parse_mysql_replica_shorthand(spec_input)
+        read_only = values.pop("read_only", True)
+        connection = dict(values.pop("connection_config_overrides", {}))
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
+        connection.update(values)
+        read_only = connection.pop("read_only", read_only)
+        driver_features_overrides = dict(forwarded.get("driver_features_overrides") or {})
+        driver_features_overrides["_replica_read_only"] = read_only is not False
+        forwarded["driver_features_overrides"] = driver_features_overrides
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
+
     async def _create_pool(self) -> "AiomysqlPool":
         """Create the actual async connection pool.
 
@@ -388,7 +464,11 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         type handlers. JSON serialization is handled via type_coercion_map in the
         driver's statement_config (see driver.py).
         """
-        return cast("AiomysqlPool", await aiomysql.create_pool(**self._pool_kwargs()))
+        try:
+            return cast("AiomysqlPool", await aiomysql.create_pool(**self._pool_kwargs()))
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _connection_kwargs(self) -> "dict[str, Any]":
         """Return aiomysql.connect-compatible kwargs without pool-only settings."""
@@ -403,14 +483,22 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         return pool_kwargs
 
     async def _ensure_connection(self, connection: "AiomysqlConnection") -> None:
-        """Ensure connection callback has been called exactly once for this connection.
+        """Ensure read-only session state and connection callback run once per physical connection.
 
-        Uses WeakSet tracking to ensure the callback runs once per physical connection.
+        Uses WeakSet tracking to ensure initialization runs once per physical connection.
         """
-        if self._user_connection_hook is None:
+        if not self._read_only and self._user_connection_hook is None:
             return
         if connection not in self._initialized_connections:
-            await self._user_connection_hook(connection)
+            if self._read_only:
+                try:
+                    async with AiomysqlCursor(connection) as cursor:
+                        await cursor.execute("SET SESSION TRANSACTION READ ONLY")
+                except Exception as exc:
+                    _raise_mapped_connection_error(exc)
+                    raise
+            if self._user_connection_hook is not None:
+                await self._user_connection_hook(connection)
             self._initialized_connections.add(connection)
 
     async def _close_pool(self) -> None:
@@ -451,3 +539,65 @@ def _normalize_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dic
     config.pop("passwd", None)
 
     return config
+
+
+def _is_autocommit_enabled(connection: Any) -> bool:
+    """Return whether autocommit is active on an aiomysql connection."""
+    get_autocommit = getattr(connection, "get_autocommit", None)
+    if callable(get_autocommit):
+        return bool(get_autocommit())
+    return bool(getattr(connection, "autocommit_mode", False))
+
+
+async def _reset_session(config: Any, connection: Any) -> None:
+    """Reset server session state on a released connection, closing it when the reset cannot complete.
+
+    Sends ``COM_RESET_CONNECTION`` through the driver command path and re-runs connection
+    initialization. Without a command path, or when the reset fails, the connection is closed
+    so the pool opens a fresh one.
+    """
+    if getattr(connection, "closed", False):
+        return
+    execute_command = getattr(connection, "_execute_command", None)
+    read_ok_packet = getattr(connection, "_read_ok_packet", None)
+    if not callable(execute_command) or not callable(read_ok_packet):
+        with contextlib.suppress(Exception):
+            connection.close()
+        return
+    try:
+        result = execute_command(_COM_RESET_CONNECTION, b"")
+        if inspect.isawaitable(result):
+            await result
+        result = read_ok_packet()
+        if inspect.isawaitable(result):
+            await result
+        config._initialized_connections.discard(connection)
+        await config._ensure_connection(connection)
+    except Exception:
+        with contextlib.suppress(Exception):
+            connection.close()
+
+
+async def _rollback_before_release(connection: Any) -> None:
+    """Roll back open work before pool release and close the connection when rollback fails."""
+    if getattr(connection, "closed", False) or _is_autocommit_enabled(connection):
+        return
+    try:
+        await connection.rollback()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            connection.close()
+        raise
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, AiomysqlPymysqlMySQLError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

@@ -249,8 +249,8 @@ def test_arrow_staged_load_emits_teradata_update_insert_and_cleans_stage() -> No
     sql_statements = [item.args[0] for item in cursor.execute.call_args_list]
     assert sql_statements == [
         "CREATE MULTISET TABLE stage_orders AS (SELECT * FROM orders) WITH NO DATA",
-        "UPDATE tgt FROM orders tgt, stage_orders src SET total = src.total WHERE tgt.id = src.id",
-        "INSERT INTO orders (id, total) SELECT stg.id, stg.total FROM stage_orders stg WHERE NOT EXISTS (SELECT 1 FROM orders tgt WHERE tgt.id = stg.id)",
+        'UPDATE tgt FROM orders tgt, stage_orders src SET "total" = src."total" WHERE tgt."id" = src."id"',
+        'INSERT INTO orders ("id", "total") SELECT stg."id", stg."total" FROM stage_orders stg WHERE NOT EXISTS (SELECT 1 FROM orders tgt WHERE tgt."id" = stg."id")',
         "DROP TABLE stage_orders",
     ]
     assert cursor.executemany.call_args.args == ('INSERT INTO "stage_orders" ("id", "total") VALUES (?, ?)', [(1, 2)])

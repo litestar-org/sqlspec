@@ -366,31 +366,71 @@ def test_sql_log_bind_key_in_extra_fields(caplog) -> None:
 
 def test_sql_logger_independent_configuration(caplog) -> None:
     """Test that sqlspec.sql can be configured independently from sqlspec root."""
-    # Set sqlspec root to WARNING, but sqlspec.sql to INFO
-    logging.getLogger("sqlspec").setLevel(logging.WARNING)
-    logging.getLogger("sqlspec.sql").setLevel(logging.INFO)
+    root_logger = logging.getLogger("sqlspec")
+    sql_logger = logging.getLogger("sqlspec.sql")
+    original_root_level = root_logger.level
+    original_sql_level = sql_logger.level
+    try:
+        root_logger.setLevel(logging.WARNING)
+        sql_logger.setLevel(logging.INFO)
 
-    caplog.set_level(logging.INFO, logger="sqlspec.sql")
+        caplog.set_level(logging.INFO, logger="sqlspec.sql")
 
-    event = create_event(
-        sql="SELECT 1",
-        parameters=None,
-        driver="TestDriver",
-        adapter="TestAdapter",
-        bind_key=None,
-        operation="SELECT",
-        execution_mode=None,
-        is_many=False,
-        is_script=False,
-        rows_affected=1,
-        duration_s=0.001,
-        correlation_id=None,
-        storage_backend=None,
-        started_at=0.0,
+        event = create_event(
+            sql="SELECT 1",
+            parameters=None,
+            driver="TestDriver",
+            adapter="TestAdapter",
+            bind_key=None,
+            operation="SELECT",
+            execution_mode=None,
+            is_many=False,
+            is_script=False,
+            rows_affected=1,
+            duration_s=0.001,
+            correlation_id=None,
+            storage_backend=None,
+            started_at=0.0,
+        )
+
+        default_statement_observer(event)
+
+        sql_records = [r for r in caplog.records if r.name == "sqlspec.sql"]
+        assert len(sql_records) >= 1
+    finally:
+        root_logger.setLevel(original_root_level)
+        sql_logger.setLevel(original_sql_level)
+
+
+def test_otel_console_formatter_escapes_control_characters() -> None:
+    """OTelConsoleFormatter escapes newlines, carriage returns, tabs, and C0/C1 control sequences."""
+    formatter = OTelConsoleFormatter(datefmt="%Y-%m-%d")
+    record = logging.LogRecord(
+        name="sqlspec.observability",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=42,
+        msg="SELECT\r\nINFO fake\x1b[31m",
+        args=(),
+        exc_info=None,
     )
+    record.__dict__.update({
+        "correlation_id": "cid-1\nforged=true",
+        "sqlspec.bind_key": "bind\tkey\x00\x7f\x85\x9b",
+        "db.statement": "SELECT 'a\nb'",
+    })
 
-    default_statement_observer(event)
+    output = formatter.format(record)
 
-    # Should still receive the log since sqlspec.sql is at INFO
-    sql_records = [r for r in caplog.records if r.name == "sqlspec.sql"]
-    assert len(sql_records) >= 1
+    assert "\n" not in output
+    assert "\r" not in output
+    assert "\t" not in output
+    assert "\x1b" not in output
+    assert "\x00" not in output
+    assert "\x7f" not in output
+    assert "\x85" not in output
+    assert "\x9b" not in output
+    assert r"SELECT\r\nINFO fake\x1b[31m" in output
+    assert r"correlation_id=cid-1\nforged=true" in output
+    assert r"sqlspec.bind_key=bind\tkey\x00\x7f\x85\x9b" in output
+    assert r"db.statement=SELECT 'a\nb'" in output

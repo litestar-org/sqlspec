@@ -1,11 +1,14 @@
 """MysqlConnector adapter compiled helpers."""
 
 import contextlib
+import math
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -14,27 +17,34 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_mysql_dsn
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code, resolve_row_format
+
+if TYPE_CHECKING:
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "MysqlConnectorAsyncStreamSource",
     "MysqlConnectorSyncStreamSource",
     "_resolve_column_types",
     "apply_driver_features",
+    "build_gtid_wait_query",
     "build_insert_statement",
     "build_load_data_statement",
     "build_profile",
@@ -46,10 +56,14 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "encode_records_for_local_infile",
+    "execute_cache_hit",
+    "execute_cache_hit_async",
     "format_identifier",
+    "merge_derive_overrides",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
+    "parse_mysql_replica_shorthand",
     "resolve_many_rowcount",
     "resolve_row_plan",
     "resolve_rowcount",
@@ -57,6 +71,7 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.mysqlconnector")
 
+MYSQL_ER_OPTION_PREVENTS_STATEMENT: Final[int] = 1290
 MYSQL_ER_DUP_ENTRY: Final[int] = 1062
 MYSQL_ER_NO_DEFAULT_FOR_FIELD: Final[int] = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED: Final[int] = 3819
@@ -80,6 +95,10 @@ _MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
     1091: (OperationalError, "cannot drop column or key"),
 }
 _MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "23505": (UniqueViolationError, "unique constraint violation"),
+    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
+    "23502": (NotNullViolationError, "not-null constraint violation"),
+    "23514": (CheckViolationError, "check constraint violation"),
     "42S02": (OperationalError, "table does not exist"),
     "42S22": (OperationalError, "column does not exist"),
 }
@@ -112,6 +131,7 @@ _MYSQL_ACCESS_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] =
     MYSQL_ER_DBACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_ACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_TABLEACCESS_DENIED: (PermissionDeniedError, "access denied"),
+    1290: (PermissionDeniedError, "read-only server"),
 }
 _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_LOCK_DEADLOCK: (DeadlockError, "deadlock detected"),
@@ -121,6 +141,7 @@ _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str
     3024: (QueryTimeoutError, "query execution timeout"),
 }
 _MYSQL_CONNECTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1040: (DatabaseConnectionError, "too many connections"),
     MYSQL_CR_SERVER_LOST: (ConnectionTimeoutError, "connection lost"),
     MYSQL_CR_CONNECTION_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
@@ -190,17 +211,6 @@ class MysqlConnectorSyncStreamSource:
         self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    def _start(self) -> None:
-        try:
-            cursor = self._driver.connection.cursor(**self._cursor_options)
-            self._cursor = cursor
-            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-            self.column_types = _resolve_column_types(self._cursor.description)
-        except BaseException:
-            self.close(error=True)
-            raise
-
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
@@ -224,6 +234,17 @@ class MysqlConnectorSyncStreamSource:
             if cursor is not None:
                 with contextlib.suppress(Exception):
                     cursor.close()
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor(**self._cursor_options)
+            self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+            self.column_types = _resolve_column_types(self._cursor.description)
+        except BaseException:
+            self.close(error=True)
+            raise
 
 
 class MysqlConnectorAsyncStreamSource:
@@ -286,25 +307,32 @@ class MysqlConnectorAsyncStreamSource:
         self._cursor = None
         connection = self._driver.connection
         raw_connection = getattr(connection, "_cnx", None) or connection
+        consume_error: BaseException | None = None
         try:
             with contextlib.suppress(Exception):
                 if getattr(raw_connection, "unread_result", False):
                     await raw_connection.consume_results()
-        finally:
-            if cursor is not None:
-                with contextlib.suppress(Exception):
-                    await cursor.close()
+        except BaseException as exc:
+            consume_error = exc
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                await cursor.close()
+        if consume_error is not None:
+            raise consume_error
 
     async def _start(self) -> None:
+        start_error: BaseException | None = None
         try:
             cursor = await self._driver.connection.cursor(**self._cursor_options)
             self._cursor = cursor
             await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
             self.column_types = _resolve_column_types(self._cursor.description)
-        except BaseException:
+        except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             await self.close(error=True)
-            raise
+            raise start_error
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -553,14 +581,155 @@ def normalize_lastrowid(cursor: Any) -> int | None:
     return last_id if isinstance(last_id, int) else None
 
 
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[Callable[[Any], Any], set[int], dict[str, Any] | None]",
+) -> "SQLResult":
+    """Execute a cached statement on a mysql-connector connection and build its result.
+
+    Args:
+        connection: mysql-connector connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: JSON deserializer, JSON column type codes, and cursor options of the owning session.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any mysql-connector error the statement raises.
+    """
+    compiled_sql = cached.compiled_sql
+    deserializer, json_type_codes, cursor_options = state
+    try:
+        cursor = connection.cursor() if cursor_options is None else connection.cursor(**cursor_options)
+        try:
+            if params:
+                cursor.execute(compiled_sql, params)
+            else:
+                cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            rows, column_names, _row_format = collect_rows(
+                fetched_data, resolve_row_plan(cursor.description or None, json_type_codes), deserializer, logger=logger
+            )
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                params,
+                rows,
+                column_names,
+                len(rows),
+                resolve_row_format(rows),
+            )
+        finally:
+            raw_connection = getattr(connection, "_cnx", None) or connection
+            with contextlib.suppress(Exception):
+                if getattr(raw_connection, "unread_result", False):
+                    raw_connection.consume_results()
+            with contextlib.suppress(Exception):
+                cursor.close()
+    except MysqlConnectorError as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+async def execute_cache_hit_async(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[Callable[[Any], Any], set[int], dict[str, Any] | None]",
+) -> "SQLResult":
+    """Execute a cached statement on an asynchronous mysql-connector connection and build its result.
+
+    Args:
+        connection: mysql-connector connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: JSON deserializer, JSON column type codes, and cursor options of the owning session.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any mysql-connector error the statement raises.
+    """
+    compiled_sql = cached.compiled_sql
+    deserializer, json_type_codes, cursor_options = state
+    try:
+        cursor = await (connection.cursor() if cursor_options is None else connection.cursor(**cursor_options))
+        error: BaseException | None = None
+        result: SQLResult | None = None
+        try:
+            if params:
+                await cursor.execute(compiled_sql, params)
+            else:
+                await cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                result = DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            else:
+                fetched_data = await cursor.fetchall()
+                rows, column_names, _row_format = collect_rows(
+                    fetched_data,
+                    resolve_row_plan(cursor.description or None, json_type_codes),
+                    deserializer,
+                    logger=logger,
+                )
+                result = SQLResult.create_cached_select(
+                    sql,
+                    statement_config,
+                    cached.processed_state,
+                    compiled_sql,
+                    params,
+                    rows,
+                    column_names,
+                    len(rows),
+                    resolve_row_format(rows),
+                )
+        except BaseException as cleanup_trigger:
+            error = cleanup_trigger
+        raw_connection = getattr(connection, "_cnx", None) or connection
+        with contextlib.suppress(Exception):
+            if getattr(raw_connection, "unread_result", False):
+                await raw_connection.consume_results()
+        with contextlib.suppress(Exception):
+            await cursor.close()
+        if error is not None:
+            raise error
+    except MysqlConnectorError as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    else:
+        return cast("SQLResult", result)
+
+
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map MySQL driver exceptions to SQLSpec errors."""
     _ = logger
     type_name = type(error).__name__
     if type_name == "PoolError" or "PoolError" in str(type(error)):
-        return ConnectionTimeoutError(str(error))
+        exc: SQLSpecError = ConnectionTimeoutError(str(error))
+        exc.__cause__ = error
+        return exc
     if type_name == "InterfaceError" or getattr(error, "errno", None) == -1:
-        return DatabaseConnectionError(str(error))
+        exc = DatabaseConnectionError(str(error))
+        exc.__cause__ = error
+        return exc
 
     error_code = getattr(error, "errno", None)
     if error_code is None and isinstance(error, Exception) and error.args:
@@ -569,6 +738,14 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             error_code = value
     sqlstate = error.sqlstate if has_sqlstate(error) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
+
+    read_only_message = str(error).lower().replace("-", "_")
+    if (
+        sqlstate == "25006"
+        or error_code in {1792, 1836}
+        or (error_code == MYSQL_ER_OPTION_PREVENTS_STATEMENT and "read_only" in read_only_message)
+    ):
+        return _create_mysql_error(error, sqlstate, error_code, ReadOnlyTransactionError, "read-only transaction")
 
     dispatch = _MYSQL_DDL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
@@ -623,6 +800,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if sqlstate_prefix == "22" or type(error).__name__ == "DataError":
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["22"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if type_name == "OperationalError":
+        return _create_mysql_error(error, sqlstate, error_code, OperationalError, "operational error")
 
     return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
 
@@ -643,6 +822,108 @@ def build_load_data_statement(
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         f"LINES TERMINATED BY '\\n' ({column_list})"
     )
+
+
+def merge_derive_overrides(
+    base_config: Mapping[str, Any], overrides: Mapping[str, Any], *, clear_pool_name: bool = False
+) -> dict[str, Any]:
+    """Merge clone parameters with explicit aliases taking precedence.
+
+    Args:
+        base_config: Inherited connection options.
+        overrides: Explicit clone options.
+        clear_pool_name: Remove an inherited native pool name.
+
+    Returns:
+        Independent normalized connection options.
+    """
+    result = dict(base_config)
+    dsn_keys = ("dsn", "url", "connection_string")
+    if any(overrides.get(key) is not None for key in dsn_keys):
+        for key in dsn_keys:
+            if key not in overrides:
+                result.pop(key, None)
+        for endpoint_key in (
+            "host",
+            "port",
+            "user",
+            "username",
+            "password",
+            "passwd",
+            "db",
+            "database",
+            "unix_socket",
+            "charset",
+        ):
+            if endpoint_key not in overrides:
+                result.pop(endpoint_key, None)
+    aliases = {
+        "database": ("db",),
+        "user": ("username",),
+        "password": ("passwd",),
+        "allow_local_infile": ("local_infile",),
+        "connection_timeout": ("connect_timeout",),
+    }
+    for canonical, alternatives in aliases.items():
+        if canonical not in overrides and any(alias in overrides for alias in alternatives):
+            result.pop(canonical, None)
+    result.update(overrides)
+    for canonical, alternatives in aliases.items():
+        for alias in alternatives:
+            if alias in result:
+                value = result.pop(alias)
+                result.setdefault(canonical, value)
+    if clear_pool_name and "pool_name" not in overrides:
+        result.pop("pool_name", None)
+    return result
+
+
+def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+    """Parse explicit MySQL or MariaDB replica endpoints.
+
+    Args:
+        spec: Endpoint URL, host shorthand, or override mapping.
+
+    Returns:
+        Independent connection or config overrides.
+
+    Raises:
+        ImproperConfigurationError: The endpoint is missing or unsupported.
+    """
+    if isinstance(spec, bool):
+        msg = "MySQL replicas require explicit endpoints or overrides"
+        raise ImproperConfigurationError(msg)
+    if isinstance(spec, Mapping):
+        return dict(spec)
+    endpoint = spec if "://" in spec else "mysql://" + spec
+    if not endpoint.startswith(("mysql://", "mariadb://")):
+        msg = "Replica endpoint must use mysql:// or mariadb://"
+        raise ImproperConfigurationError(msg)
+    options: dict[str, Any] = parse_mysql_dsn(endpoint)
+    if not options.get("host"):
+        msg = "Replica endpoint requires a host"
+        raise ImproperConfigurationError(msg)
+    return options
+
+
+def build_gtid_wait_query(gtid_set: str, timeout: float, *, mariadb: bool) -> str:
+    """Select a parameterized native GTID wait query.
+
+    Args:
+        gtid_set: Native GTID position to await.
+        timeout: Finite nonnegative wait duration in seconds.
+        mariadb: Select the MariaDB native function.
+
+    Returns:
+        SQL containing placeholders for the GTID position and timeout.
+
+    Raises:
+        ValueError: The GTID position is blank or the timeout is invalid.
+    """
+    if not gtid_set.strip() or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0:
+        msg = "GTID wait requires a nonempty GTID set and a finite nonnegative timeout"
+        raise ValueError(msg)
+    return "SELECT MASTER_GTID_WAIT(%s, %s)" if mariadb else "SELECT WAIT_FOR_EXECUTED_GTID_SET(%s, %s)"
 
 
 def _deserialize_json_value(value: Any, deserializer: "Callable[[Any], Any]", *, logger: Any | None = None) -> Any:
@@ -730,6 +1011,10 @@ def _create_mysql_error(
 
 driver_profile = build_profile()
 
+_MYSQL_NEWDECIMAL_CODE: Final[int] = 246
+_MYSQL_DECIMAL_MIN_LEN: Final[int] = 6
+_DECIMAL_MAX_PRECISION: Final[int] = 76
+
 _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
     0: "decimal",
     1: "int32",
@@ -749,6 +1034,22 @@ _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
 }
 
 
+def _decimal_token(col: Any) -> str:
+    """Resolve a MySQL NEWDECIMAL field descriptor to an exact or fallback decimal token."""
+    if not isinstance(col, (tuple, list)) or len(col) < _MYSQL_DECIMAL_MIN_LEN:
+        return "decimal"
+    raw_length = col[4]
+    raw_scale = col[5]
+    if isinstance(raw_length, bool) or not isinstance(raw_length, int):
+        return "decimal"
+    if isinstance(raw_scale, bool) or not isinstance(raw_scale, int):
+        return "decimal"
+    precision = raw_length - (1 if raw_scale else 0)
+    if 1 <= precision <= _DECIMAL_MAX_PRECISION and 0 <= raw_scale <= precision:
+        return f"decimal({precision},{raw_scale})"
+    return "decimal"
+
+
 def _resolve_column_types(description: Any) -> "dict[str, str] | None":
     """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
 
@@ -759,9 +1060,13 @@ def _resolve_column_types(description: Any) -> "dict[str, str] | None":
         return None
     column_types: dict[str, str] = {}
     for col in description:
-        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
-        if token is not None:
-            column_types[col[0]] = token
+        type_code = col[1]
+        if type_code == _MYSQL_NEWDECIMAL_CODE:
+            column_types[col[0]] = _decimal_token(col)
+        else:
+            token = _MYSQL_TYPE_CODE_TOKENS.get(type_code)
+            if token is not None:
+                column_types[col[0]] = token
     return column_types or None
 
 

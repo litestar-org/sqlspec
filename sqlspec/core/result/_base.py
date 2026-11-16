@@ -460,7 +460,7 @@ class SQLResult(StatementResult):
         last_inserted_id: int | str | None = None,
     ) -> "SQLResult":
         """Construct a fast-path SELECT result with deferred SQL statement materialization."""
-        result = cls(
+        result = SQLResult(
             statement=None,
             data=data,
             rows_affected=rows_affected,

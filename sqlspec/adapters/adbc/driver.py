@@ -23,6 +23,7 @@ from sqlspec.adapters.adbc.core import (
     detect_dialect,
     driver_profile,
     enforce_strict_type_coercion,
+    execute_cache_hit,
     get_statement_config,
     handle_postgres_rollback,
     is_postgres_dialect,
@@ -51,12 +52,13 @@ from sqlspec.core import (
 from sqlspec.core.parameters import ParameterValidator
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
-from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError, TransactionError
+from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.exceptions import DatabaseConnectionError, DataError, SQLSpecError, TransactionError
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
+from sqlspec.utils.module_loader import ensure_pyarrow, import_optional, import_optional_attr
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.text import (
     normalize_identifier,
@@ -83,6 +85,7 @@ _DB_SYSTEM_OVERRIDE_DIALECTS = frozenset({"snowflake", "teradata"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 _SCHEMA_QUALIFIED_PARTS = 2
+_TEMPORARY_STAGE_DIALECTS = frozenset({"sqlite", "duckdb"})
 _CATALOG_QUALIFIED_PARTS = 3
 _SCRIPT_PARAMETER_VALIDATOR = ParameterValidator()
 
@@ -108,6 +111,20 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
             self.pending_exception = (
                 create_teradata_mapped_exception(exc_val) if self._assume_teradata else create_mapped_exception(exc_val)
             )
+            return True
+        arrow_errors = tuple(
+            error_type
+            for error_type in (
+                import_optional_attr("pyarrow", "ArrowInvalid"),
+                import_optional_attr("pyarrow", "ArrowTypeError"),
+            )
+            if isinstance(error_type, type)
+        )
+        if arrow_errors and issubclass(exc_type, arrow_errors):
+            msg = f"ADBC could not convert a parameter or result value: {exc_val}"
+            error = DataError(msg)
+            error.__cause__ = exc_val
+            self.pending_exception = error
             return True
         return False
 
@@ -294,6 +311,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._previous_autocommit: bool | None = None
         self._has_streams = False
         self._stream_closers: list[Callable[[], None]] = []
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), AdbcDriver) else None
+        self._cache_hit_state = (self._dialect_name, self.driver_features, self._column_name_cache)
 
     @property
     def has_streams(self) -> bool:
@@ -443,9 +462,15 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Execution result with statement counts
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-
-        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
+        bound_statements = self._bound_script_statements(statement)
+        entries: list[tuple[str, Any]] | None = None
+        if bound_statements is not None:
+            entries = [self._compiled_sql(piece, piece.statement_config) for piece in bound_statements]
+            statements = [entry[0] for entry in entries]
+            prepared_parameters: Any = None
+        else:
+            sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
         last_rowcount = 0
@@ -463,13 +488,21 @@ class AdbcDriver(SyncDriverAdapterBase):
             for idx, stmt in enumerate(statements):
                 stmt_started = perf_counter() if has_observers else 0.0
                 stmt_params: Any = ()
-                placeholders = (
-                    validator.extract_parameters(stmt, dialect=self._dialect_name) if prepared_parameters else []
-                )
-                if prepared_parameters and (total_statements == 1 or placeholders):
-                    stmt_params = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
+                placeholders: list[Any] = []
+                if entries is not None:
+                    source_parameters = entries[idx][1]
+                    has_statement_parameters = bool(source_parameters)
+                else:
+                    source_parameters = prepared_parameters
+                    placeholders = (
+                        validator.extract_parameters(stmt, dialect=self._dialect_name) if prepared_parameters else []
+                    )
+                    has_statement_parameters = bool(prepared_parameters and (total_statements == 1 or placeholders))
+                if has_statement_parameters:
+                    stmt_params = normalize_postgres_empty_parameters(self._dialect_name, source_parameters)
                     if (
-                        self._dialect_name == "snowflake"
+                        entries is None
+                        and self._dialect_name == "snowflake"
                         and total_statements > 1
                         and isinstance(stmt_params, (list, tuple))
                     ):
@@ -533,7 +566,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         source = AdbcSelectStreamSource(self, sql, prepared_parameters, chunk_size=chunk_size)
         stream: SyncRowStream[dict[str, Any]] = SyncRowStream(source)
-        self._stream_closers.extend((source.close, stream.close))
+        self._stream_closers.append(source.close)
         return stream
 
     @property
@@ -914,7 +947,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             return self._execute_staged_load_sync(
                 table,
                 source,
-                raw_loader=self.load_from_arrow,
+                raw_loader=self._load_stage_from_arrow if stage_table or conflict_keys else self._ingest_arrow,
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,
@@ -927,12 +960,47 @@ class AdbcDriver(SyncDriverAdapterBase):
                 concurrent_indexes=concurrent_indexes,
                 type_casts=type_casts,
             )
+        return self._ingest_arrow(table, source, partitioner=partitioner, overwrite=overwrite, telemetry=telemetry)
+
+    def _load_stage_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Ingest Arrow data into a staging table created by the staged-load flow.
+
+        SQLite and DuckDB stage tables are TEMP tables, and ADBC ingests into the main
+        schema unless temporary ingest is requested.
+        """
+        return self._ingest_arrow(
+            table,
+            source,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=telemetry,
+            temporary=self._dialect_name in _TEMPORARY_STAGE_DIALECTS,
+        )
+
+    def _ingest_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        temporary: bool = False,
+    ) -> "StorageBridgeJob":
         ensure_pyarrow()
 
         source_data: Any = source.get_data() if hasattr(source, "get_data") else source
         ingest_mode: Literal["append", "create", "replace", "create_append"]
         ingest_mode = "replace" if overwrite else "create_append"
-        target_table, ingest_kwargs = _parse_adbc_ingest_target(table, mode=ingest_mode)
+        target_table, ingest_kwargs = _parse_adbc_ingest_target(table, mode=ingest_mode, temporary=temporary)
 
         if hasattr(source_data, "read_next_batch"):
             row_count = 0
@@ -1277,9 +1345,11 @@ class AdbcDriver(SyncDriverAdapterBase):
 
 
 def _parse_adbc_ingest_target(
-    table: str, *, mode: Literal["append", "create", "replace", "create_append"]
+    table: str, *, mode: Literal["append", "create", "replace", "create_append"], temporary: bool = False
 ) -> "tuple[str, dict[str, Any]]":
     kwargs: dict[str, Any] = {"mode": mode}
+    if temporary:
+        kwargs["temporary"] = True
     if "." not in table:
         return table, kwargs
     parts = split_qualified_identifier(table, quote_chars='"')

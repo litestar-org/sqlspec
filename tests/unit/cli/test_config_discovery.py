@@ -575,3 +575,70 @@ def get_db2():
     finally:
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--help"],
+        ["-h"],
+        ["show-current-revision", "--help"],
+        ["show-current-revision", "-h"],
+        ["adk", "--help"],
+        ["adk", "memory", "--help"],
+    ],
+)
+def test_cli_help_skips_config_discovery_and_imports(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", args: "list[str]"
+) -> None:
+    """Help flags across root, migration, and ADK subcommands do not import configured modules."""
+    pkg_dir = tmp_path / "lazy_help_pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    marker = tmp_path / "imported.txt"
+    (pkg_dir / "cfg.py").write_text(
+        f"""
+from pathlib import Path
+
+Path({str(marker)!r}).write_text("imported")
+raise RuntimeError("config module must not load during help")
+"""
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.sqlspec]
+config = "lazy_help_pkg.cfg.get_config"
+"""
+    )
+
+    monkeypatch.chdir(tmp_path)
+    sys.path.insert(0, str(tmp_path))
+    sys.modules.pop("lazy_help_pkg.cfg", None)
+    sys.modules.pop("lazy_help_pkg", None)
+
+    try:
+        runner = CliRunner()
+        cli = get_cli_with_commands()
+
+        help_result = runner.invoke(cli, args)
+        assert help_result.exit_code == 0, help_result.output
+        assert "lazy_help_pkg.cfg" not in sys.modules
+        assert not marker.exists()
+
+        completion_result = runner.invoke(
+            cli,
+            env={"_SQLSPEC_COMPLETE": "bash_complete", "COMP_WORDS": "sqlspec ", "COMP_CWORD": "1"},
+            prog_name="sqlspec",
+        )
+        assert completion_result.exit_code == 0, completion_result.output
+        assert "lazy_help_pkg.cfg" not in sys.modules
+        assert not marker.exists()
+
+        non_help = runner.invoke(cli, ["show-config"])
+        assert non_help.exit_code != 0
+        assert marker.exists()
+    finally:
+        sys.modules.pop("lazy_help_pkg.cfg", None)
+        sys.modules.pop("lazy_help_pkg", None)
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))

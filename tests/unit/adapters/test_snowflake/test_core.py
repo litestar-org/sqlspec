@@ -11,10 +11,12 @@ from sqlspec.adapters.snowflake import driver as snowflake_driver_module
 from sqlspec.adapters.snowflake._typing import SnowflakeCursor, SnowflakeSessionContext
 from sqlspec.adapters.snowflake.core import (
     DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS,
+    IMPLICIT_UPPER_COLUMN_PATTERN,
     build_profile,
     build_statement_config,
     collect_rows,
     create_mapped_exception,
+    format_snowflake_identifier,
     normalize_column_names,
     normalize_connection_params,
     normalize_execute_parameters,
@@ -31,6 +33,7 @@ from sqlspec.exceptions import (
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
+    SQLSpecError,
     UniqueViolationError,
 )
 
@@ -277,3 +280,31 @@ def test_core_validation_edge_branches(monkeypatch: pytest.MonkeyPatch) -> None:
             })
     finally:
         reset_dependency_cache("cryptography.hazmat.primitives.serialization")
+
+
+def test_read_only_mapping_keeps_snowflake_query_id_and_native_cause() -> None:
+    from sqlspec.adapters.snowflake.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    class NativeReadOnlyError(Exception):
+        sqlstate = "25006"
+        sfqid = "01b-ro"
+
+    native = NativeReadOnlyError("Cannot write to a read-only database")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert "[sfqid=01b-ro]" in str(mapped)
+    assert mapped.__cause__ is native
+
+
+def test_snowflake_column_folding_rejects_trailing_newlines() -> None:
+    """Snowflake column folding rejects column names containing trailing newlines."""
+    assert IMPLICIT_UPPER_COLUMN_PATTERN.match("COL\n") is None
+    assert resolve_column_names([("COL\n", 0)], {}, enable_lowercase_column_names=True) == ["COL\n"]
+
+
+@pytest.mark.parametrize("bad_identifier", ("orders\n", "sales.orders\n", "sales\n.orders"))
+def test_snowflake_identifiers_reject_trailing_newlines(bad_identifier: str) -> None:
+    """Snowflake qualified identifier formatting rejects embedded and trailing newlines."""
+    with pytest.raises(SQLSpecError, match="Invalid Snowflake identifier"):
+        format_snowflake_identifier(bad_identifier)

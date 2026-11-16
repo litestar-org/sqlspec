@@ -9,8 +9,10 @@ from unittest.mock import Mock
 import pytest
 
 from sqlspec.adapters.snowflake import pool as pool_module
+from sqlspec.adapters.snowflake.config import SnowflakeConfig
 from sqlspec.adapters.snowflake.pool import SnowflakeConnectionPool
 from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, MissingDependencyError
+from sqlspec.typing import import_optional
 
 
 def make_connector(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, list[Mock]]:
@@ -271,3 +273,68 @@ def test_pool_closed_during_physical_connect_discards_handle(monkeypatch: pytest
     assert len(errors) == 1
     assert isinstance(errors[0], DatabaseConnectionError)
     assert "closed during acquisition" in str(errors[0])
+
+
+@pytest.mark.parametrize("via_pool", [True, False], ids=["pool", "create_connection"])
+def test_snowflake_connect_maps_driver_error(monkeypatch: pytest.MonkeyPatch, via_pool: bool) -> None:
+    """Connector errors during pool acquisition and standalone connect map to DatabaseConnectionError."""
+    errors_mod = import_optional("snowflake.connector.errors")
+    if errors_mod is None:
+        errors_mod = ModuleType("snowflake.connector.errors")
+
+        class _FakeSnowflakeError(Exception):
+            def __init__(self, msg: str = "", errno: int | None = None, sqlstate: str | None = None) -> None:
+                super().__init__(msg)
+                self.msg = msg
+                self.errno = errno
+                self.sqlstate = sqlstate
+
+        errors_mod.Error = _FakeSnowflakeError  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "snowflake.connector.errors", errors_mod)
+
+    native = errors_mod.Error(msg="250001: Failed to connect", errno=250001, sqlstate="08001")
+    connector, _ = make_connector(monkeypatch)
+    connector.connect.side_effect = native
+    config = SnowflakeConfig(connection_config={"account": "acme", "user": "svc", "warehouse": "wh"})
+    with pytest.raises(DatabaseConnectionError) as exc_info:
+        if via_pool:
+            with config.provide_session():
+                pass
+        else:
+            config.create_connection()
+    assert exc_info.value.__cause__ is native
+
+
+def test_nested_get_connection_in_other_task_takes_new_lease(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    _, connections = make_connector(monkeypatch)
+    pool = SnowflakeConnectionPool({}, max_size=2)
+
+    async def scenario() -> tuple[Any, Any, Any]:
+        outer_open = asyncio.Event()
+        other_done = asyncio.Event()
+        seen: dict[str, Any] = {}
+
+        async def first() -> None:
+            with pool.get_connection() as outer:
+                seen["outer"] = outer
+                with pool.get_connection() as nested:
+                    seen["nested"] = nested
+                    outer_open.set()
+                    await other_done.wait()
+
+        async def second() -> None:
+            await outer_open.wait()
+            with pool.get_connection() as other:
+                seen["other"] = other
+            other_done.set()
+
+        await asyncio.gather(first(), second())
+        return seen["outer"], seen["nested"], seen["other"]
+
+    outer, nested, other = asyncio.run(scenario())
+    assert nested is outer
+    assert other is not outer
+    assert len(connections) == 2
+    pool.close()

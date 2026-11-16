@@ -9,11 +9,16 @@ import pytest
 from sqlspec import SQL, StatementStack
 from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.core import (
+    OracleSessionContextConfig,
     _coerce_sync_row_values,  # pyright: ignore[reportPrivateUsage]
     build_insert_statement,
     build_pipeline_stack_result,
     create_mapped_exception,
     default_statement_config,
+    execute_session_checkout_async,
+    execute_session_checkout_sync,
+    execute_session_release_async,
+    execute_session_release_sync,
     normalize_execute_many_parameters_async,
     normalize_execute_many_parameters_sync,
 )
@@ -68,13 +73,11 @@ class _StubPipelineResult:
         columns: list[Any] | None = None,
         warning: Any | None = None,
         error: Exception | None = None,
-        rowcount: int | None = None,
     ) -> None:
         self.rows = rows
         self.columns = columns
         self.warning = warning
         self.error = error
-        self.rowcount = rowcount
         self.return_value = None
 
 
@@ -118,11 +121,11 @@ def test_stack_native_blocker_allows_standard_operations() -> None:
     assert driver._stack_native_blocker(stack) is None
 
 
-def test_pipeline_result_to_stack_result_uses_rowcount_attr() -> None:
+def test_pipeline_result_to_stack_result_counts_selected_rows() -> None:
     driver = _make_driver()
     stack = StatementStack().push_execute("SELECT 1 FROM dual")
     compiled = driver._prepare_pipeline_operation(stack.operations[0])
-    pipeline_result = _StubPipelineResult(rows=[(1,)], columns=[_StubColumn("VALUE")], warning="warn", rowcount=7)
+    pipeline_result = _StubPipelineResult(rows=[(1,)], columns=[_StubColumn("VALUE")], warning="warn")
     stack_result = build_pipeline_stack_result(
         compiled.statement,
         compiled.method,
@@ -131,7 +134,7 @@ def test_pipeline_result_to_stack_result_uses_rowcount_attr() -> None:
         pipeline_result,
         driver.driver_features,
     )
-    assert stack_result.rows_affected == 7
+    assert stack_result.rows_affected == 1
     assert stack_result.warning == "warn"
     result = stack_result.result
     assert result is not None
@@ -404,3 +407,49 @@ async def test_oracle_async_driver_pipeline_native_supported_zero_rtt_from_conne
     assert await driver._pipeline_native_supported() is True
     assert driver._pipeline_support_reason is None
     get_version_mock.assert_not_called()
+
+
+async def test_pipeline_materializes_async_and_sync_lob_cells() -> None:
+    from sqlspec.adapters.oracledb.core import coerce_pipeline_rows_async
+
+    class AsyncLob:
+        async def read(self) -> str:
+            return "text payload"
+
+    class SyncLob:
+        def read(self) -> bytes:
+            return b"binary payload"
+
+    rows = [(AsyncLob(), SyncLob(), 42)]
+    assert await coerce_pipeline_rows_async(rows, {}) == [("text payload", b"binary payload", 42)]
+    assert await coerce_pipeline_rows_async(rows, {"fetch_lobs": True}) == rows
+    assert await coerce_pipeline_rows_async([(1, "value")], {}) == [(1, "value")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_session_context_restores_none_initial_transaction_priority_on_release(is_async: bool) -> None:
+    """Session context hook rolls back and restores DEFAULT when initial transaction_priority was None."""
+    hook = OracleSessionContextConfig(transaction_priority="HIGH", reset_on_release=True)
+    rollback = AsyncMock() if is_async else MagicMock()
+
+    class NativeConnection:
+        transaction_priority: object = None
+
+        def cursor(self) -> Any:
+            return MagicMock()
+
+    NativeConnection.rollback = rollback  # type: ignore[attr-defined]
+    conn = NativeConnection()
+
+    if is_async:
+        await execute_session_checkout_async(conn, hook)
+        assert conn.transaction_priority == oracledb.TransactionPriority.HIGH
+        await execute_session_release_async(conn, hook)
+    else:
+        execute_session_checkout_sync(conn, hook)
+        assert conn.transaction_priority == oracledb.TransactionPriority.HIGH
+        execute_session_release_sync(conn, hook)
+
+    rollback.assert_called_once_with()
+    assert conn.transaction_priority == oracledb.TransactionPriority.DEFAULT

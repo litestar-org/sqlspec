@@ -259,8 +259,10 @@ class FakeDb2Connection:
         self.pending.clear()
 
     def close(self) -> None:
-        """Roll back pending writes, then close."""
-        self.rollback()
+        """Roll back pending writes, clear conn_handler, and close."""
+        self.rollbacks += 1
+        self.pending.clear()
+        self.conn_handler = None
         self.closed = True
 
 

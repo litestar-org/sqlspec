@@ -8,7 +8,6 @@ import pytest
 from pytest_databases.docker.snowflake import SnowflakeService
 
 from sqlspec.adapters.snowflake import SnowflakeConfig
-from tests.fixtures.snowflake import _provide_embucket_snowflake_proxy
 
 if TYPE_CHECKING:
     from sqlspec.adapters.snowflake import SnowflakeConnectionPool, SnowflakeDriver
@@ -58,7 +57,7 @@ def lifecycle_config_snowflake(
 
 
 @pytest.fixture(scope="session")
-def snowflake_connection_config(snowflake_service: SnowflakeService) -> Generator[dict[str, Any], None, None]:
+def snowflake_connection_config(snowflake_service: SnowflakeService) -> dict[str, Any]:
     """Bootstrap Embucket and expose its Snowflake REST endpoint."""
     snowflake_service.query(
         "CREATE EXTERNAL VOLUME IF NOT EXISTS embucket_mem_vol "
@@ -68,20 +67,19 @@ def snowflake_connection_config(snowflake_service: SnowflakeService) -> Generato
     schema = '"' + snowflake_service.schema.replace('"', '""') + '"'
     snowflake_service.query(f"CREATE DATABASE IF NOT EXISTS {database} EXTERNAL_VOLUME = 'embucket_mem_vol'")
     snowflake_service.query(f"CREATE SCHEMA IF NOT EXISTS {database}.{schema}")
-    with _provide_embucket_snowflake_proxy(snowflake_service.host, snowflake_service.port) as proxy_port:
-        yield {
-            **snowflake_service.connection_kwargs,
-            "host": "127.0.0.1",
-            "port": proxy_port,
-            "ocsp_fail_open": True,
-            "insecure_mode": True,
-            "login_timeout": 15,
-            "network_timeout": 15,
-            "session_parameters": {
-                "PYTHON_CONNECTOR_QUERY_RESULT_FORMAT": "JSON",
-                "CLIENT_STAGE_ARRAY_BINDING_THRESHOLD": 0,
-            },
-        }
+    return {
+        **snowflake_service.connection_kwargs,
+        "host": snowflake_service.host,
+        "port": snowflake_service.port,
+        "ocsp_fail_open": True,
+        "insecure_mode": True,
+        "login_timeout": 15,
+        "network_timeout": 15,
+        "session_parameters": {
+            "PYTHON_CONNECTOR_QUERY_RESULT_FORMAT": "JSON",
+            "CLIENT_STAGE_ARRAY_BINDING_THRESHOLD": 0,
+        },
+    }
 
 
 @pytest.fixture(scope="session")

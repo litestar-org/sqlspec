@@ -1,6 +1,8 @@
 """Unit tests for asyncpg ADK store extension configuration."""
 
 import inspect
+from contextlib import nullcontext
+from datetime import UTC, datetime, timedelta
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -126,18 +128,27 @@ async def test_asyncpg_memory_ddl_supports_alternate_vector_index_types() -> Non
 
 
 class _RecordingConnection:
-    """Captures the SQL and parameters a memory search issues."""
+    """Captures the SQL and parameters issued against an asyncpg connection."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, status: str = "INSERT 0 1", row: "dict[str, Any] | None" = None) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.status = status
+        self.row = row
 
     async def fetch(self, sql: str, *params: Any) -> list[Any]:
         self.calls.append((sql, params))
-        return []
+        return [self.row] if self.row is not None else []
+
+    async def fetchrow(self, sql: str, *params: Any) -> "dict[str, Any] | None":
+        self.calls.append((sql, params))
+        return self.row
 
     async def execute(self, sql: str, *params: Any) -> str:
         self.calls.append((sql, params))
-        return "INSERT 0 1"
+        return self.status
+
+    def transaction(self) -> Any:
+        return nullcontext()
 
     async def __aenter__(self) -> "Self":
         return self
@@ -497,3 +508,362 @@ async def test_asyncpg_reconcile_prepares_before_targets_and_companions(monkeypa
     assert statements[0] == "CREATE EXTENSION IF NOT EXISTS vector"
     assert statements[1].startswith("CREATE TABLE IF NOT EXISTS adk_memory")
     assert all(sql.startswith("CREATE INDEX IF NOT EXISTS") for sql in statements[2:])
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_update"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_asyncpg_get_session_renews_only_for_positive_durations(
+    renew_for: "int | timedelta | None", expect_update: bool
+) -> None:
+    now = datetime.now(UTC)
+    conn = _RecordingConnection(
+        row={"id": "s1", "app_name": "app", "user_id": "u1", "state": {}, "create_time": now, "update_time": now}
+    )
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncpgADKStore(config)
+
+    result = await store.get_session("app", "u1", "s1", renew_for=renew_for)
+
+    assert result is not None
+    sql, params = conn.calls[0]
+    if expect_update:
+        assert _normalized(sql).startswith("UPDATE adk_session SET update_time = CURRENT_TIMESTAMP")
+    else:
+        assert _normalized(sql).startswith("SELECT id, app_name, user_id, state, create_time, update_time")
+    assert params == ("app", "u1", "s1")
+
+
+@pytest.mark.parametrize(("status", "should_raise"), [("INSERT 0 1", False), ("INSERT 0 0", True)])
+async def test_asyncpg_append_event_checks_session_ownership(status: str, should_raise: bool) -> None:
+    conn = _RecordingConnection(status=status)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncpgADKStore(config)
+    now = datetime.now(UTC)
+    event_record = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {"author": "user"},
+    }
+
+    if should_raise:
+        with pytest.raises(ValueError, match="Session s1 not found"):
+            await store.append_event(cast("Any", event_record))
+    else:
+        await store.append_event(cast("Any", event_record))
+
+    sql, params = conn.calls[0]
+    assert "WHERE EXISTS ( SELECT 1 FROM adk_session WHERE id = $4 AND app_name = $2 AND user_id = $3 )" in _normalized(
+        sql
+    )
+    assert params[1:4] == ("app", "u1", "s1")
+
+
+@pytest.mark.parametrize(
+    ("record_overrides", "expect_mismatch"),
+    [
+        pytest.param({}, False, id="matching"),
+        pytest.param({"app_name": "other-app"}, True, id="mismatched-app"),
+        pytest.param({"user_id": "other-user"}, True, id="mismatched-user"),
+        pytest.param({"session_id": "other-session"}, True, id="mismatched-session"),
+    ],
+)
+async def test_asyncpg_append_event_and_update_state_validates_scope_and_updates_first(
+    record_overrides: dict[str, str], expect_mismatch: bool
+) -> None:
+    now = datetime.now(UTC)
+    conn = _RecordingConnection(
+        row={
+            "id": "s1",
+            "app_name": "app",
+            "user_id": "u1",
+            "state": {"k": "v"},
+            "create_time": now,
+            "update_time": now,
+        }
+    )
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncpgADKStore(config)
+    event_record = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {"author": "user"},
+        **record_overrides,
+    }
+
+    if expect_mismatch:
+        with pytest.raises(ValueError, match="event_record scope"):
+            await store.append_event_and_update_state(cast("Any", event_record), "app", "u1", "s1", {"k": "v"})
+        assert conn.calls == []
+        return
+
+    updated = await store.append_event_and_update_state(cast("Any", event_record), "app", "u1", "s1", {"k": "v"})
+    assert updated["id"] == "s1"
+    assert _normalized(conn.calls[0][0]).startswith("UPDATE adk_session")
+    assert _normalized(conn.calls[1][0]).startswith("INSERT INTO adk_event")
+
+
+async def test_asyncpg_get_events_joins_on_session_and_owner_columns() -> None:
+    store, conn = _session_store_with_connection()
+
+    await store.get_events("app", "u1", "s1")
+
+    sql, params = conn.calls[0]
+    normalized = _normalized(sql)
+    assert (
+        "JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in normalized
+    )
+    assert "WHERE s.app_name = $1 AND s.user_id = $2 AND s.id = $3" in normalized
+    assert params == ("app", "u1", "s1")
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_where", "expected_params"),
+    [
+        pytest.param(
+            "app",
+            "u1",
+            "WHERE session_id = $1 AND app_name = $2 AND user_id = $3",
+            ("s1", "app", "u1"),
+            id="session-app-user",
+        )
+    ],
+)
+async def test_asyncpg_delete_entries_by_session_scopes_predicates(
+    app_name: str, user_id: str, expected_where: str, expected_params: tuple[str, ...]
+) -> None:
+    conn = _RecordingConnection(status="DELETE 2")
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncpgADKMemoryStore(config)
+
+    deleted = await store.delete_entries_by_session("s1", app_name=app_name, user_id=user_id)
+
+    assert deleted == 2
+    sql, params = conn.calls[0]
+    assert _normalized(sql) == f"DELETE FROM adk_memory {expected_where}"
+    assert params == expected_params
+
+
+@pytest.mark.parametrize("owner_column", [None, "tenant_id UUID"])
+async def test_asyncpg_memory_ddl_and_insert_use_composite_dedup_and_targetless_conflict(
+    owner_column: "str | None",
+) -> None:
+    adk_cfg: dict[str, object] = {"owner_id_column": owner_column} if owner_column else {}
+    store, conn = _memory_store_with_connection(adk_cfg)
+    ddl = await store._memory_table_ddl()
+    assert "event_id VARCHAR(128) NOT NULL," in ddl
+    assert "event_id VARCHAR(128) NOT NULL UNIQUE" not in ddl
+    assert "UNIQUE (app_name, user_id, event_id)" in ddl
+
+    now = datetime.now(UTC)
+    entry = {
+        "id": "mem-1",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "user",
+        "timestamp": now,
+        "embedding": None,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+    }
+    await store.insert_memory_entries([cast("Any", entry)], owner_id="tenant-1")
+    sql, _ = conn.calls[0]
+    assert "ON CONFLICT DO NOTHING" in sql
+    assert "ON CONFLICT (event_id)" not in sql
+
+
+class _SequencedAsyncpgConnection(_RecordingConnection):
+    def __init__(
+        self,
+        *,
+        fetchrow_queue: "list[dict[str, Any] | None] | None" = None,
+        fetch_rows: "list[dict[str, Any]] | None" = None,
+    ) -> None:
+        super().__init__()
+        self._fetchrow_queue = list(fetchrow_queue or [])
+        self._fetch_rows = list(fetch_rows or [])
+
+    async def fetchrow(self, sql: str, *params: Any) -> "dict[str, Any] | None":
+        self.calls.append((sql, params))
+        return self._fetchrow_queue.pop(0) if self._fetchrow_queue else None
+
+    async def fetch(self, sql: str, *params: Any) -> "list[Any]":
+        self.calls.append((sql, params))
+        return list(self._fetch_rows)
+
+
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "queue_rows", "expected_state", "expect_for_update"),
+    [
+        pytest.param(
+            None,
+            None,
+            [{"state": {"app:kept": "yes"}}, {"state": {"user:kept": 1}}],
+            {"s": 1, "app:kept": "yes", "user:kept": 1},
+            False,
+            id="untouched-reads",
+        ),
+        pytest.param(
+            {"app:added": 2, "app:null": None},
+            {"user:flag": False},
+            [{"state": {"app:kept": "yes", "app:null": "old"}}, {"state": {"user:kept": 1}}],
+            {"s": 1, "app:kept": "yes", "app:added": 2, "app:null": None, "user:kept": 1, "user:flag": False},
+            True,
+            id="delta-merges",
+        ),
+    ],
+)
+async def test_asyncpg_create_session_scoped_state_contract(
+    app_delta: "dict[str, Any] | None",
+    user_delta: "dict[str, Any] | None",
+    queue_rows: "list[dict[str, Any]]",
+    expected_state: "dict[str, Any]",
+    expect_for_update: bool,
+) -> None:
+    """create_session reads untouched scope rows or locks and merges deltas atomically."""
+    now = datetime.now(UTC)
+    session_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"s": 1},
+        "create_time": now,
+        "update_time": now,
+    }
+    conn = _SequencedAsyncpgConnection(fetchrow_queue=[session_row, *queue_rows])
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncpgADKStore(config)
+
+    created = await store.create_session(
+        "s1", "app", "u1", {"s": 1}, app_state_delta=app_delta, user_state_delta=user_delta
+    )
+
+    assert created["state"] == expected_state
+    joined_sql = " | ".join(_normalized(sql) for sql, _ in conn.calls)
+    assert ("FOR UPDATE" in joined_sql) is expect_for_update
+
+
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "queue_rows", "expected_calls", "expected_state"),
+    [
+        pytest.param(None, {}, [], 2, {"s": 2}, id="skips-untouched-and-empty-deltas"),
+        pytest.param(
+            {"app:new": "v", "app:cleared": None},
+            {"user:count": 0},
+            [{"state": {"app:keep": "a", "app:cleared": "x"}}, {"state": {"user:orig": "u"}}],
+            8,
+            {"s": 2, "app:keep": "a", "app:new": "v", "app:cleared": None, "user:orig": "u", "user:count": 0},
+            id="locks-and-merges-app-then-user",
+        ),
+    ],
+)
+async def test_asyncpg_append_event_and_update_state_delta_contract(
+    app_delta: "dict[str, Any] | None",
+    user_delta: "dict[str, Any] | None",
+    queue_rows: "list[dict[str, Any]]",
+    expected_calls: int,
+    expected_state: "dict[str, Any]",
+) -> None:
+    """append_event_and_update_state locks app_state before user_state and skips untouched tables."""
+    now = datetime.now(UTC)
+    session_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"s": 2},
+        "create_time": now,
+        "update_time": now,
+    }
+    conn = _SequencedAsyncpgConnection(fetchrow_queue=[session_row, *queue_rows])
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncpgADKStore(config)
+    event_record = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {"author": "user"},
+    }
+
+    updated = await store.append_event_and_update_state(
+        cast("Any", event_record), "app", "u1", "s1", {"s": 2}, app_state_delta=app_delta, user_state_delta=user_delta
+    )
+
+    assert len(conn.calls) == expected_calls
+    assert updated["state"] == expected_state
+    if expected_calls == 8:
+        assert "INSERT INTO adk_app_state" in _normalized(conn.calls[2][0])
+        assert "ON CONFLICT (app_name) DO NOTHING" in _normalized(conn.calls[2][0])
+        assert "SELECT state FROM adk_app_state WHERE app_name = $1 FOR UPDATE" in _normalized(conn.calls[3][0])
+        assert "UPDATE adk_app_state SET state = $1" in _normalized(conn.calls[4][0])
+        assert "INSERT INTO adk_user_state" in _normalized(conn.calls[5][0])
+        assert "SELECT state FROM adk_user_state WHERE app_name = $1 AND user_id = $2 FOR UPDATE" in _normalized(
+            conn.calls[6][0]
+        )
+        assert "UPDATE adk_user_state SET state = $1" in _normalized(conn.calls[7][0])
+
+
+async def test_asyncpg_get_events_limit_queries_desc_and_reverses_to_asc() -> None:
+    """get_events(limit=N) queries newest N descending and reverses to ascending order."""
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    rows = [
+        {
+            "id": "evt-3",
+            "session_id": "s1",
+            "invocation_id": "i3",
+            "timestamp": t3,
+            "event_data": {},
+            "app_name": "app",
+            "user_id": "u1",
+        },
+        {
+            "id": "evt-2",
+            "session_id": "s1",
+            "invocation_id": "i2",
+            "timestamp": t2,
+            "event_data": {},
+            "app_name": "app",
+            "user_id": "u1",
+        },
+    ]
+    conn = _SequencedAsyncpgConnection(fetch_rows=rows)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncpgADKStore(config)
+
+    events = await store.get_events("app", "u1", "s1", after_timestamp=datetime(2026, 1, 1, tzinfo=UTC), limit=2)
+
+    sql, params = conn.calls[0]
+    assert "JOIN adk_session s" in _normalized(sql)
+    assert "ORDER BY e.timestamp DESC, e.id DESC LIMIT $5" in _normalized(sql)
+    assert params == ("app", "u1", "s1", datetime(2026, 1, 1, tzinfo=UTC), 2)
+    assert [e["id"] for e in events] == ["evt-2", "evt-3"]

@@ -53,7 +53,12 @@ def test_duckdb_directive_does_not_leak_into_later_migrations(tmp_path: Path) ->
         commands.upgrade()
 
         assert current == "0002"
-        assert _tables(config) == {("tenant", "items"), ("main", "plain"), ("main", "ddl_migrations")}
+        assert _tables(config) == {
+            ("tenant", "items"),
+            ("main", "plain"),
+            ("main", "ddl_migrations"),
+            ("main", "ddl_migrations_lock"),
+        }
         with config.provide_session() as driver:
             assert driver.select_value("SELECT current_schema()") == "main"
     finally:

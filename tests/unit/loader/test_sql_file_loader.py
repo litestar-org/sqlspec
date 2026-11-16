@@ -499,7 +499,7 @@ def test_file_cache_key() -> None:
     assert key1 != key3
 
     assert key1.startswith("file:")
-    assert len(key1.split(":")[1]) == 16
+    assert len(key1.split(":")[1]) == 64
 
 
 def test_calculate_file_checksum(tmp_path: Path) -> None:
@@ -511,7 +511,7 @@ def test_calculate_file_checksum(tmp_path: Path) -> None:
     checksum = loader._calculate_file_checksum(str(sql_file))
 
     assert isinstance(checksum, str)
-    assert len(checksum) == 32
+    assert len(checksum) == 64
 
 
 def test_is_file_unchanged(tmp_path: Path) -> None:
@@ -1166,3 +1166,41 @@ def test_fixture_parameter_extraction(fixture_integration_path: Path) -> None:
     assert isinstance(sql, SQL)
 
     assert sql.parameters == []
+
+
+@pytest.mark.parametrize(
+    "embedded_payload",
+    [
+        "SELECT '\n-- name: embedded_query\nSELECT 99;\n' AS sql_body;",
+        "SELECT 'it''s still literal\n-- name: escaped_quote_fake\nSELECT 2;' AS txt;",
+        "SELECT '\n-- fragment: fake_fragment\n' AS frag_literal;",
+        "SELECT $$\n-- name: dollar_quoted_fake\nSELECT 3;\n$$ AS body;",
+        'SELECT 1 AS "\n-- name: quoted_ident_fake\n";',
+        "SELECT 1;\n/*\n-- name: block_comment_fake\nSELECT 4;\n*/",
+    ],
+    ids=[
+        "single-quoted-name",
+        "escaped-single-quote",
+        "single-quoted-fragment",
+        "dollar-quoted-name",
+        "double-quoted-ident",
+        "block-comment-name",
+    ],
+)
+def test_parse_ignores_section_markers_inside_literals_and_block_comments(embedded_payload: str) -> None:
+    """Section markers inside SQL string literals, quoted identifiers, and block comments do not split queries."""
+    content = f"-- name: outer_query\n{embedded_payload}\n\n-- name: second_query\nSELECT 42;\n"
+
+    statements, fragments = SQLFileLoader._parse_statements(content, "embedded.sql")  # pyright: ignore[reportPrivateUsage]
+
+    assert sorted(statements) == ["outer_query", "second_query"]
+    assert fragments == {}
+    assert embedded_payload.strip() in statements["outer_query"].sql
+    assert statements["second_query"].sql.strip() == "SELECT 42;"
+
+
+def test_sql_file_checksum_is_sha256() -> None:
+    """SQLFile checksums are SHA-256 digests of the file content."""
+    import hashlib
+
+    assert SQLFile("SELECT 1", "x.sql").checksum == hashlib.sha256(b"SELECT 1").hexdigest()

@@ -1,5 +1,7 @@
 """Unit tests for without_indexes context manager and drop_indexes bulk load orchestration."""
 
+import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,7 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.data_dictionary._index_ddl import (
     AsyncWithoutIndexesContext,
     SyncWithoutIndexesContext,
+    _split_schema_and_table,
     build_create_index_sql,
     build_drop_index_sql,
     filter_droppable_table_indexes,
@@ -134,7 +137,7 @@ def test_sap_indexes_quote_owner_table_and_index_separately(
     metadata = {"index_name": 'idx"value', "columns": ["value"]}
     assert build_drop_index_sql(dialect, metadata, table, schema) == f'DROP INDEX {qualified}."idx""value"'
     assert build_create_index_sql(dialect, metadata, table, schema=schema) == (
-        f'CREATE INDEX "idx""value" ON {qualified} (value)'
+        f'CREATE INDEX "idx""value" ON {qualified} ("value")'
     )
 
 
@@ -154,14 +157,14 @@ def test_index_ddl_edge_cases_and_constraint_matching() -> None:
     assert build_drop_index_sql("bigquery", {"index_name": "idx_x"}, "users") is None
     assert build_drop_index_sql("snowflake", {"index_name": "idx_x"}, "users") is None
     assert build_drop_index_sql("postgres", {"index_name": ""}, "users") is None
-    assert build_drop_index_sql("spanner", {"index_name": "idx_x"}, "users") == "DROP INDEX idx_x"
+    assert build_drop_index_sql("spanner", {"index_name": "idx_x"}, "users") == "DROP INDEX `idx_x`"
     assert build_create_index_sql("bigquery", {"index_name": "idx_x", "columns": ["a"]}, "users") is None
     assert build_create_index_sql("snowflake", {"index_name": "idx_x", "columns": ["a"]}, "users") is None
     assert build_create_index_sql("postgres", {"index_name": "idx_x", "columns": []}, "users") is None
     unique_concurrent = build_create_index_sql(
         "postgres", {"index_name": "idx_u", "columns": "email, tenant_id", "is_unique": True}, "users", concurrent=True
     )
-    assert unique_concurrent == 'CREATE UNIQUE INDEX CONCURRENTLY "idx_u" ON users (email, tenant_id)'
+    assert unique_concurrent == 'CREATE UNIQUE INDEX CONCURRENTLY "idx_u" ON "users" ("email", "tenant_id")'
 
 
 @pytest.mark.anyio
@@ -240,7 +243,7 @@ async def test_without_indexes_ddl_override_transaction_and_rebuild_error() -> N
 
 
 def test_teradata_without_indexes_keeps_primary_index_and_addresses_unnamed_index_by_columns() -> None:
-    """Teradata primary indexes stay in place and unnamed secondary indexes are dropped and rebuilt by columns."""
+    """Teradata primary and unique indexes stay in place and unnamed secondary indexes are dropped and rebuilt by columns."""
     from sqlspec.adapters.teradata.data_dictionary import build_index_metadata
 
     rows = [
@@ -278,10 +281,8 @@ def test_teradata_without_indexes_keeps_primary_index_and_addresses_unnamed_inde
     with SyncWithoutIndexesContext(_Driver(), "mart.orders"):
         pass
     assert executed == [
-        'DROP INDEX (region, status) ON "mart"."orders"',
-        'DROP INDEX "idx_orders_customer" ON "mart"."orders"',
-        'CREATE INDEX (region, status) ON "mart"."orders"',
-        'CREATE UNIQUE INDEX "idx_orders_customer" (cust) ON "mart"."orders"',
+        'DROP INDEX ("region", "status") ON "mart"."orders"',
+        'CREATE INDEX ("region", "status") ON "mart"."orders"',
     ]
 
 
@@ -343,3 +344,346 @@ async def test_without_indexes_restores_dropped_indexes_when_a_later_drop_fails(
         pass
     async with AsyncWithoutIndexesContext(_SnowflakeNoopDriver(), "ANALYTICS.ORDERS"):
         pass
+
+
+@pytest.mark.parametrize(
+    ("dialect", "index_name", "table", "schema", "columns", "expected_drop", "expected_create"),
+    [
+        (
+            "postgres",
+            'idx"cust',
+            'ord"ers',
+            'pub"lic',
+            ['col"a DESC', "col_b ASC"],
+            'DROP INDEX IF EXISTS "pub""lic"."idx""cust"',
+            'CREATE INDEX "idx""cust" ON "pub""lic"."ord""ers" ("col""a" DESC, "col_b" ASC)',
+        ),
+        (
+            "mssql",
+            "idx]cust",
+            "ord]ers",
+            "dbo",
+            ["col]a DESC", "col_b"],
+            "DROP INDEX [idx]]cust] ON [dbo].[ord]]ers]",
+            "CREATE INDEX [idx]]cust] ON [dbo].[ord]]ers] ([col]]a] DESC, [col_b])",
+        ),
+        (
+            "mysql",
+            "idx`cust",
+            "ord`ers",
+            "app",
+            ["col`a ASC"],
+            "DROP INDEX `idx``cust` ON `app`.`ord``ers`",
+            "CREATE INDEX `idx``cust` ON `app`.`ord``ers` (`col``a` ASC)",
+        ),
+        (
+            "spanner",
+            "idx`cust",
+            "orders",
+            None,
+            ["customer_id DESC"],
+            "DROP INDEX `idx``cust`",
+            "CREATE INDEX `idx``cust` ON `orders` (`customer_id` DESC)",
+        ),
+        (
+            "oracle",
+            'idx"cust',
+            "orders",
+            "APP",
+            ["customer_id DESC"],
+            'DROP INDEX "APP"."idx""cust"',
+            'CREATE INDEX "idx""cust" ON "APP"."orders" ("customer_id" DESC)',
+        ),
+    ],
+)
+def test_index_ddl_quotes_delimiters_and_preserves_sort_direction(
+    dialect: str,
+    index_name: str,
+    table: str,
+    schema: str | None,
+    columns: list[str],
+    expected_drop: str,
+    expected_create: str,
+) -> None:
+    """Index DDL builders quote embedded delimiters and preserve ASC/DESC modifiers per dialect."""
+    meta = {"index_name": index_name, "columns": columns}
+    assert build_drop_index_sql(dialect, meta, table, schema=schema) == expected_drop
+    assert build_create_index_sql(dialect, meta, table, schema=schema) == expected_create
+
+
+@pytest.mark.parametrize(
+    ("table", "explicit_schema", "expected_pair"),
+    [
+        ('"my.schema"."my.orders"', None, ("my.schema", "my.orders")),
+        ("[audit].[order.items]", None, ("audit", "order.items")),
+        ("`my.db`.`my.table`", None, ("my.db", "my.table")),
+        ("catalog.schema.orders", None, ("catalog.schema", "orders")),
+        ('"order.items"', "audit", ("audit", "order.items")),
+        ("orders", '"My.Schema"', ("My.Schema", "orders")),
+    ],
+)
+def test_without_indexes_parses_quoted_dotted_schema_and_table_and_handles_async_tx_and_cancellation(
+    table: str, explicit_schema: str | None, expected_pair: tuple[str, str]
+) -> None:
+    """Quoted dotted and multi-segment schema/table identifiers split cleanly across lookup and DDL helpers."""
+    assert _split_schema_and_table(table, explicit_schema) == expected_pair
+    assert (
+        build_drop_index_sql("postgres", {"index_name": "idx_cust"}, '"my.schema"."my.orders"')
+        == 'DROP INDEX IF EXISTS "my.schema"."idx_cust"'
+    )
+    assert (
+        build_drop_index_sql("postgres", {"index_name": "idx_cust"}, "catalog.schema.orders")
+        == 'DROP INDEX IF EXISTS "catalog"."schema"."idx_cust"'
+    )
+    assert (
+        build_drop_index_sql("postgres", {"index_name": "idx_cust"}, "orders", schema="catalog.schema")
+        == 'DROP INDEX IF EXISTS "catalog"."schema"."idx_cust"'
+    )
+
+
+@pytest.mark.parametrize(
+    ("table", "explicit_schema", "expected_lookup", "expected_drop", "expected_create"),
+    [
+        (
+            "catalog.schema.orders",
+            None,
+            ("catalog.schema", "orders"),
+            'DROP INDEX IF EXISTS "catalog"."schema"."idx_a"',
+            'CREATE INDEX "idx_a" ON "catalog"."schema"."orders" ("a")',
+        ),
+        (
+            "orders",
+            "catalog.schema",
+            ("catalog.schema", "orders"),
+            'DROP INDEX IF EXISTS "catalog"."schema"."idx_a"',
+            'CREATE INDEX "idx_a" ON "catalog"."schema"."orders" ("a")',
+        ),
+    ],
+)
+def test_sync_without_indexes_preserves_multi_segment_schema_in_ddl(
+    table: str, explicit_schema: str | None, expected_lookup: tuple[str, str], expected_drop: str, expected_create: str
+) -> None:
+    """Multi-segment unquoted schemas quote per segment in WithoutIndexesContext DDL."""
+    executed: list[str] = []
+
+    class _DD:
+        def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+            assert (schema, table) == expected_lookup
+            return ({"index_name": "idx_a", "columns": ["a"]},)
+
+        def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+    class _SyncDriver:
+        dialect = "postgres"
+        data_dictionary = _DD()
+
+        def execute(self, sql: str) -> None:
+            executed.append(sql)
+
+    with SyncWithoutIndexesContext(_SyncDriver(), table, schema=explicit_schema, concurrent=False):
+        pass
+
+    assert executed == [expected_drop, expected_create]
+
+
+@pytest.mark.anyio
+async def test_async_without_indexes_uses_transaction_open_and_restores_on_cancellation() -> None:
+    """AsyncWithoutIndexesContext checks _connection_in_transaction_async and restores already-dropped indexes on CancelledError."""
+    executed: list[str] = []
+
+    class _DD:
+        async def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+            assert (schema, table) == ("my.schema", "my.orders")
+            return ({"index_name": "idx_a", "columns": ["a"]}, {"index_name": "idx_b", "columns": ["b"]})
+
+        async def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+    class _AsyncDriver:
+        dialect = "postgres"
+        data_dictionary = _DD()
+
+        async def _connection_in_transaction_async(self) -> bool:
+            return True
+
+        def _connection_in_transaction(self) -> bool:
+            raise AssertionError(
+                "sync _connection_in_transaction should not run when _connection_in_transaction_async exists"
+            )
+
+        async def execute(self, sql: str) -> None:
+            executed.append(sql)
+            if "DROP INDEX" in sql and "idx_b" in sql:
+                raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        async with AsyncWithoutIndexesContext(_AsyncDriver(), '"my.schema"."my.orders"', concurrent=True):
+            pass
+
+    assert executed == [
+        'DROP INDEX IF EXISTS "my.schema"."idx_a"',
+        'DROP INDEX IF EXISTS "my.schema"."idx_b"',
+        'CREATE INDEX "idx_a" ON "my.schema"."my.orders" ("a")',
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("table", "meta_schema", "expected_lookup", "expected_drop", "expected_create"),
+    [
+        (
+            '"My.Schema"."My.Orders"',
+            "My.Schema",
+            ("My.Schema", "My.Orders"),
+            'DROP INDEX IF EXISTS "My.Schema"."idx_cust"',
+            'CREATE INDEX "idx_cust" ON "My.Schema"."My.Orders" ("cust")',
+        ),
+        (
+            "catalog.schema.orders",
+            "schema",
+            ("catalog.schema", "orders"),
+            'DROP INDEX IF EXISTS "catalog"."schema"."idx_cust"',
+            'CREATE INDEX "idx_cust" ON "catalog"."schema"."orders" ("cust")',
+        ),
+    ],
+)
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_without_indexes_ignores_catalog_schema_name_when_table_is_already_qualified(
+    is_async: bool,
+    table: str,
+    meta_schema: str,
+    expected_lookup: tuple[str, str],
+    expected_drop: str,
+    expected_create: str,
+) -> None:
+    """Catalog schema_name metadata does not override or re-split qualified table identifiers."""
+    executed: list[str] = []
+
+    if is_async:
+
+        class _AsyncDD:
+            async def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+                assert (schema, table) == expected_lookup
+                return ({"index_name": "idx_cust", "columns": ["cust"], "schema_name": meta_schema},)
+
+            async def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+                return []
+
+        class _AsyncDriver:
+            dialect = "postgres"
+            data_dictionary = _AsyncDD()
+
+            async def execute(self, sql: str) -> None:
+                executed.append(sql)
+
+        async with AsyncWithoutIndexesContext(_AsyncDriver(), table, concurrent=False):
+            pass
+    else:
+
+        class _SyncDD:
+            def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+                assert (schema, table) == expected_lookup
+                return ({"index_name": "idx_cust", "columns": ["cust"], "schema_name": meta_schema},)
+
+            def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+                return []
+
+        class _SyncDriver:
+            dialect = "postgres"
+            data_dictionary = _SyncDD()
+
+            def execute(self, sql: str) -> None:
+                executed.append(sql)
+
+        with SyncWithoutIndexesContext(_SyncDriver(), table, concurrent=False):
+            pass
+
+    assert executed == [expected_drop, expected_create]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected_drop", "expected_create"),
+    [
+        (
+            "postgres",
+            'DROP INDEX IF EXISTS "My.Schema"."idx_cust"',
+            'CREATE INDEX "idx_cust" ON "My.Schema"."orders" ("cust")',
+        ),
+        ("oracle", 'DROP INDEX "My.Schema"."idx_cust"', 'CREATE INDEX "idx_cust" ON "My.Schema"."orders" ("cust")'),
+        (
+            "mssql",
+            "DROP INDEX [idx_cust] ON [My.Schema].[orders]",
+            "CREATE INDEX [idx_cust] ON [My.Schema].[orders] ([cust])",
+        ),
+    ],
+)
+def test_index_ddl_quotes_dotted_catalog_schema_name_as_single_identifier(
+    dialect: str, expected_drop: str, expected_create: str
+) -> None:
+    """Unqualified tables keep dotted index_meta['schema_name'] values intact as one schema identifier."""
+    meta = {"index_name": "idx_cust", "columns": ["cust"], "schema_name": "My.Schema"}
+    assert build_drop_index_sql(dialect, meta, "orders") == expected_drop
+    assert build_create_index_sql(dialect, meta, "orders") == expected_create
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_without_indexes_preserves_rebuild_diagnostics_when_body_raises(
+    is_async: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When body raises and index rebuild also fails, context preserves primary error, logs, and attaches note."""
+    caplog.set_level(logging.ERROR, logger="sqlspec.data_dictionary.index_ddl")
+
+    if is_async:
+
+        class _AsyncRebuildFailDD:
+            async def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+                return ({"index_name": "idx_a", "columns": ["a"]},)
+
+            async def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+                return []
+
+        class _AsyncRebuildFailDriver:
+            dialect = "postgres"
+            data_dictionary = _AsyncRebuildFailDD()
+
+            async def execute(self, sql: str) -> None:
+                if "CREATE INDEX" in sql:
+                    raise OSError("disk full during index rebuild")
+
+        with pytest.raises(RuntimeError, match="bulk load failed") as exc_info:
+            async with AsyncWithoutIndexesContext(_AsyncRebuildFailDriver(), "orders", concurrent=False):
+                raise RuntimeError("bulk load failed")
+    else:
+
+        class _SyncRebuildFailDD:
+            def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+                return ({"index_name": "idx_a", "columns": ["a"]},)
+
+            def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+                return []
+
+        class _SyncRebuildFailDriver:
+            dialect = "postgres"
+            data_dictionary = _SyncRebuildFailDD()
+
+            def execute(self, sql: str) -> None:
+                if "CREATE INDEX" in sql:
+                    raise OSError("disk full during index rebuild")
+
+        with pytest.raises(RuntimeError, match="bulk load failed") as exc_info:
+            with SyncWithoutIndexesContext(_SyncRebuildFailDriver(), "orders", concurrent=False):
+                raise RuntimeError("bulk load failed")
+
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("disk full during index rebuild" in note for note in notes)
+    assert any("disk full during index rebuild" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.parametrize("flag", ["is_unique", "unique"])
+def test_unique_index_metadata_is_not_droppable(flag: str) -> None:
+    """Standalone unique indexes are never dropped for bulk loads."""
+    indexes: list[dict[str, Any]] = [{"index_name": "uq", flag: True}, {"index_name": "plain", flag: False}]
+
+    assert [idx["index_name"] for idx in filter_droppable_table_indexes(indexes)] == ["plain"]

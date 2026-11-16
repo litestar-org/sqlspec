@@ -20,7 +20,7 @@ from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVer
 from sqlspec.builder._vector_distance import build_oracle_hnsw_subquery, build_oracle_hybrid_rrf_sql
 from sqlspec.config import ADKConfig
 from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
     BaseSyncADKStore,
@@ -28,7 +28,9 @@ from sqlspec.extensions.adk import (
     StoredSession,
     normalize_session_list_options,
 )
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -59,6 +61,7 @@ logger = get_logger("sqlspec.adapters.oracledb.adk.store")
 
 ORACLE_TABLE_NOT_FOUND_ERROR: Final = 942
 ORACLE_DUPLICATE_KEY_ERROR: Final = 1
+_MAX_STATE_MERGE_ATTEMPTS: Final = 8
 ORACLE_DEFAULT_SESSION_TABLE: Final = "adk_session"
 ORACLE_DEFAULT_EVENTS_TABLE: Final = "adk_event"
 ORACLE_DEFAULT_APP_STATE_TABLE: Final = "adk_app_state"
@@ -250,13 +253,14 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "                app_name VARCHAR2(128) NOT NULL,\n"
     "                user_id VARCHAR2(128) NOT NULL,\n"
     "                scope VARCHAR2(16) DEFAULT ''user'' NOT NULL,\n"
-    "                event_id VARCHAR2(128) NOT NULL UNIQUE,\n"
+    "                event_id VARCHAR2(128) NOT NULL,\n"
     "                author VARCHAR2(256){1},\n"
     "                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,\n"
     "                {11}"
     "                {2},\n"
     "                content_text CLOB NOT NULL,\n"
-    "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
+    "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
+    "                UNIQUE (app_name, user_id, event_id)\n"
     "            ){3}';\n"
     "        EXCEPTION\n"
     "            WHEN OTHERS THEN\n"
@@ -383,90 +387,6 @@ class OracleADKConfig(ADKConfig):
     """Raw Oracle table options for the ADK memory table."""
 
 
-def _rollback_sync(conn: Any) -> None:
-    with contextlib.suppress(Exception):
-        conn.rollback()
-
-
-async def _rollback_async(conn: Any) -> None:
-    with contextlib.suppress(Exception):
-        await conn.rollback()
-
-
-def _memory_supports_vectors(version: "OracleVersionInfo | None") -> bool:
-    if version is None or (version.major, version.minor, version.patch) < (23, 4, 0):
-        return False
-    compatible = parse_oracle_version_components(version.compatible) if version.compatible else None
-    return compatible is None or compatible >= (23, 4, 0)
-
-
-def _require_memory_vectors(version: "OracleVersionInfo | None") -> None:
-    if not _memory_supports_vectors(version):
-        msg = "Oracle memory embeddings require Oracle Database and COMPATIBLE version 23.4 or later."
-        raise ImproperConfigurationError(msg)
-
-
-def _memory_insert_count(entry_count: int, batch_errors: "list[Any]") -> int:
-    for error in batch_errors:
-        if error.code != ORACLE_DUPLICATE_KEY_ERROR:
-            raise OracleDatabaseError(error)
-    return entry_count - len(batch_errors)
-
-
-async def _prepare_oracle_schema_async(config: "OracleAsyncConfig", driver: Any) -> None:
-    """Resolve and cache the pool-scoped Oracle version on an asynchronous driver."""
-    cache = config._oracle_version_cache
-    if cache.resolved:
-        return
-    if getattr(driver, "_oracle_version_cache", None) is None:
-        with contextlib.suppress(AttributeError):
-            driver._oracle_version_cache = cache
-    version_info = await driver.data_dictionary.get_version(driver)
-    cache.resolved = True
-    cache.version = version_info
-    if version_info is None:
-        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-
-
-def _prepare_oracle_schema_sync(config: "OracleSyncConfig", driver: Any) -> None:
-    """Resolve and cache the pool-scoped Oracle version on a synchronous driver."""
-    cache = config._oracle_version_cache
-    if cache.resolved:
-        return
-    if getattr(driver, "_oracle_version_cache", None) is None:
-        with contextlib.suppress(AttributeError):
-            driver._oracle_version_cache = cache
-    version_info = driver.data_dictionary.get_version(driver)
-    cache.resolved = True
-    cache.version = version_info
-    if version_info is None:
-        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-
-
-async def _get_oracle_version_info_async(config: "OracleAsyncConfig") -> "OracleVersionInfo | None":
-    """Return the pool-scoped Oracle version through an asynchronous session."""
-    cache = config._oracle_version_cache
-    if cache.resolved:
-        return cache.version
-    async with config.provide_session() as driver:
-        version_info = await driver.data_dictionary.get_version(driver)
-    if version_info is None:
-        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-    return version_info
-
-
-def _get_oracle_version_info_sync(config: "OracleSyncConfig") -> "OracleVersionInfo | None":
-    """Return the pool-scoped Oracle version through a synchronous session."""
-    cache = config._oracle_version_cache
-    if cache.resolved:
-        return cache.version
-    with config.provide_session() as driver:
-        version_info = driver.data_dictionary.get_version(driver)
-    if version_info is None:
-        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
-    return version_info
-
-
 def coerce_decimal_values(value: Any) -> Any:
     return _coerce_decimal_values(value)
 
@@ -498,10 +418,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     __slots__ = ("_in_memory",)
 
-    def __init__(self, config: "OracleAsyncConfig") -> None:
+    def __init__(self, config: "OracleAsyncConfig", *, read_config: "OracleAsyncConfig | None" = None) -> None:
         """Initialize Oracle ADK store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: OracleAsyncConfig instance.
 
         Notes:
@@ -511,7 +432,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             - owner_id_column: Optional owner FK column DDL (default: None)
             - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         _configure_oracle_adk_session_tables(self, config)
 
         adk_config = _adk_config(config)
@@ -547,26 +468,32 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await driver.commit()
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session.
+        """Create a new session and optionally merge scoped state deltas.
 
         Args:
             session_id: Unique session identifier.
             app_name: Application name.
             user_id: User identifier.
-            state: Initial session state.
+            state: Initial session-scoped state.
             owner_id: Optional owner ID value for owner_id_column (if configured).
+            app_state_delta: Optional app-scoped state delta to merge atomically.
+            user_state_delta: Optional user-scoped state delta to merge atomically.
 
         Returns:
-            Created session record.
-
-        Notes:
-            Uses SYSTIMESTAMP for create_time and update_time.
-            State is serialized using version-appropriate format.
-            owner_id is ignored if owner_id_column not configured.
+            Created session record with merged scoped state.
         """
-        state_data = await self._serialize_state(state)
+        session_state = dict(state)
+        state_data = await self._serialize_state(session_state)
 
         if self._owner_id_column_name:
             sql = f"""
@@ -592,15 +519,35 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 coerced_params = await coerce_large_parameters_async(conn, params)
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, coerced_params)
+                    current_app_state = (
+                        await self._apply_app_state_delta_async(conn, cursor, app_name, app_state_delta)
+                        if app_state_delta
+                        else await self._select_state_async(
+                            cursor,
+                            f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name",
+                            {"app_name": app_name},
+                        )
+                    )
+                    current_user_state = (
+                        await self._apply_user_state_delta_async(conn, cursor, app_name, user_id, user_state_delta)
+                        if user_state_delta
+                        else await self._select_state_async(
+                            cursor,
+                            f"SELECT state FROM {self._user_state_table} WHERE app_name = :app_name AND user_id = :user_id",
+                            {"app_name": app_name, "user_id": user_id},
+                        )
+                    )
                     await conn.commit()
             except BaseException:
                 await _rollback_async(conn)
                 raise
 
-        result = await self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = await self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
+        result["state"] = merge_scoped_state(result["state"], current_app_state, current_user_state)
         return result
 
     async def get_session(
@@ -623,9 +570,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 with conn.cursor() as cursor:
-                    if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                    if self._is_renewal_requested(renew_for):
                         await cursor.execute(
                             f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
                             {"app_name": app_name, "user_id": user_id, "id": session_id},
@@ -729,7 +676,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, params)
                     rows = await cursor.fetchall()
@@ -756,33 +703,45 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             raise
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
+        """Delete session and all associated events.
 
         Args:
             app_name: Application name.
             user_id: User identifier.
             session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
+        events_sql = (
+            f"DELETE FROM {self._events_table} WHERE app_name = :app_name AND user_id = :user_id AND session_id = :id"
+        )
+        session_sql = (
+            f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
+        )
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id}
 
         async with self._config.provide_connection() as conn:
             try:
                 with conn.cursor() as cursor:
-                    await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                    await cursor.execute(events_sql, params)
+                    await cursor.execute(session_sql, params)
                     await conn.commit()
             except BaseException:
                 await _rollback_async(conn)
                 raise
 
     async def append_event(self, event_record: StoredEvent) -> None:
-        """Append an event to a session.
+        """Append an event to a session after verifying session ownership.
 
         Args:
             event_record: Event record.
         """
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        ownership_sql = (
+            f"SELECT 1 FROM {self._session_table} "
+            "WHERE id = :id AND app_name = :app_name AND user_id = :user_id "
+            "FETCH FIRST 1 ROWS ONLY"
+        )
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -793,19 +752,22 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         async with self._config.provide_connection() as conn:
             try:
-                coerced_params = await coerce_large_parameters_async(
-                    conn,
-                    {
-                        "id": event_record["id"],
-                        "app_name": event_record["app_name"],
-                        "user_id": event_record["user_id"],
-                        "session_id": event_record["session_id"],
-                        "invocation_id": event_record["invocation_id"],
-                        "timestamp": event_record["timestamp"],
-                        "event_data": await self._serialize_event_data(event_record["event_data"]),
-                    },
-                )
                 with conn.cursor() as cursor:
+                    await cursor.execute(ownership_sql, {"id": session_id, "app_name": app_name, "user_id": user_id})
+                    if await cursor.fetchone() is None:
+                        _raise_session_not_found_for_user(session_id, app_name, user_id)
+                    coerced_params = await coerce_large_parameters_async(
+                        conn,
+                        {
+                            "id": event_record["id"],
+                            "app_name": app_name,
+                            "user_id": user_id,
+                            "session_id": session_id,
+                            "invocation_id": event_record["invocation_id"],
+                            "timestamp": event_record["timestamp"],
+                            "event_data": await self._serialize_event_data(event_record["event_data"]),
+                        },
+                    )
                     await cursor.execute(sql, coerced_params)
                     await conn.commit()
             except BaseException:
@@ -820,14 +782,15 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update session + scoped state.
 
-        All writes are executed within a single transaction so they succeed or
-        fail together.
+        All writes are executed within a single transaction with ``FOR UPDATE``
+        row locks on updated scoped-state rows so they succeed or fail together.
         """
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -836,7 +799,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         )
         """
 
-        state_data = await self._serialize_state(state)
+        session_state = dict(state)
+        state_data = await self._serialize_state(session_state)
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = :state, update_time = SYSTIMESTAMP
@@ -849,28 +813,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
-        app_upsert_sql = f"""
-        MERGE INTO {self._app_state_table} target
-        USING (SELECT :app_name AS app_name FROM DUAL) source
-        ON (target.app_name = source.app_name)
-        WHEN MATCHED THEN
-            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (app_name, state, update_time)
-            VALUES (source.app_name, :state, SYSTIMESTAMP)
-        """
-
-        user_upsert_sql = f"""
-        MERGE INTO {self._user_state_table} target
-        USING (SELECT :app_name AS app_name, :user_id AS user_id FROM DUAL) source
-        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
-        WHEN MATCHED THEN
-            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (app_name, user_id, state, update_time)
-            VALUES (source.app_name, source.user_id, :state, SYSTIMESTAMP)
-        """
-
+        merged_app_state: dict[str, Any] | None = None
+        merged_user_state: dict[str, Any] | None = None
         async with self._config.provide_connection() as conn:
             with conn.cursor() as cursor:
                 try:
@@ -895,32 +839,26 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                         },
                     )
                     await cursor.execute(insert_sql, insert_params)
-                    if app_state is not None:
-                        app_params = await coerce_large_parameters_async(
-                            conn, {"app_name": app_name, "state": await self._serialize_state(app_state)}
+                    if app_state_delta:
+                        merged_app_state = await self._apply_app_state_delta_async(
+                            conn, cursor, app_name, app_state_delta
                         )
-                        await cursor.execute(app_upsert_sql, app_params)
-                    if user_state is not None:
-                        user_params = await coerce_large_parameters_async(
-                            conn,
-                            {
-                                "app_name": app_name,
-                                "user_id": user_id,
-                                "state": await self._serialize_state(user_state),
-                            },
+                    if user_state_delta:
+                        merged_user_state = await self._apply_user_state_delta_async(
+                            conn, cursor, app_name, user_id, user_state_delta
                         )
-                        await cursor.execute(user_upsert_sql, user_params)
                     await conn.commit()
                 except Exception:
                     await conn.rollback()
                     raise
 
         session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
+        stored_session_state = await self._deserialize_state(state_data_row)
         return StoredSession(
             id=session_id_val,
             app_name=row_app_name,
             user_id=row_user_id,
-            state=await self._deserialize_state(state_data_row),
+            state=merge_scoped_state(stored_session_state, merged_app_state, merged_user_state),
             create_time=create_time,
             update_time=update_time,
         )
@@ -945,11 +883,13 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
-
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = :app_name", "s.user_id = :user_id", "e.session_id = :session_id"]
+        where_clauses = ["s.app_name = :app_name", "s.user_id = :user_id", "s.id = :session_id"]
         params: dict[str, Any] = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
 
         if after_timestamp is not None:
@@ -957,23 +897,26 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             params["after_timestamp"] = after_timestamp
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = ""
         if limit is not None:
-            limit_clause = f" FETCH FIRST {limit} ROWS ONLY"
+            order_and_limit = f"ORDER BY e.timestamp DESC, e.id DESC FETCH FIRST {int(limit)} ROWS ONLY"
+        else:
+            order_and_limit = "ORDER BY e.timestamp ASC, e.id ASC"
 
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_and_limit}
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, params)
                     rows = await cursor.fetchall()
+                    if limit is not None:
+                        rows = list(reversed(rows))
 
                     return [
                         StoredEvent(
@@ -1162,6 +1105,103 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await cursor.execute(sql, {"key": key, "value": value})
                 await conn.commit()
 
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+        await _prepare_oracle_schema_async(self._config, driver)
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing Oracle session and event companion indexes via catalog comparison.
+
+        Args:
+            driver: Asynchronous Oracle driver executing schema reconciliation.
+        """
+        specs = _oracle_session_index_specs(self._session_table) + _oracle_event_index_specs(self._events_table)
+        rows = await driver.data_dictionary.get_indexes(driver)
+        for statement in _oracle_missing_index_statements(specs, rows):
+            await driver.execute(statement)
+
+    async def _select_state_async(self, cursor: Any, sql: str, params: "dict[str, Any]") -> "dict[str, Any] | None":
+        try:
+            await cursor.execute(sql, params)
+            row = await cursor.fetchone()
+        except OracleDatabaseError as exc:
+            error_obj = exc.args[0] if exc.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+        return await self._deserialize_state(row[0]) if row is not None else None
+
+    async def _apply_app_state_delta_async(
+        self, conn: Any, cursor: Any, app_name: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return await self._apply_state_delta_async(
+            conn,
+            cursor,
+            select_for_update_sql=f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name FOR UPDATE",
+            insert_sql=f"INSERT INTO {self._app_state_table} (app_name, state, update_time) VALUES (:app_name, :state, SYSTIMESTAMP)",
+            update_sql=f"UPDATE {self._app_state_table} SET state = :state, update_time = SYSTIMESTAMP WHERE app_name = :app_name",
+            key_params={"app_name": app_name},
+            delta=delta,
+        )
+
+    async def _apply_user_state_delta_async(
+        self, conn: Any, cursor: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return await self._apply_state_delta_async(
+            conn,
+            cursor,
+            select_for_update_sql=(
+                f"SELECT state FROM {self._user_state_table} WHERE app_name = :app_name AND user_id = :user_id FOR UPDATE"
+            ),
+            insert_sql=(
+                f"INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time) "
+                "VALUES (:app_name, :user_id, :state, SYSTIMESTAMP)"
+            ),
+            update_sql=(
+                f"UPDATE {self._user_state_table} SET state = :state, update_time = SYSTIMESTAMP "
+                "WHERE app_name = :app_name AND user_id = :user_id"
+            ),
+            key_params={"app_name": app_name, "user_id": user_id},
+            delta=delta,
+        )
+
+    async def _apply_state_delta_async(
+        self,
+        conn: Any,
+        cursor: Any,
+        *,
+        select_for_update_sql: str,
+        insert_sql: str,
+        update_sql: str,
+        key_params: "dict[str, Any]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        for _ in range(_MAX_STATE_MERGE_ATTEMPTS):
+            await cursor.execute(select_for_update_sql, key_params)
+            row = await cursor.fetchone()
+            if row is None:
+                merged = dict(delta)
+                insert_params = await coerce_large_parameters_async(
+                    conn, {**key_params, "state": await self._serialize_state(merged)}
+                )
+                try:
+                    await cursor.execute(insert_sql, insert_params)
+                except OracleDatabaseError as exc:
+                    if not _is_unique_violation(exc):
+                        raise
+                    continue
+                else:
+                    return merged
+            existing = await self._deserialize_state(row[0])
+            merged = {**existing, **delta}
+            update_params = await coerce_large_parameters_async(
+                conn, {**key_params, "state": await self._serialize_state(merged)}
+            )
+            await cursor.execute(update_sql, update_params)
+            return merged
+        msg = f"Failed to lock and merge Oracle scoped state after {_MAX_STATE_MERGE_ATTEMPTS} attempts."
+        raise SerializationConflictError(msg)
+
     async def _sessions_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
 
@@ -1202,21 +1242,6 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         - Oracle 11g and earlier: plain BLOB
         """
         return storage_type_from_version(await self._get_version_info())
-
-    async def prepare_schema_async(self, driver: Any) -> None:
-        """Prepare adapter-specific schema decisions with an asynchronous driver."""
-        await _prepare_oracle_schema_async(self._config, driver)
-
-    async def reconcile_companion_objects_async(self, driver: Any) -> None:
-        """Create missing Oracle session and event companion indexes via catalog comparison.
-
-        Args:
-            driver: Asynchronous Oracle driver executing schema reconciliation.
-        """
-        specs = _oracle_session_index_specs(self._session_table) + _oracle_event_index_specs(self._events_table)
-        rows = await driver.data_dictionary.get_indexes(driver)
-        for statement in _oracle_missing_index_statements(specs, rows):
-            await driver.execute(statement)
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
@@ -1536,10 +1561,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     __slots__ = ("_in_memory",)
 
-    def __init__(self, config: "OracleSyncConfig") -> None:
+    def __init__(self, config: "OracleSyncConfig", *, read_config: "OracleSyncConfig | None" = None) -> None:
         """Initialize Oracle synchronous ADK store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: OracleSyncConfig instance.
 
         Notes:
@@ -1549,7 +1575,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             - owner_id_column: Optional owner FK column DDL (default: None)
             - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         _configure_oracle_adk_session_tables(self, config)
 
         adk_config = _adk_config(config)
@@ -1585,26 +1611,32 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             driver.commit()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session.
+        """Create a new session and optionally merge scoped state deltas.
 
         Args:
             session_id: Unique session identifier.
             app_name: Application name.
             user_id: User identifier.
-            state: Initial session state.
+            state: Initial session-scoped state.
             owner_id: Optional owner ID value for owner_id_column (if configured).
+            app_state_delta: Optional app-scoped state delta to merge atomically.
+            user_state_delta: Optional user-scoped state delta to merge atomically.
 
         Returns:
-            Created session record.
-
-        Notes:
-            Uses SYSTIMESTAMP for create_time and update_time.
-            State is serialized using version-appropriate format.
-            owner_id is ignored if owner_id_column not configured.
+            Created session record with merged scoped state.
         """
-        state_data = self._serialize_state(state)
+        session_state = dict(state)
+        state_data = self._serialize_state(session_state)
 
         if self._owner_id_column_name:
             sql = f"""
@@ -1625,15 +1657,40 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             """
             params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            coerced_params = coerce_large_parameters_sync(conn, params)
-            cursor.execute(sql, coerced_params)
-            conn.commit()
+        with self._config.provide_connection() as conn:
+            try:
+                coerced_params = coerce_large_parameters_sync(conn, params)
+                with conn.cursor() as cursor:
+                    cursor.execute(sql, coerced_params)
+                    current_app_state = (
+                        self._apply_app_state_delta_sync(conn, cursor, app_name, app_state_delta)
+                        if app_state_delta
+                        else self._select_state_sync(
+                            cursor,
+                            f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name",
+                            {"app_name": app_name},
+                        )
+                    )
+                    current_user_state = (
+                        self._apply_user_state_delta_sync(conn, cursor, app_name, user_id, user_state_delta)
+                        if user_state_delta
+                        else self._select_state_sync(
+                            cursor,
+                            f"SELECT state FROM {self._user_state_table} WHERE app_name = :app_name AND user_id = :user_id",
+                            {"app_name": app_name, "user_id": user_id},
+                        )
+                    )
+                    conn.commit()
+            except BaseException:
+                _rollback_sync(conn)
+                raise
 
-        result = self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
+        result["state"] = merge_scoped_state(result["state"], current_app_state, current_user_state)
         return result
 
     def get_session(
@@ -1661,9 +1718,10 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
+        should_renew = self._is_renewal_requested(renew_for)
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cursor:
-                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            with self._provide_replica_connection(primary=renew_for is not None) as conn, conn.cursor() as cursor:
+                if should_renew:
                     cursor.execute(
                         f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
                         {"app_name": app_name, "user_id": user_id, "id": session_id},
@@ -1759,7 +1817,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -1785,29 +1843,41 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             raise
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete session and all associated events (cascade).
+        """Delete session and all associated events.
 
         Args:
             app_name: Application name.
             user_id: User identifier.
             session_id: Session identifier.
-
-        Notes:
-            Foreign key constraint ensures events are cascade-deleted.
         """
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
+        events_sql = (
+            f"DELETE FROM {self._events_table} WHERE app_name = :app_name AND user_id = :user_id AND session_id = :id"
+        )
+        session_sql = (
+            f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
+        )
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id}
 
         with self._config.provide_connection() as conn:
             try:
                 with conn.cursor() as cursor:
-                    cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                    cursor.execute(events_sql, params)
+                    cursor.execute(session_sql, params)
                     conn.commit()
             except BaseException:
                 _rollback_sync(conn)
                 raise
 
     def append_event(self, event_record: StoredEvent) -> None:
-        """Append an event to a session."""
+        """Append an event to a session after verifying session ownership."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        ownership_sql = (
+            f"SELECT 1 FROM {self._session_table} "
+            "WHERE id = :id AND app_name = :app_name AND user_id = :user_id "
+            "FETCH FIRST 1 ROWS ONLY"
+        )
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -1818,19 +1888,22 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         with self._config.provide_connection() as conn:
             try:
-                params = coerce_large_parameters_sync(
-                    conn,
-                    {
-                        "id": event_record["id"],
-                        "app_name": event_record["app_name"],
-                        "user_id": event_record["user_id"],
-                        "session_id": event_record["session_id"],
-                        "invocation_id": event_record["invocation_id"],
-                        "timestamp": event_record["timestamp"],
-                        "event_data": self._serialize_event_data(event_record["event_data"]),
-                    },
-                )
                 with conn.cursor() as cursor:
+                    cursor.execute(ownership_sql, {"id": session_id, "app_name": app_name, "user_id": user_id})
+                    if cursor.fetchone() is None:
+                        _raise_session_not_found_for_user(session_id, app_name, user_id)
+                    params = coerce_large_parameters_sync(
+                        conn,
+                        {
+                            "id": event_record["id"],
+                            "app_name": app_name,
+                            "user_id": user_id,
+                            "session_id": session_id,
+                            "invocation_id": event_record["invocation_id"],
+                            "timestamp": event_record["timestamp"],
+                            "event_data": self._serialize_event_data(event_record["event_data"]),
+                        },
+                    )
                     cursor.execute(sql, params)
                     conn.commit()
             except BaseException:
@@ -1845,10 +1918,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update session + scoped state."""
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -1857,7 +1931,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         )
         """
 
-        state_data = self._serialize_state(state)
+        session_state = dict(state)
+        state_data = self._serialize_state(session_state)
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = :state, update_time = SYSTIMESTAMP
@@ -1870,28 +1945,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
-        app_upsert_sql = f"""
-        MERGE INTO {self._app_state_table} target
-        USING (SELECT :app_name AS app_name FROM DUAL) source
-        ON (target.app_name = source.app_name)
-        WHEN MATCHED THEN
-            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (app_name, state, update_time)
-            VALUES (source.app_name, :state, SYSTIMESTAMP)
-        """
-
-        user_upsert_sql = f"""
-        MERGE INTO {self._user_state_table} target
-        USING (SELECT :app_name AS app_name, :user_id AS user_id FROM DUAL) source
-        ON (target.app_name = source.app_name AND target.user_id = source.user_id)
-        WHEN MATCHED THEN
-            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (app_name, user_id, state, update_time)
-            VALUES (source.app_name, source.user_id, :state, SYSTIMESTAMP)
-        """
-
+        merged_app_state: dict[str, Any] | None = None
+        merged_user_state: dict[str, Any] | None = None
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
             try:
                 update_params = coerce_large_parameters_sync(
@@ -1915,27 +1970,24 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     },
                 )
                 cursor.execute(insert_sql, insert_params)
-                if app_state is not None:
-                    app_params = coerce_large_parameters_sync(
-                        conn, {"app_name": app_name, "state": self._serialize_state(app_state)}
+                if app_state_delta:
+                    merged_app_state = self._apply_app_state_delta_sync(conn, cursor, app_name, app_state_delta)
+                if user_state_delta:
+                    merged_user_state = self._apply_user_state_delta_sync(
+                        conn, cursor, app_name, user_id, user_state_delta
                     )
-                    cursor.execute(app_upsert_sql, app_params)
-                if user_state is not None:
-                    user_params = coerce_large_parameters_sync(
-                        conn, {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(user_state)}
-                    )
-                    cursor.execute(user_upsert_sql, user_params)
                 conn.commit()
             except Exception:
                 conn.rollback()
                 raise
 
         session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
+        stored_session_state = self._deserialize_state(state_data_row)
         return StoredSession(
             id=session_id_val,
             app_name=row_app_name,
             user_id=row_user_id,
-            state=self._deserialize_state(state_data_row),
+            state=merge_scoped_state(stored_session_state, merged_app_state, merged_user_state),
             create_time=create_time,
             update_time=update_time,
         )
@@ -1960,11 +2012,13 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
-
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = :app_name", "s.user_id = :user_id", "e.session_id = :session_id"]
+        where_clauses = ["s.app_name = :app_name", "s.user_id = :user_id", "s.id = :session_id"]
         params: dict[str, Any] = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
 
         if after_timestamp is not None:
@@ -1972,19 +2026,24 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             params["after_timestamp"] = after_timestamp
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" FETCH FIRST {limit} ROWS ONLY" if limit is not None else ""
+        if limit is not None:
+            order_and_limit = f"ORDER BY e.timestamp DESC, e.id DESC FETCH FIRST {int(limit)} ROWS ONLY"
+        else:
+            order_and_limit = "ORDER BY e.timestamp ASC, e.id ASC"
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_and_limit}
         """
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            with self._provide_replica_connection(primary=False) as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
+                if limit is not None:
+                    rows = list(reversed(rows))
 
                 return [
                     StoredEvent(
@@ -2165,6 +2224,101 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, {"key": key, "value": value})
             conn.commit()
 
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
+        _prepare_oracle_schema_sync(self._config, driver)
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Oracle session and event companion indexes via catalog comparison.
+
+        Args:
+            driver: Synchronous Oracle driver executing schema reconciliation.
+        """
+        specs = _oracle_session_index_specs(self._session_table) + _oracle_event_index_specs(self._events_table)
+        rows = driver.data_dictionary.get_indexes(driver)
+        for statement in _oracle_missing_index_statements(specs, rows):
+            driver.execute(statement)
+
+    def _select_state_sync(self, cursor: Any, sql: str, params: "dict[str, Any]") -> "dict[str, Any] | None":
+        try:
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+        except OracleDatabaseError as exc:
+            error_obj = exc.args[0] if exc.args else None
+            if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
+                return None
+            raise
+        return self._deserialize_state(row[0]) if row is not None else None
+
+    def _apply_app_state_delta_sync(
+        self, conn: Any, cursor: Any, app_name: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return self._apply_state_delta_sync(
+            conn,
+            cursor,
+            select_for_update_sql=f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name FOR UPDATE",
+            insert_sql=f"INSERT INTO {self._app_state_table} (app_name, state, update_time) VALUES (:app_name, :state, SYSTIMESTAMP)",
+            update_sql=f"UPDATE {self._app_state_table} SET state = :state, update_time = SYSTIMESTAMP WHERE app_name = :app_name",
+            key_params={"app_name": app_name},
+            delta=delta,
+        )
+
+    def _apply_user_state_delta_sync(
+        self, conn: Any, cursor: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return self._apply_state_delta_sync(
+            conn,
+            cursor,
+            select_for_update_sql=(
+                f"SELECT state FROM {self._user_state_table} WHERE app_name = :app_name AND user_id = :user_id FOR UPDATE"
+            ),
+            insert_sql=(
+                f"INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time) "
+                "VALUES (:app_name, :user_id, :state, SYSTIMESTAMP)"
+            ),
+            update_sql=(
+                f"UPDATE {self._user_state_table} SET state = :state, update_time = SYSTIMESTAMP "
+                "WHERE app_name = :app_name AND user_id = :user_id"
+            ),
+            key_params={"app_name": app_name, "user_id": user_id},
+            delta=delta,
+        )
+
+    def _apply_state_delta_sync(
+        self,
+        conn: Any,
+        cursor: Any,
+        *,
+        select_for_update_sql: str,
+        insert_sql: str,
+        update_sql: str,
+        key_params: "dict[str, Any]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        for _ in range(_MAX_STATE_MERGE_ATTEMPTS):
+            cursor.execute(select_for_update_sql, key_params)
+            row = cursor.fetchone()
+            if row is None:
+                merged = dict(delta)
+                insert_params = coerce_large_parameters_sync(
+                    conn, {**key_params, "state": self._serialize_state(merged)}
+                )
+                try:
+                    cursor.execute(insert_sql, insert_params)
+                except OracleDatabaseError as exc:
+                    if not _is_unique_violation(exc):
+                        raise
+                    continue
+                else:
+                    return merged
+            existing = self._deserialize_state(row[0])
+            merged = {**existing, **delta}
+            update_params = coerce_large_parameters_sync(conn, {**key_params, "state": self._serialize_state(merged)})
+            cursor.execute(update_sql, update_params)
+            return merged
+        msg = f"Failed to lock and merge Oracle scoped state after {_MAX_STATE_MERGE_ATTEMPTS} attempts."
+        raise SerializationConflictError(msg)
+
     def _sessions_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
 
@@ -2205,21 +2359,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         - Oracle 11g and earlier: plain BLOB
         """
         return storage_type_from_version(self._get_version_info())
-
-    def prepare_schema_sync(self, driver: Any) -> None:
-        """Prepare adapter-specific schema decisions with a synchronous driver."""
-        _prepare_oracle_schema_sync(self._config, driver)
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing Oracle session and event companion indexes via catalog comparison.
-
-        Args:
-            driver: Synchronous Oracle driver executing schema reconciliation.
-        """
-        specs = _oracle_session_index_specs(self._session_table) + _oracle_event_index_specs(self._events_table)
-        rows = driver.data_dictionary.get_indexes(driver)
-        for statement in _oracle_missing_index_statements(specs, rows):
-            driver.execute(statement)
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
@@ -2512,8 +2651,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
     __slots__ = ("_approximate", "_fts_operator", "_in_memory")
 
-    def __init__(self, config: "OracleAsyncConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "OracleAsyncConfig", *, read_config: "OracleAsyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
@@ -2643,23 +2782,31 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                     scope_filter,
                     fts_operator=self._fts_operator,
                     approximate=self._approximate,
+                    read=True,
                 )
             if self._use_fts:
                 return await self._search_entries_fts(
-                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator, read=True
                 )
-            return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
+            return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter, read=True)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        clauses = ["session_id = :session_id"]
+        params: dict[str, Any] = {"session_id": session_id}
+        clauses.append("app_name = :app_name")
+        params["app_name"] = app_name
+        clauses.append("user_id = :user_id")
+        params["user_id"] = user_id
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn:
             with conn.cursor() as cursor:
-                await cursor.execute(sql, {"session_id": session_id})
+                await cursor.execute(sql, params)
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
@@ -2683,9 +2830,6 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-    async def _detect_json_storage_type(self) -> "JSONStorageType":
-        return storage_type_from_version(await self._get_version_info())
-
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
         await _prepare_oracle_schema_async(self._config, driver)
@@ -2702,6 +2846,9 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         rows = await driver.data_dictionary.get_indexes(driver)
         for statement in _oracle_missing_index_statements(specs, rows):
             await driver.execute(statement)
+
+    async def _detect_json_storage_type(self) -> "JSONStorageType":
+        return storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
         return await _get_oracle_version_info_async(self._config)
@@ -2858,6 +3005,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         *,
         fts_operator: str = "ACCUM",
+        read: bool = False,
     ) -> "list[StoredMemory]":
         sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         if not sanitized_query:
@@ -2881,7 +3029,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         WHERE ROWNUM <= :limit
         """
         params = {**scope_params, "query": sanitized_query, "limit": limit}
-        async with self._config.provide_connection() as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
@@ -2901,6 +3049,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         metric: str = "COSINE",
         fts_operator: str = "ACCUM",
         approximate: bool = True,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
@@ -2953,14 +3102,21 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 "top_k": limit,
                 "rrf_k": rrf_k,
             }
-        async with self._config.provide_connection() as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
                 return await self._rows_to_records(rows)
 
     async def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         embedding_column = (
@@ -2981,7 +3137,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         """
         pattern = f"%{query.lower()}%"
         params = {**scope_params, "pattern": pattern, "limit": limit}
-        async with self._config.provide_connection() as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
@@ -3020,8 +3176,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
     __slots__ = ("_approximate", "_fts_operator", "_in_memory")
 
-    def __init__(self, config: "OracleSyncConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "OracleSyncConfig", *, read_config: "OracleSyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
@@ -3154,23 +3310,31 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                     scope_filter,
                     fts_operator=self._fts_operator,
                     approximate=self._approximate,
+                    read=True,
                 )
             if self._use_fts:
                 return self._search_entries_fts(
-                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator, read=True
                 )
-            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
+            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter, read=True)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
                 return []
             raise
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
+        clauses = ["session_id = :session_id"]
+        params: dict[str, Any] = {"session_id": session_id}
+        clauses.append("app_name = :app_name")
+        params["app_name"] = app_name
+        clauses.append("user_id = :user_id")
+        params["user_id"] = user_id
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"session_id": session_id})
+            cursor.execute(sql, params)
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
@@ -3192,9 +3356,6 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-    def _detect_json_storage_type(self) -> "JSONStorageType":
-        return storage_type_from_version(self._get_version_info())
-
     def prepare_schema_sync(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with a synchronous driver."""
         _prepare_oracle_schema_sync(self._config, driver)
@@ -3211,6 +3372,9 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         rows = driver.data_dictionary.get_indexes(driver)
         for statement in _oracle_missing_index_statements(specs, rows):
             driver.execute(statement)
+
+    def _detect_json_storage_type(self) -> "JSONStorageType":
+        return storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
         return _get_oracle_version_info_sync(self._config)
@@ -3367,6 +3531,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         *,
         fts_operator: str = "ACCUM",
+        read: bool = False,
     ) -> "list[StoredMemory]":
         sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         if not sanitized_query:
@@ -3388,7 +3553,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         WHERE ROWNUM <= :limit
         """
         params = {**scope_params, "query": sanitized_query, "limit": limit}
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)
@@ -3407,6 +3572,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         metric: str = "COSINE",
         fts_operator: str = "ACCUM",
         approximate: bool = True,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
@@ -3459,13 +3625,20 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 "top_k": limit,
                 "rrf_k": rrf_k,
             }
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)
 
     def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         embedding_column = "embedding" if _memory_supports_vectors(self._get_version_info()) else "NULL AS embedding"
@@ -3484,7 +3657,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         """
         pattern = f"%{query.lower()}%"
         params = {**scope_params, "pattern": pattern, "limit": limit}
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        with self._provide_replica_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)
@@ -3517,6 +3690,98 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         return records
 
 
+def _rollback_sync(conn: Any) -> None:
+    with contextlib.suppress(Exception):
+        conn.rollback()
+
+
+async def _rollback_async(conn: Any) -> None:
+    with contextlib.suppress(Exception):
+        await conn.rollback()
+
+
+def _memory_supports_vectors(version: "OracleVersionInfo | None") -> bool:
+    if version is None or (version.major, version.minor, version.patch) < (23, 4, 0):
+        return False
+    compatible = parse_oracle_version_components(version.compatible) if version.compatible else None
+    return compatible is None or compatible >= (23, 4, 0)
+
+
+def _require_memory_vectors(version: "OracleVersionInfo | None") -> None:
+    if not _memory_supports_vectors(version):
+        msg = "Oracle memory embeddings require Oracle Database and COMPATIBLE version 23.4 or later."
+        raise ImproperConfigurationError(msg)
+
+
+def _memory_insert_count(entry_count: int, batch_errors: "list[Any]") -> int:
+    for error in batch_errors:
+        if error.code != ORACLE_DUPLICATE_KEY_ERROR:
+            raise OracleDatabaseError(error)
+    return entry_count - len(batch_errors)
+
+
+async def _prepare_oracle_schema_async(config: "OracleAsyncConfig", driver: Any) -> None:
+    """Resolve and cache the pool-scoped Oracle version on an asynchronous driver."""
+    cache = config._oracle_version_cache
+    if cache.resolved:
+        return
+    if getattr(driver, "_oracle_version_cache", None) is None:
+        with contextlib.suppress(AttributeError):
+            driver._oracle_version_cache = cache
+    version_info = await driver.data_dictionary.get_version(driver)
+    cache.resolved = True
+    cache.version = version_info
+    if version_info is None:
+        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+
+
+def _prepare_oracle_schema_sync(config: "OracleSyncConfig", driver: Any) -> None:
+    """Resolve and cache the pool-scoped Oracle version on a synchronous driver."""
+    cache = config._oracle_version_cache
+    if cache.resolved:
+        return
+    if getattr(driver, "_oracle_version_cache", None) is None:
+        with contextlib.suppress(AttributeError):
+            driver._oracle_version_cache = cache
+    version_info = driver.data_dictionary.get_version(driver)
+    cache.resolved = True
+    cache.version = version_info
+    if version_info is None:
+        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+
+
+async def _get_oracle_version_info_async(config: "OracleAsyncConfig") -> "OracleVersionInfo | None":
+    """Return the pool-scoped Oracle version through an asynchronous session."""
+    cache = config._oracle_version_cache
+    if cache.resolved:
+        return cache.version
+    async with config.provide_session() as driver:
+        version_info = await driver.data_dictionary.get_version(driver)
+    if version_info is None:
+        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+    return version_info
+
+
+def _get_oracle_version_info_sync(config: "OracleSyncConfig") -> "OracleVersionInfo | None":
+    """Return the pool-scoped Oracle version through a synchronous session."""
+    cache = config._oracle_version_cache
+    if cache.resolved:
+        return cache.version
+    with config.provide_session() as driver:
+        version_info = driver.data_dictionary.get_version(driver)
+    if version_info is None:
+        logger.warning("Could not detect Oracle version, defaulting to BLOB_JSON storage")
+    return version_info
+
+
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
+    expected_scope = (app_name, user_id, session_id)
+    if record_scope != expected_scope:
+        msg = f"event_record scope {record_scope!r} does not match {expected_scope!r}"
+        raise ValueError(msg)
+
+
 def _configure_oracle_adk_session_tables(store: Any, config: Any) -> None:
     """Apply Oracle clean-break ADK table names independent of shared-base drift."""
 
@@ -3534,7 +3799,7 @@ def _configure_oracle_adk_session_tables(store: Any, config: Any) -> None:
 
 
 def _normalize_event_data_for_storage(event_data: Any) -> Any:
-    """Return event data without ADK 2.2-invalid durable ``actions: null``."""
+    """Return event data without Google ADK-invalid durable ``actions: null``."""
 
     if isinstance(event_data, dict) and event_data.get("actions") is None:
         normalized = dict(event_data)
@@ -3545,6 +3810,19 @@ def _normalize_event_data_for_storage(event_data: Any) -> Any:
 
 def _raise_session_not_found(session_id: str) -> NoReturn:
     msg = f"Session {session_id} not found during append_event_and_update_state."
+    raise ValueError(msg)
+
+
+def _is_unique_violation(exc: BaseException) -> bool:
+    if isinstance(exc, OracleDatabaseError):
+        error_obj = exc.args[0] if exc.args else None
+        if error_obj is not None and getattr(error_obj, "code", None) == ORACLE_DUPLICATE_KEY_ERROR:
+            return True
+    return "ORA-00001" in str(exc)
+
+
+def _raise_session_not_found_for_user(session_id: str, app_name: str, user_id: str) -> NoReturn:
+    msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
     raise ValueError(msg)
 
 

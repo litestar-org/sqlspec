@@ -15,7 +15,7 @@ import sqlspec.adapters.spanner.driver as spanner_driver_module
 from sqlspec.adapters.spanner.core import SpannerAsyncStreamSource, default_statement_config, resolve_row_plan
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerAsyncExceptionHandler
 from sqlspec.driver import AsyncRowStream
-from sqlspec.exceptions import DeadlockError, SQLConversionError, UniqueViolationError
+from sqlspec.exceptions import DeadlockError, ReadOnlyTransactionError, UniqueViolationError
 from sqlspec.utils.serializers import from_json
 
 _ARROW_CAPABILITIES = {
@@ -156,11 +156,11 @@ async def test_async_driver_dispatch_execute_dml_and_last_statement() -> None:
 
 
 async def test_async_driver_dispatch_execute_dml_on_read_only_snapshot_raises() -> None:
-    """Verify SpannerAsyncDriver raises SQLConversionError on DML when cursor lacks execute_update."""
+    """Verify SpannerAsyncDriver raises ReadOnlyTransactionError on DML against a Snapshot."""
     snapshot = SimpleNamespace(execute_sql=AsyncMock())
     driver = SpannerAsyncDriver(connection=cast("Any", snapshot))
 
-    with pytest.raises(SQLConversionError, match="Cannot execute DML in a read-only Snapshot context"):
+    with pytest.raises(ReadOnlyTransactionError, match="Cannot execute DML in a read-only Snapshot context"):
         await driver.execute("DELETE FROM users WHERE id = 1")
 
 

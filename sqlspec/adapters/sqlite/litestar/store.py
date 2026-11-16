@@ -1,6 +1,7 @@
 """SQLite sync session store for Litestar integration."""
 
 import contextlib
+import weakref
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired
 
@@ -13,9 +14,9 @@ from sqlspec.adapters.sqlite.core import (
     extension_pragma_statements,
     julian_to_datetime,
 )
+from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -53,7 +54,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         config: SqliteConfig instance.
     """
 
-    __slots__ = ("_configured_connection_ids", "_pragma_statements")
+    __slots__ = ("_configured_connections", "_pragma_statements")
     extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
         "pragma_overrides",
         "pragma_profile",
@@ -67,20 +68,20 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
         super().__init__(config)
         self._pragma_statements = extension_pragma_statements(config, "litestar")
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     def prepare_schema_sync(self, driver: Any) -> None:
         """Apply configured SQLite PRAGMAs before migration DDL generation."""
         apply_extension_pragmas(driver.connection, self._pragma_statements)
-        self._configured_connection_ids.add(id(driver.connection))
+        self._record_configured_connection(driver.connection)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -92,7 +93,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -102,7 +103,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
             value: Session data.
             expires_in: Time until expiration.
         """
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -110,11 +111,11 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Args:
             key: Session ID to delete.
         """
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -125,7 +126,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Returns:
             True if the session exists and is not expired.
         """
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -136,7 +137,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
         """
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions.
@@ -144,12 +145,22 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Returns:
             Number of sessions deleted.
         """
-        return await async_(self._delete_expired)()
+        return await self._run_sync(self._delete_expired)
+
+    def _record_configured_connection(self, connection: Any) -> None:
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config)
+        if token is not None:
+            self._configured_connections.add(token)
 
     def _ensure_pragmas(self, connection: Any) -> None:
-        if self._pragma_statements and id(connection) not in self._configured_connection_ids:
-            apply_extension_pragmas(connection, self._pragma_statements)
-            self._configured_connection_ids.add(id(connection))
+        if not self._pragma_statements:
+            return
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config)
+        if token is not None and token in self._configured_connections:
+            return
+        apply_extension_pragmas(connection, self._pragma_statements)
+        if token is not None:
+            self._configured_connections.add(token)
 
     def _table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL.
@@ -188,7 +199,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         sql = self._table_ddl()
         with self._config.provide_session() as driver:
             apply_extension_pragmas(driver.connection, self._pragma_statements)
-            self._configured_connection_ids.add(id(driver.connection))
+            self._record_configured_connection(driver.connection)
             driver.execute_script(sql)
             end_transaction(driver.connection, commit=True)
         self._log_table_created()
@@ -201,7 +212,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -214,7 +226,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
 
             data, expires_at_julian = _row_values(raw_row)
 
-            if renew_for is not None and expires_at_julian is not None:
+            if self._is_renewal_requested(renew_for) and expires_at_julian is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 new_expires_at_julian = self._datetime_to_julian(new_expires_at)
                 if new_expires_at_julian is not None:
@@ -224,7 +236,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
                     WHERE session_id = ?
                     """
                     _close_cursor(conn.execute(update_sql, (new_expires_at_julian, key)))
-                    end_transaction(conn, commit=True)
+                    if store_connection.owned:
+                        end_transaction(conn, commit=True)
 
             return bytes(data)
 
@@ -239,28 +252,34 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         VALUES (?, ?, ?)
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql, (key, data, expires_at_julian)))
-            end_transaction(conn, commit=True)
+            if store_connection.owned:
+                end_transaction(conn, commit=True)
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql, (key,)))
-            end_transaction(conn, commit=True)
+            if store_connection.owned:
+                end_transaction(conn, commit=True)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql))
-            end_transaction(conn, commit=True)
+            if store_connection.owned:
+                end_transaction(conn, commit=True)
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
@@ -271,7 +290,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -287,7 +307,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         WHERE session_id = ?
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -319,11 +340,13 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at <= julianday('now')"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql)
             try:
-                end_transaction(conn, commit=True)
+                if store_connection.owned:
+                    end_transaction(conn, commit=True)
                 count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 _close_cursor(cursor)

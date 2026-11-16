@@ -16,6 +16,9 @@ from psycopg.adapt import AdaptersMap as CockroachPsycopgAdaptersMap
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.rows import dict_row as cockroach_psycopg_dict_row
 from psycopg.rows import tuple_row as cockroach_psycopg_tuple_row
+from psycopg.sql import SQL as CockroachPsycopgSQL  # noqa: N811
+from psycopg.sql import Composed as CockroachPsycopgComposed
+from psycopg.sql import Identifier as CockroachPsycopgIdentifier
 from psycopg.types.json import Jsonb as CockroachPsycopgJsonb
 from psycopg.types.json import set_json_dumps as cockroach_psycopg_set_json_dumps
 from psycopg.types.json import set_json_loads as cockroach_psycopg_set_json_loads
@@ -50,8 +53,11 @@ __all__ = (
     "CockroachPsycopgAdaptersMap",
     "CockroachPsycopgAsyncConnectionPool",
     "CockroachPsycopgAsyncSessionContext",
+    "CockroachPsycopgComposed",
     "CockroachPsycopgConnectionPool",
+    "CockroachPsycopgIdentifier",
     "CockroachPsycopgJsonb",
+    "CockroachPsycopgSQL",
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
     "CockroachSyncCursor",
@@ -116,9 +122,42 @@ class CockroachPsycopgSyncSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        rollback_exc: BaseException | None = None
+        try:
+            try:
+                if driver is not None:
+                    driver._close_open_streams(error=exc_type is not None)
+                if driver is not None and (
+                    getattr(driver, "_transaction_active", False)
+                    or getattr(driver, "_connection_in_transaction", lambda: False)()
+                ):
+                    try:
+                        driver.rollback()
+                    except BaseException as exc:
+                        rollback_exc = exc
+                        if exc_type is None:
+                            raise
+            except BaseException as exc:
+                if rollback_exc is None:
+                    rollback_exc = exc
+                raise
+            finally:
+                self._driver = None
+                if self._connection is not None:
+                    release_type = exc_type if exc_type is not None else (type(rollback_exc) if rollback_exc else None)
+                    release_val = exc_val if exc_val is not None else rollback_exc
+                    release_tb = (
+                        exc_tb if exc_tb is not None else (rollback_exc.__traceback__ if rollback_exc else None)
+                    )
+                    self._release_connection(
+                        self._connection, exc_type=release_type, exc_val=release_val, exc_tb=release_tb
+                    )
+                    self._connection = None
+        finally:
+            self._driver = None
+            if driver is not None:
+                driver._mark_closed()
         return None
 
 
@@ -167,9 +206,42 @@ class CockroachPsycopgAsyncSessionContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        rollback_exc: BaseException | None = None
+        try:
+            try:
+                if driver is not None:
+                    await driver._close_open_streams(error=exc_type is not None)
+                if driver is not None and (
+                    getattr(driver, "_transaction_active", False)
+                    or getattr(driver, "_connection_in_transaction", lambda: False)()
+                ):
+                    try:
+                        await driver.rollback()
+                    except BaseException as exc:
+                        rollback_exc = exc
+                        if exc_type is None:
+                            raise
+            except BaseException as exc:
+                if rollback_exc is None:
+                    rollback_exc = exc
+                raise
+            finally:
+                self._driver = None
+                if self._connection is not None:
+                    release_type = exc_type if exc_type is not None else (type(rollback_exc) if rollback_exc else None)
+                    release_val = exc_val if exc_val is not None else rollback_exc
+                    release_tb = (
+                        exc_tb if exc_tb is not None else (rollback_exc.__traceback__ if rollback_exc else None)
+                    )
+                    await self._release_connection(
+                        self._connection, exc_type=release_type, exc_val=release_val, exc_tb=release_tb
+                    )
+                    self._connection = None
+        finally:
+            self._driver = None
+            if driver is not None:
+                driver._mark_closed()
         return None
 
 

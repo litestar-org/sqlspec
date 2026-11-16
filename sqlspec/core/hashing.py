@@ -6,7 +6,7 @@ filters, and AST sub-expressions.
 
 import hashlib
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp
 
@@ -30,12 +30,15 @@ __all__ = (
 )
 
 
+_HASH_SIMPLE_TYPES: Final[frozenset[type]] = frozenset({str, int, bool, float, type(None)})
+
+
 def hash_expression(expr: "exp.Expr | None", _seen: "set[int] | None" = None) -> int:
     """Generate hash from AST structure.
 
     Args:
         expr: SQLGlot Expression to hash
-        _seen: Set of seen object IDs to handle circular references
+        _seen: Set of active ancestor object IDs to handle circular references
 
     Returns:
         Hash of the AST structure
@@ -51,19 +54,35 @@ def hash_expression(expr: "exp.Expr | None", _seen: "set[int] | None" = None) ->
         return hash(expr_id)
 
     _seen.add(expr_id)
-
     components: list[Any] = [type(expr).__name__]
 
     if isinstance(expr, exp.Expression):
-        for key, value in sorted(expr.args.items()):
-            components.extend((key, _hash_value(value, _seen)))
+        args = expr.args
+        arg_count = len(args)
+        if arg_count == 1:
+            key, value = next(iter(args.items()))
+            components.append(key)
+            components.append(
+                hash_expression(value, _seen)
+                if isinstance(value, exp.Expr)
+                else (hash(value) if type(value) in _HASH_SIMPLE_TYPES else _hash_value(value, _seen))
+            )
+        elif arg_count > 1:
+            for key, value in sorted(args.items()):
+                components.append(key)
+                components.append(
+                    hash_expression(value, _seen)
+                    if isinstance(value, exp.Expr)
+                    else (hash(value) if type(value) in _HASH_SIMPLE_TYPES else _hash_value(value, _seen))
+                )
         if has_default_nulls(expr):
             components.append("default_nulls")
         if has_explicit_nulls(expr):
             components.append("explicit_nulls")
     else:
-        components.append(hash(expr.sql()))
+        components.append(hash(expr.sql(copy=False)))
 
+    _seen.remove(expr_id)
     return hash(tuple(components))
 
 
@@ -208,7 +227,7 @@ def hash_expression_node(node: "exp.Expr", include_children: bool = True, dialec
 
 def hash_optimized_expression(
     expr: "exp.Expr",
-    dialect: str,
+    dialect: "str | None",
     schema: "dict[str, Any] | None" = None,
     optimizer_settings: "dict[str, Any] | None" = None,
 ) -> str:
@@ -219,7 +238,7 @@ def hash_optimized_expression(
 
     Args:
         expr: The unoptimized expression
-        dialect: Target SQL dialect
+        dialect: Optimizer dialect, or None for generic SQL
         schema: Schema information
         optimizer_settings: Additional optimizer configuration
 
@@ -239,23 +258,102 @@ def _expression_cache_fingerprint(
     settings: Any = None,
 ) -> str:
     components = (
-        hash_expression(expr),
+        _expression_digest(expr),
         parameter_signature,
         str(dialect) if dialect is not None else "default",
-        _freeze_cache_value(schema),
-        _freeze_cache_value(settings),
+        None if schema is None else _freeze_cache_value(schema),
+        None if settings is None else _freeze_cache_value(settings),
     )
-    return hashlib.blake2b(repr(components).encode(), digest_size=8).hexdigest()
+    return hashlib.blake2b(repr(components).encode(), digest_size=16).hexdigest()
+
+
+class _ArgKey:
+    """Marks an argument name on the digest work stack."""
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def _expression_digest(expr: "exp.Expr") -> str:
+    """Return a 128-bit digest of an expression tree's full content.
+
+    The walk is iterative, so nesting depth is bounded by memory, not by the interpreter's recursion
+    limit. Every node contributes its type, comments, NULL-ordering markers, and each set argument in
+    name order; leaf values are length-prefixed so adjacent values cannot run together. A node reached
+    a second time contributes a reference to its first visit, which also ends cyclic trees.
+    """
+    hasher = hashlib.blake2b(digest_size=16)
+    update = hasher.update
+    ordinals: dict[int, int] = {}
+    stack: list[Any] = [expr]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, exp.Expr):
+            node_id = id(node)
+            first_visit = ordinals.get(node_id)
+            if first_visit is not None:
+                update(b"R%d;" % first_visit)
+                continue
+            ordinals[node_id] = len(ordinals)
+            update(b"E")
+            update(type(node).__name__.encode())
+            update(b";")
+            if not isinstance(node, exp.Expression):
+                _update_digest_text(update, node.sql(copy=False))
+                continue
+            if has_default_nulls(node):
+                update(b"d")
+            if has_explicit_nulls(node):
+                update(b"x")
+            comments = node.comments
+            if comments:
+                stack.append(comments)
+                stack.append(_ArgKey("comments"))
+            args = node.args
+            for name in sorted(args, reverse=True):
+                value = args[name]
+                if value is None:
+                    continue
+                stack.append(value)
+                stack.append(_ArgKey(name))
+        elif type(node) is _ArgKey:
+            update(b"K")
+            update(node.name.encode())
+            update(b";")
+        elif type(node) is str:
+            _update_digest_text(update, node)
+        elif type(node) is list or type(node) is tuple:
+            update(b"L%d;" % len(node))
+            stack.extend(reversed(node))
+        elif isinstance(node, dict):
+            update(b"M%d;" % len(node))
+            for key in sorted(node, key=repr, reverse=True):
+                stack.append(node[key])
+                stack.append(_ArgKey(repr(key)))
+        else:
+            update(b"V")
+            update(type(node).__name__.encode())
+            update(b":")
+            _update_digest_text(update, repr(node))
+    return hasher.hexdigest()
+
+
+def _update_digest_text(update: Any, text: str) -> None:
+    encoded = text.encode("utf-8", "surrogatepass")
+    update(b"S%d:" % len(encoded))
+    update(encoded)
 
 
 def _freeze_cache_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        items = ((key, _freeze_cache_value(item)) for key, item in value.items())
+        items = [(key, _freeze_cache_value(item)) for key, item in value.items()]
         return tuple(sorted(items, key=lambda pair: repr(pair[0])))
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze_cache_value(item) for item in value)
+        return tuple([_freeze_cache_value(item) for item in value])
     if isinstance(value, (set, frozenset)):
-        return tuple(sorted((_freeze_cache_value(item) for item in value), key=repr))
+        return tuple(sorted([_freeze_cache_value(item) for item in value], key=repr))
     try:
         hash(value)
     except TypeError:
@@ -268,19 +366,29 @@ def _hash_value(value: Any, _seen: "set[int]") -> int:
 
     Args:
         value: Value to hash (can be Expression, list, dict, or primitive)
-        _seen: Set of seen object IDs to handle circular references
+        _seen: Set of active ancestor object IDs to handle circular references
 
     Returns:
         Hash of the value
     """
     if isinstance(value, exp.Expr):
         return hash_expression(value, _seen)
-    if isinstance(value, list):
-        return hash(tuple(_hash_value(v, _seen) for v in value))
+    value_type = type(value)
+    if value_type in _HASH_SIMPLE_TYPES:
+        return hash(value)
+    if value_type is list or value_type is tuple:
+        return hash(
+            tuple([
+                hash_expression(item, _seen)
+                if isinstance(item, exp.Expr)
+                else (hash(item) if type(item) in _HASH_SIMPLE_TYPES else _hash_value(item, _seen))
+                for item in value
+            ])
+        )
     if isinstance(value, dict):
-        items = sorted((k, _hash_value(v, _seen)) for k, v in value.items())
+        items = sorted([(k, _hash_value(v, _seen)) for k, v in value.items()])
         return hash(tuple(items))
-    if isinstance(value, tuple):
-        return hash(tuple(_hash_value(v, _seen) for v in value))
+    if isinstance(value, (list, tuple)):
+        return hash(tuple([_hash_value(v, _seen) for v in value]))
 
     return hash(value)

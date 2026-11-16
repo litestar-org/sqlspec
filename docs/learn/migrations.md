@@ -85,6 +85,8 @@ Enterprise deployments frequently store application tables in `app_schema` while
 
 When PostgreSQL adapters (`AsyncpgConfig`, `PsycopgSyncConfig`, `PsycopgAsyncConfig`, `PsqlpyConfig`) run behind transaction-mode PgBouncer (`pooler_mode="transaction"`) and define `direct_dsn`, `MigrationCommands` automatically routes DDL execution through `config.derive_direct_config()` so session-level locks and DDL statements bypass the transaction pooler.
 
+On PostgreSQL (not CockroachDB), the tracking table is always resolved by schema and name, never through `search_path`. When `version_table_schema` is not configured, SQLSpec pins the table to the session's `current_schema()` and uses the qualified name for every tracking statement, so a migration that changes `search_path` or creates a temporary table of the same name cannot redirect tracking writes. The migrating role must own the tracking table, belong to the role that does, or be a superuser; the check runs again right after the migration lock is taken. The advisory lock key derives from the configured table name, so it does not change when the schema is pinned, and the pin is re-resolved on every locked command.
+
 ## Lifecycle, Squash, and Schema Commands
 
 | Action | CLI Command | Behavior |
@@ -92,12 +94,20 @@ When PostgreSQL adapters (`AsyncpgConfig`, `PsycopgSyncConfig`, `PsycopgAsyncCon
 | Apply pending revisions | `uv run sqlspec upgrade` | Runs unapplied migrations in lexical order and records each version in `version_table_name`. |
 | Target a specific revision | `uv run sqlspec upgrade 0003` | Applies pending revisions up to and including `0003`. |
 | Roll back revisions | `uv run sqlspec downgrade -1` | Executes the `down` section of the most recently applied revision (`downgrade base` reverts all). |
-| Verify checksums & drift | `uv run sqlspec verify --strict` | Read-only audit of applied checksums, orphaned tracker rows, pending files, and partial squashes. |
+| Verify checksums & drift | `uv run sqlspec verify --strict` | Audits applied checksums, orphaned tracker rows, pending files, and partial squashes. Writes only to upgrade legacy checksum rows (see below). |
 | Export live schema DDL | `uv run sqlspec dump-schema -o migrations/schema.sql` | Writes topologically ordered schema DDL to `--output` or directly to stdout. |
 | Bootstrap from live schema | `uv run sqlspec create-migration -m "baseline" --from-schema` | Populates a new `.sql` or `.py` revision with `CREATE` DDL in `up` and reverse `DROP` DDL in `down`. |
 | Bootstrap from data | `uv run sqlspec create-migration -m "events" --from-data events.jsonl` | Infers a typed `CREATE TABLE` revision from a JSON/JSONL/Parquet/Arrow file or staging table. |
 | Baseline an existing DB | `uv run sqlspec stamp head` | Records the target revision in `version_table_name` without executing DDL statements. |
 | Consolidate history | `uv run sqlspec squash 1:10 -m "baseline" --strategy ddl --yes` | Collapses a revision range (or all revisions when omitted) into one file with `-- Squashed from:` metadata. |
+
+### Checksum Verification
+
+`upgrade` and `downgrade` (including `--dry-run`) compare every applied migration file with the checksum recorded when it was applied, before running any migration. A changed file raises `MigrationError` naming the versions, so an edited `up` or `down` section cannot run unreviewed. Set `migration_config["verify_checksums"] = False` to skip the check after you have reviewed a deliberate edit. `verify --strict` always fails on the drift.
+
+The digest ignores the version number in each single-line `-- name: migrate-<version>-up|down` header and in single-line `Version:` lines, so `fix` renames keep checksums stable. Each header is replaced by a version-free marker (`-- name:up` or `-- name:down`), so moving a `down` header changes the digest. Python assignments such as `version: str = "x"` are part of the digest.
+
+Rows recorded by earlier releases verify through the previous form, which dropped header lines entirely. When such a row matches, `verify`, `upgrade`, and `downgrade` re-record it as the current digest in the same transaction (a dry run only prints `Would re-record legacy checksums for [...]`). A header value that is not a single token, such as `-- Version: 1.0 beta`, does not verify against a legacy row.
 
 ## Squashing Strategies and Reconciliation
 
@@ -112,6 +122,8 @@ Choose the squash strategy that matches your migration history:
 - `concat` (**default**): Preserves every `up` statement verbatim in chronological order and reverses `down` statements. Safe for histories containing seed `INSERT`/`UPDATE` DML, views, triggers, functions, or procedural blocks.
 - `ddl`: Parses chronological DDL with SQLGlot and folds `CREATE` / `ALTER` / `DROP` / `RENAME` operations into net `CREATE TABLE`, `CREATE SEQUENCE`, and `CREATE INDEX` statements. Fails closed with `SquashValidationError` whenever a statement (such as data DML, views/triggers, dynamic PL/SQL, or destructive column rewrites) cannot be folded faithfully.
 - `schema`: Emits topological DDL reflected directly from the live database catalog via `driver.data_dictionary.get_schema_ddl(...)`.
+
+Schema extraction (`schema` squash, `create-migration --from-schema`, and `dump-schema`) emits tables, columns, indexes, and constraints. It refuses to run when an included table is protected by row-level security: PostgreSQL RLS or policies, Oracle VPD policies, or SQL Server security policies, because rebuilding the database from the dump would silently drop that protection. On PostgreSQL it also logs one `migration.schema_extraction.omitted` warning naming the grants, functions, triggers, and domains it does not emit; carry those over with `--strategy ddl` or hand-written migrations. The tracking table and its `_lock` table are ignored by these checks.
 
 When `upgrade()` runs against downstream environments after a squash has been committed:
 
@@ -143,7 +155,18 @@ Place a `reconcile.py` module inside `<migrations_path>` exporting a synchronous
 - **Upgrade execution order**: Reconcilers execute in `include_extensions` order before pending numbered revisions on every `upgrade(revision)` (both `upgrade("head")` and targeted revisions), including when zero numbered migrations are pending. Co-located numbered migration files for that extension are skipped, and zero `ext_<name>_*` rows are inserted into `ddl_migrations`.
 - **Drop-at-base downgrade**: Partial downgrades (such as rolling back `0002 -> 0001`) preserve reconciled extension tables. When `downgrade` reaches `base` (`downgrade("base")` or `downgrade("-1")` leaving zero applied revisions in `ddl_migrations`), SQLSpec executes each reconciler's `downgrade(context)` callback in reverse `include_extensions` order to drop the extension schema and removes any retained `ext_<name>_*` ledger rows. `downgrade --dry-run` at base previews reconciler downgrades without executing DDL.
 - **Retained ledger & versioned extension ordering**: Any previously applied `ext_<name>_*` rows already present in `ddl_migrations` pass `sqlspec verify --strict` without orphan warnings. When an extension uses `migration_mode="versioned"`, its `ext_<name>_*` migrations sort before core migrations in `include_extensions` order and are excluded from out-of-order and auto-sync checksum warnings.
-- **Serialized upgrades**: SQLSpec adds no distributed migration lock, so run `upgrade` from one process at a time (such as a release job rather than every replica at startup). If concurrent upgrades race and one fails with a duplicate-object error, re-running `upgrade` converges idempotently.
+- **Serialized upgrades**: mutating commands (`upgrade`, `downgrade`, `stamp`, and the ledger phases of `squash` and `fix`) hold a migration lock, so concurrent migrators wait for each other and raise `MigrationError` after the lock timeout. The lock depends on the backend:
+
+  | Backend | Lock |
+  | --- | --- |
+  | PostgreSQL family | Session advisory lock |
+  | MySQL and MariaDB | `GET_LOCK` |
+  | SQL Server | `sp_getapplock` |
+  | SQLite (native adapters) | `BEGIN IMMEDIATE` transaction lock |
+  | CockroachDB, Oracle, DuckDB, Spanner, Db2, Sybase, SQL Anywhere, Teradata, and SQLite or DuckDB through ADBC or Arrow ODBC | Lease row in `<version_table_name>_lock` |
+  | BigQuery and Snowflake | None. SQLSpec logs `migration.lock.unsupported` once and continues; run one migrator at a time. |
+
+  The lease lasts `migration_config["lock_lease_seconds"]` (default 900) and is renewed before each migration, so set it longer than your longest single migration. An abandoned lease blocks other migrators until it expires. Lease times use the client clock, so migrator hosts should have roughly synchronized clocks.
 
 ### Strict Schema Safety and Built-In Adapter Coverage
 
@@ -164,6 +187,7 @@ Remaining built-in refusals and their remedies:
 ## Schema Snapshots, Verification, and Data Bootstrap
 
 - **Read-Only `verify`**: Checks applied tracker rows against migration files on disk without creating `version_table_name` on empty databases. Combine `--strict` with `--fail-on-pending` as a pre-deploy CI gate.
+- **Extraction limits**: `dump-schema` and `--from-schema` refuse tables protected by PostgreSQL RLS, Oracle VPD, or SQL Server security policies, and warn about PostgreSQL grants, functions, triggers, and domains they do not emit (see Squashing Strategies above).
 - **Deterministic `dump-schema`**: Exports live schema DDL excluding `version_table_name` by default (`--include-migrations-table` includes it; `--target-dialect` transpiles across SQLGlot dialects). Omitting `--output` writes pure SQL to stdout so `sqlspec dump-schema > schema.sql` produces a clean SQL script.
 
 ### How Data Bootstrap Classifies Sources

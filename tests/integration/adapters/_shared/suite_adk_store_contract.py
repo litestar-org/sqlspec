@@ -6,6 +6,7 @@ from tests.integration.adapters._shared._adk_cases import AdkStoreCaseContext, a
 from tests.integration.adapters._shared.adk_behaviors import (
     assert_adk_append_and_get_events_contract,
     assert_adk_append_event_and_update_state_contract,
+    assert_adk_concurrent_state_merge_contract,
     assert_adk_create_tables_idempotent_contract,
     assert_adk_delete_session_cascade_contract,
     assert_adk_get_events_filtering_contract,
@@ -89,6 +90,15 @@ async def test_adk_append_event_and_update_state_contract(adk_capability_store_c
     """Atomic append updates state and stores the event together."""
     assert adk_capability_store_case.case.supports_atomic_state_update
     await assert_adk_append_event_and_update_state_contract(adk_capability_store_case.make_store)
+
+
+@pytest.mark.parametrize(
+    "adk_capability_store_case", adk_store_params_with("supports_atomic_state_update"), indirect=True
+)
+async def test_adk_concurrent_state_merge_contract(adk_capability_store_case: AdkStoreCaseContext) -> None:
+    """Concurrent scoped state delta appends preserve every disjoint key."""
+    assert adk_capability_store_case.case.supports_atomic_state_update
+    await assert_adk_concurrent_state_merge_contract(adk_capability_store_case.make_store)
 
 
 async def test_adk_get_events_filtering_contract(adk_store_case: AdkStoreCaseContext) -> None:

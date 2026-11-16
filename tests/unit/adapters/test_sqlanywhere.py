@@ -3,13 +3,16 @@
 import asyncio
 import threading
 from contextlib import nullcontext
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, Mock
 
 import pytest
 
+import sqlspec.adapters.sqlanywhere.core as sqlanywhere_core
+import sqlspec.adapters.sqlanywhere.pool as sqlanywhere_pool_module
 from sqlspec.adapters.sqlanywhere import (
     DEFAULT_SQLANYWHERE_PORT,
     SqlanywhereConfig,
@@ -27,20 +30,23 @@ from sqlspec.adapters.sqlanywhere import (
 )
 from sqlspec.adapters.sqlanywhere._typing import SqlanywhereError, SqlanywhereSessionContext
 from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKMemoryStore, SqlanywhereADKStore
-from sqlspec.adapters.sqlanywhere.core import build_insert_statement, format_identifier
+from sqlspec.adapters.sqlanywhere.core import build_insert_statement, execute_cache_hit, format_identifier
 from sqlspec.adapters.sqlanywhere.data_dictionary import build_column_metadata, build_foreign_key_metadata
 from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore
 from sqlspec.adapters.sqlanywhere.litestar import SqlanywhereLitestarConfig, SqlanywhereStore
 from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
+from sqlspec.core.result._base import DMLResult
 from sqlspec.data_dictionary.dialects.sqlanywhere import SqlanywhereVersionInfo
 from sqlspec.data_dictionary.dialects.sqlanywhere.config import SQLANYWHERE_FEATURE_FLAGS
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     MigrationError,
     NotFoundError,
     NotNullViolationError,
@@ -51,6 +57,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.extensions.adk import StoredEvent
 from sqlspec.extensions.adk.migrations.reconcile import reconcile as adk_reconcile
 from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
 from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
@@ -122,6 +129,16 @@ class FakeConnection:
 
     def close(self) -> None:
         self.closed = True
+
+
+def _exact(*columns: str) -> str:
+    return " AND ".join(
+        f"{c} = ? AND CAST({c} AS BINARY(512)) = CAST(CAST(? AS VARCHAR(128)) AS BINARY(512))" for c in columns
+    )
+
+
+def _doubled(*values: Any) -> tuple[Any, ...]:
+    return tuple(item for value in values for item in (value, value))
 
 
 def test_build_connection_config_normalizes_friendly_keys_and_strips_pool_keys() -> None:
@@ -530,6 +547,7 @@ def test_sqlanywhere_migration_tracker_and_extension_stores() -> None:
     assert "CREATE TABLE IF NOT EXISTS" in memory_ddl
     assert "LONG VARCHAR" in memory_ddl
     assert "TIMESTAMP" in memory_ddl
+    assert "UNIQUE (app_name, user_id, event_id)" in memory_ddl
 
 
 @pytest.mark.anyio
@@ -556,17 +574,23 @@ async def test_sqlanywhere_litestar_and_adk_stores_roundtrip_with_mocked_connect
 
     captured: list[tuple[str, tuple[Any, ...]]] = []
 
-    def _capture(_self: SqlanywhereADKStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+    def _capture(_self: Any, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         captured.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(SqlanywhereADKStore, "_execute_fetchall", _capture)
+    connection = MagicMock()
+    cursor = connection.cursor.return_value
+    cursor.execute.side_effect = lambda sql, params=(): _capture(None, sql, params)
+    cursor.fetchall.return_value = []
+    provider = MagicMock()
+    provider.return_value.__enter__.return_value = connection
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", provider)
     adk_store = SqlanywhereADKStore(config)
     adk_store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
     sql, params = captured[0]
     normalized_sql = " ".join(sql.split())
     assert "ORDER BY create_time ASC, id ASC LIMIT ? OFFSET ?" in normalized_sql
-    assert params == ("app", "u1", 10, 20)
+    assert params == (*_doubled("app", "u1"), 10, 20)
 
     monkeypatch.setattr(SqlanywhereADKMemoryStore, "insert_memory_entries", MagicMock(return_value=1))
     memory_store = SqlanywhereADKMemoryStore(config)
@@ -644,6 +668,7 @@ def test_sqlanywhere_adk_memory_store_insert_sql_contains_from_sys_dummy(monkeyp
     assert len(executed_statements) == 1
     assert "FROM SYS.DUMMY" in executed_statements[0]
     assert "WHERE NOT EXISTS" in executed_statements[0]
+    assert f"WHERE {_exact('app_name', 'user_id', 'event_id')}" in " ".join(executed_statements[0].split())
 
 
 def test_sqlanywhere_adk_memory_store_handles_native_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -769,7 +794,7 @@ def test_sqlanywhere_commit_and_rollback_raise_transaction_error() -> None:
 
 
 def test_sqlanywhere_session_context_rolls_back_implicit_work() -> None:
-    """DML without begin() must be rolled back before a pooled connection is reused."""
+    """DML without begin() must be rolled back and the driver detached before a pooled connection is reused."""
     conn = FakeConnection()
     ctx = SqlanywhereSessionContext(
         acquire_connection=lambda: cast("SqlanywhereConnection", conn),
@@ -782,6 +807,27 @@ def test_sqlanywhere_session_context_rolls_back_implicit_work() -> None:
         driver.execute("INSERT INTO items (id) VALUES (1)")
 
     assert conn.rollbacks == 1
+    assert driver.connection is _CLOSED_CONNECTION
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+def test_sqlanywhere_provide_session_detaches_driver_on_exit(
+    monkeypatch: pytest.MonkeyPatch, body_raises: bool
+) -> None:
+    """SqlanywhereConfig.provide_session detaches the yielded driver on clean and error exit."""
+    conn = FakeConnection()
+    monkeypatch.setattr(sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: conn))
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    try:
+        if body_raises:
+            with pytest.raises(RuntimeError, match="sa body error"), config.provide_session() as session:
+                raise RuntimeError("sa body error")
+        else:
+            with config.provide_session() as session:
+                pass
+        assert session.connection is _CLOSED_CONNECTION
+    finally:
+        config.close_pool()
 
 
 def test_sqlanywhere_connection_pool_bounds_max_size(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1007,3 +1053,683 @@ def test_sqlanywhere_reconcile_end_to_end_orchestrators() -> None:
     assert any('"adk_memory"' in stmt for stmt in executed)
     assert any('"idx_adk_session_app_user"' in stmt for stmt in executed)
     assert any('"idx_adk_memory_session"' in stmt for stmt in executed)
+
+
+def test_sqlanywhere_replica_derivation_preserves_pool_options_and_replaces_aliases() -> None:
+    def connection_hook(connection: SqlanywhereConnection) -> None:
+        del connection
+
+    source = {"host": "writer", "port": 2638, "user": "dba", "database": "app", "pool_max_size": 12}
+    primary = SqlanywhereConfig(
+        connection_config=source, driver_features={"on_connection_create": connection_hook}, replicas=True
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    assert replica.connection_config["nodetype"] == "READONLY"
+    derived = primary.derive_pool(host="reader", port=2639, user="reporter")
+    assert derived.connection_config["links"] == "tcpip(host=reader;port=2639)"
+    assert derived.connection_config["uid"] == "reporter"
+    assert derived.connection_config["dbn"] == "app"
+    assert source["user"] == "dba"
+    assert getattr(derived, "_pool_max_size") == 12
+    assert getattr(derived, "_user_connection_hook") is connection_hook
+
+
+@pytest.mark.parametrize("bad_spec", [False, "", "sqlanywhere:///app", "postgresql://reader/app", "reader:invalid"])
+def test_sqlanywhere_replica_rejects_invalid_specs(bad_spec: Any) -> None:
+    """Boolean False and malformed endpoint strings should fail fast with ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        SqlanywhereConfig(connection_config={"host": "writer", "port": 2638}, replicas=[bad_spec])
+
+
+@pytest.mark.parametrize(
+    ("replica_spec", "expected_nodetype"),
+    [
+        ({"host": "reader"}, "READONLY"),
+        ({"host": "reader", "extra": {"nodetype": "PRIMARY"}}, "PRIMARY"),
+        ({"connection_config_overrides": {"host": "reader", "nodetype": "PRIMARY"}}, "PRIMARY"),
+    ],
+)
+def test_sqlanywhere_replica_mapping_nodetype_defaults_and_overrides(
+    replica_spec: dict[str, Any], expected_nodetype: str
+) -> None:
+    """Replica mappings default nodetype to READONLY inside connection_config_overrides while honoring explicit values."""
+    config = SqlanywhereConfig(connection_config={"host": "writer", "port": 2638}, replicas=[replica_spec])
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["nodetype"] == expected_nodetype
+
+
+@pytest.mark.parametrize("arguments", [("25006", -757), ("25006", 757), ("25006", "read-only transaction")])
+def test_sqlanywhere_readonly_errors_preserve_native_cause(arguments: tuple[object, ...]) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    native = Exception(*arguments)
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is native
+
+
+@pytest.mark.parametrize(
+    ("raw_pwd", "expected_pwd"),
+    [
+        ("pa;ss=word", "'pa;ss=word'"),
+        ("pa'ss;word", "'pa''ss;word'"),
+        ("{braced}", "'{braced}'"),
+        ("  padded  ", "'  padded  '"),
+        ("plain_pwd", "plain_pwd"),
+    ],
+)
+def test_sqlanywhere_build_connection_config_quotes_delimiter_values(raw_pwd: str, expected_pwd: str) -> None:
+    """Delimiter-bearing SQL Anywhere parameter strings are single-quoted with doubled inner quotes."""
+    cfg = build_connection_config({"user": "dba", "password": raw_pwd, "database": "demo"})
+    assert cfg["pwd"] == expected_pwd
+
+
+@pytest.mark.parametrize(
+    "bad_config",
+    [
+        {"user": "dba", "password": "bad\x00pwd"},
+        {"user": "dba", "password": "bad\npwd"},
+        {"user": "dba", "extra": {"bad;key": "1"}},
+        {"user": "dba", "extra": {"Server\n": "demo"}},
+        {"user": "dba", "links": "tcpip\n"},
+        {"user": "dba", "host": "localhost", "port": 70000},
+        {"user": "dba", "host": "localhost", "port": True},
+    ],
+)
+def test_sqlanywhere_build_connection_config_rejects_invalid_keys_ports_and_controls(
+    bad_config: dict[str, Any],
+) -> None:
+    """Invalid SQL Anywhere keys, out-of-range ports, and control characters raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(bad_config)
+
+
+@pytest.mark.parametrize(
+    ("pattern_name", "value"), [("_SQLANY_KEY_PATTERN", "Server\n"), ("_SQLANY_LINKS_PATTERN", "tcpip\n")]
+)
+def test_sqlanywhere_identifier_patterns_reject_trailing_newline(pattern_name: str, value: str) -> None:
+    """SQL Anywhere identifier regexes use full-string anchors and reject trailing newlines."""
+    pattern = getattr(sqlanywhere_core, pattern_name)
+    assert pattern.match(value) is None
+    assert pattern.fullmatch(value) is None
+
+
+def test_sqlanywhere_pool_checkin_rolls_back_and_retires_on_hook_or_rollback_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SqlanywhereConnectionPool rolls back once on outermost checkin, closes failed-hook sockets, and retires failed rollbacks."""
+    hook_conn = FakeConnection()
+    monkeypatch.setattr(
+        sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: hook_conn)
+    )
+    hook_pool = SqlanywhereConnectionPool(
+        {"user": "dba", "password": "sql", "database": "demo"},
+        on_connection_create=lambda _c: (_ for _ in ()).throw(RuntimeError("sa hook failed")),
+    )
+    with pytest.raises(RuntimeError, match="sa hook failed"):
+        hook_pool.new_connection()
+    assert hook_conn.closed is True
+
+    c1 = FakeConnection()
+    c2 = FakeConnection()
+    conns = [c1, c2]
+    monkeypatch.setattr(
+        sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: conns.pop(0))
+    )
+    pool = SqlanywhereConnectionPool(
+        {"user": "dba", "password": "sql", "database": "demo"}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        with pool.get_connection() as outer:
+            with pool.get_connection() as inner:
+                assert inner is outer
+            assert c1.rollbacks == 0
+        assert c1.rollbacks == 1
+
+        monkeypatch.setattr(c1, "rollback", MagicMock(side_effect=OSError("sa rollback broken")))
+        with pytest.raises(OSError, match="sa rollback broken"), pool.get_connection():
+            pass
+        assert c1.closed is True
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+        with pool.get_connection() as fresh:
+            assert cast("object", fresh) is c2
+    finally:
+        pool.close()
+
+
+def _sqlanywhere_event_fixture(**overrides: Any) -> StoredEvent:
+    payload: dict[str, Any] = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+        "event_data": {"text": "hello"},
+    }
+    payload.update(overrides)
+    return cast("StoredEvent", payload)
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+def test_sqlanywhere_adk_get_session_renews_only_for_positive_duration(
+    monkeypatch: pytest.MonkeyPatch, renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """SqlanywhereADKStore.get_session executes UPDATE only when renew_for is positive."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    writes: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture_execute(_self: SqlanywhereADKStore, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        writes.append((" ".join(sql.split()), tuple(params)))
+        return 1
+
+    monkeypatch.setattr(SqlanywhereADKStore, "_execute", capture_execute)
+    monkeypatch.setattr(
+        SqlanywhereADKStore, "_execute_fetchone", lambda *_a, **_kw: ("s1", "app", "u1", '{"step":1}', now, now)
+    )
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    session = SqlanywhereADKStore(config).get_session("app", "u1", "s1", renew_for=renew_for)
+
+    assert session is not None
+    assert session["id"] == "s1"
+    if expect_renew:
+        assert writes == [
+            (
+                (
+                    'UPDATE "DBA"."adk_session" SET update_time = CURRENT UTC TIMESTAMP '
+                    f"WHERE {_exact('app_name', 'user_id', 'id')}"
+                ),
+                _doubled("app", "u1", "s1"),
+            )
+        ]
+    else:
+        assert writes == []
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-or-unowned"])
+def test_sqlanywhere_adk_append_event_verifies_session_ownership(
+    monkeypatch: pytest.MonkeyPatch, session_exists: bool
+) -> None:
+    """SqlanywhereADKStore.append_event probes session ownership before inserting and rolls back when unowned."""
+    cursor = FakeCursor(rows=[(1,)] if session_exists else [])
+    conn = FakeConnection(cursor)
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(conn))
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKStore(config)
+
+    if session_exists:
+        store.append_event(_sqlanywhere_event_fixture())
+        assert len(cursor.calls) == 2
+        ownership_sql, ownership_params = cursor.calls[0]
+        insert_sql, _ = cursor.calls[1]
+        assert " ".join(ownership_sql.split()) == (
+            f'SELECT TOP 1 1 FROM "DBA"."adk_session" WHERE {_exact("id", "app_name", "user_id")}'
+        )
+        assert ownership_params == _doubled("s1", "app", "u1")
+        assert " ".join(insert_sql.split()).startswith('INSERT INTO "DBA"."adk_event"')
+        assert conn.commits == 1
+        assert conn.rollbacks == 0
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+            store.append_event(_sqlanywhere_event_fixture())
+        assert len(cursor.calls) == 1
+        assert conn.rollbacks == 1
+        assert conn.commits == 0
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"app_name": "other"}, id="app-mismatch"),
+        pytest.param({"user_id": "other"}, id="user-mismatch"),
+        pytest.param({"session_id": "other"}, id="session-mismatch"),
+    ],
+)
+def test_sqlanywhere_adk_append_event_and_update_state_rejects_mismatched_scope(
+    monkeypatch: pytest.MonkeyPatch, overrides: "dict[str, str]"
+) -> None:
+    """Mismatched event scope fails before acquiring a SQL Anywhere connection."""
+    opened = False
+
+    def fail_connect(_self: Any) -> Any:
+        nonlocal opened
+        opened = True
+        return nullcontext(FakeConnection())
+
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", fail_connect)
+    store = SqlanywhereADKStore(
+        SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        store.append_event_and_update_state(_sqlanywhere_event_fixture(**overrides), "app", "u1", "s1", {"step": 2})
+
+    assert opened is False
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-session"])
+def test_sqlanywhere_adk_append_event_and_update_state_orders_update_before_insert(
+    monkeypatch: pytest.MonkeyPatch, session_exists: bool
+) -> None:
+    """SqlanywhereADKStore.append_event_and_update_state updates and checks session row before inserting event."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = [("s1", "app", "u1", '{"step":2}', now, now)] if session_exists else []
+    cursor = FakeCursor(rows=rows)
+    conn = FakeConnection(cursor)
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(conn))
+    store = SqlanywhereADKStore(
+        SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    )
+
+    if session_exists:
+        session = store.append_event_and_update_state(_sqlanywhere_event_fixture(), "app", "u1", "s1", {"step": 2})
+        assert session["state"] == {"step": 2}
+        executed_sql = [" ".join(sql.split()) for sql, _ in cursor.calls]
+        assert len(executed_sql) == 3
+        assert executed_sql[0].startswith('UPDATE "DBA"."adk_session"')
+        assert executed_sql[1].startswith("SELECT TOP 1 id, app_name")
+        assert executed_sql[2].startswith('INSERT INTO "DBA"."adk_event"')
+        assert conn.commits == 1
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found"):
+            store.append_event_and_update_state(_sqlanywhere_event_fixture(), "app", "u1", "s1", {"step": 2})
+        assert len(cursor.calls) == 2
+        assert conn.rollbacks == 1
+        assert conn.commits == 0
+
+
+def test_sqlanywhere_adk_events_join_and_delete_session_scoping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_events joins on (session_id, app_name, user_id) and delete_session scopes event deletes."""
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKStore(config)
+    after = datetime(2026, 1, 1, tzinfo=UTC)
+    events_sql, events_params = store._events_query("app", "u1", "s1", after_timestamp=after, limit=5)
+
+    assert (
+        'FROM "DBA"."adk_event" e JOIN "DBA"."adk_session" s '
+        "ON e.session_id = s.id AND CAST(e.session_id AS BINARY(512)) = CAST(s.id AS BINARY(512)) "
+        "AND e.app_name = s.app_name AND CAST(e.app_name AS BINARY(512)) = CAST(s.app_name AS BINARY(512)) "
+        "AND e.user_id = s.user_id AND CAST(e.user_id AS BINARY(512)) = CAST(s.user_id AS BINARY(512)) "
+        f"WHERE {_exact('s.app_name', 's.user_id', 's.id')} AND e.timestamp > ? "
+        "ORDER BY e.timestamp DESC LIMIT ?"
+    ) in " ".join(events_sql.split())
+    assert events_params == (*_doubled("app", "u1", "s1"), after, 5)
+
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(conn))
+    store.delete_session("app", "u1", "s1")
+    executed = [(" ".join(sql.split()), params) for sql, params in cursor.calls]
+    assert executed == [
+        (
+            f'DELETE FROM "DBA"."adk_event" WHERE {_exact("app_name", "user_id", "session_id")}',
+            _doubled("app", "u1", "s1"),
+        ),
+        (f'DELETE FROM "DBA"."adk_session" WHERE {_exact("app_name", "user_id", "id")}', _doubled("app", "u1", "s1")),
+    ]
+    assert conn.commits == 1
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_sql", "expected_params"),
+    [
+        pytest.param(
+            "app",
+            "u1",
+            f'DELETE FROM "DBA"."adk_memory" WHERE {_exact("session_id", "app_name", "user_id")}',
+            _doubled("s1", "app", "u1"),
+            id="session-app-and-user",
+        )
+    ],
+)
+def test_sqlanywhere_adk_memory_delete_entries_by_session_owner_filters(
+    monkeypatch: pytest.MonkeyPatch, app_name: str, user_id: str, expected_sql: str, expected_params: "tuple[str, ...]"
+) -> None:
+    """SqlanywhereADKMemoryStore.delete_entries_by_session appends owner predicates when provided."""
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture_delete(_self: SqlanywhereADKMemoryStore, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        calls.append((" ".join(sql.split()), tuple(params)))
+        return 1
+
+    monkeypatch.setattr(SqlanywhereADKMemoryStore, "_execute", capture_delete)
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    assert SqlanywhereADKMemoryStore(config).delete_entries_by_session("s1", app_name=app_name, user_id=user_id) == 1
+    assert calls == [(expected_sql, expected_params)]
+
+
+def test_sqlanywhere_session_context_cleans_up_on_prepare_and_exit_work_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SqlanywhereSessionContext always releases connections and detaches drivers across setup/exit errors."""
+    conn = FakeConnection()
+    monkeypatch.setattr(sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: conn))
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    pool = config.provide_pool()
+    seen: list[Any] = []
+
+    def fail_prepare(_self: Any, driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(SqlanywhereConfig, "_prepare_driver", fail_prepare)
+    try:
+        with pytest.raises(RuntimeError, match="prepare boom"), config.provide_session():
+            pass
+
+        assert pool.checked_out() == 0
+        assert seen[0].connection is _CLOSED_CONNECTION
+
+        released: list[object] = []
+        ctx = SqlanywhereSessionContext(
+            acquire_connection=lambda: cast("SqlanywhereConnection", conn),
+            release_connection=lambda c, **_kw: released.append(c),
+            statement_config=config.statement_config,
+            driver_features={},
+            prepare_driver=lambda d: d,
+        )
+        with pytest.raises(RuntimeError, match="release work boom"), ctx as driver:
+            monkeypatch.setattr(
+                type(driver),
+                "_release_open_work",
+                lambda _self: (_ for _ in ()).throw(RuntimeError("release work boom")),
+            )
+
+        assert released == [conn]
+        assert driver.connection is _CLOSED_CONNECTION
+    finally:
+        config.close_pool()
+
+
+def test_sqlanywhere_pool_nested_acquire_rolls_back_only_on_outermost_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nested SqlanywhereConnectionPool acquire/release calls roll back only on the outermost release."""
+    conn = FakeConnection()
+    monkeypatch.setattr(sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: conn))
+    pool = SqlanywhereConnectionPool(
+        {"user": "dba", "password": "sql", "database": "demo"}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        outer = pool.acquire()
+        inner = pool.acquire()
+        assert inner is outer
+        assert pool.checked_out() == 2
+
+        pool.release(inner)
+        assert pool.checked_out() == 1
+        assert conn.rollbacks == 0
+
+        pool.release(outer)
+        assert pool.checked_out() == 0
+        assert conn.rollbacks == 1
+    finally:
+        pool.close()
+
+
+def test_sqlanywhere_derive_pool_does_not_double_escape_delimiter_values() -> None:
+    """Chained pool/replica derivations quote delimiter-bearing connection values only once."""
+    primary = SqlanywhereConfig(
+        connection_config={"host": "writer", "port": 2638, "user": "dba", "password": "a;b", "database": "app"},
+        replicas=True,
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    derived = primary.derive_pool(host="reader", port=2639)
+    derived_twice = derived.derive_pool(database="reporting")
+    assert primary.connection_config["pwd"] == "'a;b'"
+    assert replica.connection_config["pwd"] == "'a;b'"
+    assert derived.connection_config["pwd"] == "'a;b'"
+    assert derived_twice.connection_config["pwd"] == "'a;b'"
+    assert derived_twice.connection_config["links"] == "tcpip(host=reader;port=2639)"
+    assert derived_twice.connection_config["dbn"] == "reporting"
+
+
+class _FakeSqlanyInterfaceError(FakeSqlanydbError):
+    pass
+
+
+class _FakeSqlanyOperationalError(FakeSqlanydbError):
+    pass
+
+
+_FakeSqlanyInterfaceError.__name__ = "InterfaceError"
+_FakeSqlanyOperationalError.__name__ = "OperationalError"
+
+
+@pytest.mark.parametrize("method", ["provide_replica_connection", "provide_replica_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (FakeSqlanydbError("08001", -100, "Server not found"), DatabaseConnectionError),
+        (FakeSqlanydbError(None, -308, "Connection terminated"), DatabaseConnectionError),
+        (_FakeSqlanyInterfaceError(None, None, "Socket closed"), DatabaseConnectionError),
+        (_FakeSqlanyOperationalError(None, None, "Server unavailable"), OperationalError),
+    ],
+)
+def test_sqlanywhere_read_replica_failover_maps_connection_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """SQL Anywhere config and replica acquisition map driver errors so failover triggers."""
+    healthy_conn = MagicMock()
+
+    def fake_connect(**kwargs: Any) -> Any:
+        if "r1" in str(kwargs.get("host", "")) or "r1" in str(kwargs.get("links", "")):
+            raise driver_exc
+        return healthy_conn
+
+    monkeypatch.setattr(sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=fake_connect))
+    config = SqlanywhereConfig(
+        connection_config={"host": "writer", "port": 2638, "user": "dba", "password": "sql", "database": "app"},
+        replicas=["r1:2638", "r2:2638"],
+    )
+    try:
+        with getattr(config, method)() as acquired:
+            conn = acquired if method == "provide_replica_connection" else acquired.connection
+            assert conn is healthy_conn
+
+        failing_only = SqlanywhereConfig(
+            connection_config={"host": "r1", "port": 2638, "user": "dba", "password": "sql", "database": "app"}
+        )
+        try:
+            with pytest.raises(expected_mapped) as exc_info:
+                failing_only.create_connection()
+            assert exc_info.value.__cause__ is driver_exc
+            with pytest.raises(expected_mapped), failing_only.provide_connection():
+                pass
+            with pytest.raises(expected_mapped), failing_only.provide_session():
+                pass
+        finally:
+            failing_only.close_pool()
+    finally:
+        config.close_pool()
+
+
+def test_sqlanywhere_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError propagates through SQL Anywhere provide_replica_session without failover."""
+    hook_conn = MagicMock()
+    monkeypatch.setattr(
+        sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: hook_conn)
+    )
+
+    def failing_hook(_conn: Any) -> None:
+        raise RuntimeError("hook boom")
+
+    config = SqlanywhereConfig(
+        connection_config={"host": "writer", "port": 2638, "user": "dba", "password": "sql", "database": "app"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1:2638", "r2:2638"],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"), config.provide_replica_session():
+            pass
+        hook_conn.close.assert_called_once()
+    finally:
+        config.close_pool()
+
+
+class _QueueCursor(FakeCursor):
+    """FakeCursor returning queued fetchone results in execution order."""
+
+    def fetchone(self) -> Any:
+        return self.rows.pop(0) if self.rows else None
+
+
+def test_sqlanywhere_adk_create_append_and_get_events_chronological(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SqlanywhereADKStore locks app then user state with FOR UPDATE BY LOCK and reverses bounded newest-N events."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cursor = _QueueCursor(
+        rows=[
+            ("s1", "app", "u1", '{"turn": 1}', now, now),
+            ('{"app:existing": 1}',),
+            ('{"user:lang": "en"}',),
+            ("s1", "app", "u1", '{"turn": 2}', now, now),
+            None,
+            ('{"user:lang": "en"}',),
+        ]
+    )
+    conn = FakeConnection(cursor)
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(conn))
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKStore(config)
+
+    created = store.create_session(
+        "s1", "app", "u1", {"turn": 1}, app_state_delta={"app:added": 2}, user_state_delta=None
+    )
+    assert created["state"] == {"turn": 1, "app:existing": 1, "app:added": 2, "user:lang": "en"}
+
+    event = _sqlanywhere_event_fixture()
+    updated = store.append_event_and_update_state(
+        event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"app:k": 1}, user_state_delta={"user:theme": "dark"}
+    )
+    assert updated["state"] == {"turn": 2, "app:k": 1, "user:lang": "en", "user:theme": "dark"}
+    assert conn.commits == 2
+
+    executed = [" ".join(sql.split()) for sql, _ in cursor.calls]
+    assert f'SELECT state FROM "DBA"."adk_app_state" WHERE {_exact("app_name")} FOR UPDATE BY LOCK' in executed
+    assert (
+        f'SELECT state FROM "DBA"."adk_user_state" WHERE {_exact("app_name", "user_id")} FOR UPDATE BY LOCK' in executed
+    )
+
+    with pytest.raises(TypeError):
+        cast("Any", store).append_event_and_update_state(event, "app", "u1", "s1", {}, app_state={"a": 1})
+
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    captured: list[tuple[str, tuple[Any, ...]]] = []
+
+    def _fake_fetchall(
+        _store: SqlanywhereADKStore, sql: str, params: "tuple[Any, ...]", read: bool = False
+    ) -> "list[tuple[Any, ...]]":
+        captured.append((sql, params))
+        return [("e3", "app", "u1", "s1", "i", t3, "{}"), ("e2", "app", "u1", "s1", "i", t2, "{}")]
+
+    monkeypatch.setattr(SqlanywhereADKStore, "_execute_fetchall", _fake_fetchall)
+    events = store.get_events("app", "u1", "s1", limit=2)
+    assert [e["id"] for e in events] == ["e2", "e3"]
+    assert "ORDER BY e.timestamp DESC LIMIT ?" in " ".join(captured[0][0].split())
+
+
+def _cache_hit_driver(cursor: FakeCursor) -> "tuple[SqlanywhereDriver, FakeConnection]":
+    connection = FakeConnection(cursor)
+    return SqlanywhereDriver(cast("SqlanywhereConnection", connection)), connection
+
+
+def _run_cache_hit_executor(driver: SqlanywhereDriver, statement: str, params: Any) -> Any:
+    cached = cast("Any", driver._stmt_cache.get(statement))
+    return execute_cache_hit(
+        driver.connection, statement, params, cached, driver.statement_config, driver._cache_hit_state
+    )
+
+
+def _raising_cursor(error: BaseException) -> FakeCursor:
+    cursor = FakeCursor()
+
+    def fail(sql: str, parameters: Any = None) -> None:
+        raise error
+
+    cursor.execute = fail  # type: ignore[method-assign]
+    return cursor
+
+
+def test_sqlanywhere_repeated_select_runs_through_cache_hit_executor(monkeypatch: pytest.MonkeyPatch) -> None:
+    statement = "SELECT id, name FROM DBA.users WHERE id = ?"
+    cursor = FakeCursor(rows=[(1, "Ada")], description=[("id",), ("name",)])
+    driver, _ = _cache_hit_driver(cursor)
+    outcomes: list[Any] = []
+
+    def recording_executor(*args: Any) -> Any:
+        outcome = execute_cache_hit(*args)
+        outcomes.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(driver, "_cache_hit_executor", recording_executor)
+
+    driver.execute(statement, 1)
+    result = driver.execute(statement, 2)
+
+    assert len(outcomes) == 1
+    assert outcomes[0] is result
+    assert result.get_data() == [{"id": 1, "name": "Ada"}]
+    assert result.column_names == ["id", "name"]
+    assert result.rows_affected == 1
+    assert result.statement.sql == statement
+    assert cursor.calls[-1] == (statement, (2,))
+    assert cursor.closed is True
+
+
+def test_sqlanywhere_cache_hit_without_parameters_executes_sql_only() -> None:
+    statement = "SELECT id, name FROM DBA.users"
+    cursor = FakeCursor(rows=[(1, "Ada"), (2, "Grace")], description=[("id",), ("name",)])
+    driver, _ = _cache_hit_driver(cursor)
+    driver.execute(statement)
+
+    result = _run_cache_hit_executor(driver, statement, ())
+
+    assert result.get_data() == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]
+    assert cursor.calls[-1] == (statement, None)
+
+
+def test_sqlanywhere_cache_hit_dml_returns_affected_rows_for_list_parameters() -> None:
+    statement = "UPDATE DBA.users SET name = ? WHERE id = ?"
+    cursor = FakeCursor(rowcount=3)
+    driver, _ = _cache_hit_driver(cursor)
+    driver.execute(statement, "Ada", 1)
+
+    result = _run_cache_hit_executor(driver, statement, ["Grace", 2])
+
+    assert isinstance(result, DMLResult)
+    assert result.operation_type == "UPDATE"
+    assert result.rows_affected == 3
+    assert cursor.calls[-1] == (statement, ("Grace", 2))
+
+
+def test_sqlanywhere_cache_hit_maps_driver_errors_and_keeps_sqlspec_errors() -> None:
+    statement = "UPDATE DBA.users SET name = ? WHERE id = ?"
+    driver, connection = _cache_hit_driver(FakeCursor(rowcount=1))
+    driver.execute(statement, "Ada", 1)
+    native = FakeSqlanydbError("23505", -193, "Primary key not unique")
+    failing = _raising_cursor(native)
+    connection.cursor_obj = failing
+
+    with pytest.raises(UniqueViolationError) as exc_info:
+        driver.execute(statement, "Ada", 2)
+
+    assert exc_info.value.__cause__ is native
+    assert failing.closed is True
+
+    already_mapped = TransactionError("already mapped")
+    connection.cursor_obj = _raising_cursor(already_mapped)
+
+    with pytest.raises(TransactionError) as mapped_info:
+        _run_cache_hit_executor(driver, statement, ("Ada", 3))
+
+    assert mapped_info.value is already_mapped

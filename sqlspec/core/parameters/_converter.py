@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal
+from enum import Enum
 from math import isfinite
 from typing import Any, Final
 
@@ -40,7 +41,45 @@ _BINARY_LITERAL_TEMPLATES: Final[dict[str | None, str]] = {
     "bigquery": "FROM_HEX('{}')",
     "spanner": "FROM_HEX('{}')",
     "duckdb": "UNHEX('{}')",
+    "db2": "BX'{}'",
+    "teradata": "'{}'XB",
 }
+_DIALECT_LITERAL_ALIASES: Final[dict[str, str]] = {
+    "mariadb": "mysql",
+    "postgresql": "postgres",
+    "cockroach": "postgres",
+    "cockroachdb": "postgres",
+    "mssql": "tsql",
+    "sqlserver": "tsql",
+    "sybase": "tsql",
+    "ase": "tsql",
+    "sqlanywhere": "tsql",
+    "vantage": "teradata",
+}
+_ANSI_LITERAL_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "spangres",
+    "sqlite",
+    "duckdb",
+    "oracle",
+    "tsql",
+    "db2",
+    "teradata",
+})
+_POSTGRES_ESCAPE_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "redshift",
+})
+
+_FIRST_PRINTABLE_ORDINAL: Final = 0x20
+_GOOGLESQL_LITERAL_DIALECTS: Final[frozenset[str]] = frozenset({"spanner", "bigquery"})
+_GOOGLESQL_ESCAPES: Final[dict[str, str]] = {"\\": "\\\\", "'": "\\'", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
 _ORDERED_PARAM_INFO_MIN_SIZE = 2
 _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
@@ -48,6 +87,20 @@ _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
     ParameterStyle.POSITIONAL_PYFORMAT,
 })
 _INDEX_STYLES: Final[frozenset[ParameterStyle]] = frozenset({ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON})
+
+
+def _googlesql_string_literal(text: str) -> str:
+    """Render a GoogleSQL single-quoted string literal using backslash escapes."""
+    pieces: list[str] = []
+    for char in text:
+        escaped = _GOOGLESQL_ESCAPES.get(char)
+        if escaped is not None:
+            pieces.append(escaped)
+        elif ord(char) < _FIRST_PRINTABLE_ORDINAL:
+            pieces.append(f"\\x{ord(char):02x}")
+        else:
+            pieces.append(char)
+    return "'" + "".join(pieces) + "'"
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -539,27 +592,78 @@ class ParameterConverter:
     def _format_literal(param_value: object | None, dialect: "str | None" = None) -> str:
         """Render a literal for the server's default SQL mode.
 
-        MySQL NO_BACKSLASH_ESCAPES stores doubled backslashes as two characters.
+        Negative numbers are separated from a preceding minus operator during
+        embedding so they never form a ``--`` comment marker. Numeric subclasses
+        render via canonical base representations instead of custom ``__str__``
+        methods. On PostgreSQL-family dialects, strings containing backslashes
+        emit explicit ``E'...'`` escape strings so literals remain safe even when
+        ``standard_conforming_strings`` is disabled.
         """
+        while isinstance(param_value, Enum):
+            param_value = param_value.value
         if param_value is None:
             return "NULL"
         if isinstance(param_value, bool):
             return "TRUE" if param_value else "FALSE"
-        if isinstance(param_value, (float, Decimal)):
-            finite = param_value.is_finite() if isinstance(param_value, Decimal) else isfinite(param_value)
-            if not finite:
+        if isinstance(param_value, Decimal):
+            if not param_value.is_finite():
                 msg = "Cannot embed a non-finite number in statically compiled SQL"
                 raise SQLSpecError(msg)
-            return str(param_value)
+            return Decimal.__str__(param_value)
+        if isinstance(param_value, float):
+            native_float = float(param_value)
+            if not isfinite(native_float):
+                msg = "Cannot embed a non-finite number in statically compiled SQL"
+                raise SQLSpecError(msg)
+            return float.__repr__(native_float)
         if isinstance(param_value, int):
-            return str(param_value)
+            return int.__repr__(int(param_value))
+        normalized = dialect.strip().lower() if dialect else None
+        literal_dialect = _DIALECT_LITERAL_ALIASES.get(normalized, normalized) if normalized else None
         if isinstance(param_value, (bytes, bytearray, memoryview)):
-            template = _BINARY_LITERAL_TEMPLATES.get(dialect.lower() if dialect else None)
+            template = _BINARY_LITERAL_TEMPLATES.get(literal_dialect)
             if template is None:
                 msg = f"Cannot embed a bytes value in statically compiled SQL for dialect '{dialect}'"
                 raise SQLSpecError(msg)
             return template.format(bytes(param_value).hex())
-        return exp.Literal.string(str(param_value)).sql(dialect=dialect)
+        text = str(param_value)
+        if literal_dialect is None:
+            if "\x00" in text:
+                msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+                raise SQLSpecError(msg)
+            if "\\" in text:
+                msg = "Cannot embed a string containing a backslash in statically compiled SQL without a dialect"
+                raise SQLSpecError(msg)
+            return "'" + text.replace("'", "''") + "'"
+        if literal_dialect in _GOOGLESQL_LITERAL_DIALECTS:
+            return _googlesql_string_literal(text)
+        if literal_dialect == "mysql" and "\\" in text:
+            if "\x00" in text:
+                msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+                raise SQLSpecError(msg)
+            return f"_utf8mb4 X'{text.encode('utf-8').hex().upper()}'"
+        if literal_dialect in _POSTGRES_ESCAPE_STRING_DIALECTS:
+            if "\x00" in text:
+                msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+                raise SQLSpecError(msg)
+            if "\\" in text:
+                escaped = text.replace("\\", "\\\\").replace("'", "''")
+                return f"E'{escaped}'"
+            return "'" + text.replace("'", "''") + "'"
+        if literal_dialect in _ANSI_LITERAL_DIALECTS:
+            if "\x00" in text:
+                msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+                raise SQLSpecError(msg)
+            return "'" + text.replace("'", "''") + "'"
+        try:
+            rendered = exp.Literal.string(text).sql(dialect=literal_dialect, copy=False)
+        except ValueError as exc:
+            msg = f"Cannot embed a string value in statically compiled SQL for dialect '{dialect}'"
+            raise SQLSpecError(msg) from exc
+        if "\x00" in rendered:
+            msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+            raise SQLSpecError(msg)
+        return rendered
 
     def _embed_static_parameters(
         self, sql: str, parameters: "ParameterPayload", param_info: "list[ParameterInfo]", dialect: "str | None" = None
@@ -589,6 +693,8 @@ class ParameterConverter:
         for param in param_info[::-1]:
             param_value = self._parameter_value(parameters, param, unique_params, explicit_indexes)
             literal = self._format_literal(param_value, dialect)
+            if literal.startswith("-") and param.position > 0 and sql[param.position - 1] == "-":
+                literal = f" {literal}"
             segments.extend((sql[param.position + len(param.placeholder_text) : last_start], literal))
             last_start = param.position
         segments.append(sql[:last_start])

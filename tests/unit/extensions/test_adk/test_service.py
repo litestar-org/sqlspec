@@ -29,6 +29,7 @@ from google.adk.sessions.session import Session
 
 from sqlspec.exceptions import UniqueViolationError
 from sqlspec.extensions.adk._types import StoredEvent, StoredSession
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.service import SQLSpecSessionService
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
 
@@ -45,22 +46,21 @@ class MockStore:
     """
 
     def __init__(self) -> None:
-        # Track calls to the new combined method
         self.append_event_and_update_state_calls: list[dict[str, Any]] = []
         self.append_event_and_update_state_called = False
         self.get_session_calls = 0
+        self.get_app_state_calls = 0
+        self.get_user_state_calls = 0
         self.get_events_calls: list[dict[str, Any]] = []
         self.list_sessions_calls: list[dict[str, Any]] = []
         self.upsert_app_state_calls: list[dict[str, Any]] = []
         self.upsert_user_state_calls: list[dict[str, Any]] = []
 
-        # Track calls to create_session
         self.create_session_calls: list[dict[str, Any]] = []
         self.app_state: dict[str, Any] = {}
         self.user_state: dict[str, Any] = {}
 
-        # Provide a get_session that returns a minimal session record
-        self._session_record = {
+        self._session_record: dict[str, Any] = {
             "id": "s1",
             "app_name": "app",
             "user_id": "u1",
@@ -76,8 +76,9 @@ class MockStore:
         user_id: str,
         session_id: str,
         state: "dict[str, Any]",
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> "dict[str, Any]":
         self.append_event_and_update_state_called = True
         self.append_event_and_update_state_calls.append({
@@ -86,19 +87,19 @@ class MockStore:
             "user_id": user_id,
             "session_id": session_id,
             "state": state,
-            "app_state": app_state,
-            "user_state": user_state,
+            "app_state_delta": app_state_delta,
+            "user_state_delta": user_state_delta,
         })
-        if app_state is not None:
-            self.app_state = dict(app_state)
-        if user_state is not None:
-            self.user_state = dict(user_state)
-        # Return the updated StoredSession — caller no longer needs a follow-up get_session().
-        updated = dict(self._session_record)
-        updated["state"] = state
-        updated["update_time"] = datetime.now(UTC)
-        self._session_record = updated
-        return updated
+        merged_app = None
+        if app_state_delta:
+            self.app_state.update(app_state_delta)
+            merged_app = dict(self.app_state)
+        merged_user = None
+        if user_state_delta:
+            self.user_state.update(user_state_delta)
+            merged_user = dict(self.user_state)
+        self._session_record = {**self._session_record, "state": dict(state), "update_time": datetime.now(UTC)}
+        return {**self._session_record, "state": merge_scoped_state(state, merged_app, merged_user)}
 
     async def get_session(self, app_name: str, user_id: str, session_id: str) -> "dict[str, Any] | None":
         self.get_session_calls += 1
@@ -109,28 +110,47 @@ class MockStore:
         return self._session_record
 
     async def create_session(
-        self, *, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+        self,
+        *,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> "dict[str, Any]":
         self.create_session_calls.append({
             "session_id": session_id,
             "app_name": app_name,
             "user_id": user_id,
             "state": state,
+            "app_state_delta": app_state_delta,
+            "user_state_delta": user_state_delta,
         })
+        if app_state_delta:
+            self.app_state.update(app_state_delta)
+        if user_state_delta:
+            self.user_state.update(user_state_delta)
+        now = datetime.now(UTC)
         self._session_record = {
             "id": session_id,
             "app_name": app_name,
             "user_id": user_id,
-            "state": state,
-            "create_time": datetime.now(UTC),
-            "update_time": datetime.now(UTC),
+            "state": dict(state),
+            "create_time": now,
+            "update_time": now,
         }
-        return self._session_record
+        return {
+            **self._session_record,
+            "state": merge_scoped_state(state, self.app_state or None, self.user_state or None),
+        }
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any]":
+        self.get_app_state_calls += 1
         return dict(self.app_state)
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any]":
+        self.get_user_state_calls += 1
         return dict(self.user_state)
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
@@ -198,7 +218,15 @@ class SyncStore:
         )
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         self.create_session_calls.append({
             "session_id": session_id,
@@ -206,16 +234,25 @@ class SyncStore:
             "user_id": user_id,
             "state": state,
             "owner_id": owner_id,
+            "app_state_delta": app_state_delta,
+            "user_state_delta": user_state_delta,
         })
+        if app_state_delta:
+            self.app_state.update(app_state_delta)
+        if user_state_delta:
+            self.user_state.update(user_state_delta)
+        now = datetime.now(UTC)
         self._session_record = StoredSession(
+            id=session_id, app_name=app_name, user_id=user_id, state=dict(state), create_time=now, update_time=now
+        )
+        return StoredSession(
             id=session_id,
             app_name=app_name,
             user_id=user_id,
-            state=state,
-            create_time=datetime.now(UTC),
-            update_time=datetime.now(UTC),
+            state=merge_scoped_state(state, self.app_state or None, self.user_state or None),
+            create_time=now,
+            update_time=now,
         )
-        return self._session_record
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: Any | None = None
@@ -250,22 +287,35 @@ class SyncStore:
         user_id: str,
         session_id: str,
         state: dict[str, Any],
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        if app_state is not None:
-            self.app_state = dict(app_state)
-        if user_state is not None:
-            self.user_state = dict(user_state)
+        merged_app = None
+        if app_state_delta:
+            self.app_state.update(app_state_delta)
+            merged_app = dict(self.app_state)
+        merged_user = None
+        if user_state_delta:
+            self.user_state.update(user_state_delta)
+            merged_user = dict(self.user_state)
+        now = datetime.now(UTC)
         self._session_record = StoredSession(
             id=self._session_record["id"],
             app_name=self._session_record["app_name"],
             user_id=self._session_record["user_id"],
-            state=state,
+            state=dict(state),
             create_time=self._session_record["create_time"],
-            update_time=datetime.now(UTC),
+            update_time=now,
         )
-        return self._session_record
+        return StoredSession(
+            id=self._session_record["id"],
+            app_name=self._session_record["app_name"],
+            user_id=self._session_record["user_id"],
+            state=merge_scoped_state(state, merged_app, merged_user),
+            create_time=self._session_record["create_time"],
+            update_time=now,
+        )
 
     def list_sessions(self, app_name: str, user_id: str | None = None) -> list[StoredSession]:
         return [self._session_record]
@@ -520,7 +570,10 @@ async def test_create_session_strips_temp_keys_from_initial_state() -> None:
     assert "temp:y" not in persisted_state
     assert persisted_state["x"] == 1
     assert "app:z" not in persisted_state
-    assert store.upsert_app_state_calls[-1]["state"] == {"app:z": 3}
+    assert store.create_session_calls[0]["app_state_delta"] == {"app:z": 3}
+    assert store.app_state == {"app:z": 3}
+    assert store.upsert_app_state_calls == []
+    assert store.get_app_state_calls == 0
 
 
 @pytest.mark.anyio
@@ -590,15 +643,47 @@ async def test_create_session_uses_provided_session_id() -> None:
 
 @pytest.mark.anyio
 async def test_create_session_splits_user_state_from_session_row() -> None:
-    """create_session persists user: keys in the user state bucket."""
+    """create_session persists user: keys via atomic user_state_delta in the store."""
     store = MockStore()
+    store.app_state = {"app:existing": "yes"}
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
 
     session = await service.create_session(app_name="app", user_id="u1", state={"x": 1, "user:theme": "dark"})
 
     assert store.create_session_calls[0]["state"] == {"x": 1}
-    assert store.upsert_user_state_calls[-1]["state"] == {"user:theme": "dark"}
-    assert session.state == {"x": 1, "user:theme": "dark"}
+    assert store.create_session_calls[0]["user_state_delta"] == {"user:theme": "dark"}
+    assert store.upsert_user_state_calls == []
+    assert store.get_app_state_calls == 0
+    assert store.get_user_state_calls == 0
+    assert session.state == {"x": 1, "app:existing": "yes", "user:theme": "dark"}
+
+
+@pytest.mark.anyio
+async def test_append_event_forwards_only_deltas_and_merges_concurrent_store_state() -> None:
+    """append_event delegates delta merging to the store without Python pre-reads."""
+    store = MockStore()
+    store.app_state = {"app:concurrent": "from_other_worker"}
+    store.user_state = {"user:concurrent": "from_other_session"}
+    service = SQLSpecSessionService(store)  # type: ignore[arg-type]
+    session = _make_session(state={"count": 1, "app:untouched": "keep"})
+    event = _make_event(state_delta={"count": 2, "app:mine": "added", "user:pref": "compact"})
+
+    await service.append_event(session, event)
+
+    assert store.get_app_state_calls == 0
+    assert store.get_user_state_calls == 0
+    call = store.append_event_and_update_state_calls[-1]
+    assert call["state"] == {"count": 2}
+    assert call["app_state_delta"] == {"app:mine": "added"}
+    assert call["user_state_delta"] == {"user:pref": "compact"}
+    assert session.state == {
+        "count": 2,
+        "app:untouched": "keep",
+        "app:concurrent": "from_other_worker",
+        "app:mine": "added",
+        "user:concurrent": "from_other_session",
+        "user:pref": "compact",
+    }
 
 
 @pytest.mark.anyio
@@ -618,7 +703,7 @@ async def test_get_session_num_recent_events_zero_returns_no_events_without_stor
 
 @pytest.mark.anyio
 async def test_get_user_state_strips_user_prefixes() -> None:
-    """ADK 2.2 BaseSessionService.get_user_state returns unprefixed keys."""
+    """BaseSessionService.get_user_state returns unprefixed keys."""
     store = MockStore()
     store.user_state = {"user:theme": "dark", "raw": "kept"}
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
@@ -702,8 +787,9 @@ async def test_append_event_updates_inmemory_after_persist() -> None:
             user_id: str,
             session_id: str,
             state: Any,
-            app_state: "dict[str, Any] | None" = None,
-            user_state: "dict[str, Any] | None" = None,
+            *,
+            app_state_delta: "dict[str, Any] | None" = None,
+            user_state_delta: "dict[str, Any] | None" = None,
         ) -> "dict[str, Any]":
             raise RuntimeError("Simulated DB failure")
 
@@ -843,7 +929,14 @@ async def test_create_session_converts_unique_violation_to_already_exists_error(
             return None
 
         async def create_session(
-            self, *, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]"
+            self,
+            *,
+            session_id: str,
+            app_name: str,
+            user_id: str,
+            state: "dict[str, Any]",
+            app_state_delta: "dict[str, Any] | None" = None,
+            user_state_delta: "dict[str, Any] | None" = None,
         ) -> "dict[str, Any]":
             raise UniqueViolationError("duplicate key value violates unique constraint")
 

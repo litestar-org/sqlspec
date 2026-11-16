@@ -18,6 +18,7 @@ from sqlspec.adapters.pymssql.core import (
     default_statement_config,
     driver_profile,
     escape_literal_percent,
+    execute_cache_hit,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -36,6 +37,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
@@ -151,6 +153,8 @@ class PymssqlDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), PymssqlDriver) else None
+        self._cache_hit_state = self._column_name_cache
         self._migration_schema_restore: tuple[str, str] | None = None
         self._transaction_active = False
         self._explicit_transaction = False
@@ -194,6 +198,10 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         normalized_params = normalize_execute_parameters(prepared_parameters)
@@ -284,14 +292,13 @@ class PymssqlDriver(SyncDriverAdapterBase):
             if self._migration_schema_restore is None:
                 cursor.execute("SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;")
                 row: Any = cursor.fetchone()
-                if row is None:
-                    return
-                user_name, current_schema = (
-                    (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
-                )
-                resolved_schema = str(current_schema or "dbo")
-                cursor.execute(_alter_default_schema_sql(str(user_name), schema))
-                self._migration_schema_restore = (str(user_name), resolved_schema)
+                if row is not None:
+                    user_name, current_schema = (
+                        (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
+                    )
+                    resolved_schema = str(current_schema or "dbo")
+                    cursor.execute(_alter_default_schema_sql(str(user_name), schema))
+                    self._migration_schema_restore = (str(user_name), resolved_schema)
             else:
                 cursor.execute(_alter_default_schema_sql(self._migration_schema_restore[0], schema))
         self._check_pending_exception(exc_handler)

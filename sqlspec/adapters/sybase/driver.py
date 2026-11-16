@@ -13,6 +13,7 @@ from sqlspec.adapters.sybase.core import (
     default_statement_config,
     driver_profile,
     escape_literal_percent,
+    execute_cache_hit,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -30,6 +31,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
@@ -146,6 +148,8 @@ class SybaseDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SybaseSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), SybaseDriver) else None
+        self._cache_hit_state = self._column_name_cache
         self._transaction_active = False
         self._explicit_transaction = False
 
@@ -188,6 +192,10 @@ class SybaseDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "SybaseRawCursor", statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         normalized_params = normalize_execute_parameters(prepared_parameters)

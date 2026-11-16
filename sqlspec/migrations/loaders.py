@@ -7,6 +7,7 @@ import abc
 import ast
 import builtins
 import inspect
+import os
 import sys
 import types
 from collections.abc import Awaitable, Callable, Iterable, Iterator
@@ -40,7 +41,7 @@ ReconcileCallable = Callable[[MigrationContext], Awaitable[None] | None]
 
 
 def find_project_root(start_path: Path) -> Path:
-    """Search upward from start_path for a project marker file.
+    """Search upward from start_path for a project marker file within trusted ownership bounds.
 
     Args:
         start_path: Directory to start searching from.
@@ -48,15 +49,35 @@ def find_project_root(start_path: Path) -> Path:
     Returns:
         Path to project root or parent directory.
     """
-    current_path = start_path.resolve()
+    resolved_start = start_path.resolve()
+    allowed_uids = {os.getuid(), 0} if hasattr(os, "getuid") else None
+    current_path = resolved_start
 
     while current_path != current_path.parent:
+        if allowed_uids is not None:
+            try:
+                owner_uid: int | None = current_path.stat().st_uid
+            except FileNotFoundError:
+                owner_uid = None
+            except OSError:
+                break
+            if owner_uid is not None and owner_uid not in allowed_uids:
+                break
         for marker in PROJECT_ROOT_MARKERS:
             if (current_path / marker).exists():
                 return current_path
         current_path = current_path.parent
 
-    return start_path.resolve().parent
+    fallback = resolved_start.parent
+    if allowed_uids is not None:
+        try:
+            if fallback.stat().st_uid not in allowed_uids:
+                return resolved_start
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return resolved_start
+    return fallback
 
 
 @contextmanager
@@ -80,42 +101,6 @@ def temporary_project_path(project_root: Path) -> Iterator[None]:
     finally:
         with suppress(ValueError):
             sys.path.remove(path_to_add)
-
-
-def _exec_reconcile_module(
-    module_path: Path, *, extension_name: str, project_root: Path | None = None
-) -> types.ModuleType:
-    """Compile and execute a reconcile.py module fresh from disk and return the executed module."""
-    root = project_root if project_root is not None else find_project_root(module_path.parent)
-    module_name = f"_sqlspec_reconcile_{extension_name}_{uuid4().hex}"
-
-    try:
-        source_code = module_path.read_text(encoding="utf-8")
-        compiled_code = compile(source_code, str(module_path), "exec")
-    except Exception as exc:
-        msg = f"Failed to load extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
-        error = MigrationError(msg)
-        error.__cause__ = exc
-        raise error
-
-    module = types.ModuleType(module_name)
-    module.__file__ = str(module_path)
-
-    with temporary_project_path(root):
-        try:
-            sys.modules[module_name] = module
-            builtins.__dict__["exec"](compiled_code, module.__dict__)
-        except MigrationError:
-            raise
-        except Exception as exc:
-            msg = f"Failed to execute extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
-            exec_error = MigrationError(msg)
-            exec_error.__cause__ = exc
-            raise exec_error
-        finally:
-            sys.modules.pop(module_name, None)
-
-    return module
 
 
 def load_reconcile_callable(
@@ -429,35 +414,37 @@ class PythonFileLoader(BaseMigrationLoader):
             return self._normalize_and_validate_sql(sql_result, path)
 
     def validate_migration_file(self, path: Path) -> None:
-        """Validate Python migration file has required upgrade function.
+        """Validate Python migration file has required upgrade function via AST inspection.
 
         Args:
             path: Path to Python migration file.
 
         Raises:
-            MigrationLoadError: If validation fails.
+            MigrationLoadError: If parsing fails or required upgrade callable is missing.
         """
-        with self._temporary_project_path():
-            module = self._load_module_from_path(path)
+        try:
+            tree = _parse_python_migration_ast(path)
+        except (OSError, SyntaxError) as exc:
+            msg = f"Failed to parse migration file {path}: {exc}"
+            raise MigrationLoadError(msg) from exc
 
-            upgrade_func = _get_callable_attr(module, "up")
-            if upgrade_func is None:
-                upgrade_func = _get_callable_attr(module, "migrate_up")
-
-            if upgrade_func is None:
-                msg = f"Migration {path} missing required upgrade function. Expected 'up()' or 'migrate_up()'"
-                raise MigrationLoadError(msg)
+        if _resolve_ast_callable_binding(tree, ("up", "migrate_up")) is None:
+            msg = f"Migration {path} missing required upgrade function. Expected 'up()' or 'migrate_up()'"
+            raise MigrationLoadError(msg)
 
     def has_downgrade(self, path: Path) -> bool:
-        """Return whether the Python migration defines a downgrade function without executing it."""
-        with self._temporary_project_path():
-            module = self._load_module_from_path(path)
-            func_name = "down" if _get_callable_attr(module, "down") is not None else None
-            if func_name is None and _get_callable_attr(module, "migrate_down") is not None:
-                func_name = "migrate_down"
-            if func_name is None:
-                return False
-            return not _is_literal_none_return_function(path, func_name)
+        """Return whether the Python migration defines a downgrade function via AST inspection."""
+        try:
+            tree = _parse_python_migration_ast(path)
+        except (OSError, SyntaxError):
+            return False
+
+        binding = _resolve_ast_callable_binding(tree, ("down", "migrate_down"))
+        if binding is None:
+            return False
+        if isinstance(binding, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return not _is_literal_none_return_ast(binding)
+        return True
 
     def _find_project_root(self, start_path: Path) -> Path:
         """Find project root by searching upwards for marker files.
@@ -593,6 +580,42 @@ def get_migration_loader(
     raise MigrationLoadError(msg)
 
 
+def _exec_reconcile_module(
+    module_path: Path, *, extension_name: str, project_root: Path | None = None
+) -> types.ModuleType:
+    """Compile and execute a reconcile.py module fresh from disk and return the executed module."""
+    root = project_root if project_root is not None else find_project_root(module_path.parent)
+    module_name = f"_sqlspec_reconcile_{extension_name}_{uuid4().hex}"
+
+    try:
+        source_code = module_path.read_text(encoding="utf-8")
+        compiled_code = compile(source_code, str(module_path), "exec")
+    except Exception as exc:
+        msg = f"Failed to load extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
+        error = MigrationError(msg)
+        error.__cause__ = exc
+        raise error
+
+    module = types.ModuleType(module_name)
+    module.__file__ = str(module_path)
+
+    with temporary_project_path(root):
+        try:
+            sys.modules[module_name] = module
+            builtins.__dict__["exec"](compiled_code, module.__dict__)
+        except MigrationError:
+            raise
+        except Exception as exc:
+            msg = f"Failed to execute extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
+            exec_error = MigrationError(msg)
+            exec_error.__cause__ = exc
+            raise exec_error
+        finally:
+            sys.modules.pop(module_name, None)
+
+    return module
+
+
 def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., Any] | None":
     """Get a callable attribute from a module if it exists.
 
@@ -628,26 +651,66 @@ def _callable_accepts_context(func: "Callable[..., Any]", context: Any) -> bool:
     return context is not None
 
 
+def _parse_python_migration_ast(path: Path) -> ast.Module:
+    """Parse a Python migration file into an AST without executing it."""
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _resolve_ast_callable_binding(tree: ast.Module, names: tuple[str, ...]) -> ast.stmt | None:
+    """Locate the final top-level callable binding for any candidate name in a module AST."""
+    bindings: dict[str, ast.stmt | None] = {}
+    target_names = set(names)
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in target_names:
+            bindings[node.name] = node
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                bound_name = alias.asname or alias.name
+                if bound_name in target_names:
+                    bindings[bound_name] = node
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in target_names:
+                    bindings[target.id] = None if isinstance(node.value, ast.Constant) else node
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id in target_names
+            and node.value is not None
+        ):
+            bindings[node.target.id] = None if isinstance(node.value, ast.Constant) else node
+    for candidate in names:
+        matched = bindings.get(candidate)
+        if matched is not None:
+            return matched
+    return None
+
+
+def _is_literal_none_return_ast(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return True when a function AST body only returns ``None``."""
+    body = list(node.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    if len(body) == 1 and isinstance(body[0], ast.Return):
+        ret_val = body[0].value
+        return ret_val is None or (isinstance(ret_val, ast.Constant) and ret_val.value is None)
+    return False
+
+
 def _is_literal_none_return_function(path: Path, func_name: str) -> bool:
     """Return True when a top-level function body only returns None."""
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = _parse_python_migration_ast(path)
     except (OSError, SyntaxError):
         return False
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-            body = list(node.body)
-            if (
-                body
-                and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)
-            ):
-                body = body[1:]
-            if len(body) == 1 and isinstance(body[0], ast.Return):
-                ret_val = body[0].value
-                return ret_val is None or (isinstance(ret_val, ast.Constant) and ret_val.value is None)
-            return False
+            return _is_literal_none_return_ast(node)
     return False
 
 

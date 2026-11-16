@@ -48,22 +48,48 @@ async def test_register_json_codecs_success() -> None:
 
     assert json_call.kwargs["encoder"]({"value": 1}) == b'{"value":1}'
     assert json_call.kwargs["encoder"]("console") == b'"console"'
-    assert json_call.kwargs["encoder"]("123") == b"123"
-    assert json_call.kwargs["encoder"]("true") == b"true"
-    assert json_call.kwargs["encoder"]("null") == b"null"
-    assert json_call.kwargs["encoder"]('"text"') == b'"text"'
-    assert json_call.kwargs["encoder"]('{"pre":"serialized"}') == b'{"pre":"serialized"}'
+    assert json_call.kwargs["encoder"]("123") == b'"123"'
+    assert json_call.kwargs["encoder"]("true") == b'"true"'
+    assert json_call.kwargs["encoder"]("null") == b'"null"'
+    assert json_call.kwargs["encoder"]('"text"') == b'"\\"text\\""'
+    assert json_call.kwargs["encoder"]('{"pre":"serialized"}') == b'"{\\"pre\\":\\"serialized\\"}"'
     assert json_call.kwargs["encoder"](b'\x01{"value":1}') == b'{"value":1}'
     assert json_call.kwargs["decoder"](b'{"value":1}') == {"value": 1}
     assert jsonb_call.kwargs["encoder"]({"value": 1}) == b'\x01{"value":1}'
     assert jsonb_call.kwargs["encoder"]("console") == b'\x01"console"'
-    assert jsonb_call.kwargs["encoder"]("123") == b"\x01123"
-    assert jsonb_call.kwargs["encoder"]("true") == b"\x01true"
-    assert jsonb_call.kwargs["encoder"]("null") == b"\x01null"
-    assert jsonb_call.kwargs["encoder"]('"text"') == b'\x01"text"'
-    assert jsonb_call.kwargs["encoder"]('{"pre":"serialized"}') == b'\x01{"pre":"serialized"}'
+    assert jsonb_call.kwargs["encoder"]("123") == b'\x01"123"'
+    assert jsonb_call.kwargs["encoder"]("true") == b'\x01"true"'
+    assert jsonb_call.kwargs["encoder"]("null") == b'\x01"null"'
+    assert jsonb_call.kwargs["encoder"]('"text"') == b'\x01"\\"text\\""'
+    assert jsonb_call.kwargs["encoder"]('{"pre":"serialized"}') == b'\x01"{\\"pre\\":\\"serialized\\"}"'
     assert jsonb_call.kwargs["encoder"](b'\x01{"value":1}') == b'\x01{"value":1}'
     assert jsonb_call.kwargs["decoder"](b'\x01{"value":1}') == {"value": 1}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("scalar", ["", "123", "-45.6", "true", "false", "null", "[1, 2]", '{"a": 1}'])
+async def test_register_json_codecs_invokes_custom_serializer_for_string_scalars(scalar: str) -> None:
+    """Plain Python strings serialize as JSON string scalars and invoke custom serializers."""
+    connection = AsyncMock()
+    seen: list[object] = []
+
+    def custom_encoder(val: object) -> str:
+        seen.append(val)
+        return to_json(val)
+
+    await register_json_codecs(connection, custom_encoder, from_json)
+    json_encoder = connection.set_type_codec.call_args_list[0].kwargs["encoder"]
+    json_decoder = connection.set_type_codec.call_args_list[0].kwargs["decoder"]
+    jsonb_encoder = connection.set_type_codec.call_args_list[1].kwargs["encoder"]
+    jsonb_decoder = connection.set_type_codec.call_args_list[1].kwargs["decoder"]
+
+    encoded_json = json_encoder(scalar)
+    encoded_jsonb = jsonb_encoder(scalar)
+    assert encoded_json == to_json(scalar).encode("utf-8")
+    assert encoded_jsonb == b"\x01" + to_json(scalar).encode("utf-8")
+    assert json_decoder(encoded_json) == scalar
+    assert jsonb_decoder(encoded_jsonb) == scalar
+    assert seen == [scalar, scalar]
 
 
 @pytest.mark.anyio

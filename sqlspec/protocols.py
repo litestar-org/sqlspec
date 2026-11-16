@@ -81,6 +81,7 @@ __all__ = (
     "PipelineCapableProtocol",
     "QueryResultProtocol",
     "ReadableProtocol",
+    "ReplicaRoutableConfigProtocol",
     "SQLBuilderProtocol",
     "SpanAttributeProtocol",
     "SpannerParamTypesProtocol",
@@ -352,7 +353,7 @@ class AsyncWriteBytesProtocol(Protocol):
 class AsyncDeleteProtocol(Protocol):
     """Protocol for async delete support."""
 
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None: ...
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None: ...
 
 
 @runtime_checkable
@@ -604,7 +605,7 @@ class ObjectStoreProtocol(Protocol):
         """Check if an object exists synchronously."""
         return False
 
-    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
+    def delete_sync(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
         """Delete an object synchronously."""
         return
 
@@ -694,7 +695,7 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)
 
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
         """Async delete an object."""
         msg = "Async operations not implemented"
         raise NotImplementedError(msg)
@@ -1206,3 +1207,29 @@ class AsyncDataDictionaryProtocol(Protocol):
     ) -> "list[ForeignKeyMetadata]": ...
 
     def list_available_features(self) -> "list[str]": ...
+
+
+@runtime_checkable
+class ReplicaRoutableConfigProtocol(Protocol):
+    """Structural contract for configuration-level replica read routing."""
+
+    @property
+    def is_replica(self) -> bool: ...
+
+    @property
+    def has_replicas(self) -> bool: ...
+
+    @property
+    def replica_groups(self) -> "Mapping[str, Any]": ...
+
+    def provide_replica_connection(self, *args: Any, replica_group: str | None = None, **kwargs: Any) -> Any: ...
+
+    def provide_replica_session(
+        self,
+        *args: Any,
+        replica_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: Any = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> Any: ...

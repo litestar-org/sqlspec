@@ -4,13 +4,13 @@ Provides Column objects that support Python operators for building
 SQL conditions with parameter binding.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from typing import Any, cast, final
 
 from sqlglot import exp
 
-from sqlspec.builder._vector_distance import VectorDistance
+from sqlspec.builder._vector_distance import VectorDistance, validate_vector_elements
 from sqlspec.core import NullsPlacement, ordered
 
 __all__ = ("Column", "ColumnExpression", "ColumnNamespace", "FunctionColumn")
@@ -70,7 +70,7 @@ class ColumnExpression:
         msg = (
             "Cannot use 'and'/'or' operators on ColumnExpression. "
             "Use '&'/'|' operators instead. "
-            f"Expression: {self._expression.sql()}"
+            f"Expression: {self._expression.sql(copy=False)}"
         )
         raise TypeError(msg)
 
@@ -340,7 +340,7 @@ class Column(_ScalarExpressionMixin):
         return FunctionColumn(exp.Count(this=exp.Star()))
 
     def vector_distance(
-        self, other_vector: "list[float] | Column | exp.Expr", metric: str = "euclidean"
+        self, other_vector: "Sequence[float | int] | Any | Column | exp.Expr", metric: str = "euclidean"
     ) -> "FunctionColumn":
         """Calculate vector distance using specified metric.
 
@@ -350,7 +350,7 @@ class Column(_ScalarExpressionMixin):
             - Oracle 23ai+: VECTOR_DISTANCE(col, vec, METRIC) function
 
         Args:
-            other_vector: Vector to compare against (list, Column, or SQLGlot expression).
+            other_vector: Vector to compare against (sequence, 1-D array, Column, or SQLGlot expression).
             metric: Distance metric to use (`"euclidean"`, `"cosine"`, `"inner_product"`, or `"euclidean_squared"`).
 
         Returns:
@@ -361,14 +361,14 @@ class Column(_ScalarExpressionMixin):
         distance_expr = VectorDistance(this=self._expression, expression=vec_expr, metric=normalized_metric)
         return FunctionColumn(distance_expr)
 
-    def cosine_similarity(self, other_vector: "list[float] | Column | exp.Expr") -> "FunctionColumn":
+    def cosine_similarity(self, other_vector: "Sequence[float | int] | Any | Column | exp.Expr") -> "FunctionColumn":
         """Calculate cosine similarity (1 - cosine_distance).
 
         Convenience method that computes similarity instead of distance.
         Returns values in range [-1, 1] where 1 = identical vectors.
 
         Args:
-            other_vector: Vector to compare against (list, Column, or expression).
+            other_vector: Vector to compare against (sequence, 1-D array, Column, or expression).
 
         Returns:
             FunctionColumn expression: 1 - cosine_distance(self, other_vector).
@@ -387,16 +387,14 @@ class Column(_ScalarExpressionMixin):
             raise ValueError(msg)
         return normalized_metric
 
-    def _convert_vector_value(self, value: "list[float] | Column | exp.Expr") -> "exp.Expr":
+    def _convert_vector_value(self, value: "Sequence[float | int] | Any | Column | exp.Expr") -> "exp.Expr":
         """Convert a vector input into a SQLGlot expression."""
-        if isinstance(value, list):
-            return exp.Array(expressions=[exp.Literal.number(v) for v in value])
         if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
             return value._expression
         if isinstance(value, exp.Expr):
             return value
-        msg = f"Unsupported vector type: {type(value)}"
-        raise TypeError(msg)
+        items = validate_vector_elements(value)
+        return exp.Array(expressions=[exp.Literal.number(v) for v in items])
 
 
 class FunctionColumn(_ScalarExpressionMixin):

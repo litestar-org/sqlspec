@@ -225,7 +225,7 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
+    def delete_sync(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
         """Delete object from storage synchronously."""
         raise NotImplementedError
 
@@ -329,7 +329,7 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
         """Delete object from storage asynchronously."""
         raise NotImplementedError
 

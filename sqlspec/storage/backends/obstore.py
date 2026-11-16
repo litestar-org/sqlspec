@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import inspect
 import os
+import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from datetime import timedelta
@@ -29,6 +30,7 @@ from sqlspec.storage._arrow_payload import (
 )
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
+    check_local_delete_target,
     ensure_path_within_root,
     extract_glob_static_prefix,
     glob_to_regex,
@@ -43,6 +45,7 @@ from sqlspec.storage._utils import (
     import_pyarrow,
     import_pyarrow_parquet,
     log_storage_event,
+    sanitize_uri_for_log,
 )
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncObStoreStreamIterator
 
@@ -55,7 +58,7 @@ if TYPE_CHECKING:
 
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
 from sqlspec.utils.module_loader import ensure_obstore
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, exit_async_context
 from sqlspec.utils.uuids import uuid4
 
 _MAX_SIGN_EXPIRES_SECONDS: Final[int] = 604800
@@ -163,12 +166,13 @@ class ObStoreBackend:
                 self.store = obs_store.MemoryStore()
             elif uri.startswith("file://"):
                 path_str = parse_file_uri_path(uri)
-                path_obj = Path(path_str)
-
-                if is_file_destination(path_obj):
-                    path_str = str(path_obj.parent)
-
-                local_store_root_obj = Path(path_str)
+                if path_str:
+                    path_obj = Path(path_str)
+                    if is_file_destination(path_obj):
+                        path_str = str(path_obj.parent)
+                    local_store_root_obj = Path(path_str)
+                else:
+                    local_store_root_obj = Path.cwd().resolve()
                 if self.base_path:
                     local_store_root_obj /= self.base_path
 
@@ -187,8 +191,10 @@ class ObStoreBackend:
                 path=uri,
             )
 
+        except StoragePathTraversalError:
+            raise
         except Exception as exc:
-            msg = f"Failed to initialize obstore backend for {uri}"
+            msg = f"Failed to initialize obstore backend for {sanitize_uri_for_log(uri)}"
             raise StorageOperationFailedError(msg) from exc
 
     @property
@@ -306,12 +312,26 @@ class ObStoreBackend:
         )
         return True
 
-    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
-        """Delete object using obstore synchronously."""
+    def delete_sync(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
+        """Delete object using obstore synchronously.
+
+        Args:
+            path: Path relative to ``base_path``.
+            recursive: Allow deleting directories of a local ``file://`` store.
+            **kwargs: Unused backend options.
+
+        Raises:
+            StorageOperationFailedError: On a local ``file://`` store, if ``path`` is the store root or a
+                directory and ``recursive`` is False.
+        """
         _ = kwargs
         resolved_path = self._resolve_path(path)
+        directory = self._local_delete_directory(resolved_path, recursive=recursive)
         execute_sync_storage_operation(
-            partial(self.store.delete, resolved_path), backend=self.backend_type, operation="delete", path=resolved_path
+            partial(shutil.rmtree, directory) if directory is not None else partial(self.store.delete, resolved_path),
+            backend=self.backend_type,
+            operation="delete",
+            path=resolved_path,
         )
         log_storage_event(
             "storage.write",
@@ -321,6 +341,14 @@ class ObStoreBackend:
             mode="sync",
             path=resolved_path,
         )
+
+    def _local_delete_directory(self, resolved_path: str, *, recursive: bool) -> "Path | None":
+        """Validate a delete on a local ``file://`` store and return the directory to remove, if any."""
+        if not self._is_local_store:
+            return None
+        target = Path(self._local_store_root) / resolved_path
+        check_local_delete_target(target, self._local_store_root, recursive=recursive)
+        return target if target.is_dir() else None
 
     def copy_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy object using obstore synchronously."""
@@ -464,47 +492,6 @@ class ObStoreBackend:
             path=resolved_path,
         )
         return result
-
-    def _supports_atomic_copy_create(self) -> bool:
-        """Return whether the underlying store supports atomic conditional copy (overwrite=False)."""
-        if self.protocol in _ATOMIC_COPY_CREATE_PROTOCOLS:
-            return True
-        if self.protocol in _S3_PROTOCOLS:
-            store_config = getattr(self.store, "config", None)
-            has_store_setting = (
-                bool(store_config.get("copy_if_not_exists")) if isinstance(store_config, dict) else False
-            )
-            return has_store_setting or bool(os.environ.get("AWS_COPY_IF_NOT_EXISTS"))
-        return False
-
-    def _can_stream_create_only(self, kwargs: "dict[str, Any]") -> bool:
-        """Return whether create-only streaming can preserve the requested options on this store."""
-        if not self._supports_atomic_copy_create():
-            return False
-        return not (
-            self.protocol in _S3_PROTOCOLS and (kwargs.get("attributes") is not None or kwargs.get("tags") is not None)
-        )
-
-    def _prepare_create_only_stream_options(self, overwrite: bool, kwargs: "dict[str, Any]") -> "dict[str, Any]":
-        """Validate create-only stream options and resolve options for the staged inner writer."""
-        if kwargs:
-            unsupported = sorted(k for k in kwargs if k not in _SUPPORTED_WRITER_KWARGS)
-            if unsupported:
-                names = ", ".join(unsupported)
-                msg = f"Unsupported write stream keyword argument(s) for ObStoreBackend: {names}"
-                raise TypeError(msg)
-        mode = kwargs.get("mode")
-        if not overwrite and mode is not None and mode != "create":
-            msg = f"Conflicting write options: overwrite=False requires mode='create', got mode={mode!r}"
-            raise ValueError(msg)
-        if not self._supports_atomic_copy_create():
-            msg = "Direct write streams do not support overwrite=False for this store"
-            raise StorageCapabilityError(msg, capability="overwrite_false_stream")
-        if self.protocol in _S3_PROTOCOLS and (kwargs.get("attributes") is not None or kwargs.get("tags") is not None):
-            msg = "Direct create-only write streams on S3 do not preserve attributes or tags"
-            raise StorageCapabilityError(msg, capability="overwrite_false_stream")
-        stage_kwargs = {k: v for k, v in kwargs.items() if k != "mode"}
-        return _resolve_obstore_writer_options(True, stage_kwargs)
 
     def supports_direct_arrow_write(self, file_format: "StorageFormat", *, overwrite: bool = True) -> bool:
         """Return whether ObStoreBackend can stream the given Arrow format directly.
@@ -751,6 +738,8 @@ class ObStoreBackend:
         read_buffer_bytes = kwargs.pop("read_buffer_bytes", 16_777_216)
         arrow_schema = kwargs.pop("arrow_schema", None)
         for obj_path in self.glob_sync(pattern):
+            if getattr(self, "_is_local_store", False) and self._local_store_root:
+                ensure_path_within_root(Path(self._local_store_root) / obj_path, self._local_store_root)
             reader = execute_sync_storage_operation(
                 partial(_open_obstore_reader, obs, self.store, obj_path, read_buffer_bytes),
                 backend=self.backend_type,
@@ -895,16 +884,18 @@ class ObStoreBackend:
         )
         return True
 
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
         """Delete object from storage asynchronously."""
         _ = kwargs
         resolved_path = self._resolve_path(path)
-
+        directory = self._local_delete_directory(resolved_path, recursive=recursive)
+        operation = (
+            async_(partial(shutil.rmtree, directory))
+            if directory is not None
+            else partial(self.store.delete_async, resolved_path)
+        )
         await execute_async_storage_operation(
-            partial(self.store.delete_async, resolved_path),
-            backend=self.backend_type,
-            operation="delete",
-            path=resolved_path,
+            operation, backend=self.backend_type, operation="delete", path=resolved_path
         )
         log_storage_event(
             "storage.write",
@@ -1070,9 +1061,12 @@ class ObStoreBackend:
             writer_options = _resolve_obstore_writer_options(overwrite, store_kwargs)
 
             async def _do_stream_write_async() -> None:
-                async with _AsyncObstoreWriteStream(
+                stream_context = _AsyncObstoreWriteStream(
                     self.store, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
-                ) as sink:
+                )
+                sink = await stream_context.__aenter__()
+                stream_error: BaseException | None = None
+                try:
                     chunk_size = writer_options.get("buffer_size", 1048576)
                     await encode_arrow_to_async_sink(
                         table,
@@ -1082,6 +1076,9 @@ class ObStoreBackend:
                         write_options=merged_write_options,
                         chunk_size=chunk_size,
                     )
+                except BaseException as caught:
+                    stream_error = caught
+                await exit_async_context(stream_context, stream_error)
 
             await execute_async_storage_operation(
                 _do_stream_write_async, backend=self.backend_type, operation="write_arrow", path=resolved_path
@@ -1096,9 +1093,12 @@ class ObStoreBackend:
             stage = _obstore_stage_key(resolved_path)
 
             async def _do_staged_stream_write_async() -> None:
-                async with _AsyncObstoreStagedCreateStream(
+                stream_context = _AsyncObstoreStagedCreateStream(
                     self.store, stage, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
-                ) as sink:
+                )
+                sink = await stream_context.__aenter__()
+                stream_error: BaseException | None = None
+                try:
                     chunk_size = writer_options.get("buffer_size", 1048576)
                     await encode_arrow_to_async_sink(
                         table,
@@ -1108,6 +1108,9 @@ class ObStoreBackend:
                         write_options=merged_write_options,
                         chunk_size=chunk_size,
                     )
+                except BaseException as caught:
+                    stream_error = caught
+                await exit_async_context(stream_context, stream_error)
 
             await execute_async_storage_operation(
                 _do_staged_stream_write_async, backend=self.backend_type, operation="write_arrow", path=resolved_path
@@ -1195,6 +1198,47 @@ class ObStoreBackend:
             msg = f"Failed to generate signed URL(s) for {resolved_paths}"
             raise StorageOperationFailedError(msg) from exc
 
+    def _supports_atomic_copy_create(self) -> bool:
+        """Return whether the underlying store supports atomic conditional copy (overwrite=False)."""
+        if self.protocol in _ATOMIC_COPY_CREATE_PROTOCOLS:
+            return True
+        if self.protocol in _S3_PROTOCOLS:
+            store_config = getattr(self.store, "config", None)
+            has_store_setting = (
+                bool(store_config.get("copy_if_not_exists")) if isinstance(store_config, dict) else False
+            )
+            return has_store_setting or bool(os.environ.get("AWS_COPY_IF_NOT_EXISTS"))
+        return False
+
+    def _can_stream_create_only(self, kwargs: "dict[str, Any]") -> bool:
+        """Return whether create-only streaming can preserve the requested options on this store."""
+        if not self._supports_atomic_copy_create():
+            return False
+        return not (
+            self.protocol in _S3_PROTOCOLS and (kwargs.get("attributes") is not None or kwargs.get("tags") is not None)
+        )
+
+    def _prepare_create_only_stream_options(self, overwrite: bool, kwargs: "dict[str, Any]") -> "dict[str, Any]":
+        """Validate create-only stream options and resolve options for the staged inner writer."""
+        if kwargs:
+            unsupported = sorted(k for k in kwargs if k not in _SUPPORTED_WRITER_KWARGS)
+            if unsupported:
+                names = ", ".join(unsupported)
+                msg = f"Unsupported write stream keyword argument(s) for ObStoreBackend: {names}"
+                raise TypeError(msg)
+        mode = kwargs.get("mode")
+        if not overwrite and mode is not None and mode != "create":
+            msg = f"Conflicting write options: overwrite=False requires mode='create', got mode={mode!r}"
+            raise ValueError(msg)
+        if not self._supports_atomic_copy_create():
+            msg = "Direct write streams do not support overwrite=False for this store"
+            raise StorageCapabilityError(msg, capability="overwrite_false_stream")
+        if self.protocol in _S3_PROTOCOLS and (kwargs.get("attributes") is not None or kwargs.get("tags") is not None):
+            msg = "Direct create-only write streams on S3 do not preserve attributes or tags"
+            raise StorageCapabilityError(msg, capability="overwrite_false_stream")
+        stage_kwargs = {k: v for k, v in kwargs.items() if k != "mode"}
+        return _resolve_obstore_writer_options(True, stage_kwargs)
+
     def _resolve_path(self, path: "str | Path") -> str:
         if getattr(self, "_is_local_store", False):
             return self._local_store_path(path)
@@ -1232,11 +1276,12 @@ class ObStoreBackend:
         Raises:
             StoragePathTraversalError: If the path resolves outside the store root.
         """
-        if not getattr(self, "_local_store_root", ""):
-            reject_parent_traversal(path)
-            return str(path)
-
-        return ensure_path_within_root(path, self._local_store_root)
+        target: str | Path = path
+        target_str = str(path)
+        if target_str.startswith("file://"):
+            target = parse_file_uri_path(target_str)
+        root = getattr(self, "_local_store_root", "") or str(Path.cwd().resolve())
+        return ensure_path_within_root(target, root)
 
     def _read_bytes_resolved_sync(self, resolved_path: str) -> bytes:
         if getattr(self, "_is_local_store", False):
@@ -1289,25 +1334,32 @@ class ObStoreBackend:
                 operation="list_objects",
                 path=resolved_prefix,
             )
-            return sorted(item["path"] for item in result["objects"])
-        batches = execute_sync_storage_operation(
-            partial(self.store.list, resolved_prefix),
-            backend=self.backend_type,
-            operation="list_objects",
-            path=resolved_prefix,
-        )
-        return sorted(item["path"] for batch in batches for item in batch)
+            objects = [item["path"] for item in result["objects"]]
+        else:
+            batches = execute_sync_storage_operation(
+                partial(self.store.list, resolved_prefix),
+                backend=self.backend_type,
+                operation="list_objects",
+                path=resolved_prefix,
+            )
+            objects = [item["path"] for batch in batches for item in batch]
+        if getattr(self, "_is_local_store", False) and self._local_store_root:
+            objects = _filter_local_obstore_keys(objects, self._local_store_root)
+        return sorted(objects)
 
     async def _list_resolved_async(self, resolved_prefix: str, recursive: bool) -> "list[str]":
         if not recursive and hasattr(self.store, "list_with_delimiter_async"):
             result = await self.store.list_with_delimiter_async(resolved_prefix)
-            return sorted(item["path"] for item in result["objects"])
-        objects: list[str] = []
-        async for batch in self.store.list_async(resolved_prefix):  # pyright: ignore[reportAttributeAccessIssue]
-            objects.extend(item["path"] for item in batch)
-        if not recursive:
-            base_depth = resolved_prefix.rstrip("/").count("/") + (1 if resolved_prefix.strip("/") else 0)
-            objects = [obj for obj in objects if obj.count("/") < base_depth]
+            objects = [item["path"] for item in result["objects"]]
+        else:
+            objects = []
+            async for batch in self.store.list_async(resolved_prefix):  # pyright: ignore[reportAttributeAccessIssue]
+                objects.extend(item["path"] for item in batch)
+            if not recursive:
+                base_depth = resolved_prefix.rstrip("/").count("/") + (1 if resolved_prefix.strip("/") else 0)
+                objects = [obj for obj in objects if obj.count("/") < base_depth]
+        if getattr(self, "_is_local_store", False) and self._local_store_root:
+            objects = _filter_local_obstore_keys(objects, self._local_store_root)
         return sorted(objects)
 
     def _prepare_sign_request(
@@ -1548,6 +1600,7 @@ def _resolve_obstore_writer_options(overwrite: bool, kwargs: "dict[str, Any]") -
     return opts
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _ObstoreWriteStream:
     """Commit or abort one obstore multipart writer around a caller's write block."""
 
@@ -1609,6 +1662,7 @@ class _ObstoreWriteStream:
                 entered_writer.__exit__(exc_type, exc, traceback)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncObstoreWriteStream:
     """Commit or abort one obstore async writer with shielded completion."""
 
@@ -1684,6 +1738,7 @@ def _obstore_stage_key(destination: str) -> str:
     return f"{_STAGE_PREFIX}{uuid4().hex}"
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _ObstoreStagedCreateStream:
     """Stage a create-only obstore stream to a temporary key and publish via conditional copy."""
 
@@ -1741,6 +1796,7 @@ async def _delete_obstore_stage_async(store: Any, stage: str) -> None:
         return
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncObstoreStagedCreateStream:
     """Asynchronously stage a create-only obstore stream and publish via shielded conditional copy."""
 
@@ -1799,6 +1855,7 @@ class _AsyncObstoreStagedCreateStream:
             )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _ObstoreSink:
     """Adapt an obstore WritableFile to WritableBytesSink and pyarrow.PythonFile."""
 
@@ -1849,6 +1906,7 @@ class _ObstoreSink:
         self._closed = True
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncObstoreSink:
     """Adapt an obstore AsyncWritableFile to AsyncWritableBytesSink with storage error translation."""
 
@@ -1892,3 +1950,20 @@ class _AsyncObstoreSink:
 
     async def close(self) -> None:
         self._closed = True
+
+
+def _filter_local_obstore_keys(objects: "list[str]", root: str) -> "list[str]":
+    """Filter listed local obstore keys so symlinks escaping ``root`` are omitted."""
+    try:
+        root_obj = Path(root).resolve()
+    except OSError:
+        return []
+    confined: list[str] = []
+    for item_path in objects:
+        try:
+            resolved = (root_obj / item_path).resolve()
+        except OSError:
+            continue
+        if resolved == root_obj or root_obj in resolved.parents:
+            confined.append(item_path)
+    return confined

@@ -16,13 +16,14 @@ from sqlspec.adapters.mssql_python.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
     format_identifier,
     materialize_tuple_rows,
-    normalize_execute_parameters,
     quote_bracket_identifier,
     resolve_column_names,
     resolve_many_rowcount,
     resolve_rowcount,
+    validate_bulk_identifier,
 )
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
 from sqlspec.core import (
@@ -38,6 +39,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
@@ -56,6 +58,7 @@ if TYPE_CHECKING:
 __all__ = ("MssqlPythonBulkCopyResult", "MssqlPythonDriver", "MssqlPythonExceptionHandler")
 
 logger = get_logger("sqlspec.adapters.mssql_python")
+_BULK_MAPPING_PAIR_LEN = 2
 
 
 class MssqlPythonBulkCopyResult(TypedDict):
@@ -169,6 +172,10 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MssqlPythonSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), MssqlPythonDriver) else None
+        )
+        self._cache_hit_state = self._column_name_cache
         self._migration_schema_restore: tuple[str, str] | None = None
         self._restore_autocommit = False
         self._transaction_active = False
@@ -485,6 +492,8 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         use_internal_transaction: bool = False,
     ) -> MssqlPythonBulkCopyResult:
         """Bulk insert rows via mssql-python cursor.bulkcopy()."""
+        validate_bulk_identifier(target_table, allow_schema=True)
+        self._validate_bulk_column_mappings(column_mappings)
 
         def _do_bulkcopy() -> Any:
             with self.with_cursor(self.connection) as cursor:
@@ -546,6 +555,8 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         while consuming a stream can still leave a partially completed load.
         """
         self._require_capability("arrow_import_enabled")
+        validate_bulk_identifier(table, allow_schema=True)
+        self._validate_bulk_column_mappings(column_mappings)
         if drop_indexes:
             with self.without_indexes(table, concurrent=concurrent_indexes):
                 return self.load_from_arrow(
@@ -613,6 +624,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             has_rows = bool(arrow_source.num_rows)
             columns = column_mappings if column_mappings is not None else list(arrow_source.column_names)
             telemetry_payload = self._ingest_telemetry(arrow_source)
+        self._validate_bulk_column_mappings(columns)
 
         options = {
             "batch_size": batch_size,
@@ -695,7 +707,26 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        return super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
+        """Execute a cached statement through the compiled mssql-python cache-hit executor."""
+        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._column_name_cache)
+
+    @staticmethod
+    def _validate_bulk_column_mappings(column_mappings: "Sequence[str] | Sequence[tuple[int, str]] | None") -> None:
+        if column_mappings is None:
+            return
+        for entry in column_mappings:
+            if isinstance(entry, tuple):
+                if (
+                    len(entry) != _BULK_MAPPING_PAIR_LEN
+                    or isinstance(entry[0], bool)
+                    or not isinstance(entry[0], int)
+                    or entry[0] < 0
+                ):
+                    msg = f"Invalid SQL Server bulk column mapping: {entry!r}."
+                    raise SQLSpecError(msg)
+                validate_bulk_identifier(entry[1], allow_schema=False)
+            else:
+                validate_bulk_identifier(entry, allow_schema=False)
 
     def _connection_in_transaction(self) -> bool:
         """Return True for explicit transactions and for open implicit transactions."""

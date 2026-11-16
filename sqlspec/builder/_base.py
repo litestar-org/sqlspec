@@ -9,20 +9,26 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Final, NoReturn, Self, cast
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
 from sqlglot import optimizer as sqlglot_optimizer
+from sqlglot.dialects.athena import Athena
 from sqlglot.dialects.dialect import DialectType
+from sqlglot.dialects.presto import Presto
 from sqlglot.errors import OptimizeError as SQLGlotOptimizeError
 from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import RULES
 from sqlglot.optimizer.eliminate_ctes import eliminate_ctes as _eliminate_ctes_rule
 from sqlglot.optimizer.merge_subqueries import merge_subqueries as _merge_subqueries_rule
+from sqlglot.optimizer.normalize import normalized as _is_normalized_condition
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
 from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
+from sqlglot.optimizer.pushdown_predicates import pushdown_cnf as _pushdown_cnf
+from sqlglot.optimizer.pushdown_predicates import pushdown_dnf as _pushdown_dnf
 from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
 from sqlglot.optimizer.pushdown_projections import pushdown_projections as _pushdown_projections_rule
 from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
-from sqlglot.optimizer.scope import build_scope
+from sqlglot.optimizer.scope import Scope, build_scope
 from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from sqlglot.schema import MappingSchema
 
@@ -38,13 +44,16 @@ from sqlspec.core import (
     SQL,
     ParameterStyle,
     ParameterStyleConfig,
+    ParameterValidator,
     StatementConfig,
     get_cache,
     get_cache_config,
     hash_optimized_expression,
 )
+from sqlspec.core.compiler import validate_placeholder_names
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.hashing import _expression_cache_fingerprint
+from sqlspec.core.query_modifiers import is_valid_parameter_name, sanitize_parameter_name
 from sqlspec.data_dictionary import DialectConfig, get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
@@ -60,12 +69,13 @@ __all__ = (
 )
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
-PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
-_PARAMETER_SUFFIX_PATTERN = re.compile(r"^(?P<base>.+)_(?P<index>\d+)$")
+PARAMETER_INDEX_PATTERN = re.compile(r"\A(?:.+_)?param_(?P<index>\d+)\Z")
+_PARAMETER_SUFFIX_PATTERN = re.compile(r"\A(?P<base>.+)_(?P<index>\d+)\Z")
 _UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
 _UNQUOTED_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][\w$#]*$")
 SUBQUERY_PARAMETERS_META_KEY: Final[str] = "sqlspec_subquery_parameters"
 _SUBQUERY_FRAGMENTS_ISSUED = False
+_PLACEHOLDER_SCANNER: Final[ParameterValidator] = ParameterValidator()
 
 
 logger = get_logger(__name__)
@@ -123,7 +133,7 @@ class QueryBuilder:
         enable_optimization: bool = True,
         optimize_joins: bool = True,
         optimize_predicates: bool = True,
-        simplify_expressions: bool = True,
+        simplify_expressions: bool = False,
     ) -> None:
         self.dialect = dialect
         self.schema = schema
@@ -215,14 +225,19 @@ class QueryBuilder:
             tuple[Self, str]: The builder instance and the parameter name.
         """
         if name:
+            if not is_valid_parameter_name(name):
+                self._raise_builder_error(f"Parameter name {name!r} must be an ASCII identifier")
             if name in self._parameters:
                 self._raise_builder_error(f"Parameter name '{name}' already exists.")
             self._parameters[name] = value
             self._sync_parameter_name_counter(name)
             return self, name
 
-        self._parameter_counter += 1
-        param_name = f"param_{self._parameter_counter}"
+        while True:
+            self._parameter_counter += 1
+            param_name = f"param_{self._parameter_counter}"
+            if param_name not in self._parameters:
+                break
         self._parameters[param_name] = value
         self._sync_parameter_name_counter(param_name)
         return self, param_name
@@ -237,6 +252,8 @@ class QueryBuilder:
             return
 
         for name, value in parameters.items():
+            if not is_valid_parameter_name(name):
+                self._raise_builder_error(f"Parameter name {name!r} must be an ASCII identifier")
             if name in self._parameters:
                 self._raise_builder_error(f"Parameter name '{name}' already exists.")
             self._parameters[name] = value
@@ -345,9 +362,14 @@ class QueryBuilder:
         self._validate_update_from(final_expression, _resolve_dialect(dialect, self.dialect))
 
         if self.enable_optimization and isinstance(final_expression, exp.Expr):
-            final_expression = self._optimize_expression(final_expression, dialect=target_dialect)
+            try:
+                final_expression = self._optimize_expression(final_expression, dialect=target_dialect)
+            except RecursionError as e:
+                self._raise_builder_error(f"Error generating SQL from expression: {e!s}", e)
 
         final_expression = self._prepare_dialect_expression(final_expression, target_dialect, dialect)
+        if isinstance(final_expression, exp.Expr):
+            validate_placeholder_names(final_expression)
 
         try:
             if isinstance(final_expression, exp.Expr):
@@ -400,23 +422,21 @@ class QueryBuilder:
         if not parameters:
             return sql
 
-        sorted_names = sorted(parameters, key=len, reverse=True)
-        names_pattern = "|".join(re.escape(name) for name in sorted_names)
-        pattern = re.compile(rf"%\(({names_pattern})\)s|(?<![:\w])[:@$]({names_pattern})\b")
-
-        def _replace_match(match: "re.Match[str]") -> str:
-            param_name = match.group(1) or match.group(2)
-            param_value = parameters[param_name]
-            if isinstance(param_value, str):
-                escaped = param_value.replace("'", "''")
-                return f"'{escaped}'"
-            if param_value is None:
-                return "NULL"
-            if isinstance(param_value, bool):
-                return "TRUE" if param_value else "FALSE"
-            return str(param_value)
-
-        return pattern.sub(_replace_match, sql)
+        dialect_name = safe_query.dialect if isinstance(safe_query.dialect, str) else None
+        segments: list[str] = []
+        cursor = 0
+        for placeholder in _PLACEHOLDER_SCANNER.extract_parameters(sql, dialect=dialect_name):
+            if placeholder.name is None or placeholder.name not in parameters:
+                continue
+            literal = self._format_display_literal(parameters[placeholder.name])
+            if literal.startswith("-") and placeholder.position > 0 and sql[placeholder.position - 1] == "-":
+                literal = f" {literal}"
+            segments.extend((sql[cursor : placeholder.position], literal))
+            cursor = placeholder.position + len(placeholder.placeholder_text)
+        if not segments:
+            return sql
+        segments.append(sql[cursor:])
+        return "".join(segments)
 
     def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         """Converts the built query into a SQL statement object.
@@ -565,7 +585,7 @@ class QueryBuilder:
         enable_optimization = kwargs.pop("enable_optimization", True)
         optimize_joins = kwargs.pop("optimize_joins", True)
         optimize_predicates = kwargs.pop("optimize_predicates", True)
-        simplify_expressions = kwargs.pop("simplify_expressions", True)
+        simplify_expressions = kwargs.pop("simplify_expressions", False)
 
         if kwargs:
             unknown = ", ".join(sorted(kwargs.keys()))
@@ -723,12 +743,7 @@ class QueryBuilder:
             subquery_expression = exp.maybe_parse(sql_text, dialect=self.dialect_name) or exp.convert(sql_text)
 
         if parameters:
-            param_mapping: dict[str, str] = {}
-            for old_name, value in parameters.items():
-                target_name = self._next_parameter_name(old_name) if old_name in self._parameters else old_name
-                _, actual_name = self.add_parameter(value, name=target_name)
-                if actual_name != old_name:
-                    param_mapping[old_name] = actual_name
+            param_mapping = self._merge_parameter_dict(parameters)
             if param_mapping:
                 subquery_expression = self._update_placeholders(subquery_expression, param_mapping)
         return subquery_expression
@@ -755,10 +770,9 @@ class QueryBuilder:
 
         if hasattr(query, "get_expression"):
             raw_query = cast("Any", query)
+            has_build_final = hasattr(raw_query, "_build_final_expression")
             raw_query_expr = (
-                raw_query._build_final_expression(copy=True)
-                if hasattr(raw_query, "_build_final_expression")
-                else raw_query.get_expression()
+                raw_query._build_final_expression(copy=True) if has_build_final else raw_query.get_expression()
             )
             if raw_query_expr is None:
                 self._raise_cte_query_error(alias, "query builder has no expression")
@@ -766,7 +780,7 @@ class QueryBuilder:
                 self._raise_cte_query_error(
                     alias, f"expression must be a Select or Values, got {type(raw_query_expr).__name__}"
                 )
-            cte_duck_expression: exp.Expr = raw_query_expr.copy()
+            cte_duck_expression: exp.Expr = raw_query_expr if has_build_final else raw_query_expr.copy()
             if isinstance(cte_duck_expression, exp.Values) and cte_duck_expression.args.get("alias"):
                 cte_duck_expression.set("alias", None)
             if hasattr(raw_query, "parameters"):
@@ -796,6 +810,17 @@ class QueryBuilder:
         msg = "Unreachable"
         raise AssertionError(msg)
 
+    def _format_display_literal(self, value: Any) -> str:
+        """Render a bound value as display text for ``to_sql(show_parameters=True)``."""
+        if isinstance(value, str):
+            escaped = value.replace("'", "''")
+            return f"'{escaped}'"
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+        return str(value)
+
     def _add_parameter(self, value: Any, context: str | None = None) -> str:
         """Adds a parameter to the query and returns its placeholder name.
 
@@ -806,9 +831,12 @@ class QueryBuilder:
         Returns:
             str: The placeholder name for the parameter.
         """
-        self._parameter_counter += 1
-
-        param_name = f"{context}_param_{self._parameter_counter}" if context else f"param_{self._parameter_counter}"
+        prefix = f"{sanitize_parameter_name(context)}_param_" if context else "param_"
+        while True:
+            self._parameter_counter += 1
+            param_name = f"{prefix}{self._parameter_counter}"
+            if param_name not in self._parameters:
+                break
 
         self._parameters[param_name] = value
         self._sync_parameter_name_counter(param_name)
@@ -885,15 +913,24 @@ class QueryBuilder:
             if parameters is None:
                 continue
             del node.meta[SUBQUERY_PARAMETERS_META_KEY]
-            param_mapping: dict[str, str] = {}
-            for name, value in parameters.items():
-                target_name = self._next_parameter_name(name) if name in self._parameters else name
-                _, actual_name = self.add_parameter(value, name=target_name)
-                if actual_name != name:
-                    param_mapping[name] = actual_name
+            param_mapping = self._merge_parameter_dict(parameters)
             if param_mapping:
                 self._update_placeholders(node, param_mapping)
         return merged
+
+    def _merge_parameter_dict(self, parameters: "Mapping[str, Any]") -> dict[str, str]:
+        """Merge parameter bindings into this builder without overwriting existing keys."""
+        param_mapping: dict[str, str] = {}
+        for old_name, value in parameters.items():
+            target_name = (
+                self._next_parameter_name(old_name)
+                if old_name in self._parameters or not is_valid_parameter_name(old_name)
+                else old_name
+            )
+            _, actual_name = self.add_parameter(value, name=target_name)
+            if actual_name != old_name:
+                param_mapping[old_name] = actual_name
+        return param_mapping
 
     def _next_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name when collision occurs.
@@ -904,6 +941,7 @@ class QueryBuilder:
         Returns:
             A unique parameter name that doesn't exist in current parameters
         """
+        base_name = sanitize_parameter_name(base_name)
         current_index = self._parameter_name_counters.get(base_name, 0)
 
         if base_name not in self._parameters:
@@ -1054,14 +1092,14 @@ class QueryBuilder:
                 columns = keys or (schema.expressions if isinstance(schema, exp.Schema) else None)
                 if not columns:
                     self._raise_builder_error("MySQL DO NOTHING requires a conflict column or explicit insert columns.")
-                column = exp.column(columns[0].name)
+                column = exp.column(columns[0].name, copy=False)
                 assignments = [exp.EQ(this=column, expression=column.copy())]
             elif not assignments:
                 self._raise_builder_error("ON CONFLICT DO UPDATE requires at least one assignment.")
             for assignment in assignments:
                 for column in list(assignment.find_all(exp.Column)):
                     if column.table.lower() == "excluded":
-                        column.replace(exp.Anonymous(this="VALUES", expressions=[exp.column(column.name)]))
+                        column.replace(exp.Anonymous(this="VALUES", expressions=[exp.column(column.name, copy=False)]))
             conflict.replace(exp.OnConflict(duplicate=True, action=exp.var("UPDATE"), expressions=assignments))
         return expression
 
@@ -1125,9 +1163,8 @@ class QueryBuilder:
             "simplify_expressions": self.simplify_expressions,
         }
 
-        dialect_key = optimizer_dialect or "default"
         cache_key = hash_optimized_expression(
-            expression, dialect=dialect_key, schema=self.schema, optimizer_settings=optimizer_settings
+            expression, dialect=optimizer_dialect, schema=self.schema, optimizer_settings=optimizer_settings
         )
 
         cache = get_cache()
@@ -1154,7 +1191,18 @@ class QueryBuilder:
         ):
             excluded_rules.add(_pushdown_projections_rule)
 
-        rules = RULES if not excluded_rules else tuple(rule for rule in RULES if rule not in excluded_rules)
+        pushdown_rule = (
+            _pushdown_predicates_rule if self.simplify_expressions else _pushdown_predicates_without_simplify
+        )
+        rules = (
+            RULES
+            if not excluded_rules
+            else tuple(
+                (pushdown_rule if rule is _pushdown_predicates_rule else rule)
+                for rule in RULES
+                if rule not in excluded_rules
+            )
+        )
         rule_sets = [rules]
         if _pushdown_projections_rule not in excluded_rules:
             rule_sets.append(tuple(rule for rule in rules if rule is not _pushdown_projections_rule))
@@ -1311,17 +1359,10 @@ class QueryBuilder:
         Returns:
             Mapping of original parameter names to renamed parameter names.
         """
-        param_mapping: dict[str, str] = {}
         if not has_expression_and_parameters(sql_obj):
-            return param_mapping
+            return {}
 
-        sql_parameters = sql_obj.parameters
-        for param_name, param_value in sql_parameters.items():
-            target_name = self._next_parameter_name(param_name) if param_name in self._parameters else param_name
-            _, actual_name = self.add_parameter(param_value, name=target_name)
-            if actual_name != param_name:
-                param_mapping[param_name] = actual_name
-        return param_mapping
+        return self._merge_parameter_dict(sql_obj.parameters)
 
     def _folds_unquoted_to_upper(self, dialect: "DialectType | str | None") -> bool:
         """Check if the target dialect folds unquoted identifiers to uppercase."""
@@ -1335,7 +1376,7 @@ class QueryBuilder:
         Upper-folding dialects resolve quoted lowercase names case-sensitively, so quoting is
         removed to keep lookups aligned with how unquoted DDL created the objects.
         """
-        return expression.copy().transform(_unquote_identifier, copy=False)
+        return expression.transform(_unquote_identifier, copy=False)
 
     def _strip_merge_target_quotes(self, sql_string: str) -> str:
         if sql_string.startswith('MERGE INTO "') and not self._merge_target_quoted:
@@ -1372,6 +1413,24 @@ class ExpressionBuilder(QueryBuilder):
         return self._expression
 
 
+def register_subquery_fragment(expression: exp.Expr, parameters: "Mapping[str, Any]") -> exp.Expr:
+    """Mark a subquery fragment and attach its bound parameters for later merging.
+
+    Args:
+        expression: The ``EXISTS`` / ``IN`` / ``ANY`` / ``ALL`` fragment.
+        parameters: Parameters bound by the fragment's subquery builder.
+
+    Returns:
+        The same expression, carrying ``parameters`` in its metadata when any exist.
+    """
+    global _SUBQUERY_FRAGMENTS_ISSUED
+    _SUBQUERY_FRAGMENTS_ISSUED = True
+    if parameters:
+        expression.meta[SUBQUERY_PARAMETERS_META_KEY] = dict(parameters)
+    return expression
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _BuilderCacheEntry:
     __slots__ = ("dialect", "expression")
 
@@ -1380,6 +1439,7 @@ class _BuilderCacheEntry:
         self.dialect = dialect
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _ExpressionParameterizer:
     __slots__ = ("_builder",)
 
@@ -1392,7 +1452,10 @@ class _ExpressionParameterizer:
                 return node
 
             parent = node.parent
-            if isinstance(parent, exp.Array) and has_vector_distance_ancestor(node):
+            is_vector_array_element = isinstance(parent, exp.Array) or (
+                isinstance(parent, exp.Neg) and isinstance(parent.parent, exp.Array)
+            )
+            if is_vector_array_element and has_vector_distance_ancestor(node):
                 return node
 
             value = node.this
@@ -1407,6 +1470,7 @@ class _ExpressionParameterizer:
         return node
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _PlaceholderReplacer:
     __slots__ = ("_param_mapping",)
 
@@ -1584,18 +1648,108 @@ def _tsql_target_reference(target: exp.Table) -> exp.Table:
     return target.copy()
 
 
-def register_subquery_fragment(expression: exp.Expr, parameters: "Mapping[str, Any]") -> exp.Expr:
-    """Mark a subquery fragment and attach its bound parameters for later merging.
+def _pushdown_predicates_without_simplify(expression: exp.Expr, dialect: DialectType = None) -> exp.Expr:
+    """Push down predicates into JOIN and subquery scopes without invoking ``simplify()``."""
+    root = build_scope(expression)
+    if not root:
+        return expression
 
-    Args:
-        expression: The ``EXISTS`` / ``IN`` / ``ANY`` / ``ALL`` fragment.
-        parameters: Parameters bound by the fragment's subquery builder.
+    resolved_dialect = Dialect.get_or_raise(dialect)
+    unnest_requires_cross_join = isinstance(resolved_dialect, (Athena, Presto))
+    scope_ref_count = root.ref_count()
 
-    Returns:
-        The same expression, carrying ``parameters`` in its metadata when any exist.
-    """
-    global _SUBQUERY_FRAGMENTS_ISSUED
-    _SUBQUERY_FRAGMENTS_ISSUED = True
-    if parameters:
-        expression.meta[SUBQUERY_PARAMETERS_META_KEY] = dict(parameters)
+    scopes = list(root.traverse())
+    scopes.reverse()
+    for scope in scopes:
+        select = scope.expression
+        where_node = select.args.get("where")
+        joins: list[exp.Join] = select.args.get("joins") or []
+
+        if any(join.args.get("nearest") for join in joins):
+            continue
+
+        if isinstance(where_node, exp.Where) and where_node.this is not None:
+            selected_sources: dict[str, tuple[exp.Selectable, exp.Table | Scope]] = dict(scope.selected_sources)
+            join_index = {join.alias_or_name: i for i, join in enumerate(joins)}
+            last_null_extending = max((i for i, join in enumerate(joins) if join.side in ("RIGHT", "FULL")), default=-1)
+            pushdown_allowed = True
+            reachable: dict[str, tuple[exp.Selectable, exp.Table | Scope]] = {}
+            for name, (node, source) in selected_sources.items():
+                parent = node.find_ancestor(exp.Join, exp.From)
+                if isinstance(parent, exp.Join):
+                    if isinstance(node, exp.Unnest) and unnest_requires_cross_join:
+                        pushdown_allowed = False
+                        break
+                    position = join_index.get(parent.alias_or_name, -1)
+                else:
+                    position = -1
+                if position >= last_null_extending:
+                    reachable[name] = (node, source)
+
+            if pushdown_allowed:
+                preserved_true_ids = {id(node) for node in where_node.this.find_all(exp.Boolean) if node.this is True}
+                _pushdown_condition_without_simplify(where_node.this, reachable, scope_ref_count, join_index=join_index)
+                updated_where = where_node.args.get("this")
+                if isinstance(updated_where, exp.Expr):
+                    pruned_where = _prune_pushed_true(updated_where, preserved_true_ids)
+                    if pruned_where is None:
+                        select.set("where", None)
+                    elif pruned_where is not updated_where:
+                        where_node.set("this", pruned_where)
+
+        for join in joins:
+            name = join.alias_or_name
+            if join.side in ("RIGHT", "FULL"):
+                continue
+            on_expr = join.args.get("on")
+            if isinstance(on_expr, exp.Expr) and name in scope.selected_sources:
+                preserved_true_ids = {id(node) for node in on_expr.find_all(exp.Boolean) if node.this is True}
+                _pushdown_condition_without_simplify(on_expr, {name: scope.selected_sources[name]}, scope_ref_count)
+                updated_on = join.args.get("on")
+                if isinstance(updated_on, exp.Expr):
+                    pruned_on = _prune_pushed_true(updated_on, preserved_true_ids)
+                    if pruned_on is None:
+                        join.set("on", exp.true())
+                    elif pruned_on is not updated_on:
+                        join.set("on", pruned_on)
+
     return expression
+
+
+def _pushdown_condition_without_simplify(
+    condition: exp.Expr,
+    sources: "Mapping[str, tuple[exp.Selectable, exp.Table | Scope]]",
+    scope_ref_count: "Mapping[int, int]",
+    join_index: "Mapping[str, int] | None" = None,
+) -> None:
+    unwrapped = condition
+    while isinstance(unwrapped, exp.Paren):
+        unwrapped = unwrapped.this
+    cnf_like = _is_normalized_condition(unwrapped) or not _is_normalized_condition(unwrapped, dnf=True)
+    predicates = list(unwrapped.flatten() if isinstance(unwrapped, exp.And if cnf_like else exp.Or) else [unwrapped])
+    if cnf_like:
+        _pushdown_cnf(predicates, sources, scope_ref_count, join_index=join_index)
+    else:
+        _pushdown_dnf(predicates, sources, scope_ref_count, join_index=join_index)
+
+
+def _prune_pushed_true(condition: exp.Expr, preserved_true_ids: set[int]) -> exp.Expr | None:
+    if isinstance(condition, exp.Boolean) and condition.this is True:
+        return condition if id(condition) in preserved_true_ids else None
+    if isinstance(condition, exp.Paren):
+        inner = _prune_pushed_true(condition.this, preserved_true_ids)
+        if inner is None:
+            return None
+        if inner is not condition.this:
+            return exp.paren(inner, copy=False) if isinstance(inner, exp.Or) else inner
+        return condition
+    if isinstance(condition, exp.And):
+        left = _prune_pushed_true(condition.left, preserved_true_ids)
+        right = _prune_pushed_true(condition.right, preserved_true_ids)
+        if left is None:
+            return right
+        if right is None:
+            return left
+        if left is not condition.left or right is not condition.right:
+            return exp.and_(left, right, copy=False)
+    return condition

@@ -8,7 +8,15 @@ from typing import cast
 import pytest
 
 from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
-from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, FakeIbmDbDbiModule, FakeIbmDbModule
+from sqlspec.exceptions import DatabaseConnectionError
+from tests.unit.adapters.test_db2._fakes import (
+    FakeDb2Connection,
+    FakeDb2Cursor,
+    FakeDb2OperationalError,
+    FakeIbmDbDbiModule,
+    FakeIbmDbModule,
+    db2_error,
+)
 
 FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
 
@@ -94,7 +102,7 @@ def test_pool_recycles_exceeded_recycle_time(fake_ibm_db: FakeModules) -> None:
     conn1 = pool.acquire()
     assert cast(object, conn1) is first
 
-    pool._thread_local.created_at = time.time() - 20
+    pool._current_holder().created_at = time.time() - 20
 
     conn2 = pool.acquire()
     assert cast(object, conn2) is second
@@ -290,3 +298,109 @@ def test_failed_creation_hook_closes_unregistered_connection(fake_ibm_db: FakeMo
         pool.acquire()
     assert connection.closed is True
     assert pool.size() == 0
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_hadr_pool_passes_read_only_cli_options_without_mutation(
+    fake_ibm_db: FakeModules, asynchronous: bool
+) -> None:
+    from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool
+
+    _, module = fake_ibm_db
+    options = {999: 42}
+    if asynchronous:
+        pool = Db2AsyncConnectionPool({"database": "app", "read_only": True}, conn_options=options)
+        connection = await pool.new_connection()
+        await connection.close()
+        await pool.close()
+    else:
+        sync_pool = Db2SyncConnectionPool({"database": "app", "read_only": True}, conn_options=options)
+        connection = sync_pool.new_connection()
+        connection.close()
+        sync_pool.close()
+    assert module.connect_calls[-1][5] == {999: 42, module.SQL_ATTR_AUTOCOMMIT: module.SQL_AUTOCOMMIT_ON, 101: 1}
+    assert "READONLY" not in module.connect_calls[-1][0]
+    assert options == {999: 42}
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_db2_sync_pool_checkin_rolls_back_when_autocommit_off(fake_ibm_db: FakeModules, autocommit: bool) -> None:
+    """Db2SyncConnectionPool rolls back on outermost checkin when autocommit=False and skips when True."""
+    _, module = fake_ibm_db
+    connection = FakeDb2Connection(autocommit=autocommit)
+    module.pending_connections.append(connection)
+    pool = Db2SyncConnectionPool(
+        {"database": "TESTDB", "autocommit": autocommit}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        with pool.get_connection() as outer:
+            with pool.get_connection() as inner:
+                assert inner is outer
+            assert connection.rollbacks == 0
+        assert connection.rollbacks == (0 if autocommit else 1)
+    finally:
+        pool.close()
+
+
+def test_db2_sync_pool_retires_failed_rollback_and_closed_handle(
+    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Db2SyncConnectionPool retires connections on failed rollback or closed conn_handler."""
+    _, module = fake_ibm_db
+    c1 = FakeDb2Connection(autocommit=False)
+    c2 = FakeDb2Connection(autocommit=True)
+    c3 = FakeDb2Connection(autocommit=True)
+    module.pending_connections.extend([c1, c2, c3])
+
+    def fail_rollback() -> None:
+        raise RuntimeError("db2 rollback failed")
+
+    monkeypatch.setattr(c1, "rollback", fail_rollback)
+    pool_off = Db2SyncConnectionPool(
+        {"database": "TESTDB", "autocommit": False}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        with pytest.raises(RuntimeError, match="db2 rollback failed"), pool_off.get_connection():
+            pass
+        assert c1.closed is True
+        assert pool_off.size() == 0
+    finally:
+        pool_off.close()
+
+    pool_on = Db2SyncConnectionPool(
+        {"database": "TESTDB", "autocommit": True}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        with pool_on.get_connection() as active:
+            assert cast("object", active) is c2
+            c2.conn_handler = None
+        assert pool_on.size() == 0
+        with pool_on.get_connection() as fresh:
+            assert cast("object", fresh) is c3
+    finally:
+        pool_on.close()
+
+
+def test_sync_pool_maps_native_connect_errors(fake_ibm_db: FakeModules) -> None:
+    """Db2SyncConnectionPool maps Db2Error directly across new_connection, acquire, and get_connection."""
+    _, module = fake_ibm_db
+    native_new = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    native_acquire = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    native_ctx = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    module.connect_errors.extend([native_new, native_acquire, native_ctx])
+    pool = Db2SyncConnectionPool({"database": "TESTDB"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pytest.raises(DatabaseConnectionError) as new_exc:
+            pool.new_connection()
+        assert new_exc.value.__cause__ is native_new
+
+        with pytest.raises(DatabaseConnectionError) as acq_exc:
+            pool.acquire()
+        assert acq_exc.value.__cause__ is native_acquire
+
+        with pytest.raises(DatabaseConnectionError) as ctx_exc:
+            with pool.get_connection():
+                pass
+        assert ctx_exc.value.__cause__ is native_ctx
+    finally:
+        pool.close()

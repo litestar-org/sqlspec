@@ -1,15 +1,17 @@
 """Bounded exclusive Snowflake connection pooling."""
 
+import asyncio
 import contextlib
 import math
 import os
 import threading
 import time
+import weakref
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.snowflake.core import normalize_connection_params
+from sqlspec.adapters.snowflake.core import create_mapped_exception, is_snowflake_error, normalize_connection_params
 from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, MissingDependencyError
 from sqlspec.typing import import_optional
 
@@ -31,12 +33,14 @@ class SnowflakeConnectionPool:
         "_created_pid",
         "_health_check_interval",
         "_idle",
+        "_lease_lock",
         "_max_size",
         "_min_size",
         "_observability_runtime",
         "_recycle_seconds",
         "_standalone",
         "_standalone_slots",
+        "_task_leases",
         "_thread_local",
         "_timeout",
         "_total_count",
@@ -92,6 +96,8 @@ class SnowflakeConnectionPool:
         self._created_pid = os.getpid()
         self._condition = threading.Condition(threading.Lock())
         self._thread_local = threading.local()
+        self._lease_lock = threading.Lock()
+        self._task_leases: weakref.WeakKeyDictionary[asyncio.Task[Any], _LeaseState] = weakref.WeakKeyDictionary()
         self._idle: list[tuple[SnowflakeConnection, float, float]] = []
         self._checked_out: dict[int, tuple[SnowflakeConnection, float]] = {}
         self._standalone: dict[int, SnowflakeConnection] = {}
@@ -113,32 +119,6 @@ class SnowflakeConnectionPool:
         if os.getpid() != self._created_pid:
             msg = "Snowflake connection pool cannot be reused after a process fork"
             raise DatabaseConnectionError(msg)
-
-    def _open_connection(self) -> "SnowflakeConnection":
-        connector = import_optional("snowflake.connector")
-        if connector is None:
-            raise MissingDependencyError(package="snowflake-connector-python", install_package="snowflake")
-        return cast(
-            "SnowflakeConnection", connector.connect(**normalize_connection_params(self._connection_parameters))
-        )
-
-    def _create_physical_connection(self) -> "SnowflakeConnection":
-        connection: SnowflakeConnection | None = None
-        try:
-            connection = self._open_connection()
-            if self._observability_runtime is not None:
-                self._observability_runtime.emit_connection_create_sync(connection)
-        except BaseException:
-            try:
-                if connection is not None:
-                    self._destroy_connection(connection)
-            finally:
-                with self._condition:
-                    self._total_count -= 1
-                    self._condition.notify_all()
-            raise
-        else:
-            return connection
 
     def new_connection(self) -> "SnowflakeConnection":
         """Open a standalone connection configured like a pooled one.
@@ -194,14 +174,6 @@ class SnowflakeConnectionPool:
             finally:
                 if owned:
                     self._standalone_slots.release()
-
-    def _destroy_connection(self, connection: "SnowflakeConnection") -> None:
-        try:
-            if self._observability_runtime is not None:
-                self._observability_runtime.emit_connection_destroy_sync(connection)
-        finally:
-            with contextlib.suppress(Exception):
-                connection.close()
 
     def acquire(self) -> "SnowflakeConnection":
         """Acquire one exclusive healthy handle within the configured timeout."""
@@ -284,30 +256,47 @@ class SnowflakeConnectionPool:
 
     @contextmanager
     def get_connection(self) -> "Generator[SnowflakeConnection, None, None]":
-        """Reuse an outer thread lease when connection contexts are nested.
+        """Reuse an outer lease when connection contexts are nested in the same task or thread.
 
         Yields:
-            An exclusively leased connection shared by nested contexts on this thread.
+            An exclusively leased connection shared by nested contexts of one asyncio task, or of one
+            thread outside a task.
         """
         self.check_pid()
-        connection = getattr(self._thread_local, "connection", None)
+        state = self._lease_state()
+        connection = state.connection
         if connection is None:
             connection = self.acquire()
-            self._thread_local.connection = connection
-            self._thread_local.depth = 0
-            self._thread_local.discard = False
-        self._thread_local.depth += 1
+            state.connection = connection
+            state.depth = 0
+            state.discard = False
+        state.depth += 1
         try:
             yield connection
         except BaseException:
-            self._thread_local.discard = True
+            state.discard = True
             raise
         finally:
-            self._thread_local.depth -= 1
-            if self._thread_local.depth == 0:
-                discard = self._thread_local.discard
-                self._thread_local.connection = None
+            state.depth -= 1
+            if state.depth == 0:
+                discard = state.discard
+                state.connection = None
                 self.release(connection, discard=discard)
+
+    def _lease_state(self) -> "_LeaseState":
+        task = _current_async_task()
+        if task is None:
+            state = getattr(self._thread_local, "state", None)
+            if state is None:
+                state = _LeaseState()
+                self._thread_local.state = state
+            return cast("_LeaseState", state)
+        with self._lease_lock:
+            state = self._task_leases.get(task)
+            if state is None:
+                state = _LeaseState()
+                self._task_leases[task] = state
+        return state
 
     def close(self) -> None:
         """Stop acquisitions and close idle handles, draining active leases on return."""
@@ -338,3 +327,59 @@ class SnowflakeConnectionPool:
         self.check_pid()
         with self._condition:
             return len(self._checked_out)
+
+    def _open_connection(self) -> "SnowflakeConnection":
+        connector = import_optional("snowflake.connector")
+        if connector is None:
+            raise MissingDependencyError(package="snowflake-connector-python", install_package="snowflake")
+        try:
+            return cast(
+                "SnowflakeConnection", connector.connect(**normalize_connection_params(self._connection_parameters))
+            )
+        except Exception as exc:
+            if is_snowflake_error(exc):
+                raise create_mapped_exception(exc) from exc
+            raise
+
+    def _create_physical_connection(self) -> "SnowflakeConnection":
+        connection: SnowflakeConnection | None = None
+        try:
+            connection = self._open_connection()
+            if self._observability_runtime is not None:
+                self._observability_runtime.emit_connection_create_sync(connection)
+        except BaseException:
+            try:
+                if connection is not None:
+                    self._destroy_connection(connection)
+            finally:
+                with self._condition:
+                    self._total_count -= 1
+                    self._condition.notify_all()
+            raise
+        else:
+            return connection
+
+    def _destroy_connection(self, connection: "SnowflakeConnection") -> None:
+        try:
+            if self._observability_runtime is not None:
+                self._observability_runtime.emit_connection_destroy_sync(connection)
+        finally:
+            with contextlib.suppress(Exception):
+                connection.close()
+
+
+class _LeaseState:
+    """Re-entrant lease owned by one asyncio task or, outside a task, one thread."""
+
+    __slots__ = ("connection", "depth", "discard")
+
+    def __init__(self) -> None:
+        self.connection: SnowflakeConnection | None = None
+        self.depth = 0
+        self.discard = False
+
+
+def _current_async_task() -> "asyncio.Task[Any] | None":
+    """Return the active asyncio Task when running inside an event loop, otherwise None."""
+    loop = asyncio._get_running_loop()
+    return asyncio.current_task(loop) if loop is not None else None

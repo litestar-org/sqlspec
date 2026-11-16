@@ -5,14 +5,21 @@ import sys
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
-from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgPostgresError, CockroachAsyncpgSessionContext
+from sqlspec.adapters.cockroach_asyncpg._typing import (
+    CockroachAsyncpgInterfaceError,
+    CockroachAsyncpgPostgresError,
+    CockroachAsyncpgSessionContext,
+)
 from sqlspec.adapters.cockroach_asyncpg.core import (
+    DEFAULT_FOLLOWER_READ_STALENESS,
     CockroachAsyncpgRetryConfig,
     build_native_export,
     build_native_import,
     calculate_backoff_seconds,
+    create_mapped_exception,
+    driver_profile,
+    execute_cache_hit,
     is_retryable_error,
     native_export_telemetry,
     native_import_telemetry,
@@ -22,16 +29,18 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.core import SQL, register_driver_profile
 from sqlspec.driver import AsyncRowStream
+from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.exceptions import ReadOnlyTransactionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from sqlspec.adapters.asyncpg.core import AsyncpgStreamSource
     from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgConnection
     from sqlspec.core import SQLResult, StatementConfig
     from sqlspec.driver import CachedQuery, ExecutionResult
+    from sqlspec.driver._stream import AsyncRowSource
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
@@ -48,15 +57,17 @@ _T = TypeVar("_T")
 class CockroachAsyncpgStreamSource:
     """Async chunk source for CockroachDB AsyncPG with follower read support."""
 
-    __slots__ = ("_auto_started", "_driver", "_statement", "_underlying")
+    __slots__ = ("_auto_started", "_connection", "_driver", "_statement", "_underlying")
 
-    def __init__(self, driver: "CockroachAsyncpgDriver", statement: "SQL", underlying: "AsyncpgStreamSource") -> None:
+    def __init__(self, driver: "CockroachAsyncpgDriver", statement: "SQL", underlying: "AsyncRowSource") -> None:
         self._driver = driver
         self._statement = statement
         self._underlying = underlying
         self._auto_started = False
+        self._connection: Any = None
 
     async def start(self) -> None:
+        self._connection = self._driver.connection
         if self._driver._wants_follower_read(self._statement):
             self._auto_started = await self._driver._begin_follower_read_transaction()
         try:
@@ -74,7 +85,13 @@ class CockroachAsyncpgStreamSource:
         try:
             await self._underlying.close(error=error)
         finally:
-            if self._auto_started and self._driver._connection_in_transaction():
+            connection = self._connection
+            self._connection = None
+            if (
+                self._auto_started
+                and self._driver.connection is connection
+                and self._driver._connection_in_transaction()
+            ):
                 if error:
                     with suppress(Exception):
                         await self._driver.rollback()
@@ -89,7 +106,9 @@ class CockroachAsyncpgExceptionHandler(AsyncpgExceptionHandler):
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
-        if isinstance(exc_val, CockroachAsyncpgPostgresError) or has_sqlstate(exc_val):
+        if isinstance(
+            exc_val, (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError)
+        ) or has_sqlstate(exc_val):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -110,8 +129,16 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._retry_config = CockroachAsyncpgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
-        self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
+        self._follower_staleness = cast(
+            "str | None",
+            self.driver_features.get("default_staleness")
+            or (DEFAULT_FOLLOWER_READ_STALENESS if self.driver_features.get("enable_follower_reads") else None),
+        )
         self._data_dictionary = None
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), CockroachAsyncpgDriver) else None
+        )
+        self._cache_hit_state = self.driver_features
 
     @property
     def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":
@@ -149,8 +176,9 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
                 query is not None
                 and not prepared.is_script
                 and not prepared.is_many
-                and prepared.operation_type == "SELECT"
                 and isinstance(values, (list, tuple))
+                and self._wants_follower_read(prepared)
+                and prepared.operation_type == "SELECT"
             ):
                 command, bound = build_native_export(
                     query,
@@ -190,6 +218,9 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         transactions use the inherited path. CSV needs explicit skip (0 for no
         header); nullif is never inferred. Native failures are never replayed.
         """
+        if self.driver_features.get("read_only_session"):
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         options = self.driver_features.get("native_storage_csv_options", {})
         resolved = None
         if (
@@ -209,9 +240,9 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
-    def _wants_follower_read(self, statement: "SQL") -> bool:
-        """Return True when a statement may run under a follower-read transaction."""
-        return statement.returns_rows() and not statement.is_modifying_operation()
+    async def dispatch_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
+        self._wants_follower_read(statement)
+        return await super().dispatch_special_handling(cursor, statement)
 
     async def begin(self) -> None:
         """Begin a transaction and apply follower-read staleness to it.
@@ -277,13 +308,33 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             await self.commit()
         return result
 
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native asyncpg row stream wrapped for follower reads."""
+        stream = super().dispatch_select_stream(statement, chunk_size)
+        if stream is None:
+            return None
+        source = CockroachAsyncpgStreamSource(self, statement, stream._source)
+        return AsyncRowStream(source)
+
+    def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":
+        return CockroachAsyncpgExceptionHandler()
+
+    def _wants_follower_read(self, statement: "SQL") -> bool:
+        """Return True when a statement may run under a follower-read transaction."""
+        safe = statement.is_read_only()
+        if self.driver_features.get("read_only_session") and not safe:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
+        return safe
+
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
+        if self.driver_features.get("read_only_session") and not cached.operation_profile.is_read_only:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         auto_started = (
-            await self._begin_follower_read_transaction()
-            if (cached.operation_profile.returns_rows and not cached.operation_profile.modifies_rows)
-            else False
+            await self._begin_follower_read_transaction() if (cached.operation_profile.is_read_only) else False
         )
         try:
             result = await super()._execute_cache_hit(sql, params, cached)
@@ -295,17 +346,6 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         if auto_started and self._connection_in_transaction():
             await self.commit()
         return result
-
-    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
-        """Return a native asyncpg row stream wrapped for follower reads."""
-        stream = super().dispatch_select_stream(statement, chunk_size)
-        if stream is None:
-            return None
-        source = CockroachAsyncpgStreamSource(self, statement, cast("AsyncpgStreamSource", stream._source))
-        return AsyncRowStream(source)
-
-    def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":
-        return CockroachAsyncpgExceptionHandler()
 
     def _native_storage_ready(self) -> bool:
         return bool(self.driver_features.get("enable_native_storage")) and not self._connection_in_transaction()
@@ -327,12 +367,11 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         return rows
 
     async def _apply_follower_reads(self) -> None:
-        if not self.driver_features.get("enable_follower_reads", False):
-            return
-        if not self._follower_staleness:
-            return
-        staleness = validate_follower_read_staleness(self._follower_staleness)
-        await self.connection.execute(f"SET TRANSACTION AS OF SYSTEM TIME {staleness}")
+        if self.driver_features.get("enable_follower_reads", False) and self._follower_staleness:
+            staleness = validate_follower_read_staleness(self._follower_staleness)
+            await self.connection.execute(f"SET TRANSACTION AS OF SYSTEM TIME {staleness}, READ ONLY")
+        elif self.driver_features.get("read_only_session"):
+            await self.connection.execute("SET TRANSACTION READ ONLY")
 
     async def _begin_follower_read_transaction(self) -> bool:
         """Open the transaction a follower read needs so the staleness clause can lead it.
@@ -341,9 +380,9 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         the clause could not precede, so a read opens a transaction here when the
         caller has not already done so.
         """
-        if not self.driver_features.get("enable_follower_reads", False):
-            return False
-        if not self._follower_staleness:
+        if not (
+            self.driver_features.get("enable_follower_reads", False) or self.driver_features.get("read_only_session")
+        ):
             return False
         if self._connection_in_transaction():
             return False

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.exceptions import SQLFileParseError, SQLFragmentNotFoundError, SQLStatementNotFoundError
-from sqlspec.loader import SlotDeclaration, SQLFileLoader
+from sqlspec.loader import MAX_EXPANDED_SQL_BYTES, SlotDeclaration, SQLFileLoader
 
 SHARED_FRAGMENT = """\
 -- fragment: active_users
@@ -385,3 +385,42 @@ def test_fragment_moved_between_files_reloads(tmp_path: Path, source_first: bool
     assert loader.list_fragments() == ["active_users"]
     assert "active = FALSE" in loader.get_query_text("count_active")
     assert loader.get_file_for_query("count_active") == loader.get_file(destination)
+
+
+def test_recursive_include_expansion_rejects_excessive_output_bytes() -> None:
+    """Exponentially expanding includes stop cleanly once expanded output exceeds MAX_EXPANDED_SQL_BYTES."""
+    loader = SQLFileLoader()
+    loader.add_fragment("frag_0", "SELECT 'x' AS v UNION ALL " * 20 + "SELECT 'x' AS v")
+    for level in range(1, 14):
+        loader.add_fragment(f"frag_{level}", f"/* include: frag_{level - 1} */\n/* include: frag_{level - 1} */")
+    loader.add_named_sql("boom", "/* include: frag_13 */")
+
+    with pytest.raises(SQLFileParseError, match="Expanded SQL size exceeds maximum"):
+        loader.get_query_text("boom")
+
+
+def test_single_fragment_exceeding_max_expanded_bytes_is_rejected() -> None:
+    """A single included fragment exceeding MAX_EXPANDED_SQL_BYTES fails loudly."""
+    loader = SQLFileLoader()
+    oversized = "SELECT '" + ("a" * (MAX_EXPANDED_SQL_BYTES + 128)) + "'"
+    loader.add_fragment("huge", oversized)
+    loader.add_named_sql("use_huge", "/* include: huge */")
+
+    with pytest.raises(SQLFileParseError, match="Expanded SQL size exceeds maximum"):
+        loader.get_query_text("use_huge")
+
+
+def test_multiline_directive_headers_do_not_cross_blank_lines(tmp_path: Path) -> None:
+    """Directive regexes match horizontal whitespace only and do not consume trailing blank lines."""
+    content = """\
+-- fragment: frag_alpha
+SELECT 1 AS a
+
+-- name: query_beta
+SELECT 2 AS b
+"""
+    loader = SQLFileLoader()
+    loader.load_sql(_write(tmp_path / "spacing.sql", content))
+
+    assert loader.get_fragment_text("frag_alpha") == "SELECT 1 AS a"
+    assert loader.get_query_text("query_beta") == "SELECT 2 AS b"

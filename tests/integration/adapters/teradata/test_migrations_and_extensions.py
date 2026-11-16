@@ -109,7 +109,7 @@ def test_migrations_and_all_extension_schemas_reconcile_idempotently(
         sessions.delete_session("app", "user", "session-1")
         assert sessions.get_session("app", "user", "session-1") is None
         assert sessions.get_events("app", "user", "session-1") == []
-        assert memory.delete_entries_by_session("session-1") == 1
+        assert memory.delete_entries_by_session("session-1", "app", "user") == 1
     finally:
         with config.provide_session() as session:
             for key in ("memory", "meta", "user", "app", "events", "sess", "ev", "ls", "ledger"):

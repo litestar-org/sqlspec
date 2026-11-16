@@ -170,6 +170,7 @@ sqlspec stamp [OPTIONS] <REVISION>
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--bind-key` | `text` | - | Specify which SQLSpec config to use by bind key |
+| `--no-prompt` | `flag` | `False` | Do not prompt for confirmation before executing the command. |
 
 #### sqlspec squash
 

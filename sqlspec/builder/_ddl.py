@@ -21,6 +21,7 @@ from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import (
+    _FORBIDDEN_STATEMENT_NODES,
     _is_simple_identifier,
     _mark_explicit_table_quotes,
     _normalize_dialect,
@@ -29,6 +30,7 @@ from sqlspec.builder._parsing_utils import (
     parse_order_expression,
 )
 from sqlspec.core import SQL
+from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.data_dictionary import (
     DDLResult,
     ForeignKeyMetadata,
@@ -133,7 +135,7 @@ _ISO_OFFSET_SUFFIX_RE = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$", re.IGNORECASE)
 _DEFAULT_INFERRED_DECIMAL_PRECISION = 38
 _DEFAULT_INFERRED_DECIMAL_SCALE = 9
 _ORACLE_NUMBER_MAX_PRECISION = 38
-_BARE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_BARE_IDENTIFIER_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 _TYPE_NAME_PART = r'(?:"(?:[^"]|"")+"|`(?:[^`]|``)+`|\[(?:[^\]]|\]\])+\]|[A-Za-z_][A-Za-z0-9_$]*)'
 _QUALIFIED_TYPE_NAME_RE = re.compile(rf"^{_TYPE_NAME_PART}(?:\s*\.\s*{_TYPE_NAME_PART}){{0,2}}$")
 _INLINE_ENUM_TYPE_RE = re.compile(r"^\s*ENUM\s*\(", re.IGNORECASE)
@@ -367,7 +369,8 @@ def build_column_expression(
         )
 
     if col.check:
-        constraints.append(exp.ColumnConstraint(kind=exp.Check(this=exp.maybe_parse(col.check, dialect=norm_dialect))))
+        check_expr = _parse_ddl_expression(col.check, label="column CHECK expression", dialect=norm_dialect)
+        constraints.append(exp.ColumnConstraint(kind=exp.Check(this=check_expr)))
 
     if col.comment:
         constraints.append(exp.ColumnConstraint(kind=exp.CommentColumnConstraint(this=exp.convert(col.comment))))
@@ -445,13 +448,16 @@ def build_constraint_expression(
         return unique_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_CHECK:
-        check_expr = exp.Check(
-            this=constraint.condition_expr
-            if constraint.condition_expr is not None
-            else exp.maybe_parse(constraint.condition, dialect=dialect)
-            if constraint.condition
-            else None
-        )
+        check_condition: exp.Expr | None = None
+        if constraint.condition_expr is not None:
+            check_condition = _check_ddl_expression_nodes(
+                constraint.condition_expr, label="CHECK constraint condition", text=constraint.condition_expr.sql()
+            )
+        elif constraint.condition:
+            check_condition = _parse_ddl_expression(
+                constraint.condition, label="CHECK constraint condition", dialect=dialect
+            )
+        check_expr = exp.Check(this=check_condition)
 
         if constraint.name:
             return exp.Constraint(
@@ -729,11 +735,14 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
     def tablespace(self, name: str) -> "Self":
         """Set tablespace for the table."""
-        self._tablespace = name
+        self._tablespace = _validate_clause_identifier(name, label="tablespace")
         return self
 
     def partition_by(self, partition_spec: str) -> "Self":
         """Set partitioning specification."""
+        if not isinstance(partition_spec, str) or not partition_spec.strip():
+            msg = f"Invalid PARTITION BY specification: {partition_spec!r}"
+            raise SQLBuilderError(msg)
         self._partition_by = partition_spec
         return self
 
@@ -763,6 +772,9 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
         if any(col.name == name for col in self._columns):
             self._raise_builder_error(f"Column '{name}' already defined")
+
+        if check:
+            _parse_ddl_expression(check, label="column CHECK expression", dialect=self.dialect)
 
         column_def = ColumnDefinition(
             name=name,
@@ -867,8 +879,13 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         if has_sqlglot_expression(condition):
             sqlglot_expr = condition.sqlglot_expression
             condition_expr = sqlglot_expr if isinstance(sqlglot_expr, exp.Expr) else None
+            if condition_expr is not None:
+                _check_ddl_expression_nodes(
+                    condition_expr, label="CHECK constraint condition", text=condition_expr.sql()
+                )
         else:
             condition_str = str(condition)
+            _parse_ddl_expression(condition_str, label="CHECK constraint condition", dialect=self.dialect)
 
         constraint = ConstraintDefinition(
             constraint_type=CONSTRAINT_TYPE_CHECK, name=name, condition=condition_str, condition_expr=condition_expr
@@ -879,7 +896,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
     def engine(self, engine_name: str) -> "Self":
         """Set storage engine (MySQL/MariaDB)."""
-        self._table_options["engine"] = engine_name
+        self._table_options["engine"] = _validate_clause_identifier(engine_name, label="table engine")
         return self
 
     def charset(self, charset_name: str) -> "Self":
@@ -899,7 +916,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
     def with_option(self, key: str, value: "Any") -> "Self":
         """Add custom table option."""
-        self._table_options[key] = value
+        self._table_options[_validate_clause_identifier(key, label="table option key")] = value
         return self
 
     @classmethod
@@ -1222,22 +1239,18 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
                 )
             )
         if self._table_options.get("engine"):
-            props.append(
-                exp.Property(
-                    this=exp.to_identifier("ENGINE"), value=exp.to_identifier(self._table_options.get("engine"))
-                )
-            )
+            engine_name = _validate_clause_identifier(self._table_options.get("engine"), label="table engine")
+            props.append(exp.Property(this=exp.to_identifier("ENGINE"), value=exp.to_identifier(engine_name)))
         if self._tablespace:
-            props.append(exp.Property(this=exp.to_identifier("TABLESPACE"), value=exp.to_identifier(self._tablespace)))
+            tablespace_name = _validate_clause_identifier(self._tablespace, label="tablespace")
+            props.append(exp.Property(this=exp.to_identifier("TABLESPACE"), value=exp.to_identifier(tablespace_name)))
         if self._partition_by:
-            partition_expr: exp.Expr = exp.maybe_parse(self._partition_by, dialect=effective_dialect) or exp.var(
-                self._partition_by
-            )
-            props.append(exp.PartitionedByProperty(this=partition_expr))
+            props.append(exp.PartitionedByProperty(this=_parse_partition_by(self._partition_by, effective_dialect)))
 
         for key, value in self._table_options.items():
             if key != "engine":
-                props.append(exp.Property(this=exp.to_identifier(key.upper()), value=exp.convert(value)))
+                option_key = _validate_clause_identifier(key, label="table option key")
+                props.append(exp.Property(this=exp.to_identifier(option_key.upper()), value=exp.convert(value)))
 
         table_identifier = _parse_ddl_table(self._table_name, schema=self._schema, dialect=effective_dialect)
 
@@ -1614,10 +1627,14 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         return self
 
     def using(self, method: str) -> Self:
-        self._using = method
+        self._using = _validate_clause_identifier(method, label="index method")
         return self
 
     def where(self, condition: str | exp.Expr) -> Self:
+        if isinstance(condition, str):
+            _parse_ddl_expression(condition, label="partial index predicate", dialect=self.dialect)
+        else:
+            _check_ddl_expression_nodes(condition, label="partial index predicate", text=condition.sql())
         self._where = condition
         return self
 
@@ -1822,7 +1839,11 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                     "DuckDB does not support partial indexes; a full index would change the index semantics."
                 )
             where_expr = (
-                exp.condition(self._where, dialect=norm_dialect) if isinstance(self._where, str) else self._where.copy()
+                _parse_ddl_expression(self._where, label="partial index predicate", dialect=norm_dialect)
+                if isinstance(self._where, str)
+                else _check_ddl_expression_nodes(
+                    self._where.copy(), label="partial index predicate", text=self._where.sql()
+                )
             )
 
         index_params = exp.IndexParameters(columns=cols) if cols else None
@@ -1835,7 +1856,7 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         if self._using:
             if index_params is None:
                 index_params = exp.IndexParameters()
-            index_params.set("using", exp.Var(this=self._using))
+            index_params.set("using", exp.Var(this=_validate_clause_identifier(self._using, label="index method")))
 
         if where_expr is not None:
             if index_params is None:
@@ -2127,15 +2148,15 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         return self
 
     def storage_parameter(self, key: str, value: Any) -> Self:
-        self._storage_parameters[key] = value
+        self._storage_parameters[_validate_clause_identifier(key, label="storage parameter key")] = value
         return self
 
     def tablespace(self, name: str) -> Self:
-        self._tablespace = name
+        self._tablespace = _validate_clause_identifier(name, label="tablespace")
         return self
 
     def using_index(self, index_name: str) -> Self:
-        self._using_index = index_name
+        self._using_index = _validate_clause_identifier(index_name, label="index name")
         return self
 
     def with_hint(self, hint: str) -> Self:
@@ -2156,13 +2177,14 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         if self._refresh_mode:
             props.append(exp.Property(this=exp.to_identifier("REFRESH_MODE"), value=exp.convert(self._refresh_mode)))
         if self._tablespace:
-            props.append(exp.Property(this=exp.to_identifier("TABLESPACE"), value=exp.to_identifier(self._tablespace)))
+            tablespace_name = _validate_clause_identifier(self._tablespace, label="tablespace")
+            props.append(exp.Property(this=exp.to_identifier("TABLESPACE"), value=exp.to_identifier(tablespace_name)))
         if self._using_index:
-            props.append(
-                exp.Property(this=exp.to_identifier("USING_INDEX"), value=exp.to_identifier(self._using_index))
-            )
+            index_name = _validate_clause_identifier(self._using_index, label="index name")
+            props.append(exp.Property(this=exp.to_identifier("USING_INDEX"), value=exp.to_identifier(index_name)))
         for k, v in self._storage_parameters.items():
-            props.append(exp.Property(this=exp.to_identifier(k), value=exp.convert(str(v))))
+            param_key = _validate_clause_identifier(k, label="storage parameter key")
+            props.append(exp.Property(this=exp.to_identifier(param_key), value=exp.convert(str(v))))
         if self._with_data is not None:
             props.append(exp.WithDataProperty(no=not self._with_data))
         props.extend(exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(hint)) for hint in self._hints)
@@ -2303,6 +2325,9 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
         if not new_type:
             self._raise_builder_error("New type must be a non-empty string")
 
+        if using is not None:
+            _parse_ddl_expression(using, label="ALTER COLUMN TYPE USING expression", dialect=self.dialect)
+
         operation = AlterOperation(
             operation_type="ALTER COLUMN TYPE", column_name=name, new_type=new_type, using_expression=using
         )
@@ -2361,9 +2386,12 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
         if condition is not None:
             if has_sqlglot_expression(condition):
                 sqlglot_expr = condition.sqlglot_expression
-                condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
+                condition_str = sqlglot_expr.sql(dialect=self.dialect, copy=False) if sqlglot_expr else str(condition)
             else:
                 condition_str = str(condition)
+
+        if condition_str is not None and constraint_type.upper() == CONSTRAINT_TYPE_CHECK:
+            _parse_ddl_expression(condition_str, label="CHECK constraint condition", dialect=self.dialect)
 
         constraint_def = ConstraintDefinition(
             constraint_type=constraint_type.upper(),
@@ -2489,7 +2517,11 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
             return exp.AlterColumn(
                 this=_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect),
                 dtype=_parse_column_type(op.column_name, op.new_type, effective_dialect),
-                using=exp.maybe_parse(op.using_expression, dialect=effective_dialect) if op.using_expression else None,
+                using=_parse_ddl_expression(
+                    op.using_expression, label="ALTER COLUMN TYPE USING expression", dialect=effective_dialect
+                )
+                if op.using_expression
+                else None,
             )
 
         if op_type == "RENAME COLUMN":
@@ -2697,12 +2729,14 @@ class CreateSequence(DDLBuilder):
         self._sequence_name = sequence_name
         self._schema = schema
         self._if_not_exists = if_not_exists
-        self._start_with = start_with
-        self._increment_by = increment_by
-        self._min_value = min_value
-        self._max_value = max_value
+        self._start_with = _coerce_int_argument(start_with, name="start_with") if start_with is not None else None
+        self._increment_by = (
+            _coerce_int_argument(increment_by, name="increment_by") if increment_by is not None else None
+        )
+        self._min_value = _coerce_int_argument(min_value, name="min_value") if min_value is not None else None
+        self._max_value = _coerce_int_argument(max_value, name="max_value") if max_value is not None else None
         self._cycle = cycle
-        self._cache = cache
+        self._cache = _coerce_int_argument(cache, name="cache") if cache is not None else None
 
     def name(self, sequence_name: str) -> Self:
         """Set the sequence name."""
@@ -2721,22 +2755,22 @@ class CreateSequence(DDLBuilder):
 
     def start_with(self, value: int) -> Self:
         """Set the START WITH value for the sequence."""
-        self._start_with = value
+        self._start_with = _coerce_int_argument(value, name="start_with")
         return self
 
     def increment_by(self, value: int) -> Self:
         """Set the INCREMENT BY value for the sequence."""
-        self._increment_by = value
+        self._increment_by = _coerce_int_argument(value, name="increment_by")
         return self
 
     def min_value(self, value: int) -> Self:
         """Set the MINVALUE for the sequence."""
-        self._min_value = value
+        self._min_value = _coerce_int_argument(value, name="min_value")
         return self
 
     def max_value(self, value: int) -> Self:
         """Set the MAXVALUE for the sequence."""
-        self._max_value = value
+        self._max_value = _coerce_int_argument(value, name="max_value")
         return self
 
     def cycle(self) -> Self:
@@ -2751,7 +2785,7 @@ class CreateSequence(DDLBuilder):
 
     def cache(self, value: int) -> Self:
         """Set the CACHE size for the sequence."""
-        self._cache = value
+        self._cache = _coerce_int_argument(value, name="cache")
         return self
 
     def _create_base_expression(self) -> exp.Expr:
@@ -3228,7 +3262,7 @@ def _translate_catalog_type(
         return dtype
     with contextlib.suppress(ParseError):
         built = exp.DataType.build(dtype, dialect=norm_source)
-        rendered = built.sql(dialect=norm_target)
+        rendered = built.sql(dialect=norm_target, copy=False)
         if norm_target == "sqlite" and _sqlite_type_affinity(rendered) != _sqlite_type_affinity(dtype):
             return dtype
         return rendered
@@ -3954,7 +3988,7 @@ def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | Non
         declared = dtype.strip()
         with contextlib.suppress(ParseError):
             built = exp.DataType.build(declared, dialect=target_dialect)
-            if _sqlite_type_affinity(built.sql(dialect="sqlite")) == _sqlite_type_affinity(declared):
+            if _sqlite_type_affinity(built.sql(dialect="sqlite", copy=False)) == _sqlite_type_affinity(declared):
                 return built
         return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=declared)
     if norm_dialect in ("tsql", "mssql") and dtype.strip().upper().startswith("TIMESTAMP"):
@@ -3963,7 +3997,7 @@ def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | Non
         return exp.DataType.build(dtype, dialect=target_dialect)
     if _QUALIFIED_TYPE_NAME_RE.fullmatch(dtype.strip()):
         type_name = _mark_explicit_table_quotes(exp.to_table(dtype.strip(), dialect=norm_dialect), dtype.strip())
-        return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=type_name.sql(dialect=norm_dialect))
+        return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=type_name.sql(dialect=norm_dialect, copy=False))
     if target_dialect is not None:
         with contextlib.suppress(ParseError):
             return exp.DataType.build(dtype)
@@ -4024,7 +4058,7 @@ def _catalog_name(name: str, dialect: "DialectType | None", source_dialect: "Dia
     target_name = name
     if _BARE_IDENTIFIER_RE.fullmatch(name) and _fold_identifier(name, case_dialect) == name:
         target_name = _fold_identifier(name, norm_dialect)
-    return exp.Identifier(this=target_name, quoted=True).sql(dialect=norm_dialect)
+    return exp.Identifier(this=target_name, quoted=True).sql(dialect=norm_dialect, copy=False)
 
 
 def _fold_identifier(name: str, dialect: str | None) -> str:
@@ -4380,3 +4414,86 @@ def _dialect_foreign_key_actions(
         msg = f"Oracle does not support ON DELETE {on_delete} on foreign keys"
         raise SQLBuilderError(msg)
     return (on_delete if on_delete in _ORACLE_ON_DELETE_ACTIONS else None), None
+
+
+def _validate_clause_identifier(value: Any, *, label: str) -> str:
+    """Validate that a raw DDL clause identifier matches ``[A-Za-z_][A-Za-z0-9_]*``."""
+    if not isinstance(value, str) or not _BARE_IDENTIFIER_RE.fullmatch(value):
+        msg = f"Invalid {label}: {value!r}"
+        raise SQLBuilderError(msg)
+    return value
+
+
+_FORBIDDEN_CLAUSE_NODES: Final = (*_FORBIDDEN_STATEMENT_NODES, exp.Select, exp.Subquery, exp.SetOperation)
+
+
+def _check_ddl_expression_nodes(expression: exp.Expr, *, label: str, text: Any) -> exp.Expr:
+    """Reject statement, subquery, and set-operation nodes inside a raw DDL expression."""
+    if isinstance(expression, _FORBIDDEN_CLAUSE_NODES) or expression.find(*_FORBIDDEN_CLAUSE_NODES) is not None:
+        msg = f"Invalid {label}: {text!r}"
+        raise SQLBuilderError(msg)
+    return expression
+
+
+def _parse_ddl_expression(text: str, *, label: str, dialect: "DialectType | None") -> exp.Expr:
+    """Parse trusted raw DDL expression text and require exactly one plain expression.
+
+    Args:
+        text: Raw expression text supplied to a DDL builder.
+        label: Clause name used in the error message.
+        dialect: Dialect used to parse the text.
+
+    Returns:
+        The parsed expression.
+
+    Raises:
+        SQLBuilderError: When the text is blank, contains a statement terminator, fails to parse,
+            holds more than one statement, or contains a statement, subquery, or set operation.
+    """
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    if (
+        not isinstance(text, str)
+        or not text.strip()
+        or "\x00" in text
+        or contains_statement_terminator(text, dialect=norm_dialect)
+    ):
+        msg = f"Invalid {label}: {text!r}"
+        raise SQLBuilderError(msg)
+    try:
+        statements = sqlglot.parse(text, read=norm_dialect)
+    except (ParseError, TokenError) as exc:
+        msg = f"Invalid {label}: {text!r}"
+        raise SQLBuilderError(msg) from exc
+    if len(statements) != 1 or statements[0] is None:
+        msg = f"Invalid {label}: {text!r}"
+        raise SQLBuilderError(msg)
+    return _check_ddl_expression_nodes(statements[0], label=label, text=text)
+
+
+def _parse_partition_by(spec: str, dialect: "DialectType | None") -> exp.Expr:
+    """Parse and validate a CREATE TABLE PARTITION BY specification."""
+    try:
+        return _parse_ddl_expression(spec, label="PARTITION BY specification", dialect=dialect)
+    except SQLBuilderError:
+        if isinstance(spec, str) and _BARE_IDENTIFIER_RE.fullmatch(spec):
+            return exp.var(spec)
+        raise
+
+
+def _coerce_int_argument(value: Any, *, name: str) -> int:
+    """Coerce an integer sequence option, rejecting booleans and non-integer values."""
+    if isinstance(value, bool):
+        msg = f"{name} must be an integer, got bool"
+        raise SQLBuilderError(msg)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            try:
+                return int(stripped)
+            except ValueError as exc:
+                msg = f"{name} must be an integer, got {value!r}"
+                raise SQLBuilderError(msg) from exc
+    msg = f"{name} must be an integer, got {type(value).__name__}"
+    raise SQLBuilderError(msg)

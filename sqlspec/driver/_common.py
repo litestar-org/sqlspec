@@ -13,14 +13,30 @@ import re
 from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
+from itertools import count as _itertools_count
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, Self, cast, overload
+from types import BuiltinFunctionType, FunctionType
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Literal,
+    NamedTuple,
+    NoReturn,
+    Protocol,
+    Self,
+    TypeVar,
+    cast,
+    overload,
+)
 from uuid import UUID
 
 import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
-from sqlglot.errors import SqlglotError
+from sqlglot.errors import ParseError, SqlglotError
+from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder import QueryBuilder
 from sqlspec.builder._ddl import compile_table_ddl_results
@@ -42,6 +58,7 @@ from sqlspec.core import (
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
+from sqlspec.core.compiler import _split_leading_keyword  # pyright: ignore[reportPrivateUsage]
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import (
@@ -52,9 +69,10 @@ from sqlspec.core.parameters import (
     type_coercion_fallbacks,
     value_fingerprint,
 )
+from sqlspec.core.parameters._converter import ambiguous_index_message
 from sqlspec.core.result._base import RowFormat
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
-from sqlspec.core.statement import ProcessedState
+from sqlspec.core.statement import ProcessedState, _is_uncacheable_callable
 from sqlspec.data_dictionary import (
     DDL_PARENT_TABLE_CONTEXT_KEY,
     ColumnProfileMetadata,
@@ -77,6 +95,7 @@ from sqlspec.data_dictionary import (
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, SyncRowStream
 from sqlspec.exceptions import (
     ImproperConfigurationError,
     NotFoundError,
@@ -86,6 +105,7 @@ from sqlspec.exceptions import (
     TransactionError,
 )
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
+from sqlspec.observability._common import redact_sql_literals
 from sqlspec.protocols import StatementProtocol
 from sqlspec.storage._ingest import (
     execute_load_from_storage_async,
@@ -154,9 +174,11 @@ __all__ = (
     "ExecutionResult",
     "StackExecutionObserver",
     "SyncExceptionHandler",
+    "cache_hit_hooks_unchanged",
     "describe_stack_statement",
     "handle_single_row_error",
     "hash_stack_operations",
+    "operation_requires_transaction",
     "parameter_value_needs_processing",
     "parameter_values_need_processing",
     "type_coercion_fallbacks",
@@ -175,8 +197,33 @@ _INT64_MIN: Final[int] = -9223372036854775808
 _INT64_MAX: Final[int] = 9223372036854775807
 _MAX_NUMERIC_PRECISION: Final[int] = 38
 
+StreamT = TypeVar("StreamT")
+_SCRIPT_BIND_KEYWORDS: Final[frozenset[str]] = frozenset({
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "MERGE",
+    "WITH",
+    "VALUES",
+    "CALL",
+    "EXEC",
+    "EXECUTE",
+})
+_ORACLE_SCRIPT_BIND_KEYWORDS: Final[frozenset[str]] = frozenset({"BEGIN", "DECLARE"})
+_SCRIPT_NAMED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.NAMED_COLON,
+    ParameterStyle.NAMED_AT,
+    ParameterStyle.NAMED_DOLLAR,
+    ParameterStyle.NAMED_PYFORMAT,
+})
+_SCRIPT_INDEX_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.NUMERIC,
+    ParameterStyle.POSITIONAL_COLON,
+})
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
+_READ_ONLY_OPERATION_TYPES: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA", "COPY_TO"})
 
 _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
     ParameterStyle.NAMED_COLON.value,
@@ -184,6 +231,14 @@ _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
     ParameterStyle.NAMED_DOLLAR.value,
     ParameterStyle.NAMED_PYFORMAT.value,
 ))
+_POSITIONAL_DRIVER_STYLES: Final[frozenset[ParameterStyle]] = frozenset((
+    ParameterStyle.NUMERIC,
+    ParameterStyle.QMARK,
+    ParameterStyle.POSITIONAL_COLON,
+    ParameterStyle.POSITIONAL_PYFORMAT,
+))
+_TOP_LIMIT_DIALECTS: Final[frozenset[str]] = frozenset({"tsql", "mssql"})
+_DYNAMIC_CALLABLE_COUNTER: Final = _itertools_count(1)
 
 
 class SyncExceptionHandler(Protocol):
@@ -729,7 +784,7 @@ class DataDictionaryMixin:
             status=MetadataSupport.SUPPORTED,
             fidelity=result.fidelity,
             source=result.source,
-            ddl=f"{drop_expr.sql(dialect=_sqlglot_dialect(dialect))};",
+            ddl=f"{drop_expr.sql(dialect=_sqlglot_dialect(dialect), copy=False)};",
             dependencies=result.dependencies,
             redactions=result.redactions,
             context=result.context,
@@ -830,7 +885,7 @@ class DataDictionaryMixin:
         if is_native_statement:
             ddl_text = f"{definition_text};"
         else:
-            quoted_view = self._quoted_table(view_name, view_schema).sql(dialect=_sqlglot_dialect(dialect))
+            quoted_view = self._quoted_table(view_name, view_schema).sql(dialect=_sqlglot_dialect(dialect), copy=False)
             ddl_text = f"CREATE VIEW {quoted_view} AS {definition_text};"
         source = MetadataSource.CATALOG if is_native_statement else MetadataSource.GENERATED
         return DDLResult(
@@ -901,7 +956,7 @@ class DataDictionaryMixin:
             status=MetadataSupport.SUPPORTED,
             fidelity=MetadataFidelity.GENERATED,
             source=MetadataSource.GENERATED,
-            ddl=f"{create_expr.sql(dialect=_sqlglot_dialect(dialect))};",
+            ddl=f"{create_expr.sql(dialect=_sqlglot_dialect(dialect), copy=False)};",
         )
 
     def _build_type_ddl_from_row(
@@ -934,8 +989,10 @@ class DataDictionaryMixin:
                 warnings=(f"{logical_type or 'unknown'} type {identity.name} cannot be rebuilt from catalog rows",),
             )
         render_dialect = _sqlglot_dialect(dialect)
-        quoted_type = self._quoted_table(identity.name, identity.schema).sql(dialect=render_dialect)
-        rendered_labels = ", ".join(exp.Literal.string(str(label)).sql(dialect=render_dialect) for label in labels)
+        quoted_type = self._quoted_table(identity.name, identity.schema).sql(dialect=render_dialect, copy=False)
+        rendered_labels = ", ".join(
+            exp.Literal.string(str(label)).sql(dialect=render_dialect, copy=False) for label in labels
+        )
         return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
@@ -1438,14 +1495,19 @@ class DataDictionaryMixin:
                     ),
                 ))
 
-        select_expr = exp.select(*projections).from_(self._quoted_table(table, schema))
-        return SQL(select_expr.sql(dialect=sqlglot_dialect))
+        select_expr = exp.select(*projections, copy=False).from_(self._quoted_table(table, schema), copy=False)
+        return SQL(select_expr.sql(dialect=sqlglot_dialect, copy=False))
 
     def _build_table_sample_sql(self, table: str, schema: str | None = None, sample_size: int = 1000) -> SQL:
         """Build a query sampling rows from a table, quoting the exact catalog identifiers."""
         effective_dialect = _ddl_dialect_or_none(type(self).dialect)
-        select_expr = exp.select(exp.Star()).from_(self._quoted_table(table, schema)).limit(max(1, sample_size))
-        return SQL(select_expr.sql(dialect=_sqlglot_dialect(effective_dialect)))
+        select_expr = (
+            exp
+            .select(exp.Star(), copy=False)
+            .from_(self._quoted_table(table, schema), copy=False)
+            .limit(max(1, sample_size), copy=False)
+        )
+        return SQL(select_expr.sql(dialect=_sqlglot_dialect(effective_dialect), copy=False))
 
     def _infer_column_type_from_sample(
         self, declared_type: str, values: "abc.Sequence[Any]", *, target_dialect: str | None = None
@@ -1463,8 +1525,8 @@ class DataDictionaryMixin:
             if target_dialect and target_dialect != type(self).dialect:
                 src_dialect = _ddl_dialect_or_none(type(self).dialect)
                 with contextlib.suppress(SqlglotError):
-                    return exp.DataType.build(clean_declared, dialect=_sqlglot_dialect(src_dialect)).sql(
-                        dialect=_sqlglot_dialect(target_dialect)
+                    return exp.DataType.build(clean_declared, dialect=_sqlglot_dialect(src_dialect), copy=False).sql(
+                        dialect=_sqlglot_dialect(target_dialect), copy=False
                     )
             return clean_declared or "TEXT"
 
@@ -1733,13 +1795,43 @@ class DataDictionaryMixin:
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _ClosedConnection:
+    """Sentinel assigned to driver.connection after session exit."""
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return "<ClosedConnection>"
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
+
+
+_CLOSED_CONNECTION: Final[Any] = _ClosedConnection()
+
+
+def operation_requires_transaction(operation_type: "OperationType", modifies_rows: bool) -> bool:
+    """Return whether a statement must run inside a transaction under lazy write begin."""
+    return modifies_rows or operation_type not in _READ_ONLY_OPERATION_TYPES
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
     __slots__ = (
+        "_auto_begin_on_write",
+        "_cache_hit_executor",
+        "_cache_hit_state",
         "_cache_holder",
         "_observability",
+        "_open_streams",
         "_pending_statement_profile",
         "_processed_state_pool",
         "_statement_cache",
@@ -1780,7 +1872,9 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._pending_statement_profile: dict[str, Any] | None = None
+        self._auto_begin_on_write = False
         self._transaction_depth = 0
+        self._open_streams: list[Any] = []
         self._stmt_cache_max_size = self._statement_cache_size()
         shared_holder = self.driver_features.get("_statement_cache_holder")
         if (
@@ -1795,6 +1889,13 @@ class CommonDriverAttributesMixin:
         self._stmt_cache: QueryCache = self._cache_holder.query_cache
         self._stmt_cache_rebind_processor: ParameterProcessor = self._cache_holder.rebind_processor
         self._stmt_cache_enabled = False
+        self._cache_hit_executor: (
+            abc.Callable[
+                [Any, str, Any, CachedQuery, StatementConfig, Any], SQLResult | Awaitable[SQLResult | None] | None
+            ]
+            | None
+        ) = None
+        self._cache_hit_state: Any = None
         self._statement_pool = get_sql_pool()
         self._processed_state_pool = get_processed_state_pool()
         self._refresh_statement_cache_state()
@@ -1830,12 +1931,6 @@ class CommonDriverAttributesMixin:
         self._observability = runtime
         self._refresh_statement_cache_state()
 
-    def _consume_statement_profile(self) -> "dict[str, Any] | None":
-        """Take the profile produced by an execution callback and clear pending ownership."""
-        profile = self._pending_statement_profile
-        self._pending_statement_profile = None
-        return profile
-
     def storage_capabilities(self) -> "StorageCapabilities":
         """Return cached storage capabilities for the active driver.
 
@@ -1861,11 +1956,20 @@ class CommonDriverAttributesMixin:
             and not cached.applied_wrap_types
             and not config.type_coercion_map
             and not cached.needs_style_remap
+            and not _is_mapping_parameters(params)
         ):
             return params
+        profile = cached.parameter_profile
+        rebound_input = (
+            _normalize_cached_parameters(
+                params, profile, input_named_parameters=cached.input_named_parameters, is_many=False
+            )
+            if profile is not None and profile.is_positional_only
+            else params
+        )
         return self._stmt_cache_rebind_processor.transform_cached_parameters(
-            params,
-            cached.parameter_profile,
+            rebound_input,
+            profile,
             config,
             input_named_parameters=cached.input_named_parameters,
             is_many=False,
@@ -2036,8 +2140,9 @@ class CommonDriverAttributesMixin:
         """
         if statement_config is None:
             statement_config = self.statement_config
+        use_default_cache = statement_config is self.statement_config
 
-        if isinstance(statement, str):
+        if use_default_cache and isinstance(statement, str):
             cached_sql = self._cache_holder.get_statement(statement)
             if cached_sql is not None and not kwargs:
                 has_filters = any(is_statement_filter(p) for p in parameters)
@@ -2056,7 +2161,13 @@ class CommonDriverAttributesMixin:
             filters = [*pending_filters, *filters]
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
-            if not filters and not kwargs and isinstance(statement, str) and self._stmt_cache_max_size > 0:
+            if (
+                use_default_cache
+                and not filters
+                and not kwargs
+                and isinstance(statement, str)
+                and self._stmt_cache_max_size > 0
+            ):
                 self._cache_holder.set_statement(statement, sql_statement, max_size=self._stmt_cache_max_size)
 
         _check_declared_parameters(sql_statement)
@@ -2149,7 +2260,7 @@ class CommonDriverAttributesMixin:
                     return parameters
                 return formatted_many
             return [self._batch_parameters(parameters, statement_config)]
-        return self._driver_parameters(parameters, statement_config)
+        return self._driver_parameters(parameters, statement_config, prepared_statement=prepared_statement)
 
     @staticmethod
     def find_filter(
@@ -2194,6 +2305,44 @@ class CommonDriverAttributesMixin:
             last_inserted_id=last_inserted_id,
         )
 
+    def _register_open_stream(self, stream: StreamT) -> StreamT:
+        """Track a returned row stream so session teardown can close it.
+
+        Args:
+            stream: Row stream returned to the caller.
+
+        Returns:
+            The same stream, unchanged.
+        """
+        open_streams = self._open_streams
+        open_streams[:] = [open_stream for open_stream in open_streams if not open_stream._closed]
+        open_streams.append(stream)
+        return stream
+
+    def _mark_closed(self) -> None:
+        """Replace driver.connection with the closed sentinel, then invalidate open streams.
+
+        The sentinel is installed first so a stream closing here sees that the session no longer owns its
+        connection and leaves the released connection untouched.
+        """
+        self.connection = _CLOSED_CONNECTION
+        open_streams = self._open_streams
+        self._open_streams = []
+        for open_stream in open_streams:
+            if isinstance(open_stream, SyncRowStream):
+                open_stream._close_for_session_exit(error=True)
+            else:
+                open_stream._mark_session_closed()
+        self._auto_begin_on_write = False
+        self._stmt_cache_enabled = False
+        self._transaction_depth = 0
+
+    def _consume_statement_profile(self) -> "dict[str, Any] | None":
+        """Take the profile produced by an execution callback and clear pending ownership."""
+        profile = self._pending_statement_profile
+        self._pending_statement_profile = None
+        return profile
+
     def _format_wire_sql(self, sql: str) -> str:
         """Apply wire-level sqlcommenter formatting when enabled on statement_config."""
         if not self.statement_config.enable_sqlcommenter:
@@ -2205,7 +2354,12 @@ class CommonDriverAttributesMixin:
         return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
-        self._stmt_cache_enabled = bool(self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers)
+        self._stmt_cache_enabled = bool(
+            self.connection is not _CLOSED_CONNECTION
+            and self._stmt_cache_max_size > 0
+            and not self.statement_config._has_transformers
+            and not self.statement_config._has_uncacheable_transformers
+        )
 
     def _require_capability(self, capability_flag: str) -> None:
         """Check that a storage capability is enabled.
@@ -2277,6 +2431,99 @@ class CommonDriverAttributesMixin:
         )
         return SQL._create_cached_direct(sql, self.statement_config, direct_state, pooled=False)
 
+    def _bound_script_statements(self, statement: "SQL") -> "list[SQL] | None":
+        """Split a parameterized script into per-statement ``SQL`` objects.
+
+        Statements whose leading keyword is DML or DQL bind the parameters they use through the
+        normal execute path. Every other statement compiles in script mode and receives escaped
+        literals. Each returned statement is already compiled.
+
+        Args:
+            statement: Script statement carrying the caller's parameters.
+
+        Returns:
+            One compiled ``SQL`` per script statement, or ``None`` when the script has no parameters.
+
+        Raises:
+            SQLSpecError: When a statement uses a parameter that was not supplied, mixes index and
+                sequential placeholders, or the script receives positional values it never uses.
+        """
+        positional = list(statement.positional_parameters)
+        named = statement.named_parameters
+        if not positional and not named:
+            return None
+        config = self.statement_config
+        dialect = str(config.dialect) if config.dialect else None
+        bind_keywords = (
+            _SCRIPT_BIND_KEYWORDS | _ORACLE_SCRIPT_BIND_KEYWORDS if dialect == "oracle" else _SCRIPT_BIND_KEYWORDS
+        )
+        validator = config.parameter_validator
+        pieces = self.split_script_statements(statement.raw_sql, config, strip_trailing_semicolon=True)
+        script_config = config._with_script_mode()  # pyright: ignore[reportPrivateUsage]
+        statements: list[SQL] = []
+        used_positional: set[int] = set()
+        sequential_cursor = 0
+        for index, piece in enumerate(pieces):
+            infos = validator.extract_parameters(piece, dialect=dialect)
+            if not infos:
+                piece_statement = SQL(piece, statement_config=config)
+                piece_statement.compile()
+                statements.append(piece_statement)
+                continue
+            has_index = any(info.style in _SCRIPT_INDEX_STYLES for info in infos)
+            if has_index and any(
+                info.style not in _SCRIPT_INDEX_STYLES and info.style not in _SCRIPT_NAMED_STYLES for info in infos
+            ):
+                first_index = next(info for info in infos if info.style in _SCRIPT_INDEX_STYLES)
+                raise SQLSpecError(ambiguous_index_message(first_index))
+            piece_named: dict[str, Any] = {}
+            piece_positional: list[Any] = []
+            index_slots: dict[int, int] = {}
+            rewrites: list[tuple[int, int, str]] = []
+            for info in infos:
+                if info.style in _SCRIPT_NAMED_STYLES:
+                    name = cast("str", info.name)
+                    if name not in named:
+                        msg = f"Script statement {index + 1} uses parameter {name!r}, which was not supplied"
+                        raise SQLSpecError(msg)
+                    piece_named[name] = named[name]
+                elif info.style in _SCRIPT_INDEX_STYLES:
+                    source_index = int(cast("str", info.name)) - 1
+                    if source_index < 0 or source_index >= len(positional):
+                        msg = (
+                            f"Script statement {index + 1} uses parameter {info.placeholder_text!r}, "
+                            "which was not supplied"
+                        )
+                        raise SQLSpecError(msg)
+                    used_positional.add(source_index)
+                    slot = index_slots.get(source_index)
+                    if slot is None:
+                        slot = len(index_slots) + 1
+                        index_slots[source_index] = slot
+                        piece_positional.append(positional[source_index])
+                    prefix = "$" if info.style is ParameterStyle.NUMERIC else ":"
+                    rewrites.append((info.position, len(info.placeholder_text), f"{prefix}{slot}"))
+                else:
+                    if sequential_cursor >= len(positional):
+                        msg = f"Script statement {index + 1} uses more positional parameters than were supplied"
+                        raise SQLSpecError(msg)
+                    used_positional.add(sequential_cursor)
+                    piece_positional.append(positional[sequential_cursor])
+                    sequential_cursor += 1
+            for position, length, replacement in reversed(rewrites):
+                piece = piece[:position] + replacement + piece[position + length :]
+            parsed_keyword = _split_leading_keyword(_skip_leading_line_comments(piece, dialect))
+            binds = parsed_keyword is not None and parsed_keyword[0] in bind_keywords
+            piece_statement = SQL(
+                piece, *piece_positional, statement_config=config if binds else script_config, **piece_named
+            )
+            piece_statement.compile()
+            statements.append(piece_statement)
+        if len(used_positional) < len(positional):
+            msg = "Script received more parameters than its statements use"
+            raise SQLSpecError(msg)
+        return statements
+
     def _sub_statement(self, sql: str, execution_parameters: "ConvertedParameters") -> "SQL":
         direct_state = self._processed_state_pool.acquire()
         ProcessedState.__init__(direct_state, compiled_sql=sql, execution_parameters=execution_parameters)
@@ -2299,8 +2546,13 @@ class CommonDriverAttributesMixin:
         runtime = self._observability
         if runtime is None or not runtime.has_statement_observers:
             return
+        observed_sql = (
+            redact_sql_literals(sql, dialect=self.observability_db_system)
+            if runtime._redaction is not None and runtime._redaction.mask_parameters
+            else sql
+        )
         runtime.emit_statement_event(
-            sql=sql,
+            sql=observed_sql,
             parameters=parameters,
             driver=type(self).__name__,
             operation=operation,
@@ -2317,85 +2569,6 @@ class CommonDriverAttributesMixin:
             script_statement_count=script_statement_count,
             db_system=self.observability_db_system,
         )
-
-    def _cached_execution(
-        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
-    ) -> "SQLResult | Awaitable[SQLResult | None] | None":
-        """Attempt cached execution for query.
-
-        Args:
-            statement: Raw SQL string.
-            params: Query parameters.
-
-        Returns:
-            SQLResult (sync) or Awaitable[SQLResult] (async) if cache hit,
-            None if cache miss.
-        """
-        if not self._stmt_cache_enabled:
-            return None
-        cached = self._stmt_cache.get(statement)
-        if cached is None or cached.param_count != len(params):
-            return None
-
-        config = self.statement_config
-        param_config = config.parameter_config
-        if param_config.ast_transformer is not None:
-            param_values = _cache_param_values(params)
-            if any(p is None for p in param_values):
-                return None
-        else:
-            param_values = None
-
-        needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types or cached.needs_style_remap)
-        if not needs_rebind and params:
-            if param_values is None:
-                param_values = _cache_param_values(params)
-            needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
-
-        if not needs_rebind and not config._has_output_transformer:
-            effective_cached = cached
-            if config.enable_sqlcommenter:
-                wire_sql = self._format_wire_sql(cached.compiled_sql)
-                if wire_sql != cached.compiled_sql:
-                    effective_cached = CachedQuery(
-                        compiled_sql=wire_sql,
-                        parameter_profile=cached.parameter_profile,
-                        input_named_parameters=cached.input_named_parameters,
-                        applied_wrap_types=cached.applied_wrap_types,
-                        parameter_casts=cached.parameter_casts,
-                        operation_type=cached.operation_type,
-                        operation_profile=cached.operation_profile,
-                        param_count=cached.param_count,
-                        processed_state=cached.processed_state,
-                        needs_style_remap=cached.needs_style_remap,
-                    )
-            runtime = self._observability
-            if runtime is not None and not runtime.is_idle:
-                return self._execute_cache_hit_observed(statement, params, effective_cached)
-            return self._execute_cache_hit(statement, params, effective_cached)
-
-        if needs_rebind:
-            rebound_params = self.stmt_cache_rebind(params, cached)
-            params_are_simple = False
-        else:
-            rebound_params = params
-            params_are_simple = True
-
-        compiled_sql = self._format_wire_sql(cached.compiled_sql)
-        output_transformer = config.output_transformer
-        if output_transformer is not None:
-            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
-            params_are_simple = False
-
-        prepared = self._cached_statement(
-            statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
-        )
-        runtime = self._observability
-        if runtime is not None and not runtime.is_idle:
-            return self._execute_cached_statement_observed(
-                prepared, compiled_sql, rebound_params, cached.operation_type
-            )
-        return self._execute_cached_statement(prepared)
 
     def _execute_cached_statement(self, statement: "SQL") -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
@@ -2456,9 +2629,7 @@ class CommonDriverAttributesMixin:
         if not statement.is_processed:
             return
         if statement.statement_config.parameter_config.ast_transformer is not None:
-            params = statement.positional_parameters
-            if any(p is None for p in params):
-                return
+            return
         if self._stmt_cache.get(statement.raw_sql) is not None:
             return
 
@@ -2468,7 +2639,11 @@ class CommonDriverAttributesMixin:
         param_profile = processed.parameter_profile
         operation_profile = processed.operation_profile
         if not operation_profile.returns_rows and statement.returns_rows():
-            operation_profile = OperationProfile(returns_rows=True, modifies_rows=operation_profile.modifies_rows)
+            operation_profile = OperationProfile(
+                returns_rows=True,
+                modifies_rows=operation_profile.modifies_rows,
+                is_read_only=operation_profile.is_read_only,
+            )
         clean_sql = (
             strip_sqlcomment(processed.compiled_sql)
             if self.statement_config.enable_sqlcommenter
@@ -2692,13 +2867,18 @@ class CommonDriverAttributesMixin:
         return tuple(updated_params) if isinstance(parameters, tuple) else updated_params
 
     def _driver_parameters(
-        self, parameters: "StatementParameters", statement_config: "StatementConfig"
+        self,
+        parameters: "StatementParameters",
+        statement_config: "StatementConfig",
+        *,
+        prepared_statement: Any | None = None,
     ) -> "ConvertedParameters":
         """Prepare a single parameter set for database driver consumption.
 
         Args:
             parameters: Single parameter set in any format
             statement_config: Statement configuration for parameter style detection
+            prepared_statement: Optional prepared statement containing parameter metadata
 
         Returns:
             Processed parameter set with TypedParameter objects unwrapped and type coercion applied
@@ -2714,16 +2894,29 @@ class CommonDriverAttributesMixin:
             return [coerce_value(parameters, type_coercion_map, fallback_items)]
 
         if isinstance(parameters, dict):
-            if statement_config.parameter_config.supported_execution_parameter_styles and (
-                ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
-                or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
+            processed_state = (
+                prepared_statement._processed_state
+                if isinstance(prepared_statement, SQL)
+                and isinstance(prepared_statement._processed_state, ProcessedState)
+                else None
+            )
+            if (
+                processed_state is not None
+                and processed_state.parameter_profile is not None
+                and processed_state.parameter_profile.is_positional_only
+            ):
+                aligned_values = _align_positional_mapping(parameters, processed_state.parameter_profile)
+                return [coerce_value(value, type_coercion_map, fallback_items) for value in aligned_values]
+
+            param_config = statement_config.parameter_config
+            if param_config._supports_named_execution and not (
+                param_config._positional_default_execution and _has_only_positional_keys(parameters)
             ):
                 return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map, fallback_items)
-            if statement_config.parameter_config.default_parameter_style in {
-                ParameterStyle.NUMERIC,
-                ParameterStyle.QMARK,
-                ParameterStyle.POSITIONAL_PYFORMAT,
-            }:
+            if (
+                param_config.default_parameter_style in _POSITIONAL_DRIVER_STYLES
+                or param_config._positional_default_execution
+            ):
                 sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
                 return [coerce_value(value, type_coercion_map, fallback_items) for _, value in sorted_items]
 
@@ -2797,7 +2990,7 @@ class CommonDriverAttributesMixin:
                 cached_statement = CachedStatement(
                     compiled_sql=compiled_sql,
                     parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
-                    expression=statement._peek_expression(),
+                    expression=statement._get_shared_expression(),
                     input_named_parameters=processed.input_named_parameters,
                     parameter_profile=processed.parameter_profile,
                     applied_wrap_types=processed.applied_wrap_types,
@@ -2857,7 +3050,11 @@ class CommonDriverAttributesMixin:
         dialect_key = str(statement.dialect) if statement.dialect else None
         cache_key = None
         cache = None
-        if cache_config.compiled_cache_enabled and statement_config.enable_caching:
+        if (
+            cache_config.compiled_cache_enabled
+            and statement_config.enable_caching
+            and not statement_config._has_uncacheable_transformers
+        ):
             cache_key = self._compile_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
             cached_result = cache.get_statement(cache_key, dialect_key)
@@ -2871,8 +3068,18 @@ class CommonDriverAttributesMixin:
             if cached_result is not None:
                 parameter_profile = cached_result.parameter_profile
                 if parameter_profile is not None:
+                    rebound_input = (
+                        _normalize_cached_parameters(
+                            statement.parameters,
+                            parameter_profile,
+                            input_named_parameters=cached_result.input_named_parameters,
+                            is_many=statement.is_many,
+                        )
+                        if parameter_profile.is_positional_only
+                        else statement.parameters
+                    )
                     prepared_parameters = self._stmt_cache_rebind_processor.transform_cached_parameters(
-                        statement.parameters,
+                        rebound_input,
                         parameter_profile,
                         statement_config.parameter_config,
                         input_named_parameters=cached_result.input_named_parameters,
@@ -2918,7 +3125,7 @@ class CommonDriverAttributesMixin:
         cached_statement = CachedStatement(
             compiled_sql=compiled_sql,
             parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", cached_parameters),
-            expression=statement._peek_expression(),
+            expression=statement._get_shared_expression(),
             input_named_parameters=processed.input_named_parameters,
             parameter_profile=processed.parameter_profile,
             applied_wrap_types=processed.applied_wrap_types,
@@ -3011,6 +3218,11 @@ class CommonDriverAttributesMixin:
                 expr = expr.copy()
                 expr.set("with_", None)
 
+        positional_only = not _has_named_input_parameters(original_sql)
+        cte_placeholders = (
+            _count_anonymous_placeholders(cte, count_named_as_positional=positional_only) if cte is not None else 0
+        )
+
         if isinstance(expr, exp.Select):
             from_clause = expr.args.get("from_")
             if from_clause is None:
@@ -3041,13 +3253,28 @@ class CommonDriverAttributesMixin:
                 or has_having
                 or has_agg_or_window
             )
-            leading_stripped = (
+            limit_clause = expr.args.get("limit")
+            has_leading_top = _has_leading_top_limit(expr, original_sql)
+            top_placeholders = (
+                _count_anonymous_placeholders(limit_clause, count_named_as_positional=positional_only)
+                if has_leading_top
+                else 0
+            )
+            select_stripped = (
                 0
                 if needs_subquery
-                else sum(_count_anonymous_placeholders(select_expr) for select_expr in expr.expressions)
+                else sum(
+                    _count_anonymous_placeholders(select_expr, count_named_as_positional=positional_only)
+                    for select_expr in expr.expressions
+                )
+            )
+            leading_stripped = top_placeholders + select_stripped
+            trailing_clauses = (
+                ("order", "offset", "fetch") if has_leading_top else ("order", "limit", "offset", "fetch")
             )
             trailing_stripped = sum(
-                _count_anonymous_placeholders(expr.args.get(clause)) for clause in ("order", "limit", "offset", "fetch")
+                _count_anonymous_placeholders(expr.args.get(clause), count_named_as_positional=positional_only)
+                for clause in trailing_clauses
             )
             pagination_params = _pagination_names(original_sql, include_select_expressions=not needs_subquery)
             if needs_subquery:
@@ -3057,9 +3284,9 @@ class CommonDriverAttributesMixin:
                 subquery_expr.set("offset", None)
                 subquery_expr.set("fetch", None)
                 subquery = subquery_expr.subquery(alias="grouped_data", copy=False)
-                count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery, copy=False)
+                count_expr = exp.select(exp.Count(this=exp.Star()), copy=False).from_(subquery, copy=False)
             else:
-                count_expr = exp.select(exp.Count(this=exp.Star()))
+                count_expr = exp.select(exp.Count(this=exp.Star()), copy=False)
                 count_expr.set("from_", from_clause.copy())
                 if expr.args.get("where"):
                     count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")).copy(), copy=False)
@@ -3072,11 +3299,13 @@ class CommonDriverAttributesMixin:
                 pagination_params=pagination_params,
                 leading_stripped=leading_stripped,
                 trailing_stripped=trailing_stripped,
+                leading_offset=cte_placeholders if cte_placeholders and leading_stripped else 0,
             )
 
         leading_stripped = 0
         trailing_stripped = sum(
-            _count_anonymous_placeholders(expr.args.get(clause)) for clause in ("order", "limit", "offset", "fetch")
+            _count_anonymous_placeholders(expr.args.get(clause), count_named_as_positional=positional_only)
+            for clause in ("order", "limit", "offset", "fetch")
         )
         pagination_params = _pagination_names(original_sql, include_select_expressions=False)
         count_source = cast("exp.Query", expr.copy())
@@ -3085,7 +3314,7 @@ class CommonDriverAttributesMixin:
         count_source.set("offset", None)
         count_source.set("fetch", None)
         subquery = count_source.subquery(alias="total_query", copy=False)
-        count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery, copy=False)
+        count_expr = exp.select(exp.Count(this=exp.Star()), copy=False).from_(subquery, copy=False)
         if cte is not None:
             count_expr.set("with_", cte.copy())
         return _build_rewritten_sql(
@@ -3127,16 +3356,16 @@ class CommonDriverAttributesMixin:
             if cte:
                 expr_copy.set("with_", None)
             subquery = expr_copy.subquery(alias="__set_op_subq", copy=False)
-            modified_expr = exp.select(exp.Column(this=exp.Star())).from_(subquery, copy=False)
+            modified_expr = exp.select(exp.Column(this=exp.Star()), copy=False).from_(subquery, copy=False)
             count_window = exp.Window(this=exp.Count(this=exp.Star()))
-            aliased_count = exp.alias_(count_window, alias)
+            aliased_count = exp.alias_(count_window, alias, copy=False)
             modified_expr = modified_expr.select(aliased_count, copy=False)
             if cte:
                 modified_expr.set("with_", cte.copy())
         elif isinstance(expr, exp.Select):
             modified_expr = expr.copy()
             count_window = exp.Window(this=exp.Count(this=exp.Star()))
-            aliased_count = exp.alias_(count_window, alias)
+            aliased_count = exp.alias_(count_window, alias, copy=False)
             modified_expr = modified_expr.select(aliased_count, copy=False)
         else:
             msg = "COUNT(*) OVER() can only be added to SELECT or set operation statements"
@@ -3404,6 +3633,144 @@ class CommonDriverAttributesMixin:
     _execute_load_from_storage_async = staticmethod(execute_load_from_storage_async)
 
 
+_PASSTHROUGH_TYPES_MAX_SIZE: Final[int] = 256
+_PASSTHROUGH_TYPES_CACHE: "dict[int, tuple[dict[type, Any], int, set[type]]]" = {}
+
+
+_CACHE_HIT_HOOKS: Final[tuple[str, ...]] = (
+    "_execute_cache_hit",
+    "_execute_cache_hit_with_cursor",
+    "build_cached_select_result",
+    "collect_rows",
+    "handle_database_exceptions",
+    "resolve_rowcount",
+    "with_cursor",
+)
+
+
+def cache_hit_hooks_unchanged(driver_type: type, owner: type) -> bool:
+    """Report whether ``driver_type`` runs cached statements exactly as ``owner`` does.
+
+    A cache-hit executor replaces the driver methods a cached statement passes through, so a
+    subclass that overrides any of them keeps its overrides only on the method path.
+
+    Args:
+        driver_type: Concrete driver class being constructed.
+        owner: Adapter driver class the executor was written for.
+
+    Returns:
+        True when ``driver_type`` is ``owner`` or inherits every cache-hit method from it unchanged.
+    """
+    if driver_type is owner:
+        return True
+    return all(getattr(driver_type, name, None) is getattr(owner, name, None) for name in _CACHE_HIT_HOOKS)
+
+
+async def _await_cache_hit(
+    driver: "CommonDriverAttributesMixin",
+    pending: "Awaitable[SQLResult | None]",
+    statement: str,
+    params: "tuple[Any, ...] | list[Any] | dict[str, Any]",
+    cached: "CachedQuery",
+) -> "SQLResult | None":
+    """Await an async cache-hit executor and run the driver's cache-hit method when it declines."""
+    outcome = await pending
+    if outcome is not None:
+        return outcome
+    return await cast("Awaitable[SQLResult]", driver._execute_cache_hit(statement, params, cached))
+
+
+def run_cached_execution(
+    driver: "CommonDriverAttributesMixin", statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
+) -> "SQLResult | Awaitable[SQLResult | None] | None":
+    """Execute a raw SQL string through the driver's compiled-statement cache.
+
+    A driver that registers a cache-hit executor has it called with the connection, the raw SQL,
+    the parameters, the cached query, the statement configuration, and the driver's executor state.
+    An executor that returns ``None`` declines the call, which then runs through the driver's
+    ``_execute_cache_hit`` method.
+
+    Args:
+        driver: Driver owning the statement cache and connection.
+        statement: Raw SQL string.
+        params: Query parameters.
+
+    Returns:
+        SQLResult (sync) or Awaitable[SQLResult] (async) if cache hit, None if cache miss.
+    """
+    if not driver._stmt_cache_enabled:
+        return None
+    cached = driver._stmt_cache.get(statement)
+    if cached is None or cached.param_count != len(params):
+        return None
+
+    config = driver.statement_config
+    param_config = config.parameter_config
+    if param_config.ast_transformer is not None:
+        return None
+
+    needs_rebind = bool(
+        cached.input_named_parameters
+        or cached.applied_wrap_types
+        or cached.needs_style_remap
+        or _is_mapping_parameters(params)
+    )
+    if not needs_rebind and params:
+        param_values = _cache_param_values(params)
+        needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
+
+    if not needs_rebind and not config._has_output_transformer:
+        effective_cached = cached
+        if config.enable_sqlcommenter:
+            wire_sql = driver._format_wire_sql(cached.compiled_sql)
+            if wire_sql != cached.compiled_sql:
+                effective_cached = CachedQuery(
+                    compiled_sql=wire_sql,
+                    parameter_profile=cached.parameter_profile,
+                    input_named_parameters=cached.input_named_parameters,
+                    applied_wrap_types=cached.applied_wrap_types,
+                    parameter_casts=cached.parameter_casts,
+                    operation_type=cached.operation_type,
+                    operation_profile=cached.operation_profile,
+                    param_count=cached.param_count,
+                    processed_state=cached.processed_state,
+                    needs_style_remap=cached.needs_style_remap,
+                )
+        runtime = driver._observability
+        if runtime is not None and not runtime.is_idle:
+            return driver._execute_cache_hit_observed(statement, params, effective_cached)
+        executor = driver._cache_hit_executor
+        if executor is None:
+            return driver._execute_cache_hit(statement, params, effective_cached)
+        outcome = executor(driver.connection, statement, params, effective_cached, config, driver._cache_hit_state)
+        if outcome is None:
+            return driver._execute_cache_hit(statement, params, effective_cached)
+        if isinstance(outcome, SQLResult):
+            return outcome
+        return _await_cache_hit(driver, outcome, statement, params, effective_cached)
+
+    if needs_rebind:
+        rebound_params = driver.stmt_cache_rebind(params, cached)
+        params_are_simple = False
+    else:
+        rebound_params = params
+        params_are_simple = True
+
+    compiled_sql = driver._format_wire_sql(cached.compiled_sql)
+    output_transformer = config.output_transformer
+    if output_transformer is not None:
+        compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        params_are_simple = False
+
+    prepared = driver._cached_statement(
+        statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
+    )
+    runtime = driver._observability
+    if runtime is not None and not runtime.is_idle:
+        return driver._execute_cached_statement_observed(prepared, compiled_sql, rebound_params, cached.operation_type)
+    return driver._execute_cached_statement(prepared)
+
+
 def parameter_values_need_processing(
     values: "tuple[Any, ...] | list[Any]",
     type_coercion_map: "dict[type, Any] | None",
@@ -3415,16 +3782,44 @@ def parameter_values_need_processing(
         if len(values) == 1:
             return type(values[0]) is TypedParameter
         return any(type(value) is TypedParameter for value in values)
-    if fallback_items is None:
-        fallback_items = type_coercion_fallbacks(type_coercion_map)
-    dispatcher = type_coercion_dispatcher(fallback_items)
+    if fallback_items is not None:
+        dispatcher = type_coercion_dispatcher(fallback_items)
+        for value in values:
+            value_type = type(value)
+            if value_type is TypedParameter or value_type in type_coercion_map:
+                return True
+            if dispatcher.resolve_type(value_type) is not None:
+                return True
+        return False
+    passthrough_types = _passthrough_types(type_coercion_map)
     for value in values:
         value_type = type(value)
+        if value_type in passthrough_types:
+            continue
         if value_type is TypedParameter or value_type in type_coercion_map:
             return True
-        if dispatcher.resolve_type(value_type) is not None:
+        if type_coercion_dispatcher(type_coercion_fallbacks(type_coercion_map)).resolve_type(value_type) is not None:
             return True
+        if len(passthrough_types) < _PASSTHROUGH_TYPES_MAX_SIZE:
+            passthrough_types.add(value_type)
     return False
+
+
+def _passthrough_types(type_coercion_map: "dict[type, Any]") -> "set[type]":
+    """Return the value types already proven to need no coercion under ``type_coercion_map``.
+
+    The set is remembered per map object and discarded when the map's size changes.
+    """
+    map_id = id(type_coercion_map)
+    map_len = len(type_coercion_map)
+    cached = _PASSTHROUGH_TYPES_CACHE.get(map_id)
+    if cached is not None and cached[0] is type_coercion_map and cached[1] == map_len:
+        return cached[2]
+    if len(_PASSTHROUGH_TYPES_CACHE) >= _PASSTHROUGH_TYPES_MAX_SIZE:
+        _PASSTHROUGH_TYPES_CACHE.clear()
+    passthrough_types: set[type] = set()
+    _PASSTHROUGH_TYPES_CACHE[map_id] = (type_coercion_map, map_len, passthrough_types)
+    return passthrough_types
 
 
 def parameter_value_needs_processing(
@@ -3488,11 +3883,144 @@ def _parameter_sort_key(item: "tuple[str, object]") -> float:
     key = item[0]
     if key.isdigit():
         return float(int(key))
+    if len(key) > 1 and key[0] in {"$", ":", "?"} and key[1:].isdigit():
+        return float(int(key[1:]))
     if key.startswith("param_"):
         suffix = key[6:]
         if suffix.isdigit():
             return float(int(suffix))
     return float("inf")
+
+
+def _is_mapping_parameters(params: Any) -> bool:
+    return type(params) is dict or (type(params) not in (tuple, list) and isinstance(params, Mapping))
+
+
+def _is_positional_parameter_key(key: str) -> bool:
+    if key.isdigit():
+        return True
+    if len(key) > 1 and key[0] in {"$", ":", "?"} and key[1:].isdigit():
+        return True
+    return key.startswith("param_") and key[6:].isdigit()
+
+
+def _has_only_positional_keys(parameters: "dict[str, Any]") -> bool:
+    for key in parameters:  # noqa: SIM110
+        if not _is_positional_parameter_key(key):
+            return False
+    return True
+
+
+def _take_mapping_value(
+    param: Any, mapping: "Mapping[str, Any]", positional_keys: "list[str]", consumed: "set[str]"
+) -> "tuple[Any, bool]":
+    for candidate in (param.name, param.placeholder_text, f"param_{param.ordinal}", str(param.ordinal + 1)):
+        if candidate and candidate in mapping:
+            consumed.add(candidate)
+            return mapping[candidate], True
+    for key in positional_keys:
+        if key not in consumed:
+            consumed.add(key)
+            return mapping[key], True
+    return None, False
+
+
+def _align_positional_mapping(mapping: "Mapping[str, Any]", parameter_profile: Any) -> "tuple[Any, ...]":
+    positional_keys = list(mapping.keys())
+    consumed: set[str] = set()
+    values: list[Any] = []
+    for param in parameter_profile.parameters:
+        value, found = _take_mapping_value(param, mapping, positional_keys, consumed)
+        if not found:
+            return tuple(mapping.values())
+        values.append(value)
+    return tuple(values)
+
+
+def _mapping_row_to_profile_names(mapping: "Mapping[str, Any]", parameter_profile: Any) -> "dict[str, Any]":
+    positional_keys = list(mapping.keys())
+    consumed: set[str] = set()
+    remapped: dict[str, Any] = {}
+    for param in parameter_profile.parameters:
+        target_key = param.name or f"param_{param.ordinal}"
+        if target_key in remapped:
+            continue
+        value, found = _take_mapping_value(param, mapping, positional_keys, consumed)
+        if found:
+            remapped[target_key] = value
+    return remapped
+
+
+def _normalize_cached_mapping_row(
+    mapping: "Mapping[str, Any]", parameter_profile: Any, input_named_parameters: "tuple[str, ...]"
+) -> Any:
+    if input_named_parameters:
+        for name in input_named_parameters:
+            if name not in mapping:
+                return _mapping_row_to_profile_names(mapping, parameter_profile)
+        return mapping
+    return _align_positional_mapping(mapping, parameter_profile)
+
+
+def _normalize_cached_parameters(
+    params: Any, parameter_profile: Any, *, input_named_parameters: "tuple[str, ...]", is_many: bool
+) -> Any:
+    if params is None or parameter_profile is None or not parameter_profile.is_positional_only:
+        return params
+    if not is_many:
+        if _is_mapping_parameters(params):
+            return _normalize_cached_mapping_row(params, parameter_profile, input_named_parameters)
+        return params
+    if isinstance(params, (list, tuple)) and params:
+        has_mapping = False
+        for row in params:
+            if _is_mapping_parameters(row):
+                has_mapping = True
+                break
+        if not has_mapping:
+            return params
+        updated_rows = [
+            _normalize_cached_mapping_row(row, parameter_profile, input_named_parameters)
+            if _is_mapping_parameters(row)
+            else row
+            for row in params
+        ]
+        return tuple(updated_rows) if isinstance(params, tuple) else updated_rows
+    return params
+
+
+def _has_leading_top_limit(expr: "exp.Select", original_sql: "SQL") -> bool:
+    limit_clause = expr.args.get("limit")
+    if not isinstance(limit_clause, exp.Limit):
+        return False
+    dialect = str(original_sql.statement_config.dialect) if original_sql.statement_config.dialect else None
+    normalized_dialect = dialect.lower() if dialect else ""
+    sql_text = original_sql.raw_sql or expr.sql(dialect=dialect)
+    if not sql_text:
+        return normalized_dialect in _TOP_LIMIT_DIALECTS
+    try:
+        tokens = sqlglot.tokenize(sql_text, read=dialect)
+    except SqlglotError:
+        return normalized_dialect in _TOP_LIMIT_DIALECTS
+    depth = 0
+    saw_top = False
+    saw_limit = False
+    for token in tokens:
+        if token.token_type is TokenType.L_PAREN:
+            depth += 1
+        elif token.token_type is TokenType.R_PAREN:
+            if depth > 0:
+                depth -= 1
+        elif depth == 0:
+            if token.token_type is TokenType.TOP:
+                saw_top = True
+            elif token.token_type is TokenType.LIMIT:
+                saw_limit = True
+    if saw_top and not saw_limit:
+        return True
+    if saw_limit:
+        return False
+    return normalized_dialect in _TOP_LIMIT_DIALECTS
 
 
 def _lazy_copy_coerce_dict(
@@ -3540,11 +4068,44 @@ def _clone_processed_state(
     )
 
 
-def _count_anonymous_placeholders(node: "exp.Expr | None") -> int:
+def _named_placeholder_name(node: "exp.Expr") -> "str | None":
+    if isinstance(node, exp.Placeholder):
+        return str(node.this) if node.this is not None else None
+    if isinstance(node, exp.Parameter):
+        inner = node.this
+        if isinstance(inner, (exp.Var, exp.Identifier)) and inner.name and not inner.name.isdigit():
+            return inner.name
+    return None
+
+
+def _numeric_parameter_ordinal(node: "exp.Expr") -> "int | None":
+    if isinstance(node, exp.Placeholder):
+        name = node.this
+        if isinstance(name, str) and name.isdigit():
+            return int(name)
+        return None
+    if isinstance(node, exp.Parameter):
+        inner = node.this
+        if isinstance(inner, exp.Literal) and inner.name.isdigit():
+            return int(inner.name)
+    return None
+
+
+def _is_positional_placeholder(node: "exp.Expr", *, count_named_as_positional: bool = False) -> bool:
+    if isinstance(node, exp.Placeholder):
+        return count_named_as_positional or node.this is None
+    return _numeric_parameter_ordinal(node) is not None
+
+
+def _count_anonymous_placeholders(node: "exp.Expr | None", *, count_named_as_positional: bool = False) -> int:
     """Count anonymous positional placeholders within a SQLGlot expression subtree."""
     if node is None:
         return 0
-    return sum(1 for child in node.walk() if isinstance(child, exp.Placeholder) and child.this is None)
+    count = 0
+    for child in node.walk():
+        if _is_positional_placeholder(child, count_named_as_positional=count_named_as_positional):
+            count += 1
+    return count
 
 
 def _pagination_names_in_expression(expression: "exp.Expr", *, include_select_expressions: bool = False) -> "set[str]":
@@ -3570,8 +4131,9 @@ def _pagination_names_in_expression(expression: "exp.Expr", *, include_select_ex
 
     for clause_node in stripped_nodes:
         for node in clause_node.walk():
-            if isinstance(node, exp.Placeholder) and node.this is not None:
-                stripped_placeholders.add(str(node.this))
+            name = _named_placeholder_name(node)
+            if name is not None:
+                stripped_placeholders.add(name)
 
     if not stripped_placeholders:
         return set()
@@ -3582,10 +4144,63 @@ def _pagination_names_in_expression(expression: "exp.Expr", *, include_select_ex
     for clause_name in ("order", "limit", "offset", "fetch"):
         retained_expr.set(clause_name, None)
 
-    retained_placeholders = {
-        str(node.this) for node in retained_expr.walk() if isinstance(node, exp.Placeholder) and node.this is not None
-    }
+    retained_placeholders: set[str] = set()
+    for node in retained_expr.walk():
+        name = _named_placeholder_name(node)
+        if name is not None:
+            retained_placeholders.add(name)
     return stripped_placeholders - retained_placeholders
+
+
+def _has_stripped_placeholder(stmt_expr: "exp.Expr", *, include_select_expressions: bool) -> bool:
+    for clause_name in ("order", "limit", "offset", "fetch"):
+        clause = stmt_expr.args.get(clause_name)
+        if isinstance(clause, exp.Expr):
+            for node in clause.walk():
+                if isinstance(node, (exp.Placeholder, exp.Parameter)):
+                    return True
+    if include_select_expressions and isinstance(stmt_expr, exp.Select):
+        for select_expr in stmt_expr.expressions:
+            for node in select_expr.walk():
+                if isinstance(node, (exp.Placeholder, exp.Parameter)):
+                    return True
+    return False
+
+
+def _has_named_placeholder(stmt_expr: "exp.Expr") -> bool:
+    return any(_named_placeholder_name(node) is not None for node in stmt_expr.walk())
+
+
+def _has_named_input_parameters(original_sql: "SQL") -> bool:
+    if original_sql.named_parameters:
+        return True
+    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
+    if not isinstance(processed_state, ProcessedState) or not processed_state.input_named_parameters:
+        return False
+    return any(not name.isdigit() for name in processed_state.input_named_parameters)
+
+
+def _realign_numeric_parameters(
+    rewritten_expr: "exp.Expr", positional: "list[Any] | tuple[Any, ...]"
+) -> "tuple[Any, ...] | None":
+    numeric_nodes: list[tuple[exp.Parameter | exp.Placeholder, int]] = []
+    ordinals: set[int] = set()
+    for node in rewritten_expr.walk():
+        ordinal = _numeric_parameter_ordinal(node)
+        if ordinal is not None:
+            if ordinal < 1 or ordinal > len(positional):
+                return None
+            numeric_nodes.append((cast("exp.Parameter | exp.Placeholder", node), ordinal))
+            ordinals.add(ordinal)
+    if not numeric_nodes:
+        return None
+    ordered = sorted(ordinals)
+    mapping = {old_index: new_index for new_index, old_index in enumerate(ordered, start=1)}
+    for node, old_index in numeric_nodes:
+        new_index = mapping[old_index]
+        if new_index != old_index:
+            node.set("this", str(new_index) if isinstance(node, exp.Placeholder) else exp.Literal.number(new_index))
+    return tuple(positional[old_index - 1] for old_index in ordered)
 
 
 def _pagination_names(original_sql: "SQL", *, include_select_expressions: bool = False) -> "set[str]":
@@ -3598,13 +4213,15 @@ def _pagination_names(original_sql: "SQL", *, include_select_expressions: bool =
     Returns:
         Set of placeholder names found exclusively in stripped clauses.
     """
+    has_input_named = _has_named_input_parameters(original_sql)
     stmt_expr = original_sql.statement_expression
     if stmt_expr is not None:
         placeholders = _pagination_names_in_expression(stmt_expr, include_select_expressions=include_select_expressions)
         if placeholders:
             return placeholders
-        has_named = any(isinstance(n, exp.Placeholder) and n.this is not None for n in stmt_expr.walk())
-        if has_named:
+        if _has_named_placeholder(stmt_expr) or not has_input_named:
+            return set()
+        if not _has_stripped_placeholder(stmt_expr, include_select_expressions=include_select_expressions):
             return set()
 
     raw_sql = original_sql.raw_sql
@@ -3613,7 +4230,10 @@ def _pagination_names(original_sql: "SQL", *, include_select_expressions: bool =
 
     try:
         dialect = str(original_sql.statement_config.dialect) if original_sql.statement_config.dialect else None
-        parsed = sqlglot.parse_one(raw_sql, read=dialect)
+        try:
+            parsed = sqlglot.parse_one(raw_sql, read=dialect)
+        except ParseError:
+            parsed = sqlglot.parse_one(raw_sql)
         return _pagination_names_in_expression(parsed, include_select_expressions=include_select_expressions)
     except Exception:
         return set()
@@ -3642,6 +4262,23 @@ def _parameters_for_repeated_names(original_sql: "SQL", excluded_names: "set[str
     )
 
 
+_LINE_COMMENT_MARKERS: Final[dict[str, str]] = {"snowflake": "//", "mysql": "#", "mariadb": "#"}
+
+
+def _skip_leading_line_comments(sql: str, dialect: "str | None") -> str:
+    """Drop leading dialect-specific line comments that the keyword scanner does not recognize."""
+    marker = _LINE_COMMENT_MARKERS.get(dialect or "")
+    if marker is None:
+        return sql
+    text = sql.lstrip()
+    while text.startswith(marker):
+        newline = text.find("\n")
+        if newline < 0:
+            return ""
+        text = text[newline + 1 :].lstrip()
+    return text
+
+
 def _build_rewritten_sql(
     rewritten_expr: "exp.Expr",
     original_sql: "SQL",
@@ -3649,19 +4286,33 @@ def _build_rewritten_sql(
     pagination_params: "set[str]",
     leading_stripped: int,
     trailing_stripped: int,
+    leading_offset: int = 0,
 ) -> "SQL":
     """Construct a rewritten SQL object with stripped positional or named parameters."""
     positional = original_sql.positional_parameters
-    retained_positional = positional
+    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
+    exec_params = processed_state.execution_parameters if isinstance(processed_state, ProcessedState) else None
+    numeric_source = positional or (exec_params if isinstance(exec_params, (list, tuple)) else None)
+    if numeric_source:
+        realigned = _realign_numeric_parameters(rewritten_expr, numeric_source)
+        if realigned is not None:
+            return SQL(rewritten_expr, *realigned, statement_config=original_sql.statement_config)
+
+    retained_positional: Any = positional
     if positional and (leading_stripped or trailing_stripped):
         end_idx = len(positional) - trailing_stripped if trailing_stripped else len(positional)
-        retained_positional = positional[leading_stripped:end_idx]
+        if leading_offset:
+            retained_positional = (
+                *positional[:leading_offset],
+                *positional[leading_offset + leading_stripped : end_idx],
+            )
+        else:
+            retained_positional = positional[leading_stripped:end_idx]
 
     if original_sql.named_parameters:
         materialized_parameters = _parameters_for_repeated_names(original_sql, pagination_params)
         if materialized_parameters is not None:
             return SQL(rewritten_expr, *materialized_parameters, statement_config=original_sql.statement_config)
-        processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
         input_names = processed_state.input_named_parameters if isinstance(processed_state, ProcessedState) else ()
         filtered_named_params: dict[str, Any] = {}
         for name in input_names:
@@ -3697,7 +4348,11 @@ def _callable_cache_key(func: Any) -> Any:
         return None
     module = getattr(func, "__module__", None)
     qualname = getattr(func, "__qualname__", type(func).__name__)
-    return (module, qualname, id(func))
+    if _is_uncacheable_callable(func):
+        return (module, qualname, "dynamic", next(_DYNAMIC_CALLABLE_COUNTER))
+    if isinstance(func, (FunctionType, BuiltinFunctionType)):
+        return (module, qualname, id(func))
+    return (module, qualname, hash(func))
 
 
 def _apply_declared_optional_defaults(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:

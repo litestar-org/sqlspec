@@ -7,6 +7,7 @@ This module consolidates configuration-related helpers:
 """
 
 import inspect
+import os
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
@@ -61,16 +62,24 @@ def find_pyproject_toml() -> "Path | None":
     """Walk filesystem upward to find pyproject.toml.
 
     Starts from current working directory and walks up to filesystem root.
-    Stops at .git directory boundary (repository root) if found.
+    Stops at .git directory boundary (repository root) if found. On POSIX,
+    stops at the first directory owned by another non-root user and refuses
+    configuration files owned by another non-root user.
 
     Returns:
         Path to pyproject.toml, or None if not found.
     """
+    current_uid: int | None = os.getuid() if hasattr(os, "getuid") else None
     current = Path.cwd()
 
     while True:
+        if not _is_owned_by_user_or_root(current, current_uid):
+            return None
+
         pyproject = current / "pyproject.toml"
         if pyproject.exists():
+            if not _is_owned_by_user_or_root(pyproject, current_uid):
+                return None
             return pyproject
 
         if (current / ".git").exists():
@@ -497,3 +506,13 @@ def _is_valid_config(config: Any) -> bool:
             return True
 
     return False
+
+
+def _is_owned_by_user_or_root(path: Path, current_uid: int | None) -> bool:
+    if current_uid is None:
+        return True
+    try:
+        path_stat = path.stat()
+    except OSError:
+        return False
+    return path_stat.st_uid in {current_uid, 0}

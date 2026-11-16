@@ -12,6 +12,7 @@ from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
 from sqlspec.adapters.oracledb.litestar import OracleAsyncStore, OracleSyncStore
+from sqlspec.adapters.oracledb.litestar.store import _oracle_expiry_seconds
 from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
 from sqlspec.migrations.context import MigrationContext
 
@@ -176,8 +177,6 @@ def test_oracle_litestar_store_table_ddl_sanitizes_and_truncates_index_name() ->
 
 def test_oracle_store_set_rolls_back_on_execute_failure() -> None:
     """Store mutations roll back connection on execution failure."""
-    from unittest.mock import MagicMock
-
     cursor = MagicMock()
     cursor.execute.side_effect = RuntimeError("execute failed")
     connection = MagicMock()
@@ -366,3 +365,118 @@ def test_oracle_stores_reject_invalid_qualified_session_table_names(invalid_name
         OracleSyncStore(sync_cfg)
     with pytest.raises(ValueError):
         OracleAsyncStore(async_cfg)
+
+
+@pytest.mark.parametrize(
+    ("expires_in", "expected"),
+    [
+        pytest.param(None, None, id="none"),
+        pytest.param(timedelta(milliseconds=250), 0.25, id="subsecond-timedelta"),
+        pytest.param(5, 5.0, id="positive-int"),
+        pytest.param(0, -0.000001, id="zero-int"),
+        pytest.param(-5, -0.000001, id="negative-int"),
+        pytest.param(timedelta(0), -0.000001, id="zero-timedelta"),
+        pytest.param(timedelta(seconds=-1), -0.000001, id="negative-timedelta"),
+    ],
+)
+def test_oracle_expiry_seconds_converts_to_float_and_immediate_expiry(
+    expires_in: "int | timedelta | None", expected: "float | None"
+) -> None:
+    """_oracle_expiry_seconds returns float seconds for positive inputs and -0.000001 for non-positive inputs."""
+    result = _oracle_expiry_seconds(expires_in)
+
+    if expected is None:
+        assert result is None
+    else:
+        assert isinstance(result, float)
+        assert result == expected
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("renew_for", "expected_seconds"),
+    [
+        pytest.param(None, None, id="none"),
+        pytest.param(0, None, id="zero"),
+        pytest.param(-1, None, id="negative"),
+        pytest.param(timedelta(0), None, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), 0.5, id="subsecond-timedelta"),
+        pytest.param(30, 30.0, id="positive-int"),
+    ],
+)
+async def test_oracle_stores_get_renews_only_for_positive_duration(
+    is_async: bool, renew_for: "int | timedelta | None", expected_seconds: "float | None"
+) -> None:
+    """Sync and async Oracle stores renew expires_at only when renew_for is strictly positive."""
+    config = MagicMock()
+    config.extension_config = {}
+    cursor = MagicMock()
+    row = (b"payload", datetime(2026, 5, 10, tzinfo=UTC))
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchone = AsyncMock(return_value=row)
+        connection.commit = AsyncMock()
+        config.provide_connection.return_value.__aenter__.return_value = connection
+        store: OracleAsyncStore | OracleSyncStore = OracleAsyncStore(config)
+    else:
+        cursor.fetchone.return_value = row
+        config.provide_connection.return_value.__enter__.return_value = connection
+        store = OracleSyncStore(config)
+
+    result = await store.get("session-1", renew_for=renew_for)
+
+    assert result == b"payload"
+    if expected_seconds is not None:
+        assert cursor.execute.call_count == 2
+        bound = cursor.execute.call_args.args[1]
+        assert bound == (expected_seconds, expected_seconds, "session-1")
+        assert isinstance(bound[0], float)
+        connection.commit.assert_called_once()
+    else:
+        assert cursor.execute.call_count == 1
+        connection.commit.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("expires_in", "expected_seconds"),
+    [
+        pytest.param(None, None, id="none"),
+        pytest.param(timedelta(milliseconds=250), 0.25, id="subsecond-timedelta"),
+        pytest.param(0, -0.000001, id="zero"),
+        pytest.param(-5, -0.000001, id="negative"),
+        pytest.param(30, 30.0, id="positive"),
+    ],
+)
+async def test_oracle_stores_set_binds_float_or_immediate_expiry_seconds(
+    is_async: bool, expires_in: "int | timedelta | None", expected_seconds: "float | None"
+) -> None:
+    """Sync and async Oracle stores bind float TTL seconds and read expired non-positive sessions as None."""
+    config = MagicMock()
+    config.extension_config = {}
+    cursor = MagicMock()
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchone = AsyncMock(return_value=None)
+        connection.commit = AsyncMock()
+        config.provide_connection.return_value.__aenter__.return_value = connection
+        store: OracleAsyncStore | OracleSyncStore = OracleAsyncStore(config)
+    else:
+        cursor.fetchone.return_value = None
+        config.provide_connection.return_value.__enter__.return_value = connection
+        store = OracleSyncStore(config)
+
+    await store.set("session-1", b"payload", expires_in=expires_in)
+
+    bound = cursor.execute.call_args.args[1]
+    assert bound["expires_in_seconds"] == expected_seconds
+    if expected_seconds is not None:
+        assert isinstance(bound["expires_in_seconds"], float)
+    if expected_seconds == -0.000001:
+        assert await store.get("session-1") is None

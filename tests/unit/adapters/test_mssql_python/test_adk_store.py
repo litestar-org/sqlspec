@@ -1,16 +1,18 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for mssql-python ADK store wiring and T-SQL generation."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
 
+from sqlspec.adapters.mssql_python import MssqlPythonConfig
 from sqlspec.adapters.mssql_python.adk import MssqlPythonADKConfig, MssqlPythonADKMemoryStore, MssqlPythonADKStore
+from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.adk import BaseSyncADKStore
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 
 
@@ -96,7 +98,12 @@ def test_sync_store_uses_tsql_upsert_and_top_limit() -> None:
     assert "MERGE INTO [dbo].[adk_app_state]" in app_upsert
     assert "WITH (HOLDLOCK)" in app_upsert
     assert "SELECT TOP (?)" in events_sql
-    assert params[0] == 5
+    assert (
+        "JOIN [dbo].[adk_session] s ON e.session_id = s.id AND e.session_id = s.id COLLATE Latin1_General_100_BIN2 "
+        "AND e.app_name = s.app_name AND e.app_name = s.app_name COLLATE Latin1_General_100_BIN2 "
+        "AND e.user_id = s.user_id AND e.user_id = s.user_id COLLATE Latin1_General_100_BIN2"
+    ) in _normalized(events_sql)
+    assert params == (5, "app", "app", "user", "user", "session", "session")
     assert "LIMIT" not in events_sql
 
 
@@ -109,11 +116,11 @@ def test_mssql_python_list_sessions_binds_order_and_page(monkeypatch: "pytest.Mo
     sql, params = calls[0]
     assert _normalized(sql) == (
         "SELECT id, app_name, user_id, state, create_time, update_time "
-        "FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? "
+        "FROM [dbo].[adk_session] WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 "
         "ORDER BY create_time ASC, id ASC "
         "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     )
-    assert params == ("app", "u1", 20, 10)
+    assert params == ("app", "app", "u1", "u1", 20, 10)
 
 
 def test_mssql_python_list_sessions_defaults_to_recent_first_without_a_page(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -123,8 +130,10 @@ def test_mssql_python_list_sessions_defaults_to_recent_first_without_a_page(monk
     store.list_sessions("app")
 
     sql, params = calls[0]
-    assert _normalized(sql).endswith("WHERE app_name = ? ORDER BY update_time DESC, id DESC")
-    assert params == ("app",)
+    assert _normalized(sql).endswith(
+        "WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 ORDER BY update_time DESC, id DESC"
+    )
+    assert params == ("app", "app")
 
 
 def test_mssql_python_list_sessions_pages_an_unfiltered_listing(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -135,7 +144,7 @@ def test_mssql_python_list_sessions_pages_an_unfiltered_listing(monkeypatch: "py
 
     sql, params = calls[0]
     assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY")
-    assert params == ("app", 0, 5)
+    assert params == ("app", "app", 0, 5)
 
 
 def test_mssql_python_list_sessions_zero_limit_never_queries(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -169,8 +178,6 @@ def test_mssql_python_list_sessions_rejects_invalid_options(
 
 def test_mssql_python_config_accepts_default_adk_extension_config() -> None:
     """The default ADK extension config resolves both session and memory stores."""
-    from sqlspec.adapters.mssql_python import MssqlPythonConfig
-
     config = MssqlPythonConfig(
         connection_config={"server": "localhost", "database": "app", "user": "u", "password": "p"},
         extension_config={"adk": {}},
@@ -193,7 +200,7 @@ def test_mssql_python_adk_memory_store_ddl() -> None:
     assert "IF NOT EXISTS (SELECT 1 FROM sys.tables" in ddl
     assert "content_text NVARCHAR(MAX) NOT NULL" in ddl
     assert "inserted_at DATETIME2(6) NOT NULL" in ddl
-    assert "UNIQUE (event_id)" in ddl
+    assert "UNIQUE (app_name, user_id, event_id)" in ddl
 
 
 def test_mssql_python_adk_memory_store_search_entries(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -204,8 +211,9 @@ def test_mssql_python_adk_memory_store_search_entries(monkeypatch: "pytest.Monke
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(MssqlPythonADKMemoryStore, "_execute_fetchall", capture)
-    store = MssqlPythonADKMemoryStore(_mock_config())
+    config = _mock_config()
+    _capture_cursor(config, capture)
+    store = MssqlPythonADKMemoryStore(config)
     results = store.search_entries("latte", "app", "u1", limit=5, scope_filter="user")
 
     assert results == []
@@ -214,7 +222,7 @@ def test_mssql_python_adk_memory_store_search_entries(monkeypatch: "pytest.Monke
     normalized_sql = _normalized(sql)
     assert normalized_sql.startswith("SELECT TOP (?)")
     assert "content_text LIKE ?" in normalized_sql
-    assert params == (5, "app", "u1", "%latte%")
+    assert params == (5, "app", "app", "u1", "u1", "%latte%")
 
 
 def test_mssql_python_adk_memory_store_drop_table_sql() -> None:
@@ -226,8 +234,6 @@ def test_mssql_python_adk_memory_store_drop_table_sql() -> None:
 @pytest.mark.parametrize(("major", "expected_type"), [(16, "NVARCHAR(MAX)"), (17, "JSON")])
 def test_sync_store_defaults_to_driver_supported_json_storage(major: int, expected_type: str) -> None:
     """When native_json is unset, DDL lazily queries server version for JSON column support."""
-    from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
-
     config = _mock_config()
     driver = config.provide_session.return_value.__enter__.return_value
     driver.data_dictionary.get_version.return_value = MssqlVersionInfo(major=major)
@@ -298,8 +304,9 @@ def test_mssql_python_adk_search_entries_escapes_tsql_like_wildcards(monkeypatch
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(MssqlPythonADKMemoryStore, "_execute_fetchall", capture)
-    store = MssqlPythonADKMemoryStore(_mock_config())
+    config = _mock_config()
+    _capture_cursor(config, capture)
+    store = MssqlPythonADKMemoryStore(config)
     store.search_entries(r"50%_off[1]\test", "app", "u1", limit=5)
 
     sql, params = calls[0]
@@ -311,8 +318,6 @@ def test_mssql_python_adk_store_handles_dict_rows_and_schema_qualified_tables(
     monkeypatch: "pytest.MonkeyPatch",
 ) -> None:
     """ADK store should support dict rows and split schema.table for DDL and constraints."""
-    from datetime import datetime
-
     store = MssqlPythonADKStore(_mock_config({"native_json": False}))
     store._session_table = "custom.adk_sessions"
     store._events_table = "custom.adk_events"
@@ -343,8 +348,6 @@ def test_mssql_python_adk_create_tables_reconciles_schema_and_memory_insert_roll
     monkeypatch: "pytest.MonkeyPatch",
 ) -> None:
     """create_tables calls reconcile_schema(assume_existing=True) and insert_memory_entries rolls back on error."""
-    from datetime import datetime
-
     config = _mock_config({"native_json": False})
     store = MssqlPythonADKStore(config)
     reconciled: list[bool] = []
@@ -402,8 +405,9 @@ def _session_store_with_capture(
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchall", capture)
-    return MssqlPythonADKStore(_mock_config()), calls
+    config = _mock_config()
+    _capture_cursor(config, capture)
+    return MssqlPythonADKStore(config), calls
 
 
 def test_insert_memory_entries_batches_with_executemany() -> None:
@@ -444,3 +448,314 @@ def test_search_entries_raises_improper_configuration_on_embedding() -> None:
     mem_store = MssqlPythonADKMemoryStore(mem_config)
     with pytest.raises(ImproperConfigurationError, match="Vector embeddings are not configured"):
         mem_store.search_entries("test", "app", "user", embedding=[0.1, 0.2])
+
+
+def _capture_cursor(config: MagicMock, capture: Any) -> None:
+    cursor = config.provide_connection.return_value.__enter__.return_value.cursor.return_value
+    cursor.execute.side_effect = lambda sql, params=(): capture(None, sql, params)
+    cursor.fetchall.return_value = []
+
+
+def _event_fixture(**overrides: Any) -> StoredEvent:
+    payload: dict[str, Any] = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+        "event_data": {"text": "hello"},
+    }
+    payload.update(overrides)
+    return cast("StoredEvent", payload)
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+def test_mssql_python_get_session_renews_only_for_positive_duration(
+    monkeypatch: "pytest.MonkeyPatch", renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """get_session executes an UPDATE only when renew_for is strictly positive."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    writes: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture_execute(_self: MssqlPythonADKStore, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        writes.append((_normalized(sql), tuple(params)))
+        return 1
+
+    monkeypatch.setattr(MssqlPythonADKStore, "_execute", capture_execute)
+    monkeypatch.setattr(
+        MssqlPythonADKStore, "_execute_fetchone", lambda *_a, **_kw: ("s1", "app", "u1", '{"step":1}', now, now)
+    )
+    store = MssqlPythonADKStore(_mock_config())
+
+    session = store.get_session("app", "u1", "s1", renew_for=renew_for)
+
+    assert session is not None
+    assert session["id"] == "s1"
+    if expect_renew:
+        assert writes == [
+            (
+                "UPDATE [dbo].[adk_session] SET update_time = SYSUTCDATETIME() WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 AND id = ? AND id = ? COLLATE Latin1_General_100_BIN2",
+                ("app", "app", "u1", "u1", "s1", "s1"),
+            )
+        ]
+    else:
+        assert writes == []
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-or-unowned"])
+def test_mssql_python_append_event_verifies_session_ownership(session_exists: bool) -> None:
+    """append_event probes session ownership before inserting and rolls back when unowned."""
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.fetchone.return_value = (1,) if session_exists else None
+    store = MssqlPythonADKStore(config)
+    event = _event_fixture()
+
+    if session_exists:
+        store.append_event(event)
+        assert cursor.execute.call_count == 2
+        ownership_sql, ownership_params = cursor.execute.call_args_list[0].args
+        insert_sql, _ = cursor.execute.call_args_list[1].args
+        assert _normalized(ownership_sql) == (
+            "SELECT TOP (1) 1 FROM [dbo].[adk_session] WHERE id = ? AND id = ? COLLATE Latin1_General_100_BIN2 AND app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2"
+        )
+        assert ownership_params == ("s1", "s1", "app", "app", "u1", "u1")
+        assert _normalized(insert_sql).startswith("INSERT INTO [dbo].[adk_event]")
+        conn.commit.assert_called_once()
+        conn.rollback.assert_not_called()
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+            store.append_event(event)
+        assert cursor.execute.call_count == 1
+        conn.rollback.assert_called_once()
+        conn.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"app_name": "other"}, id="app-mismatch"),
+        pytest.param({"user_id": "other"}, id="user-mismatch"),
+        pytest.param({"session_id": "other"}, id="session-mismatch"),
+    ],
+)
+def test_mssql_python_append_event_and_update_state_rejects_mismatched_scope(overrides: "dict[str, str]") -> None:
+    """Mismatched event scope fails before acquiring a connection."""
+    config = _mock_config()
+    store = MssqlPythonADKStore(config)
+
+    with pytest.raises(ValueError, match="does not match"):
+        store.append_event_and_update_state(_event_fixture(**overrides), "app", "u1", "s1", {"step": 2})
+
+    config.provide_connection.assert_not_called()
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-session"])
+def test_mssql_python_append_event_and_update_state_updates_session_before_insert(session_exists: bool) -> None:
+    """append_event_and_update_state runs the scoped session UPDATE before the event INSERT."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.fetchone.return_value = ("s1", "app", "u1", '{"step":2}', now, now) if session_exists else None
+    store = MssqlPythonADKStore(config)
+
+    if session_exists:
+        session = store.append_event_and_update_state(_event_fixture(), "app", "u1", "s1", {"step": 2})
+        assert session["state"] == {"step": 2}
+        assert cursor.execute.call_count == 2
+        assert _normalized(cursor.execute.call_args_list[0].args[0]).startswith("UPDATE [dbo].[adk_session]")
+        assert _normalized(cursor.execute.call_args_list[1].args[0]).startswith("INSERT INTO [dbo].[adk_event]")
+        conn.commit.assert_called_once()
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found"):
+            store.append_event_and_update_state(_event_fixture(), "app", "u1", "s1", {"step": 2})
+        assert cursor.execute.call_count == 1
+        conn.rollback.assert_called_once()
+        conn.commit.assert_not_called()
+
+
+def test_mssql_python_delete_session_deletes_scoped_events_before_session() -> None:
+    """delete_session removes owner-scoped events before deleting the session row."""
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    store = MssqlPythonADKStore(config)
+
+    store.delete_session("app", "u1", "s1")
+
+    executed = [(_normalized(call.args[0]), call.args[1]) for call in cursor.execute.call_args_list]
+    assert executed == [
+        (
+            "DELETE FROM [dbo].[adk_event] WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 AND session_id = ? AND session_id = ? COLLATE Latin1_General_100_BIN2",
+            ("app", "app", "u1", "u1", "s1", "s1"),
+        ),
+        (
+            "DELETE FROM [dbo].[adk_session] WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 AND id = ? AND id = ? COLLATE Latin1_General_100_BIN2",
+            ("app", "app", "u1", "u1", "s1", "s1"),
+        ),
+    ]
+    conn.commit.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_sql", "expected_params"),
+    [
+        pytest.param(
+            "app",
+            "u1",
+            "DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND session_id = ? COLLATE Latin1_General_100_BIN2 AND app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2",
+            ("s1", "s1", "app", "app", "u1", "u1"),
+            id="session-app-and-user",
+        )
+    ],
+)
+def test_mssql_python_memory_dedup_and_scoped_delete_entries_by_session(
+    monkeypatch: "pytest.MonkeyPatch",
+    app_name: str,
+    user_id: str,
+    expected_sql: str,
+    expected_params: "tuple[str, ...]",
+) -> None:
+    """Memory inserts deduplicate on (app_name, user_id, event_id) and deletes honor owner filters."""
+    insert_config = _mock_config({"native_json": False})
+    conn = insert_config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.rowcount = 1
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "u1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+    MssqlPythonADKMemoryStore(insert_config).insert_memory_entries([entry])
+    insert_sql, batch_params = cursor.executemany.call_args.args
+    assert (
+        "WHERE NOT EXISTS ( SELECT 1 FROM [dbo].[adk_memory] WITH (UPDLOCK, HOLDLOCK) "
+        "WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2 AND event_id = ? AND event_id = ? COLLATE Latin1_General_100_BIN2 );"
+    ) in _normalized(insert_sql)
+    assert batch_params[0][-6:] == ("app", "app", "u1", "u1", "evt-1", "evt-1")
+
+    delete_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture_delete(_self: MssqlPythonADKMemoryStore, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        delete_calls.append((_normalized(sql), tuple(params)))
+        return 2
+
+    monkeypatch.setattr(MssqlPythonADKMemoryStore, "_execute", capture_delete)
+    deleted = MssqlPythonADKMemoryStore(_mock_config()).delete_entries_by_session(
+        "s1", app_name=app_name, user_id=user_id
+    )
+    assert deleted == 2
+    assert delete_calls == [(expected_sql, expected_params)]
+
+
+def test_mssql_python_create_session_merges_and_reads_scoped_state() -> None:
+    """create_session locks app_state then user_state with UPDLOCK HOLDLOCK, reads untouched scopes, and merges."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    conn.autocommit = True
+    cursor = conn.cursor.return_value
+    cursor.fetchone.side_effect = [
+        ("s1", "app", "u1", '{"turn": 1}', now, now),
+        ('{"app:existing": 1}',),
+        ('{"user:lang": "en"}',),
+    ]
+    store = MssqlPythonADKStore(config)
+
+    created = store.create_session(
+        "s1", "app", "u1", {"turn": 1}, app_state_delta={"app:added": 2}, user_state_delta=None
+    )
+
+    assert created["state"] == {"turn": 1, "app:existing": 1, "app:added": 2, "user:lang": "en"}
+    executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert executed[0].startswith("INSERT INTO [dbo].[adk_session]")
+    assert (
+        executed[1]
+        == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2"
+    )
+    assert (
+        executed[2]
+        == "UPDATE [dbo].[adk_app_state] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2"
+    )
+    assert (
+        executed[3]
+        == "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2"
+    )
+    assert conn.autocommit is True
+    conn.commit.assert_called_once()
+
+
+def test_mssql_python_append_event_and_update_state_atomic_merge_and_rejects_old_kwargs() -> None:
+    """append_event_and_update_state uses WITH (UPDLOCK, HOLDLOCK) in app->user order and drops legacy kwargs."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    conn.autocommit = False
+    cursor = conn.cursor.return_value
+    cursor.fetchone.side_effect = [("s1", "app", "u1", '{"turn": 2}', now, now), ('{"app:a": 1}',), None]
+    store = MssqlPythonADKStore(config)
+    event = _event_fixture()
+
+    updated = store.append_event_and_update_state(
+        event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"app:a2": 2}, user_state_delta={"user:u2": 3}
+    )
+
+    assert updated["state"] == {"turn": 2, "app:a": 1, "app:a2": 2, "user:u2": 3}
+    executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert (
+        executed[2]
+        == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2"
+    )
+    assert executed[3].startswith("UPDATE [dbo].[adk_app_state]")
+    assert executed[4] == (
+        "SELECT state FROM [dbo].[adk_user_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND app_name = ? COLLATE Latin1_General_100_BIN2 AND user_id = ? AND user_id = ? COLLATE Latin1_General_100_BIN2"
+    )
+    assert executed[5].startswith("INSERT INTO [dbo].[adk_user_state]")
+    conn.commit.assert_called_once()
+
+    with pytest.raises(TypeError):
+        cast("Any", store).append_event_and_update_state(event, "app", "u1", "s1", {}, app_state={"a": 1})
+
+
+def test_mssql_python_get_events_bounded_reverses_desc_rows(monkeypatch: "pytest.MonkeyPatch") -> None:
+    """get_events(limit=N) orders TOP DESC in T-SQL and reverses rows to chronological ascending order."""
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    store, calls = _session_store_with_capture(monkeypatch)
+
+    def _fake_fetchall(
+        _store: MssqlPythonADKStore, sql: str, params: "tuple[Any, ...]", read: bool = False
+    ) -> "list[tuple[Any, ...]]":
+        calls.append((sql, params))
+        return [("e3", "app", "u1", "s1", "i", t3, "{}"), ("e2", "app", "u1", "s1", "i", t2, "{}")]
+
+    monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchall", _fake_fetchall)
+
+    events = store.get_events("app", "u1", "s1", limit=2)
+
+    assert [e["id"] for e in events] == ["e2", "e3"]
+    assert "ORDER BY e.timestamp DESC" in _normalized(calls[0][0])

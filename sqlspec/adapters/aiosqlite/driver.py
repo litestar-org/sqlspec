@@ -12,6 +12,7 @@ from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCurs
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import (
+    ROWID_SAFE_OPERATIONS,
     AiosqliteStreamSource,
     build_insert_statement,
     collect_rows,
@@ -20,6 +21,7 @@ from sqlspec.adapters.aiosqlite.core import (
     driver_profile,
     end_transaction,
     execute_and_resolve_metadata,
+    execute_cache_hit,
     execute_fetchall_with_metadata,
     execute_many_on_worker_thread,
     format_identifier,
@@ -31,6 +33,7 @@ from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import DeadlockError
 from sqlspec.utils.type_guards import resolve_row_format
 
@@ -96,6 +99,8 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AiosqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), AiosqliteDriver) else None
+        self._cache_hit_state = self._rowid_target_cache
 
     @property
     def data_dictionary(self) -> "AiosqliteDataDictionary":
@@ -122,7 +127,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 sql,
                 normalized_parameters,
                 statement.operation_type,
-                statement._peek_expression(),
+                statement._get_shared_expression(),
                 self._rowid_target_cache,
             )
             data, column_names, row_count = collect_rows(fetched_data, description)
@@ -145,7 +150,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             sql,
             normalized_parameters,
             statement.operation_type,
-            statement._peek_expression(),
+            statement._get_shared_expression(),
             self._rowid_target_cache,
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
@@ -377,7 +382,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
-        if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
+        if operation_type not in ROWID_SAFE_OPERATIONS:
             self._rowid_target_cache.clear()
 
     def _connection_in_transaction(self) -> bool:
@@ -387,6 +392,10 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             True if connection is in an active transaction.
         """
         return bool(self.connection.in_transaction)
+
+    async def _connection_in_transaction_async(self) -> bool:
+        """Return whether the driver or underlying connection holds an open transaction."""
+        return await _check_in_transaction(self.connection)
 
 
 def _read_in_transaction_on_worker(raw_conn: Any) -> bool:

@@ -241,6 +241,10 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=-1 if executed else 0, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
             self._execute_statement(cursor, sql, _odbc_parameters(prepared_parameters))
@@ -719,7 +723,9 @@ def _db2_table_reference(table: str) -> str:
     rendered: list[str] = []
     for part in exp.to_table(table, dialect="db2").parts:
         plain = isinstance(part, exp.Identifier) and not part.quoted
-        rendered.append(part.name if plain and _DB2_PLAIN_IDENTIFIER.match(part.name) else quote_identifier(part.name))
+        rendered.append(
+            part.name if plain and _DB2_PLAIN_IDENTIFIER.fullmatch(part.name) else quote_identifier(part.name)
+        )
     return ".".join(rendered)
 
 
@@ -729,7 +735,7 @@ def _statement_dialect_for(dialect: str) -> str:
     return dialect
 
 
-_DB2_PLAIN_IDENTIFIER: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_DB2_PLAIN_IDENTIFIER: Final = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 _MSSQL_SQL_GAP: Final = r"(?:\s|/\*.*?\*/|--[^\r\n]*(?:\r?\n|$))*"
 _MSSQL_PAGINATION_PATTERN: Final = re.compile(
     rf"\bTOP{_MSSQL_SQL_GAP}\({_MSSQL_SQL_GAP}(?P<top>\?){_MSSQL_SQL_GAP}\)"
@@ -765,7 +771,7 @@ def _inline_mssql_pagination_parameters(
             or statement_config.parameter_config.output_transformer is not None
         )
     ):
-        parameter_info = tuple(ParameterValidator(cache_max_size=0).extract_parameters(sql))
+        parameter_info = tuple(ParameterValidator(cache_max_size=0).extract_parameters(sql, dialect="tsql"))
     positions = {parameter.position: parameter.ordinal for parameter in parameter_info}
     replacements: list[tuple[int, str]] = []
     consumed: set[int] = set()

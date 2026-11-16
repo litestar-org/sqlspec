@@ -39,10 +39,10 @@ async def test_sync_to_thread_concurrency(adbc_store: AdbcStore) -> None:
 
     await asyncio.gather(*[write_session(i) for i in range(10)])
 
-    async def read_session(session_id: int) -> bytes | None:
+    async def replica_session(session_id: int) -> bytes | None:
         return await adbc_store.get(f"session_{session_id}")
 
-    results = await asyncio.gather(*[read_session(i) for i in range(10)])
+    results = await asyncio.gather(*[replica_session(i) for i in range(10)])
 
     for i, result in enumerate(results):
         assert result == f"data_{i}".encode()

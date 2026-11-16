@@ -225,26 +225,32 @@ class PsycopgAsyncListenerHub:
                 await connection_cm.__aexit__(None, None, None)
             msg = "Psycopg async adapter did not yield a connection"
             raise ImproperConfigurationError(msg)
+        autocommit_error: BaseException | None = None
         try:
             if not getattr(connection, "autocommit", True):
                 with contextlib.suppress(Exception):
                     await connection.rollback()
             await connection.set_autocommit(True)
-        except BaseException:
+        except BaseException as exc:
+            autocommit_error = exc
+        if autocommit_error is not None:
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
-            raise
+            raise autocommit_error
         self._connection_cm = connection_cm
         self._connection = connection
+        listen_error: Exception | None = None
         try:
             for channel in self._queues:
                 await connection.execute(_listen_statement(channel))
-        except Exception:
+        except Exception as exc:
+            listen_error = exc
+        if listen_error is not None:
             self._connection = None
             self._connection_cm = None
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
-            raise
+            raise listen_error
         self._pump_task = asyncio.create_task(self._pump())
         _record_listener_lifecycle(self._config, self._backend_name, "acquire", is_async=True)
         if reconnecting:
@@ -268,6 +274,7 @@ class PsycopgAsyncListenerHub:
                 connection = self._connection
                 if connection is None or not has_notifies(connection):
                     return
+                pump_error: Exception | None = None
                 try:
                     async for notify in connection.notifies(timeout=_PUMP_TIMEOUT, stop_after=_PUMP_BATCH):
                         if self._stopping:
@@ -276,9 +283,11 @@ class PsycopgAsyncListenerHub:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # pragma: no cover
+                    pump_error = exc
+                if pump_error is not None:
                     if self._stopping or getattr(connection, "closed", False):
                         return
-                    logger.warning("psycopg async notify pump error: %s", exc)
+                    logger.warning("psycopg async notify pump error: %s", pump_error)
                     await asyncio.sleep(0.25)
         except asyncio.CancelledError:
             return

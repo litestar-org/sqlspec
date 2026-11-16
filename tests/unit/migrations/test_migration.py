@@ -107,7 +107,7 @@ def test_calculate_checksum_basic() -> None:
     checksum = runner.calculate_checksum(content)
 
     assert isinstance(checksum, str)
-    assert len(checksum) == 32
+    assert len(checksum) == 64
 
     checksum2 = runner.calculate_checksum(content)
     assert checksum == checksum2
@@ -134,7 +134,7 @@ def test_calculate_checksum_unicode_content() -> None:
     checksum = runner.calculate_checksum(content)
 
     assert isinstance(checksum, str)
-    assert len(checksum) == 32
+    assert len(checksum) == 64
 
 
 def test_get_migration_files_sync_empty_directory(tmp_path: Path) -> None:
@@ -263,7 +263,7 @@ DROP TABLE users;
     assert metadata["has_upgrade"] is True
     assert metadata["has_downgrade"] is True
     assert isinstance(metadata["checksum"], str)
-    assert len(metadata["checksum"]) == 32
+    assert len(metadata["checksum"]) == 64
 
 
 def test_load_migration_metadata_python_file_sync(tmp_path: Path) -> None:

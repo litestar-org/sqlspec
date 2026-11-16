@@ -11,15 +11,22 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_TYPE
 from sqlspec.adapters.psqlpy._typing import (
+    LoadBalanceHosts,
+    PsqlpyBaseConnectionError,
+    PsqlpyBaseConnectionPoolError,
     PsqlpyConnectionExecuteError,
+    PsqlpyDatabaseError,
     PsqlpyDataError,
+    PsqlpyError,
     PsqlpyIntegrityError,
     PsqlpyOperationalError,
+    TargetSessionAttrs,
 )
 from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
@@ -36,6 +43,8 @@ from sqlspec.core.config_runtime import (
     resolve_runtime_statement_config,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher, type_coercion_fallbacks
+from sqlspec.core.result._base import DMLResult, SQLResult
+from sqlspec.core.sqlcommenter import split_sqlcomment
 from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -49,6 +58,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -82,7 +92,9 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_cache_hit",
     "extract_rows_affected",
+    "fetch_dml_rowcount",
     "format_execute_many_parameters",
     "format_table_identifier",
     "get_parameter_casts",
@@ -103,10 +115,11 @@ _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
 })
 _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
-PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"\A([A-Z]+)(?:\s+(\d+))?\s+(\d+)\Z", re.IGNORECASE)
 _DML_COUNT_CTE_ALIAS: Final = "_sqlspec_affected"
 _DML_COUNT_COLUMN: Final = "_sqlspec_rows_affected"
 _DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
+_CAST_DIALECTS: Final[frozenset[str]] = frozenset({"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch"})
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple)
@@ -189,25 +202,42 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         Dictionary with connection parameters.
     """
     config = {key: value for key, value in connection_config.items() if value is not None}
-    dsn = (
-        config.pop("dsn", None)
-        or config.pop("conninfo", None)
-        or config.pop("url", None)
-        or config.pop("connection_string", None)
-    )
+    dsn = _pop_alias(config, ("dsn", "conninfo", "url", "connection_string"))
     if dsn is not None:
         config["dsn"] = dsn
-    db_name = (
-        config.pop("db_name", None)
-        or config.pop("database", None)
-        or config.pop("dbname", None)
-        or config.pop("db", None)
-    )
+    db_name = _pop_alias(config, ("db_name", "database", "dbname", "db"))
     if db_name is not None:
         config["db_name"] = db_name
-    username = config.pop("username", None) or config.pop("user", None)
+    username = _pop_alias(config, ("username", "user"))
     if username is not None:
         config["username"] = username
+    enum_fields = (
+        (
+            "target_session_attrs",
+            TargetSessionAttrs,
+            {
+                "any": TargetSessionAttrs.Any,
+                "read-write": TargetSessionAttrs.ReadWrite,
+                "primary": TargetSessionAttrs.ReadWrite,
+                "read-only": TargetSessionAttrs.ReadOnly,
+                "standby": TargetSessionAttrs.ReadOnly,
+                "prefer-standby": TargetSessionAttrs.ReadOnly,
+            },
+        ),
+        (
+            "load_balance_hosts",
+            LoadBalanceHosts,
+            {"disable": LoadBalanceHosts.Disable, "random": LoadBalanceHosts.Random},
+        ),
+    )
+    for key, enum_type, choices in enum_fields:
+        value = config.get(key)
+        if value is None or isinstance(value, enum_type):
+            continue
+        if not isinstance(value, str) or value.lower() not in choices:
+            msg = f"Invalid {key}: {value!r}"
+            raise ImproperConfigurationError(msg)
+        config[key] = choices[value.lower()]
     if "auth_token_provider" in config and config["auth_token_provider"] is None:
         config.pop("auth_token_provider", None)
     return config
@@ -275,6 +305,7 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     return dict_rows, list(dict_rows[0])
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class PsqlpyStreamSource:
     """Compiled async chunk source streaming dict rows from a psqlpy server-side cursor.
 
@@ -284,13 +315,14 @@ class PsqlpyStreamSource:
     left untouched.
     """
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+    __slots__ = ("_chunk_size", "_connection", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
 
     def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._connection: Any = None
         self._cursor: Any = None
         self._transaction: Any = None
 
@@ -310,39 +342,51 @@ class PsqlpyStreamSource:
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
+        transaction = self._transaction
+        self._transaction = None
+        connection = self._connection
+        self._connection = None
+        if self._driver.connection is not connection:
+            return
         if cursor is not None:
             with contextlib.suppress(Exception):
                 cursor.close()
-        transaction = self._transaction
-        self._transaction = None
         if transaction is not None:
+            finish_error: Exception | None = None
             try:
                 if error:
                     await transaction.rollback()
                 else:
                     await transaction.commit()
-            except Exception:
+            except Exception as exc:
+                finish_error = exc
+            if finish_error is not None:
                 with contextlib.suppress(Exception):
                     await transaction.rollback()
 
     async def _start(self) -> None:
+        connection = self._driver.connection
+        self._connection = connection
         if self._driver._connection_in_transaction():
-            cursor = self._driver.connection.cursor(self._sql, self._parameters, array_size=self._chunk_size)
+            cursor = connection.cursor(self._sql, self._parameters, array_size=self._chunk_size)
             await cursor.start()
             self._cursor = cursor
             return
-        transaction = self._driver.connection.transaction()
+        transaction = connection.transaction()
         await transaction.begin()
         self._transaction = transaction
+        start_error: BaseException | None = None
         try:
             cursor = transaction.cursor(self._sql, self._parameters, array_size=self._chunk_size)
             await cursor.start()
             self._cursor = cursor
-        except BaseException:
+        except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             self._transaction = None
             with contextlib.suppress(Exception):
                 await transaction.rollback()
-            raise
+            raise start_error
 
 
 def coerce_numeric_for_write(value: Any) -> Any:
@@ -405,7 +449,7 @@ def coerce_json_columns(
     for record in records:
         row = list(record)
         for index in indexes:
-            row[index] = _coerce_json_text_for_execute_many(row[index], deserializer=deserializer)
+            row[index] = _decode_arrow_json_column_value(row[index], deserializer=deserializer)
         coerced.append(tuple(row))
     return coerced
 
@@ -518,6 +562,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     """
     _ = logger
     error_msg = str(error).lower()
+    if getattr(error, "sqlstate", None) == "25006" or any(
+        value in error_msg for value in ("25006", "read-only transaction", "read-only sql transaction")
+    ):
+        return _create_postgres_error(error, ReadOnlyTransactionError, "read-only transaction")
 
     if isinstance(error, PsqlpyDataError):
         return _create_postgres_error(error, DataError, "data error")
@@ -582,8 +630,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_postgres_error(error, OperationalError, "operational error")
     if isinstance(error, PsqlpyIntegrityError):
         return _create_postgres_error(error, IntegrityError, "integrity constraint violation")
-    if isinstance(error, (PsqlpyConnectionExecuteError,)):
-        return _create_postgres_error(error, DatabaseConnectionError, "connection execute error")
+    if isinstance(error, (PsqlpyBaseConnectionError, PsqlpyBaseConnectionPoolError, PsqlpyConnectionExecuteError)):
+        if "timeout" in error_msg or "timed out" in error_msg:
+            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
 
     if "connection" in error_msg:
         if "timeout" in error_msg or "timed out" in error_msg:
@@ -644,20 +694,11 @@ def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[An
                 return jsonb_type(value)
             if isinstance(value, (list, tuple)):
                 return jsonb_type(list(value))
-            if isinstance(value, str):
-                stripped = value.strip()
-                if stripped.startswith(("{", "[")):
-                    with contextlib.suppress(Exception):
-                        parsed = from_json(value)
-                        if isinstance(parsed, dict):
-                            return jsonb_type(parsed)
-                        if isinstance(parsed, (list, tuple)):
-                            return jsonb_type(list(parsed))
     if isinstance(value, tuple):
         return list(value)
     if jsonb_type is not None and isinstance(value, jsonb_type):
         return value
-    if isinstance(value, (dict, list, str)):
+    if isinstance(value, (dict, list)):
         return value
     try:
         serialized_value = serializer(value)
@@ -758,7 +799,7 @@ def _parse_psqlpy_command_tag(tag: str) -> int:
     if not tag:
         return 0
 
-    match = PSQLPY_STATUS_REGEX.match(tag.strip())
+    match = PSQLPY_STATUS_REGEX.fullmatch(tag.strip())
     if match:
         command = match.group(1).upper()
         if command == "INSERT" and match.group(3):
@@ -794,8 +835,8 @@ def _dml_count_query(sql: str) -> str | None:
         expression.set("with_", None)
 
     expression = expression.returning("1", dialect="postgres", copy=False)
-    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
-    count_query = exp.select(count_expression).from_(cte_alias, copy=False)
+    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN, copy=False)
+    count_query = exp.select(count_expression, copy=False).from_(cte_alias, copy=False)
     if existing_with is not None:
         count_query.set("with_", existing_with)
     count_query.with_(cte_alias, as_=expression, copy=False)
@@ -857,7 +898,8 @@ def _format_execute_many_param_set(param_set: Any, *, coerce_numeric: bool) -> "
     return [param_set]
 
 
-def _coerce_json_text_for_execute_many(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
+def _decode_arrow_json_column_value(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
+    """Decode Arrow UTF-8 JSON document cells into dict/list values for psqlpy binary COPY."""
     if not isinstance(value, str):
         return value
     stripped = value.lstrip()
@@ -870,6 +912,133 @@ def _coerce_json_text_for_execute_many(value: Any, *, deserializer: "Callable[[s
     return decoded if isinstance(decoded, (dict, list, tuple)) else value
 
 
+def _pop_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
+    """Pop every alias key from config and return the first non-None value."""
+    found = None
+    for alias in aliases:
+        value = config.pop(alias, None)
+        if found is None and value is not None:
+            found = value
+    return found
+
+
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+
+async def fetch_dml_rowcount(connection: Any, sql: str, params: Any, unprepared: bool) -> "int | None":
+    """Execute one DML statement through a counting query and return its exact affected-row count.
+
+    Args:
+        connection: psqlpy connection to execute on.
+        sql: Wire SQL of the DML statement, with any trailing sqlcommenter block.
+        params: Positional parameters for the statement.
+        unprepared: Whether the statement runs without a server-side prepared statement.
+
+    Returns:
+        The affected-row count, or None when the statement cannot be wrapped in a counting query.
+
+    Raises:
+        SQLSpecError: If the counting query returns anything other than one non-negative integer.
+    """
+    base_sql, comment_suffix = split_sqlcomment(sql)
+    count_sql = _dml_count_query(base_sql)
+    if count_sql is None:
+        return None
+    wire_count_sql = f"{count_sql} {comment_suffix}" if comment_suffix else count_sql
+    count_result = (
+        await connection.fetch(wire_count_sql, params, prepared=False)
+        if unprepared
+        else await connection.fetch(wire_count_sql, params)
+    )
+    count_rows, _ = collect_rows(count_result)
+    if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
+        msg = "psqlpy DML row count query returned an invalid result"
+        raise SQLSpecError(msg)
+    rows_affected = count_rows[0][_DML_COUNT_COLUMN]
+    if type(rows_affected) is not int or rows_affected < 0:
+        msg = "psqlpy DML row count query returned an invalid count"
+        raise SQLSpecError(msg)
+    return rows_affected
+
+
+async def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[str, Any], bool]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a psqlpy connection and build its result.
+
+    Statements are declined when cast detection is disabled or the statement
+    dialect is not a PostgreSQL dialect.
+
+    Args:
+        connection: psqlpy connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration supplying parameter coercion and rebuilding the result statement.
+        state: Driver feature flags of the owning session and whether it runs statements unprepared.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+
+    Raises:
+        SQLSpecError: Mapped from any psqlpy error the statement raises.
+    """
+    driver_features, unprepared = state
+    if (
+        not driver_features.get("enable_cast_detection", True)
+        or (statement_config.dialect or "postgres") not in _CAST_DIALECTS
+    ):
+        return None
+    operation_type = cached.operation_type
+    compiled_sql = cached.compiled_sql
+    try:
+        prepared: Any = prepare_parameters_with_casts(params, cached.parameter_casts, statement_config)
+        if operation_type != "SELECT":
+            prepared = coerce_numeric_for_write(prepared)
+        args: Any = (
+            tuple(prepared)
+            if isinstance(prepared, (list, tuple))
+            else tuple(prepared.values())
+            if isinstance(prepared, dict)
+            else ()
+        )
+        if cached.operation_profile.returns_rows:
+            query_result = (
+                await connection.fetch(compiled_sql, args, prepared=False)
+                if unprepared
+                else await connection.fetch(compiled_sql, args)
+            )
+            dict_rows, column_names = collect_rows(query_result)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                params,
+                cast("list[Any]", dict_rows),
+                column_names,
+                len(dict_rows),
+                "dict",
+                None,
+            )
+        if operation_type in {"INSERT", "UPDATE", "DELETE"}:
+            rows_affected = await fetch_dml_rowcount(connection, compiled_sql, args, unprepared)
+            if rows_affected is not None:
+                return DMLResult(operation_type, rows_affected)
+        result = (
+            await connection.execute(compiled_sql, args, prepared=False)
+            if unprepared
+            else await connection.execute(compiled_sql, args)
+        )
+        return DMLResult(operation_type, extract_rows_affected(result))
+    except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc

@@ -31,7 +31,6 @@ from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_
 from sqlspec.exceptions import IntegrityError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
 from sqlspec.migrations.schema import DropStatement, SchemaTarget
-from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
@@ -74,34 +73,12 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         super().__init__(config)
         self._dialect: str | None = None
 
-    def _validate_table_name(self, table_name: str) -> None:
-        """Validate the session table name, accepting ``database.table`` names for Teradata configs.
-
-        Other ADBC backends derive index names from the raw table name, so they keep the bare-name rule.
-        """
-        if "." in table_name and self._configured_dialect() == "teradata":
-            schema_part, _, table_part = table_name.partition(".")
-            if schema_part and table_part and "." not in table_part:
-                BaseSQLSpecStore._ensure_table_name(schema_part)
-                BaseSQLSpecStore._ensure_table_name(table_part)
-                return
-        BaseSQLSpecStore._ensure_table_name(table_name)
-
-    def _configured_dialect(self) -> "str | None":
-        """Return the dialect implied by the connection config, or ``None`` when it needs a live driver."""
-        connection_config = getattr(self._config, "connection_config", None)
-        if not isinstance(connection_config, Mapping):
-            return None
-        return resolve_reconcile_adbc_dialect(
-            connection_config, getattr(self._config, "explicit_statement_dialect", None)
-        )
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -114,7 +91,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -124,7 +101,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             value: Session data.
             expires_in: Time until expiration.
         """
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -132,11 +109,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Args:
             key: Session ID to delete.
         """
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -147,7 +124,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Returns:
             True if the session exists and is not expired.
         """
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -158,7 +135,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
         """
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions.
@@ -166,7 +143,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Returns:
             Number of sessions deleted.
         """
-        return await async_(self._delete_expired)()
+        return await self._run_sync(self._delete_expired)
 
     def prepare_schema_sync(self, driver: Any) -> None:
         """Cache dialect from explicit FlightSQL/GizmoSQL config hints or the active driver."""
@@ -189,38 +166,6 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             self._dialect = "postgres"
         else:
             self._dialect = raw_dialect
-
-    def _resolve_schema_dialect(self) -> str:
-        """Return cached or config-classified dialect before falling back to a live session."""
-        if self._dialect is not None:
-            return self._dialect
-        connection_config = getattr(self._config, "connection_config", None)
-        if isinstance(connection_config, Mapping):
-            explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
-            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
-            if resolved is not None:
-                self._dialect = resolved
-                return resolved
-        return self._get_dialect()
-
-    def _schema_target(self) -> SchemaTarget:
-        """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
-        dialect = self._resolve_schema_dialect()
-        parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
-        if dialect == "teradata":
-            schema_name, catalog_table = split_teradata_table_name(self._table_name)
-            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
-        if dialect == "db2":
-            schema_name, catalog_table = _split_db2_table_name(self._table_name)
-            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
-        raw_schema, dot, raw_table = self._table_name.partition(".")
-        if dot:
-            schema_name = raw_schema.strip('"`[]') or None
-            bare_table = raw_table.strip('"`[]')
-        else:
-            schema_name = None
-            bare_table = self._table_name.strip('"`[]')
-        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
 
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return dialect-specific companion index definitions for ADBC session storage."""
@@ -279,6 +224,73 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
 
         return super().get_companion_indexes()
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._get_dialect() != "teradata":
+            return super().downgrade_drops()
+        return [
+            DropStatement(
+                statement,
+                exists_sql=_TERADATA_TABLE_EXISTS_SQL,
+                exists_parameters=split_teradata_table_name(self._table_name),
+            )
+            for statement in self._drop_table_sql()
+        ]
+
+    def _validate_table_name(self, table_name: str) -> None:
+        """Validate the session table name, accepting ``database.table`` names for Teradata configs.
+
+        Other ADBC backends derive index names from the raw table name, so they keep the bare-name rule.
+        """
+        if "." in table_name and self._configured_dialect() == "teradata":
+            schema_part, _, table_part = table_name.partition(".")
+            if schema_part and table_part and "." not in table_part:
+                BaseSQLSpecStore._ensure_table_name(schema_part)
+                BaseSQLSpecStore._ensure_table_name(table_part)
+                return
+        BaseSQLSpecStore._ensure_table_name(table_name)
+
+    def _configured_dialect(self) -> "str | None":
+        """Return the dialect implied by the connection config, or ``None`` when it needs a live driver."""
+        connection_config = getattr(self._config, "connection_config", None)
+        if not isinstance(connection_config, Mapping):
+            return None
+        return resolve_reconcile_adbc_dialect(
+            connection_config, getattr(self._config, "explicit_statement_dialect", None)
+        )
+
+    def _resolve_schema_dialect(self) -> str:
+        """Return cached or config-classified dialect before falling back to a live session."""
+        if self._dialect is not None:
+            return self._dialect
+        connection_config = getattr(self._config, "connection_config", None)
+        if isinstance(connection_config, Mapping):
+            explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
+            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
+            if resolved is not None:
+                self._dialect = resolved
+                return resolved
+        return self._get_dialect()
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
+        dialect = self._resolve_schema_dialect()
+        parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
+        if dialect == "teradata":
+            schema_name, catalog_table = split_teradata_table_name(self._table_name)
+            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+        if dialect == "db2":
+            schema_name, catalog_table = _split_db2_table_name(self._table_name)
+            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+        raw_schema, dot, raw_table = self._table_name.partition(".")
+        if dot:
+            schema_name = raw_schema.strip('"`[]') or None
+            bare_table = raw_table.strip('"`[]')
+        else:
+            schema_name = None
+            bare_table = self._table_name.strip('"`[]')
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
 
     def _get_dialect(self) -> str:
         """Get the database dialect, caching it after first access.
@@ -543,19 +555,6 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 raise
         self._log_table_created()
 
-    def downgrade_drops(self) -> "list[DropStatement]":
-        """Return the extension-downgrade drops, catalog-probed on Teradata."""
-        if self._get_dialect() != "teradata":
-            return super().downgrade_drops()
-        return [
-            DropStatement(
-                statement,
-                exists_sql=_TERADATA_TABLE_EXISTS_SQL,
-                exists_parameters=split_teradata_table_name(self._table_name),
-            )
-            for statement in self._drop_table_sql()
-        ]
-
     def _drop_table_sql(self) -> "list[str]":
         """Get dialect-specific DROP TABLE SQL statements for ADBC.
 
@@ -616,7 +615,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         AND (expires_at IS NULL OR expires_at > {current_ts})
         """
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             result = driver.select_one_or_none(sql, key)
 
             if result is None:
@@ -625,7 +625,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             data = result["data"] if "data" in result else result["DATA"]
             expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
 
-            if renew_for is not None and expires_at:
+            if self._is_renewal_requested(renew_for) and expires_at:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 p1_update = self._get_param_placeholder(1)
                 p2_update = self._get_param_placeholder(2)
@@ -635,7 +635,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 WHERE session_id = {p2_update}
                 """
                 driver.execute(update_sql, new_expires_at, key)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
 
             if isinstance(data, str):
                 try:
@@ -673,13 +674,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                     ON CONFLICT (session_id) DO UPDATE
                     SET data = EXCLUDED.data, expires_at = NULL
                     """
-                    with self._config.provide_session() as driver:
+                    with self._store_session_sync() as store_session:
+                        driver = store_session.session
                         try:
                             driver.execute(sql, key, data)
-                            driver.commit()
+                            if store_session.owned:
+                                driver.commit()
                         except Exception:
                             with contextlib.suppress(Exception):
-                                driver.rollback()
+                                if store_session.owned:
+                                    driver.rollback()
                             raise
                     return
                 sql = f"""
@@ -716,20 +720,24 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                     "VALUES (s.session_id, s.data, s.expires_at)"
                 )
                 merge_params = (key, bind_hex, expires_at)
-            with self._config.provide_session() as driver:
+            with self._store_session_sync() as store_session:
+                driver = store_session.session
                 try:
                     driver.execute(sql, *merge_params)
-                    driver.commit()
+                    if store_session.owned:
+                        driver.commit()
                 except Exception:
                     with contextlib.suppress(Exception):
-                        driver.rollback()
+                        if store_session.owned:
+                            driver.rollback()
                     raise
             return
         elif dialect in {"bigquery", "oracle", "db2", "mssql", "teradata"}:
             bind_data: bytes | str = data
             insert_data_expr = p2
             update_data_expr = p1
-            with self._config.provide_session() as driver:
+            with self._store_session_sync() as store_session:
+                driver = store_session.session
                 try:
                     count_alias = _count_alias(dialect)
                     check_sql = f"SELECT COUNT(*) AS {count_alias} FROM {self._table_name} WHERE session_id = {p1}"
@@ -780,10 +788,12 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                             WHERE session_id = {p3}
                             """
                             driver.execute(sql, bind_data, expires_at, key)
-                    driver.commit()
+                    if store_session.owned:
+                        driver.commit()
                 except Exception:
                     with contextlib.suppress(Exception):
-                        driver.rollback()
+                        if store_session.owned:
+                            driver.rollback()
                     raise
                 return
         else:
@@ -794,13 +804,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at
             """
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             try:
                 driver.execute(sql, key, data, expires_at)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
             except Exception:
                 with contextlib.suppress(Exception):
-                    driver.rollback()
+                    if store_session.owned:
+                        driver.rollback()
                 raise
 
     def _delete(self, key: str) -> None:
@@ -808,13 +821,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         p1 = self._get_param_placeholder(1)
         sql = f"DELETE FROM {self._table_name} WHERE session_id = {p1}"
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             try:
                 driver.execute(sql, key)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
             except Exception:
                 with contextlib.suppress(Exception):
-                    driver.rollback()
+                    if store_session.owned:
+                        driver.rollback()
                 raise
 
     def _delete_all(self) -> None:
@@ -822,13 +838,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             try:
                 driver.execute(sql)
-                driver.commit()
+                if store_session.owned:
+                    driver.commit()
             except Exception:
                 with contextlib.suppress(Exception):
-                    driver.rollback()
+                    if store_session.owned:
+                        driver.rollback()
                 raise
 
     def _exists(self, key: str) -> bool:
@@ -843,7 +862,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         AND (expires_at IS NULL OR expires_at > {current_ts})
         """
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             return bool(driver.select_one_or_none(sql, key) is not None)
 
     def _expires_in(self, key: str) -> "int | None":
@@ -855,7 +875,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         AND expires_at IS NOT NULL
         """
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             result = driver.select_one_or_none(sql, key)
 
             if result is None:
@@ -891,7 +912,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             count_sql = f"SELECT COUNT(*) AS {count_alias} FROM {self._table_name} WHERE expires_at <= {current_ts}"
             delete_sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts}"
 
-            with self._config.provide_session() as driver:
+            with self._store_session_sync() as store_session:
+                driver = store_session.session
                 try:
                     result = driver.select_one(count_sql)
                     raw_count = _count_value(result, count_alias)
@@ -899,25 +921,30 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
                     if count > 0:
                         driver.execute(delete_sql)
-                        driver.commit()
+                        if store_session.owned:
+                            driver.commit()
                         self._log_delete_expired(count)
                 except Exception:
                     with contextlib.suppress(Exception):
-                        driver.rollback()
+                        if store_session.owned:
+                            driver.rollback()
                     raise
                 else:
                     return count
 
-        with self._config.provide_session() as driver:
+        with self._store_session_sync() as store_session:
+            driver = store_session.session
             try:
                 exec_result = driver.execute(sql)
-                driver.commit()
-                count = exec_result.rows_affected
+                if store_session.owned:
+                    driver.commit()
+                count = int(exec_result.rows_affected)
                 if count > 0:
                     self._log_delete_expired(count)
             except Exception:
                 with contextlib.suppress(Exception):
-                    driver.rollback()
+                    if store_session.owned:
+                        driver.rollback()
                 raise
             else:
                 return count

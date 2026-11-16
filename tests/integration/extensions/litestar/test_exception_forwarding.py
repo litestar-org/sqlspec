@@ -85,8 +85,8 @@ def test_sqlite_autocommit_commit_and_rollback_by_status(tmp_path: Path) -> None
     assert _read_sqlite_rows(db_path) == ["good"]
 
 
-def test_sqlite_manual_commits_clean_and_rolls_back_exceptions(tmp_path: Path) -> None:
-    """Manual mode commits on clean 200 and 400, and rolls back on unhandled exception."""
+def test_sqlite_manual_discards_uncommitted_and_persists_explicit_commit(tmp_path: Path) -> None:
+    """Manual mode discards uncommitted 200/400/exception writes and persists explicit commit()."""
     db_path = tmp_path / "manual.db"
     _setup_sqlite_db(db_path)
 
@@ -99,8 +99,14 @@ def test_sqlite_manual_commits_clean_and_rolls_back_exceptions(tmp_path: Path) -
 
     @get("/ok")
     def ok_route(db_session: NamedDependency[SyncDriverAdapterBase]) -> dict[str, str]:
-        db_session.execute("INSERT INTO items (name) VALUES (?)", ("good",))
+        db_session.execute("INSERT INTO items (name) VALUES (?)", ("uncommitted_ok",))
         return {"status": "ok"}
+
+    @get("/committed")
+    def committed_route(db_session: NamedDependency[SyncDriverAdapterBase]) -> dict[str, str]:
+        db_session.execute("INSERT INTO items (name) VALUES (?)", ("committed",))
+        db_session.commit()
+        return {"status": "committed"}
 
     @get("/bad")
     def bad_route(db_session: NamedDependency[SyncDriverAdapterBase]) -> Response[dict[str, str]]:
@@ -112,17 +118,19 @@ def test_sqlite_manual_commits_clean_and_rolls_back_exceptions(tmp_path: Path) -
         db_session.execute("INSERT INTO items (name) VALUES (?)", ("ugly",))
         raise RuntimeError("failed in handler")
 
-    app = Litestar(route_handlers=[ok_route, bad_route, raise_route], plugins=[plugin], debug=True)
+    app = Litestar(route_handlers=[ok_route, committed_route, bad_route, raise_route], plugins=[plugin], debug=True)
 
     with TestClient(app=app, raise_server_exceptions=False) as client:
         res_ok = client.get("/ok")
+        res_committed = client.get("/committed")
         res_bad = client.get("/bad")
         res_raise = client.get("/raise")
 
     assert res_ok.status_code == 200
+    assert res_committed.status_code == 200
     assert res_bad.status_code == 400
     assert res_raise.status_code == 500
-    assert _read_sqlite_rows(db_path) == ["good", "bad"]
+    assert _read_sqlite_rows(db_path) == ["committed"]
 
 
 def test_sqlite_extra_commit_statuses_persists_row(tmp_path: Path) -> None:
@@ -167,7 +175,7 @@ def test_sqlite_on_demand_session_rolls_back_on_exception(tmp_path: Path) -> Non
     @get("/raise")
     def raise_route(request: Request) -> None:
         p: SQLSpecPlugin = request.app.state.sqlspec
-        session = p.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        session = p.provide_db_session_sync("db_connection", request.app.state, request.scope)
         session.execute("INSERT INTO items (name) VALUES (?)", ("on_demand_fail",))
         raise RuntimeError("on demand error")
 
@@ -211,6 +219,7 @@ def test_psycopg_injected_connection_rolls_back_on_raise(postgres_service: "Post
     @get("/ok")
     async def ok_route(db_connection: NamedDependency[Any]) -> dict[str, str]:
         await db_connection.execute("INSERT INTO litestar_psycopg_items (name) VALUES (%s)", ("healthy",))
+        await db_connection.commit()
         return {"status": "ok"}
 
     app = Litestar(route_handlers=[raise_route, ok_route], plugins=[plugin], debug=True)
@@ -230,8 +239,10 @@ def test_psycopg_injected_connection_rolls_back_on_raise(postgres_service: "Post
     assert rows == ["healthy"]
 
 
-def test_psycopg_injected_connection_clean_return_commits(postgres_service: "PostgresService") -> None:
-    """Psycopg injected connection in manual mode commits uncommitted work on clean return."""
+def test_psycopg_injected_connection_manual_rolls_back_uncommitted_and_persists_commit(
+    postgres_service: "PostgresService",
+) -> None:
+    """Psycopg injected connection in manual mode discards uncommitted writes and keeps explicit commits."""
     pytest.importorskip("psycopg")
     pytest.importorskip("psycopg_pool")
     from sqlspec.adapters.psycopg import PsycopgAsyncConfig
@@ -253,24 +264,32 @@ def test_psycopg_injected_connection_clean_return_commits(postgres_service: "Pos
     spec.add_config(config)
     plugin = SQLSpecPlugin(sqlspec=spec)
 
-    @get("/clean")
-    async def clean_route(db_connection: NamedDependency[Any]) -> dict[str, str]:
-        await db_connection.execute("INSERT INTO litestar_psycopg_clean (name) VALUES (%s)", ("clean_work",))
-        return {"status": "clean"}
+    @get("/uncommitted")
+    async def uncommitted_route(db_connection: NamedDependency[Any]) -> dict[str, str]:
+        await db_connection.execute("INSERT INTO litestar_psycopg_clean (name) VALUES (%s)", ("uncommitted_work",))
+        return {"status": "uncommitted"}
 
-    app = Litestar(route_handlers=[clean_route], plugins=[plugin], debug=True)
+    @get("/committed")
+    async def committed_route(db_connection: NamedDependency[Any]) -> dict[str, str]:
+        await db_connection.execute("INSERT INTO litestar_psycopg_clean (name) VALUES (%s)", ("committed_work",))
+        await db_connection.commit()
+        return {"status": "committed"}
+
+    app = Litestar(route_handlers=[uncommitted_route, committed_route], plugins=[plugin], debug=True)
 
     with TestClient(app=app, raise_server_exceptions=False) as client:
-        res = client.get("/clean")
+        res_uncommitted = client.get("/uncommitted")
+        res_committed = client.get("/committed")
 
-    assert res.status_code == 200
+    assert res_uncommitted.status_code == 200
+    assert res_committed.status_code == 200
 
     with psycopg.connect(conninfo, autocommit=True) as p_conn:
         with p_conn.cursor() as cur:
             cur.execute("SELECT name FROM litestar_psycopg_clean ORDER BY name;")
             rows = [row[0] for row in cur.fetchall()]
 
-    assert rows == ["clean_work"]
+    assert rows == ["committed_work"]
 
 
 def test_litestar_autocommit_rolls_back_when_exception_handler_returns_200(tmp_path: Path) -> None:
@@ -300,7 +319,7 @@ def test_litestar_autocommit_rolls_back_when_exception_handler_returns_200(tmp_p
     @get("/ondemand-fail")
     def ondemand_fail(request: Request[Any, Any, Any]) -> dict[str, str]:
         p: SQLSpecPlugin = request.app.state.sqlspec
-        session = p.provide_request_session_sync("db_connection", request.app.state, request.scope)
+        session = p.provide_db_session_sync("db_connection", request.app.state, request.scope)
         session.execute("INSERT INTO items (name) VALUES (?)", ("ondemand_partial",))
         raise FallbackError("abort ondemand")
 
@@ -358,6 +377,7 @@ def test_litestar_pre_response_cancelled_error_after_handover_releases_pool(tmp_
     @get("/healthy")
     async def healthy_route(db_session: NamedDependency[AsyncDriverAdapterBase]) -> dict[str, str]:
         await db_session.execute("INSERT INTO items (name) VALUES (:name)", name="healthy_write")
+        await db_session.commit()
         return {"status": "ok"}
 
     app = Litestar(route_handlers=[abort_route, healthy_route], plugins=[plugin])
@@ -395,7 +415,7 @@ def test_litestar_streaming_post_response_start_on_demand_session_releases_pool(
         async def iterator() -> AsyncGenerator[bytes, None]:
             yield b"chunk-1:"
             p: SQLSpecPlugin = request.app.state.sqlspec
-            session = await p.provide_request_session_async("db_connection", request.app.state, request.scope)
+            session = await p.provide_db_session_async("db_connection", request.app.state, request.scope)
             await session.execute("INSERT INTO items (name) VALUES (:name)", name="stream_row")
             yield b"chunk-2"
 
@@ -404,7 +424,7 @@ def test_litestar_streaming_post_response_start_on_demand_session_releases_pool(
     @get("/verify")
     async def verify_route(request: Request[Any, Any, Any]) -> dict[str, list[str]]:
         p: SQLSpecPlugin = request.app.state.sqlspec
-        session = await p.provide_request_session_async("db_connection", request.app.state, request.scope)
+        session = await p.provide_db_session_async("db_connection", request.app.state, request.scope)
         result = await session.execute("SELECT name FROM items ORDER BY rowid")
         return {"rows": [row["name"] for row in result.all()]}
 

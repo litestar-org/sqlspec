@@ -277,7 +277,7 @@ class AsyncTenantLease:
         if self._state is not None:
             msg = "Tenant lease already owns a connection"
             raise TenantContextError(msg)
-        payload = await TenantContext.arequire(self.tenant_key)
+        payload = await TenantContext.require_async(self.tenant_key)
         connection = await self._acquire()
         try:
             state = (

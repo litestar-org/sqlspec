@@ -39,7 +39,8 @@ def cursor_client(tmp_path: Path) -> Generator[TestClient, None, None]:
     plugin = SQLSpecPlugin(spec, app=app)
     filters_dependency = plugin.provide_filters({
         "pagination_type": "cursor",
-        "cursor_keys": [CursorKey("id")],
+        "pagination_cursor_keys": [CursorKey("id")],
+        "pagination_cursor_secret": "integration-test-secret",
         "pagination_size": 2,
     })
 

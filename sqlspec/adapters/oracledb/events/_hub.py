@@ -15,12 +15,13 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
 from sqlspec.exceptions import EventChannelError
+from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
-__all__ = ("OracleAsyncAQHub", "OracleSyncAQHub")
+__all__ = ("OracleAsyncAQHub", "OracleSyncAQHub", "format_aq_correlation")
 
 logger = get_logger("sqlspec.adapters.oracledb.events.hub")
 
@@ -79,7 +80,14 @@ class OracleSyncAQHub:
             if driver is None:
                 return None
             wait_seconds = _resolve_wait_seconds(poll_interval, self._wait_ceiling)
-            _apply_deq_options(queue, self._visibility, self._default_visibility, wait_seconds)
+            _apply_deq_options(
+                queue,
+                self._visibility,
+                self._default_visibility,
+                wait_seconds,
+                format_aq_correlation(channel, self._backend_name),
+                allow_condition=self._backend_name != "txeventq",
+            )
             try:
                 message = queue.deqone()
             except Exception as error:
@@ -213,12 +221,23 @@ class OracleAsyncAQHub:
             if driver is None:
                 return None
             wait_seconds = _resolve_wait_seconds(poll_interval, self._wait_ceiling)
-            _apply_deq_options(queue, self._visibility, self._default_visibility, wait_seconds)
+            _apply_deq_options(
+                queue,
+                self._visibility,
+                self._default_visibility,
+                wait_seconds,
+                format_aq_correlation(channel, self._backend_name),
+                allow_condition=self._backend_name != "txeventq",
+            )
+            dequeue_error: Exception | None = None
+            message: Any = None
             try:
                 message = await queue.deqone()
             except Exception as error:
-                if not isinstance(error, OracleDatabaseError):
-                    raise
+                dequeue_error = error
+            if dequeue_error is not None:
+                if not isinstance(dequeue_error, OracleDatabaseError):
+                    raise dequeue_error
                 log_with_context(
                     logger,
                     logging.WARNING,
@@ -226,7 +245,7 @@ class OracleAsyncAQHub:
                     adapter_name="oracledb",
                     backend_name=self._backend_name,
                     mode="async",
-                    error_type=type(error).__name__,
+                    error_type=type(dequeue_error).__name__,
                     status="failed",
                 )
                 with contextlib.suppress(Exception):
@@ -308,12 +327,51 @@ class OracleAsyncAQHub:
             await session_cm.__aexit__(None, None, None)
 
 
+def format_aq_correlation(channel: str, backend_name: str = "aq") -> str:
+    """Return a wildcard-safe Oracle correlation identifier for ``channel``.
+
+    Classic AQ supports exact ``corrid`` predicates via ``deqoptions.condition``,
+    so normalized channel names pass through verbatim. TxEventQ rejects
+    ``deqoptions.condition`` and evaluates ``deqoptions.correlation`` with SQL
+    ``LIKE`` semantics, so translating ``_`` to ``-`` preserves an injective,
+    wildcard-free correlation key across valid normalized channels.
+    """
+    normalized = normalize_event_channel_name(channel)
+    if backend_name == "txeventq":
+        return normalized.replace("_", "-")
+    return normalized
+
+
 def _apply_deq_options(
-    queue: Any, visibility: "int | None", default_visibility: "int | None", wait_seconds: float
+    queue: Any,
+    visibility: "int | None",
+    default_visibility: "int | None",
+    wait_seconds: float,
+    correlation: str,
+    *,
+    allow_condition: bool = True,
 ) -> None:
-    """Configure a queue's dequeue options in place (python-oracledb 4.x API)."""
+    """Configure a queue's dequeue options in place (python-oracledb 4.x API).
+
+    Oracle AQ ``deqoptions.correlation`` interprets ``_`` and ``%`` as SQL ``LIKE``
+    wildcards, so classic AQ channel names containing either character filter on
+    exact ``corrid`` equality via ``deqoptions.condition`` instead. Transactional
+    Event Queues (``txeventq``) reject SQL ``condition`` filters and must reject
+    raw ``_`` or ``%`` patterns rather than silently matching wildcards.
+    """
     options = queue.deqoptions
     options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
+    if "_" in correlation or "%" in correlation:
+        if not allow_condition:
+            msg = (
+                f"TxEventQ channel name {correlation!r} cannot contain '_' or '%' because "
+                "Oracle deqoptions.correlation interprets them as LIKE wildcards"
+            )
+            raise EventChannelError(msg)
+        escaped = correlation.replace("'", "''")
+        options.condition = f"corrid = '{escaped}'"
+    else:
+        options.correlation = correlation
     if visibility is not None:
         options.visibility = visibility
     elif default_visibility is not None:

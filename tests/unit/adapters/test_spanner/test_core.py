@@ -463,8 +463,8 @@ def test_chunk_mutation_rows_respects_mutation_limit() -> None:
     assert [len(c) for c in chunks] == [8000, 1]
 
 
-def test_litestar_store_uses_read_session_and_maps_transaction_errors() -> None:
-    """Verify SpannerSyncStore uses provide_read_session, sharded exists, and maps write errors."""
+def test_litestar_store_uses_replica_session_and_maps_transaction_errors() -> None:
+    """Verify SpannerSyncStore uses provide_replica_session, sharded exists, and maps write errors."""
     read_calls = 0
     now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     encoded_val = base64.b64encode(b"val").decode("ascii")
@@ -476,12 +476,12 @@ def test_litestar_store_uses_read_session_and_maps_transaction_errors() -> None:
     config = MagicMock()
     config.extension_config = {"litestar": {"shard_count": 4}}
 
-    def provide_read_session() -> Any:
+    def provide_replica_session() -> Any:
         nonlocal read_calls
         read_calls += 1
         return nullcontext(_ReadDriver())
 
-    config.provide_read_session = provide_read_session
+    config.provide_replica_session = provide_replica_session
     database = MagicMock()
     database.run_in_transaction.side_effect = cast("Any", api_exceptions.PermissionDenied)("denied")
     config.get_database.return_value = database
@@ -611,9 +611,64 @@ def test_spanner_config_rejects_min_sessions_and_closes_client_on_close_pool() -
     )
     config._client = cast("Any", fake_client)
     config.connection_instance = cast("Any", SimpleNamespace(clear=lambda: closed.append("pool")))
-    assert callable(config.provide_read_session)
+    assert callable(config.provide_replica_session)
     assert callable(config.provide_write_session)
     config.close_pool()
 
     assert closed == ["pool", "client"]
     assert config._client is None
+
+
+def test_snapshot_bounds_validate_single_use_and_default_coercion() -> None:
+    from datetime import timedelta
+
+    from sqlspec.adapters.spanner.core import resolve_snapshot_kwargs
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    assert resolve_snapshot_kwargs(default_staleness={"max_staleness": 15}) == {
+        "max_staleness": timedelta(seconds=15),
+        "multi_use": False,
+    }
+    assert resolve_snapshot_kwargs(exact_staleness=timedelta(seconds=4)) == {
+        "exact_staleness": timedelta(seconds=4),
+        "multi_use": True,
+    }
+    with pytest.raises(ImproperConfigurationError):
+        resolve_snapshot_kwargs(exact_staleness=timedelta(seconds=1), max_staleness=timedelta(seconds=2))
+    with pytest.raises(ImproperConfigurationError):
+        resolve_snapshot_kwargs(max_staleness=timedelta(seconds=2), multi_use=True)
+    with pytest.raises(ImproperConfigurationError):
+        resolve_snapshot_kwargs(transaction=True, exact_staleness=timedelta(seconds=1))
+
+
+@pytest.mark.parametrize(
+    "defaults",
+    [
+        {"max_staleness": -1},
+        {"max_staleness": float("nan")},
+        {"max_staleness": float("inf")},
+        {"read_timestamp": "invalid"},
+        {"read_timestamp": "2026-11-13T10:00:00"},
+        {"max_staleness": 1, "read_timestamp": "2026-11-13T10:00:00Z"},
+        {"max_staleness": 1, "multi_use": True},
+        {"multi_use": "yes"},
+        {"unknown": 1},
+    ],
+)
+def test_invalid_snapshot_defaults_fail_before_native_acquisition(defaults: Any) -> None:
+    from sqlspec.adapters.spanner.core import resolve_snapshot_kwargs
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    with pytest.raises(ImproperConfigurationError):
+        resolve_snapshot_kwargs(default_staleness=defaults)
+
+
+def test_snapshot_default_timestamp_is_timezone_aware() -> None:
+    from datetime import datetime
+
+    from sqlspec.adapters.spanner.core import resolve_snapshot_kwargs
+
+    assert resolve_snapshot_kwargs(default_staleness={"read_timestamp": "2026-11-13T10:00:00Z"}) == {
+        "read_timestamp": datetime(2026, 11, 13, 10, tzinfo=UTC),
+        "multi_use": True,
+    }

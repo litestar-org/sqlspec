@@ -27,9 +27,9 @@ def test_teradata_stage_sql() -> None:
     assert build_drop_stage_table_sql("teradata", "stage") == "DROP TABLE stage"
     sql = build_stage_merge_sql("teradata", "orders", "stage", ["id", "total"], conflict_keys=["id"])
     assert sql == (
-        "UPDATE tgt FROM orders tgt, stage src SET total = src.total WHERE tgt.id = src.id; "
-        "INSERT INTO orders (id, total) SELECT stg.id, stg.total FROM stage stg "
-        "WHERE NOT EXISTS (SELECT 1 FROM orders tgt WHERE tgt.id = stg.id)"
+        'UPDATE tgt FROM orders tgt, stage src SET "total" = src."total" WHERE tgt."id" = src."id"; '
+        'INSERT INTO orders ("id", "total") SELECT stg."id", stg."total" FROM stage stg '
+        'WHERE NOT EXISTS (SELECT 1 FROM orders tgt WHERE tgt."id" = stg."id")'
     )
     qualified = build_stage_merge_sql(
         "teradata",
@@ -41,18 +41,18 @@ def test_teradata_stage_sql() -> None:
     )
     assert qualified.startswith(
         'UPDATE tgt FROM "analytics"."orders" tgt, "analytics"."stage" src '
-        "SET total = CAST(src.total AS DECIMAL(12, 2)) WHERE tgt.id = src.id; "
+        'SET "total" = CAST(src."total" AS DECIMAL(12, 2)) WHERE tgt."id" = src."id"; '
     )
     assert build_stage_merge_sql("teradata", "orders", "stage", ["id"], conflict_keys=["id"]) == (
-        "INSERT INTO orders (id) SELECT stg.id FROM stage stg "
-        "WHERE NOT EXISTS (SELECT 1 FROM orders tgt WHERE tgt.id = stg.id)"
+        'INSERT INTO orders ("id") SELECT stg."id" FROM stage stg '
+        'WHERE NOT EXISTS (SELECT 1 FROM orders tgt WHERE tgt."id" = stg."id")'
     )
 
 
 def test_teradata_secondary_indexes() -> None:
     metadata = {"name": 'idx"name', "columns": ["created_at DESC", "status ASC"], "is_unique": True}
     assert build_create_index_sql("teradata", metadata, "orders", schema="analytics") == (
-        'CREATE UNIQUE INDEX "idx""name" (created_at, status) ON "analytics"."orders"'
+        'CREATE UNIQUE INDEX "idx""name" ("created_at", "status") ON "analytics"."orders"'
     )
     assert build_drop_index_sql("teradata", metadata, "orders", schema="analytics") == (
         'DROP INDEX "idx""name" ON "analytics"."orders"'

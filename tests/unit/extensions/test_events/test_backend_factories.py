@@ -1,12 +1,16 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event backend factories."""
 
+import json
 from datetime import UTC
 from inspect import isawaitable
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from sqlspec.exceptions import EventChannelError
+from sqlspec.extensions.events import decode_notify_payload
 
 
 def test_asyncpg_factory_notify_backend() -> None:
@@ -303,11 +307,12 @@ def test_oracle_aq_visibility_reaches_dequeue_options(is_async: bool, setting: s
     config = OracleAsyncConfig() if is_async else OracleSyncConfig()
     backend = create_event_backend(config, "aq", {"aq_visibility": setting})
     assert isinstance(backend, (OracleAsyncAQEventBackend, OracleSyncAQEventBackend))
-    queue = SimpleNamespace(deqoptions=SimpleNamespace(visibility=2, wait=0))
+    queue = SimpleNamespace(deqoptions=SimpleNamespace(visibility=2, wait=0, correlation=None))
 
-    _apply_deq_options(queue, backend._visibility, None, 1)
+    _apply_deq_options(queue, backend._visibility, None, 1, "orders")
 
     assert queue.deqoptions.visibility == expected
+    assert queue.deqoptions.correlation == "orders"
 
 
 def test_oracle_factory_txeventq_backend() -> None:
@@ -619,6 +624,20 @@ def test_shared_parse_event_timestamp() -> None:
     assert message.payload == {"action": "refresh"}
 
 
+def test_decode_notify_payload_rejects_invalid_json() -> None:
+    """Malformed JSON notification payloads raise EventChannelError."""
+    with pytest.raises(EventChannelError, match="Malformed event notification payload"):
+        decode_notify_payload("alerts", "{not-valid-json")
+
+
+@pytest.mark.parametrize("bad_event_id", [123, None, "", ["evt"], {"id": "1"}])
+def test_decode_notify_payload_rejects_non_string_event_id(bad_event_id: Any) -> None:
+    """Notification payloads with non-string or empty event_id raise EventChannelError."""
+    payload = json.dumps({"event_id": bad_event_id, "payload": {"a": 1}})
+    with pytest.raises(EventChannelError, match="event_id must be a non-empty string"):
+        decode_notify_payload("alerts", payload)
+
+
 def test_oracle_backend_build_envelope() -> None:
     """Oracle AQ backend builds correct message envelope."""
     pytest.importorskip("oracledb")
@@ -868,3 +887,68 @@ def test_all_postgres_backends_have_shutdown() -> None:
 
     for backend_class in backend_classes:
         assert hasattr(backend_class, "shutdown"), f"{backend_class.__name__} missing shutdown"
+
+
+class _RecordingRuntime:
+    def __init__(self) -> None:
+        self.metrics: list[str] = []
+
+    def increment_metric(self, name: str, value: float = 1.0) -> None:
+        del value
+        self.metrics.append(name)
+
+
+class _ScriptedQueue:
+    def __init__(self, results: "list[bool]") -> None:
+        self._results = results
+
+    def ack(self, event_id: str) -> Any:
+        del event_id
+        return self._result()
+
+    def nack(self, event_id: str) -> Any:
+        del event_id
+        return self._result()
+
+    def _result(self) -> bool:
+        return self._results.pop(0)
+
+
+class _AsyncScriptedQueue(_ScriptedQueue):
+    async def ack(self, event_id: str) -> bool:
+        return bool(super().ack(event_id))
+
+    async def nack(self, event_id: str) -> bool:
+        return bool(super().nack(event_id))
+
+
+@pytest.mark.parametrize("operation", ["ack", "nack"])
+@pytest.mark.parametrize(
+    "backend_path",
+    [
+        "sqlspec.adapters.asyncpg.events.backend:AsyncpgHybridEventsBackend",
+        "sqlspec.adapters.psqlpy.events.backend:PsqlpyHybridEventsBackend",
+        "sqlspec.adapters.psycopg.events.backend:PsycopgAsyncHybridEventsBackend",
+        "sqlspec.adapters.psycopg.events.backend:PsycopgSyncHybridEventsBackend",
+    ],
+)
+async def test_backend_counts_only_owned_settlements(backend_path: str, operation: str) -> None:
+    """Table-queue backends count ack and nack only when the queue owned the lease."""
+    pytest.importorskip("asyncpg")
+    pytest.importorskip("psycopg")
+    pytest.importorskip("psqlpy")
+    import importlib
+
+    module_name, class_name = backend_path.split(":")
+    backend_class = getattr(importlib.import_module(module_name), class_name)
+    backend = object.__new__(backend_class)
+    runtime = _RecordingRuntime()
+    backend._runtime = runtime
+    backend._queue = (_AsyncScriptedQueue if backend_class.supports_async else _ScriptedQueue)([False, True])
+
+    for _ in range(2):
+        result = getattr(backend, operation)("event-1")
+        if isawaitable(result):
+            await result
+
+    assert runtime.metrics == [f"events.{operation}.unowned", f"events.{operation}"]

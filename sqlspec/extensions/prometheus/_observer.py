@@ -10,7 +10,19 @@ from sqlspec.utils.module_loader import ensure_prometheus
 __all__ = ("PrometheusStatementObserver", "enable_metrics")
 
 
-_FORBIDDEN_HIGH_CARDINALITY_LABELS = frozenset({"sql", "parameters", "correlation_id", "duration_s"})
+_ALLOWED_LABEL_NAMES = frozenset({
+    "adapter",
+    "bind_key",
+    "db_system",
+    "driver",
+    "execution_mode",
+    "is_many",
+    "is_script",
+    "operation",
+    "prepared_statement",
+    "storage_backend",
+    "transaction_state",
+})
 
 
 class PrometheusStatementObserver:
@@ -28,10 +40,10 @@ class PrometheusStatementObserver:
         duration_buckets: tuple[float, ...] | None = None,
     ) -> None:
         resolved_labels = tuple(label_names)
-        forbidden = _FORBIDDEN_HIGH_CARDINALITY_LABELS.intersection(resolved_labels)
-        if forbidden:
-            forbidden_names = ", ".join(sorted(forbidden))
-            msg = f"High-cardinality Prometheus label names are not allowed: {forbidden_names}"
+        disallowed = [name for name in resolved_labels if name not in _ALLOWED_LABEL_NAMES]
+        if disallowed:
+            disallowed_names = ", ".join(sorted(set(disallowed)))
+            msg = f"High-cardinality Prometheus label names are not allowed: {disallowed_names}"
             raise ValueError(msg)
         self._label_names = resolved_labels
         self._counters = Counter(

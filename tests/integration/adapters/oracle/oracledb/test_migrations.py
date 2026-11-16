@@ -600,7 +600,8 @@ def test_oracledb_sync_failed_migration_restores_current_schema(
         commands.init(str(migration_dir), package=True)
         _write_failing_migration(migration_dir, table_name)
         capsys.readouterr()
-        commands.upgrade()
+        with pytest.raises(MigrationError, match="ORA-00942"):
+            commands.upgrade()
 
         assert "ORA-00942" in capsys.readouterr().out
         with config.provide_session() as driver:
@@ -635,7 +636,8 @@ async def test_oracledb_async_failed_migration_restores_current_schema(
         await commands.init(str(migration_dir), package=True)
         _write_failing_migration(migration_dir, table_name)
         capsys.readouterr()
-        await commands.upgrade()
+        with pytest.raises(MigrationError, match="ORA-00942"):
+            await commands.upgrade()
 
         assert "ORA-00942" in capsys.readouterr().out
         async with config.provide_session() as driver:

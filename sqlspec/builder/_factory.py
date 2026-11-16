@@ -5,6 +5,7 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
+import math
 import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, Union, cast, final
@@ -55,6 +56,7 @@ from sqlspec.builder._parsing_utils import (
     _normalize_dialect,
     _normalize_order_by,
     _normalize_partition_by,
+    _parse_table_reference,
     _resolve_dialect,
     _rollup_expression,
     extract_expression,
@@ -90,6 +92,7 @@ MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
 _COLUMN_NAMESPACE: Final[ColumnNamespace] = ColumnNamespace()
 _FIRST_WORD_RE: Final["re.Pattern[str]"] = re.compile(r"\w+")
+_COPY_OPTION_KEY_PATTERN: Final["re.Pattern[str]"] = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 SQL_STARTERS = {
     "SELECT",
     "INSERT",
@@ -1286,9 +1289,10 @@ class SQLFactory:
             ROUND expression.
         """
         col_expr = extract_expression(column)
-        if decimals == 0:
+        coerced_decimals = _coerce_numeric_argument(decimals, name="decimals")
+        if coerced_decimals == 0:
             return MathExpression(exp.Round(this=col_expr))
-        return MathExpression(exp.Round(this=col_expr, decimals=exp.Literal.number(decimals)))
+        return MathExpression(exp.Round(this=col_expr, decimals=exp.Literal.number(coerced_decimals)))
 
     @staticmethod
     def to_literal(value: Any) -> FunctionExpression:
@@ -1441,20 +1445,35 @@ class SQLFactory:
 
         Returns:
             INSERT expression with placeholders for bulk operations
+
+        Raises:
+            SQLBuilderError: If ``column_count``, ``table_name``, or ``placeholder_style`` is invalid.
         """
+        if isinstance(column_count, bool) or not isinstance(column_count, int) or column_count < 1:
+            msg = f"column_count must be a positive integer, got {column_count!r}"
+            raise SQLBuilderError(msg)
+        table_expr = _parse_table_reference(table_name)
+        if table_expr.args.get("alias") is not None:
+            msg = f"Invalid table reference {table_name!r}: bulk_insert does not support table aliases."
+            raise SQLBuilderError(msg)
+        if not isinstance(placeholder_style, str):
+            msg = f"Unsupported placeholder_style for bulk_insert: {placeholder_style!r}"
+            raise SQLBuilderError(msg)
         placeholders: list[exp.Expr]
         if placeholder_style == "?":
             placeholders = [exp.Placeholder() for _ in range(column_count)]
-        elif placeholder_style[:1] in {":", "$"} and placeholder_style[1:].isdigit():
+        elif placeholder_style == "%s":
+            placeholders = [exp.Var(this="%s") for _ in range(column_count)]
+        elif (
+            placeholder_style[:1] in {":", "$"} and placeholder_style[1:].isdigit() and int(placeholder_style[1:]) >= 1
+        ):
             prefix = placeholder_style[0]
             placeholders = [exp.Var(this=f"{prefix}{index}") for index in range(1, column_count + 1)]
         else:
-            placeholders = [exp.Var(this=placeholder_style) for _ in range(column_count)]
+            msg = f"Unsupported placeholder_style for bulk_insert: {placeholder_style!r}"
+            raise SQLBuilderError(msg)
         return FunctionExpression(
-            exp.Insert(
-                this=exp.Table(this=exp.to_identifier(table_name)),
-                expression=exp.Values(expressions=[exp.Tuple(expressions=placeholders)]),
-            )
+            exp.Insert(this=table_expr, expression=exp.Values(expressions=[exp.Tuple(expressions=placeholders)]))
         )
 
     def truncate(self, table_name: str, dialect: DialectType = None) -> "Truncate":
@@ -1543,7 +1562,8 @@ class SQLFactory:
             LAG window function expression.
         """
         col_expr = extract_expression(column)
-        func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
+        coerced_offset = _coerce_numeric_argument(offset, name="offset")
+        func_args: list[exp.Expr] = [col_expr, exp.Literal.number(coerced_offset)]
         if default is not None:
             func_args.append(exp.convert(default))
         return self._create_window_function("LAG", func_args, partition_by, order_by)
@@ -1571,7 +1591,8 @@ class SQLFactory:
             LEAD window function expression.
         """
         col_expr = extract_expression(column)
-        func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
+        coerced_offset = _coerce_numeric_argument(offset, name="offset")
+        func_args: list[exp.Expr] = [col_expr, exp.Literal.number(coerced_offset)]
         if default is not None:
             func_args.append(exp.convert(default))
         return self._create_window_function("LEAD", func_args, partition_by, order_by)
@@ -1712,6 +1733,43 @@ class SQLFactory:
         return FunctionExpression(exp.Window(this=func_expr, **over_args))
 
 
+def _coerce_numeric_argument(value: Any, *, name: str) -> int | float:
+    """Validate and coerce a numeric builder argument to int or finite float.
+
+    Raises:
+        SQLBuilderError: If ``value`` is a bool, non-numeric, or non-finite.
+    """
+    if isinstance(value, bool):
+        msg = f"{name} must be a numeric value, got bool"
+        raise SQLBuilderError(msg)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            msg = f"{name} must be a finite numeric value, got {value!r}"
+            raise SQLBuilderError(msg)
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            msg = f"{name} must be a numeric value, got {value!r}"
+            raise SQLBuilderError(msg)
+        try:
+            return int(stripped)
+        except ValueError:
+            try:
+                parsed = float(stripped)
+            except ValueError as exc:
+                msg = f"{name} must be a numeric value, got {value!r}"
+                raise SQLBuilderError(msg) from exc
+            if not math.isfinite(parsed):
+                msg = f"{name} must be a finite numeric value, got {value!r}"
+                raise SQLBuilderError(msg)
+            return parsed
+    msg = f"{name} must be a numeric value, got {type(value).__name__}"
+    raise SQLBuilderError(msg)
+
+
 def _fingerprint_sql(sql: str) -> str:
     digest = hashlib.sha256(sql.encode("utf-8", errors="replace")).hexdigest()
     return digest[:12]
@@ -1729,7 +1787,7 @@ def _to_copy_schema(table: str, columns: "Sequence[str] | None") -> exp.Expr:
     base = exp.table_(table)
     if not columns:
         return base
-    column_nodes = [exp.column(column_name) for column_name in columns]
+    column_nodes = [exp.column(column_name, copy=False) for column_name in columns]
     return exp.Schema(this=base, expressions=column_nodes)
 
 
@@ -1746,13 +1804,21 @@ def _build_copy_expression(
     if options:
         params: list[exp.CopyParameter] = []
         for key, value in options.items():
-            identifier = exp.Var(this=str(key).upper())
+            if not isinstance(key, str) or not _COPY_OPTION_KEY_PATTERN.fullmatch(key):
+                msg = f"Invalid COPY option key: {key!r}"
+                raise SQLBuilderError(msg)
+            identifier = exp.Var(this=key.upper())
             value_expression: exp.Expr
             if isinstance(value, bool):
                 value_expression = exp.Boolean(this=value)
             elif value is None:
                 value_expression = exp.null()
-            elif isinstance(value, (int, float)):
+            elif isinstance(value, int):
+                value_expression = exp.Literal.number(value)
+            elif isinstance(value, float):
+                if not math.isfinite(value):
+                    msg = f"COPY option {key!r} numeric value must be finite, got {value!r}"
+                    raise SQLBuilderError(msg)
                 value_expression = exp.Literal.number(value)
             elif isinstance(value, (list, tuple)):
                 elements = [exp.Literal.string(str(item)) for item in value]

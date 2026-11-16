@@ -56,7 +56,7 @@ from sqlspec.driver import (
     SyncDriverAdapterBase,
     SyncRowStream,
 )
-from sqlspec.exceptions import SQLConversionError
+from sqlspec.exceptions import ReadOnlyTransactionError, SQLConversionError
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
@@ -90,13 +90,13 @@ _pending_spanner_options: contextvars.ContextVar[SpannerExecuteOptions | None] =
 _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
     "Cannot execute DML in a read-only Snapshot context. "
     "SpannerSyncConfig.provide_session() opens a write-capable Transaction by default; "
-    "the current session must have been opened via SpannerSyncConfig.provide_read_session()."
+    "the current session must have been opened via SpannerSyncConfig.provide_replica_session()."
 )
 
 _READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE = (
     "Cannot execute DML in a read-only Snapshot context. "
     "SpannerAsyncConfig.provide_session() opens a write-capable Transaction by default; "
-    "the current session must have been opened via SpannerAsyncConfig.provide_read_session()."
+    "the current session must have been opened via SpannerAsyncConfig.provide_replica_session()."
 )
 
 _READ_ONLY_SNAPSHOT_DDL_ERROR_MESSAGE = (
@@ -186,6 +186,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             execute_kwargs = self._execute_kwargs()
             execute_ddl_sync(self._resolve_database(), [sql], timeout=execute_kwargs.get("timeout"))
             return self.create_execution_result(cursor, rowcount_override=0)
+        if statement.is_modifying_operation() and not supports_write(cursor):
+            raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
         params = cast("dict[str, Any] | None", params)
         param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
@@ -221,7 +223,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
-        raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+        raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         if not statement.returns_rows():
@@ -237,6 +239,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
 
     def dispatch_execute_many(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
+        if not supports_write(cursor):
+            msg = "execute_many cannot modify a read-only Snapshot"
+            raise ReadOnlyTransactionError(msg)
         if not supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
@@ -276,21 +281,24 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
-        sql, params = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is None:
+            sql, params = self._compiled_sql(statement, self.statement_config)
+            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+            entries = [(stmt, params) for stmt in statements]
+        else:
+            entries = [self._compiled_sql(piece, piece.statement_config) for piece in bound_statements]
+            statements = [entry[0] for entry in entries]
         is_transaction = supports_write(cursor)
         reader = cast("_SpannerReadProtocol", cursor)
 
         count = 0
-        script_params = cast("dict[str, Any] | None", params)
-        param_types_map = self._infer_param_types(script_params)
-        coerced_params = self._coerce_params(script_params)
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
         ddl_timeout = write_execute_kwargs.get("timeout")
         dialect_str = str(self.dialect) if self.dialect else "spanner"
         pending_ddl: list[str] = []
-        for index, stmt in enumerate(statements):
+        for index, (stmt, params) in enumerate(entries):
             if is_ddl_statement(stmt):
                 if not is_transaction:
                     raise SQLConversionError(_READ_ONLY_SNAPSHOT_DDL_ERROR_MESSAGE)
@@ -303,9 +311,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 pending_ddl = []
                 cursor = self.connection
                 reader = cast("_SpannerReadProtocol", cursor)
+            script_params = cast("dict[str, Any] | None", params)
+            param_types_map = self._infer_param_types(script_params)
+            coerced_params = self._coerce_params(script_params)
             is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
-                raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+                raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
                 statement_kwargs = write_execute_kwargs
@@ -706,7 +717,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def write_delete(self, table: str, keyset: Any) -> None:
         """Buffer a Spanner DELETE mutation on the active transaction or batch."""
         if not supports_write(self.connection):
-            raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+            raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
         writer = cast("_SpannerWriteProtocol", self.connection)
         exc_handler = self.handle_database_exceptions()
         with exc_handler:
@@ -721,7 +732,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self, table: str, columns: "Sequence[str]", values: "Sequence[Sequence[Any]]", *, method_name: str
     ) -> None:
         if not supports_write(self.connection):
-            raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+            raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
         column_list = list(columns)
         records = [tuple(row) for row in values]
         if not records:
@@ -857,6 +868,8 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             execute_kwargs = self._execute_kwargs()
             await execute_ddl_async(self._resolve_database(), [sql], timeout=execute_kwargs.get("timeout"))
             return self.create_execution_result(cursor, rowcount_override=0)
+        if statement.is_modifying_operation() and not supports_write(cursor):
+            raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
         params = cast("dict[str, Any] | None", params)
         param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
@@ -896,7 +909,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             )
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
-        raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
+        raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
         if not statement.returns_rows():
@@ -912,6 +925,9 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         )
 
     async def dispatch_execute_many(self, cursor: "SpannerAsyncConnection", statement: "SQL") -> ExecutionResult:
+        if not supports_write(cursor):
+            msg = "execute_many cannot modify a read-only Snapshot"
+            raise ReadOnlyTransactionError(msg)
         if not supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
@@ -951,21 +967,24 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: "SpannerAsyncConnection", statement: "SQL") -> ExecutionResult:
-        sql, params = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is None:
+            sql, params = self._compiled_sql(statement, self.statement_config)
+            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+            entries = [(stmt, params) for stmt in statements]
+        else:
+            entries = [self._compiled_sql(piece, piece.statement_config) for piece in bound_statements]
+            statements = [entry[0] for entry in entries]
         is_transaction = supports_write(cursor)
         reader = cast("_SpannerAsyncReadProtocol", cursor)
 
         count = 0
-        script_params = cast("dict[str, Any] | None", params)
-        param_types_map = self._infer_param_types(script_params)
-        coerced_params = self._coerce_params(script_params)
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
         ddl_timeout = write_execute_kwargs.get("timeout")
         dialect_str = str(self.dialect) if self.dialect else "spanner"
         pending_ddl: list[str] = []
-        for index, stmt in enumerate(statements):
+        for index, (stmt, params) in enumerate(entries):
             if is_ddl_statement(stmt):
                 if not is_transaction:
                     raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_DDL_ERROR_MESSAGE)
@@ -978,9 +997,12 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 pending_ddl = []
                 cursor = self.connection
                 reader = cast("_SpannerAsyncReadProtocol", cursor)
+            script_params = cast("dict[str, Any] | None", params)
+            param_types_map = self._infer_param_types(script_params)
+            coerced_params = self._coerce_params(script_params)
             is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
-                raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
+                raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerAsyncWriteProtocol", cursor)
                 statement_kwargs = write_execute_kwargs
@@ -1393,7 +1415,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     def write_delete(self, table: str, keyset: Any) -> None:
         """Buffer a Spanner DELETE mutation on the active async transaction or batch."""
         if not supports_write(self.connection):
-            raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
+            raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
         writer = cast("_SpannerAsyncWriteProtocol", self.connection)
         try:
             writer.delete(table, keyset)
@@ -1408,7 +1430,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         self, table: str, columns: "Sequence[str]", values: "Sequence[Sequence[Any]]", *, method_name: str
     ) -> None:
         if not supports_write(self.connection):
-            raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
+            raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
         column_list = list(columns)
         records = [tuple(row) for row in values]
         if not records:

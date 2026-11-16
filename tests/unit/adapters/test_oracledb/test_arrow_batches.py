@@ -3,11 +3,13 @@
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
+import oracledb
 import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.oracledb.core import build_arrow_fetch_kwargs
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.exceptions import SQLParsingError
 from sqlspec.utils.arrow_helpers import (
     coerce_oracle_df_to_arrow_batches,
     coerce_oracle_df_to_arrow_table,
@@ -507,3 +509,67 @@ async def test_async_select_for_storage_maps_mid_stream_oracle_error() -> None:
     with pytest.raises(SQLParsingError, match="ORA-00942") as exc_info:
         await anext(batches)
     assert isinstance(exc_info.value.__cause__, oracledb.DatabaseError)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_select_to_arrow_batches_maps_error_and_closes_iterator(is_async: bool) -> None:
+    """OracleSyncDriver/OracleAsyncDriver.select_to_arrow(batches) maps mid-stream OracleError and closes dfs."""
+    closed = False
+    native = oracledb.DatabaseError("ORA-00942: missing table")
+
+    if is_async:
+
+        class _AsyncBatchIter:
+            def __init__(self) -> None:
+                self._step = 0
+
+            def __aiter__(self) -> "_AsyncBatchIter":
+                return self
+
+            async def __anext__(self) -> pa.Table:
+                if self._step == 0:
+                    self._step += 1
+                    return pa.table({"ID": [1]})
+                raise native
+
+            async def aclose(self) -> None:
+                nonlocal closed
+                closed = True
+
+        class _AsyncConn:
+            def fetch_df_batches(self, **_kwargs: object) -> _AsyncBatchIter:
+                return _AsyncBatchIter()
+
+        driver_async = OracleAsyncDriver(cast("OracleAsyncConnection", _AsyncConn()))
+        with pytest.raises(SQLParsingError, match="ORA-00942") as exc_info:
+            await driver_async.select_to_arrow("SELECT id FROM missing_tbl", return_format="batches")
+    else:
+
+        class _SyncBatchIter:
+            def __init__(self) -> None:
+                self._step = 0
+
+            def __iter__(self) -> "_SyncBatchIter":
+                return self
+
+            def __next__(self) -> pa.Table:
+                if self._step == 0:
+                    self._step += 1
+                    return pa.table({"ID": [1]})
+                raise native
+
+            def close(self) -> None:
+                nonlocal closed
+                closed = True
+
+        class _SyncConn:
+            def fetch_df_batches(self, **_kwargs: object) -> _SyncBatchIter:
+                return _SyncBatchIter()
+
+        driver_sync = OracleSyncDriver(cast("OracleSyncConnection", _SyncConn()))
+        with pytest.raises(SQLParsingError, match="ORA-00942") as exc_info:
+            driver_sync.select_to_arrow("SELECT id FROM missing_tbl", return_format="batches")
+
+    assert closed is True
+    assert exc_info.value.__cause__ is native

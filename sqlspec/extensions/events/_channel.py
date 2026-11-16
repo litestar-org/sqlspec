@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
@@ -382,7 +382,7 @@ class SyncEventChannel:
             self._backend.ack(event_id)
 
     def nack(self, event_id: str) -> None:
-        """Return an event to the queue for redelivery."""
+        """Return a leased event to the queue with exponential backoff, or mark it failed at ``max_attempts``."""
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync nack"
             raise ImproperConfigurationError(msg)
@@ -689,7 +689,7 @@ class AsyncEventChannel:
             await self._backend.ack(event_id)
 
     async def nack(self, event_id: str) -> None:
-        """Return an event to the queue for redelivery."""
+        """Return a leased event to the queue with exponential backoff, or mark it failed at ``max_attempts``."""
         if not self._backend.supports_async:
             msg = "Current events backend does not support async nack"
             raise ImproperConfigurationError(msg)
@@ -729,10 +729,14 @@ class AsyncEventChannel:
                 span = _start_event_span(
                     self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="async"
                 )
+                dequeue_error: Exception | None = None
+                event: EventMessage | None = None
                 try:
                     event = await self._backend.dequeue(channel, poll_interval)
                 except Exception as error:
-                    _end_event_span(self._runtime, span, error=error)
+                    dequeue_error = error
+                if dequeue_error is not None:
+                    _end_event_span(self._runtime, span, error=dequeue_error)
                     self._runtime.increment_metric("events.dequeue.error")
                     log_with_context(
                         logger,
@@ -743,7 +747,7 @@ class AsyncEventChannel:
                         channel=channel,
                         listener_id=listener_id,
                         mode="async",
-                        error_type=type(error).__name__,
+                        error_type=type(dequeue_error).__name__,
                         status="dequeue_error",
                     )
                     if not stop_event.is_set() and poll_interval > 0:
@@ -753,6 +757,7 @@ class AsyncEventChannel:
                     _end_event_span(self._runtime, span, result="empty")
                     continue
                 _end_event_span(self._runtime, span, result="delivered")
+                handler_error: Exception | None = None
                 try:
                     result = handler(event)
                     if inspect.isawaitable(result):
@@ -760,6 +765,8 @@ class AsyncEventChannel:
                     if auto_ack:
                         await self._backend.ack(event.event_id)
                 except Exception as error:
+                    handler_error = error
+                if handler_error is not None:
                     self._runtime.increment_metric("events.handler.error")
                     if auto_ack and hasattr(self._backend, "nack"):
                         with suppress(Exception):
@@ -773,7 +780,7 @@ class AsyncEventChannel:
                         channel=channel,
                         listener_id=listener_id,
                         mode="async",
-                        error_type=type(error).__name__,
+                        error_type=type(handler_error).__name__,
                         status="handler_error",
                         event_id=event.event_id,
                         event_type=_resolve_event_type(event.payload, event.metadata),
@@ -1034,6 +1041,21 @@ class _SyncEventIterator:
             )
             try:
                 event = self._backend.dequeue(self._channel, self._poll_interval)
+            except (EventChannelError, ValueError) as error:
+                _end_event_span(self._runtime, span, error=error)
+                self._runtime.increment_metric("events.dequeue.error")
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "event.receive",
+                    adapter_name=self._adapter_name,
+                    backend_name=self._backend_name,
+                    channel=self._channel,
+                    mode="sync",
+                    error_type=type(error).__name__,
+                    status="malformed_payload",
+                )
+                continue
             except Exception as error:
                 _end_event_span(self._runtime, span, error=error)
                 raise
@@ -1088,6 +1110,21 @@ class _AsyncEventIterator:
             )
             try:
                 event = await self._backend.dequeue(self._channel, self._poll_interval)
+            except (EventChannelError, ValueError) as error:
+                _end_event_span(self._runtime, span, error=error)
+                self._runtime.increment_metric("events.dequeue.error")
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "event.receive",
+                    adapter_name=self._adapter_name,
+                    backend_name=self._backend_name,
+                    channel=self._channel,
+                    mode="async",
+                    error_type=type(error).__name__,
+                    status="malformed_payload",
+                )
+                continue
             except Exception as error:
                 _end_event_span(self._runtime, span, error=error)
                 raise

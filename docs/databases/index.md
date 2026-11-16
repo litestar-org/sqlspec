@@ -46,6 +46,6 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 - **[DuckDB](duckdb.md)**: In-process OLAP queries over Parquet/S3, hybrid native/Arrow materialization, and JSON statement profiling.
 - **[Snowflake](snowflake.md)**: Python connector authentication, bounded pooling, Arrow batches, stage loads, and VARIANT extension stores.
 - **[Google Cloud BigQuery](bigquery.md)**: Interactive `query_and_wait` execution, Storage Read/Write APIs, reservation governance, and multi-statement script jobs.
-- **[Google Cloud Spanner](spanner.md)**: Symmetric sync and native `asyncio` drivers, `FixedSizePool` / `AsyncFixedSizePool` session pools, `provide_read_session()`, `execute_partitioned_dml()`, mutation batch APIs, and vector/artifact ADK stores.
+- **[Google Cloud Spanner](spanner.md)**: Symmetric sync and native `asyncio` drivers, `FixedSizePool` / `AsyncFixedSizePool` session pools, `provide_replica_session()`, `execute_partitioned_dml()`, mutation batch APIs, and vector/artifact ADK stores.
 - **[Apache Arrow ADBC](adbc.md)**: Zero-copy Arrow C Data Interface ingestion and extraction across PyPI-installable ADBC wire drivers.
 - **[Arrow ODBC](arrow-odbc.md)**: Rust-backed zero-copy ODBC batch streaming into Apache Arrow tables for SQL Server, PostgreSQL, and Db2.

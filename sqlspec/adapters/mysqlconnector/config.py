@@ -2,6 +2,7 @@
 
 import contextlib
 from collections.abc import Callable, Mapping
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 from weakref import WeakSet
 
@@ -12,12 +13,19 @@ from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncPool,
     MysqlConnectorAsyncSessionContext,
     MysqlConnectorConnectionPool,
+    MysqlConnectorError,
     MysqlConnectorMysqlModule,
     MysqlConnectorSyncConnection,
     MysqlConnectorSyncCursor,
     MysqlConnectorSyncSessionContext,
 )
-from sqlspec.adapters.mysqlconnector.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.mysqlconnector.core import (
+    apply_driver_features,
+    create_mapped_exception,
+    default_statement_config,
+    merge_derive_overrides,
+    parse_mysql_replica_shorthand,
+)
 from sqlspec.adapters.mysqlconnector.driver import (
     MysqlConnectorAsyncDriver,
     MysqlConnectorAsyncExceptionHandler,
@@ -32,7 +40,13 @@ from sqlspec.driver import (
     SyncPoolConnectionContext,
     SyncPoolSessionFactory,
 )
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
@@ -321,12 +335,7 @@ class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
         if self._connection is not None:
             conn = self._connection
             self._connection = None
-            if not self._config.connection_config.get("pool_reset_session", True) and getattr(
-                conn, "in_transaction", False
-            ):
-                with contextlib.suppress(Exception):
-                    conn.rollback()
-            conn.close()
+            _rollback_before_release_sync(conn, exc_type)
         return None
 
 
@@ -346,12 +355,7 @@ class _MysqlConnectorSyncSessionConnectionHandler(SyncPoolSessionFactory):
             return
         conn = self._connection
         self._connection = None
-        if not self._config.connection_config.get("pool_reset_session", True) and getattr(
-            conn, "in_transaction", False
-        ):
-            with contextlib.suppress(Exception):
-                conn.rollback()
-        conn.close()
+        _rollback_before_release_sync(conn, kwargs.get("exc_type"))
 
 
 class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -369,12 +373,7 @@ class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
         if self._connection is not None:
             conn = self._connection
             self._connection = None
-            if not self._config.connection_config.get("pool_reset_session", True) and getattr(
-                conn, "in_transaction", False
-            ):
-                with contextlib.suppress(Exception):
-                    await conn.rollback()
-            await conn.close()
+            await _rollback_before_release_async(conn, exc_type)
         return None
 
 
@@ -390,12 +389,7 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
             return
         conn = self._connection
         self._connection = None
-        if not self._config.connection_config.get("pool_reset_session", True) and getattr(
-            conn, "in_transaction", False
-        ):
-            with contextlib.suppress(Exception):
-                await conn.rollback()
-        await conn.close()
+        await _rollback_before_release_async(conn, kwargs.get("exc_type"))
 
 
 _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"pool_name", "pool_size", "pool_reset_session"})
@@ -447,6 +441,10 @@ class MysqlConnectorSyncConfig(
         self._user_connection_hook: Callable[[MysqlConnectorSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+        replica_read_only = features_dict.pop("_replica_read_only", None)
+        self._read_only: bool = (
+            bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
+        )
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
         features_dict.setdefault("enable_local_infile_bulk_load", connection_config["allow_local_infile"])
@@ -477,7 +475,11 @@ class MysqlConnectorSyncConfig(
             A newly opened mysql-connector connection.
         """
         config = {key: value for key, value in self.connection_config.items() if key not in _POOL_ONLY_CONFIG_KEYS}
-        connection = mysql.connector.connect(**config)
+        try:
+            connection = mysql.connector.connect(**config)
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             autocommit = config.get("autocommit")
             if autocommit is not None:
@@ -505,23 +507,62 @@ class MysqlConnectorSyncConfig(
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_derive_overrides(config, overrides, clear_pool_name=True)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        values = parse_mysql_replica_shorthand(spec_input)
+        read_only = values.pop("read_only", True)
+        connection = dict(values.pop("connection_config_overrides", {}))
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
+        connection.update(values)
+        read_only = connection.pop("read_only", read_only)
+        if read_only is not False:
+            connection.setdefault("pool_reset_session", False)
+        driver_features_overrides = dict(forwarded.get("driver_features_overrides") or {})
+        driver_features_overrides["_replica_read_only"] = read_only is not False
+        forwarded["driver_features_overrides"] = driver_features_overrides
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
+
     def _ensure_connection(self, connection: "MysqlConnectorSyncConnection") -> None:
         """Initialize connection state after creation or a native session reset."""
-        if self._user_connection_hook is None:
+        if not self._read_only and self._user_connection_hook is None:
             return
         underlying = getattr(connection, "_cnx", None)
-        if underlying is not None and self.connection_config.get("pool_reset_session", True):
-            self._user_connection_hook(connection)
-            return
-        underlying = underlying or connection
-        if underlying not in self._initialized_connections:
-            self._user_connection_hook(connection)
-            self._initialized_connections.add(underlying)
+        should_reset_init = underlying is not None and self.connection_config.get("pool_reset_session", True)
+        tracking_key = underlying or connection
+        if should_reset_init or tracking_key not in self._initialized_connections:
+            if self._read_only:
+                try:
+                    with MysqlConnectorSyncCursor(connection) as cursor:
+                        cursor.execute("SET SESSION TRANSACTION READ ONLY")
+                except Exception as exc:
+                    _raise_mapped_connection_error(exc)
+                    raise
+            if self._user_connection_hook is not None:
+                self._user_connection_hook(connection)
+            if not should_reset_init:
+                self._initialized_connections.add(tracking_key)
 
     def _acquire_sync_connection(self) -> MysqlConnectorSyncConnection:
         """Acquire and initialize a sync mysql-connector connection."""
-        pool = self.provide_pool()
-        connection = cast("MysqlConnectorSyncConnection", pool.get_connection())
+        try:
+            pool = self.provide_pool()
+            connection = cast("MysqlConnectorSyncConnection", pool.get_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             self._ensure_connection(connection)
         except BaseException:
@@ -535,12 +576,16 @@ class MysqlConnectorSyncConfig(
         pool_name = config.pop("pool_name", None)
         pool_size = config.pop("pool_size", None)
         pool_reset = config.pop("pool_reset_session", True)
-        return MysqlConnectorConnectionPool(
-            pool_name=pool_name,
-            pool_size=5 if pool_size is None else pool_size,
-            pool_reset_session=pool_reset,
-            **config,
-        )
+        try:
+            return MysqlConnectorConnectionPool(
+                pool_name=pool_name,
+                pool_size=5 if pool_size is None else pool_size,
+                pool_reset_session=pool_reset,
+                **config,
+            )
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _close_pool(self) -> None:
         pool = self.connection_instance
@@ -600,6 +645,10 @@ class MysqlConnectorAsyncConfig(
         self._user_connection_hook: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]] | None = (
             features_dict.pop("on_connection_create", None)
         )
+        replica_read_only = features_dict.pop("_replica_read_only", None)
+        self._read_only: bool = (
+            bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
+        )
 
         features_dict.setdefault("enable_local_infile_bulk_load", connection_config["allow_local_infile"])
         if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("allow_local_infile"):
@@ -623,7 +672,11 @@ class MysqlConnectorAsyncConfig(
     async def create_connection(self) -> MysqlConnectorAsyncConnection:
         """Open and initialize a standalone connection owned by the caller."""
         config = {key: value for key, value in self.connection_config.items() if key not in _POOL_ONLY_CONFIG_KEYS}
-        connection = await mysqlconnector_aio.connect(**config)
+        try:
+            connection = await mysqlconnector_aio.connect(**config)
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             autocommit = self.connection_config.get("autocommit")
             if autocommit is not None:
@@ -651,6 +704,34 @@ class MysqlConnectorAsyncConfig(
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_derive_overrides(config, overrides, clear_pool_name=True)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        values = parse_mysql_replica_shorthand(spec_input)
+        read_only = values.pop("read_only", True)
+        connection = dict(values.pop("connection_config_overrides", {}))
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
+        connection.update(values)
+        read_only = connection.pop("read_only", read_only)
+        if read_only is not False:
+            connection.setdefault("pool_reset_session", False)
+        driver_features_overrides = dict(forwarded.get("driver_features_overrides") or {})
+        driver_features_overrides["_replica_read_only"] = read_only is not False
+        forwarded["driver_features_overrides"] = driver_features_overrides
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
+
     async def _create_pool(self) -> "MysqlConnectorAsyncPool":
         if MysqlConnectorAsyncPool is None:
             msg = "Async connection pooling requires mysql-connector-python 9.4 or later"
@@ -659,17 +740,21 @@ class MysqlConnectorAsyncConfig(
         pool_name = config.pop("pool_name", None)
         pool_size = config.pop("pool_size", None)
         pool_reset = config.pop("pool_reset_session", True)
-        pool = MysqlConnectorAsyncPool(
-            pool_name=pool_name,
-            pool_size=5 if pool_size is None else pool_size,
-            pool_reset_session=pool_reset,
-            **config,
-        )
         try:
-            await pool.initialize_pool()
-        except BaseException:
-            with contextlib.suppress(Exception):
-                await pool.close_pool()
+            pool = MysqlConnectorAsyncPool(
+                pool_name=pool_name,
+                pool_size=5 if pool_size is None else pool_size,
+                pool_reset_session=pool_reset,
+                **config,
+            )
+            try:
+                await pool.initialize_pool()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await pool.close_pool()
+                raise
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
             raise
         return pool
 
@@ -680,16 +765,23 @@ class MysqlConnectorAsyncConfig(
 
     async def _ensure_connection(self, connection: "MysqlConnectorAsyncConnection") -> None:
         """Initialize connection state after creation or a native session reset."""
-        if self._user_connection_hook is None:
+        if not self._read_only and self._user_connection_hook is None:
             return
         underlying = getattr(connection, "_cnx", None)
-        if underlying is not None and self.connection_config.get("pool_reset_session", True):
-            await self._user_connection_hook(connection)
-            return
-        underlying = underlying or connection
-        if underlying not in self._initialized_connections:
-            await self._user_connection_hook(connection)
-            self._initialized_connections.add(underlying)
+        should_reset_init = underlying is not None and self.connection_config.get("pool_reset_session", True)
+        tracking_key = underlying or connection
+        if should_reset_init or tracking_key not in self._initialized_connections:
+            if self._read_only:
+                try:
+                    async with MysqlConnectorAsyncCursor(connection) as cursor:
+                        await cursor.execute("SET SESSION TRANSACTION READ ONLY")
+                except Exception as exc:
+                    _raise_mapped_connection_error(exc)
+                    raise
+            if self._user_connection_hook is not None:
+                await self._user_connection_hook(connection)
+            if not should_reset_init:
+                self._initialized_connections.add(tracking_key)
 
     async def _acquire_async_connection(self) -> MysqlConnectorAsyncConnection:
         """Acquire and initialize an async mysql-connector connection from pool."""
@@ -699,8 +791,12 @@ class MysqlConnectorAsyncConfig(
             and not any(key in self.connection_config for key in _POOL_ONLY_CONFIG_KEYS)
         ):
             return await self.create_connection()
-        pool = await self.provide_pool()
-        connection = cast("MysqlConnectorAsyncConnection", await pool.get_connection())
+        try:
+            pool = await self.provide_pool()
+            connection = cast("MysqlConnectorAsyncConnection", await pool.get_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             await self._ensure_connection(connection)
         except BaseException:
@@ -708,3 +804,122 @@ class MysqlConnectorAsyncConfig(
                 await connection.close()
             raise
         return connection
+
+
+def _disconnect_raw_sync(raw_cnx: Any) -> None:
+    """Close the underlying synchronous socket when a pooled wrapper reset or rollback fails."""
+    close = getattr(raw_cnx, "close", None) if raw_cnx is not None else None
+    if callable(close):
+        with contextlib.suppress(Exception):
+            close()
+
+
+async def _disconnect_raw_async(raw_cnx: Any) -> None:
+    """Close the underlying asynchronous socket when a pooled wrapper reset or rollback fails."""
+    close = getattr(raw_cnx, "close", None) if raw_cnx is not None else None
+    if callable(close):
+        with contextlib.suppress(Exception):
+            close_res = close()
+            if isawaitable(close_res):
+                await close_res
+
+
+def _is_autocommit_enabled_sync(conn: Any) -> bool:
+    """Return whether autocommit is active on a sync mysql-connector connection without querying the server."""
+    if getattr(conn, "in_transaction", False):
+        return False
+    conn_dict = getattr(conn, "__dict__", None)
+    if isinstance(conn_dict, dict):
+        direct = conn_dict.get("autocommit")
+        if isinstance(direct, bool):
+            return direct
+    raw_cnx = getattr(conn, "_cnx", None)
+    if raw_cnx is not None:
+        raw_autocommit = getattr(raw_cnx, "_autocommit", None)
+        if isinstance(raw_autocommit, bool):
+            return raw_autocommit
+    local_autocommit = getattr(conn, "_autocommit", None)
+    if isinstance(local_autocommit, bool):
+        return local_autocommit
+    autocommit = getattr(conn, "autocommit", False)
+    return autocommit if isinstance(autocommit, bool) else False
+
+
+def _rollback_before_release_sync(conn: Any, exc_type: "type[BaseException] | None") -> None:
+    """Roll back open work, return the pooled wrapper, and disconnect the socket when either step fails."""
+    raw_cnx = getattr(conn, "_cnx", None)
+    failure: BaseException | None = None
+    try:
+        if not _is_autocommit_enabled_sync(conn):
+            conn.rollback()
+    except BaseException as exc:
+        failure = exc
+        _disconnect_raw_sync(raw_cnx)
+    try:
+        conn.close()
+    except BaseException as exc:
+        if failure is None:
+            failure = exc
+        _disconnect_raw_sync(raw_cnx)
+    if failure is not None and exc_type is None:
+        raise failure
+
+
+async def _is_autocommit_enabled_async(conn: Any) -> bool:
+    """Return whether autocommit is active on an async mysql-connector connection.
+
+    Async connections in mysql-connector raise ``ProgrammingError`` when accessing
+    the ``.autocommit`` property synchronously and expose ``await get_autocommit()``
+    and local ``_autocommit`` state instead. Treat connections with an open
+    server transaction as requiring rollback even when autocommit is enabled.
+    """
+    if getattr(conn, "in_transaction", False):
+        return False
+    try:
+        autocommit = conn.autocommit
+    except AttributeError:
+        autocommit = getattr(conn, "_autocommit", None)
+    except MysqlConnectorError:
+        autocommit = getattr(conn, "_autocommit", None)
+        if autocommit is None:
+            get_autocommit = getattr(conn, "get_autocommit", None)
+            if callable(get_autocommit):
+                autocommit = get_autocommit()
+                if isawaitable(autocommit):
+                    autocommit = await autocommit
+    if isinstance(autocommit, bool):
+        return autocommit
+    return False
+
+
+async def _rollback_before_release_async(conn: Any, exc_type: "type[BaseException] | None") -> None:
+    """Roll back open async work, return the pooled wrapper, and disconnect the socket when either step fails."""
+    raw_cnx = getattr(conn, "_cnx", None)
+    failure: BaseException | None = None
+    try:
+        if not await _is_autocommit_enabled_async(conn):
+            await conn.rollback()
+    except BaseException as exc:
+        failure = exc
+        await _disconnect_raw_async(raw_cnx)
+    try:
+        await conn.close()
+    except BaseException as exc:
+        if failure is None:
+            failure = exc
+        await _disconnect_raw_async(raw_cnx)
+    if failure is not None and exc_type is None:
+        raise failure
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, MysqlConnectorError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

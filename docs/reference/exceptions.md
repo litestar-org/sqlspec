@@ -26,6 +26,9 @@ from sqlspec.exceptions import (
     OutOfOrderMigrationError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
+    ReplicaUnavailableError,
+    RoutingContextError,
     RepositoryError,
     SerializationConflictError,
     SQLBuilderError,
@@ -270,8 +273,25 @@ Normalized exception hierarchy raised across database drivers, query builders, S
 
 ## SQLSTATE Mapping Helper
 
+SQLSTATE `25006` maps to `ReadOnlyTransactionError`. Replica checkout exhaustion uses `ReplicaUnavailableError`; invalid or conflicting scoped intent uses `RoutingContextError`.
+
 `SQLSTATE_EXCEPTION_MAP` maps standard 5-character ANSI/PostgreSQL SQLSTATE codes (`"23505"`, `"40001"`, `"40P01"`, `"57014"`, etc.) to their corresponding `SQLSpecError` subclass.
 
 ::: sqlspec.exceptions.map_sqlstate_to_exception
     options:
       heading_level: 3
+
+::: sqlspec.exceptions.RoutingContextError
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.exceptions.ReplicaUnavailableError
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.exceptions.ReadOnlyTransactionError
+    options:
+      heading_level: 4
+      members: false

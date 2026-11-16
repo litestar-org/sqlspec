@@ -2,12 +2,19 @@
 
 # ruff: noqa: N802
 # pyright: ignore[reportConstantRedefinition]
+import math
+import re
 from collections.abc import Callable, MutableMapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
+import sqlglot
 from sqlglot import exp
+from sqlglot.dialects.dialect import Dialect
+from sqlglot.errors import SqlglotError
+from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder._generation import generator_class_for_dialect, invalidate_generator_dispatch
+from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.exceptions import DialectNotSupportedError
 
 if TYPE_CHECKING:
@@ -27,10 +34,37 @@ __all__ = (
     "render_vector_distance_mysql",
     "render_vector_distance_oracle",
     "render_vector_distance_postgres",
+    "validate_vector_elements",
     "vector_distance_metric",
 )
 
 _VECTOR_DISTANCE_META_KEY: Final[str] = "sqlspec_vector_distance_metric"
+_VALID_VECTOR_METRICS: Final[frozenset[str]] = frozenset({"euclidean", "cosine", "inner_product", "euclidean_squared"})
+_VALID_ORACLE_METRICS: Final[frozenset[str]] = frozenset({
+    "EUCLIDEAN",
+    "COSINE",
+    "DOT",
+    "INNER_PRODUCT",
+    "EUCLIDEAN_SQUARED",
+    "MANHATTAN",
+    "HAMMING",
+})
+_ORACLE_IDENTIFIER_SEGMENT_RE: Final["re.Pattern[str]"] = re.compile(
+    r'^(?:[A-Za-z_][A-Za-z0-9_$#]*|"(?:[^"\x00]|"")+")$'
+)
+_ORACLE_BIND_RE: Final["re.Pattern[str]"] = re.compile(r"^:?(?:[A-Za-z_][A-Za-z0-9_$#]*|\d+)$")
+_FORBIDDEN_ORACLE_WHERE_NODES: Final[tuple[type[exp.Expr], ...]] = (
+    exp.Block,
+    exp.Command,
+    exp.DDL,
+    exp.DML,
+    exp.Drop,
+    exp.Alter,
+    exp.TruncateTable,
+    exp.Select,
+    exp.SetOperation,
+    exp.Subquery,
+)
 _POSTGRES_OPERATOR_MAP: Final[dict[str, str]] = {"euclidean": "<->", "cosine": "<=>", "inner_product": "<#>"}
 _MYSQL_METRIC_MAP: Final[dict[str, str]] = {"euclidean": "EUCLIDEAN", "cosine": "COSINE", "inner_product": "DOT"}
 _ORACLE_METRIC_MAP: Final[dict[str, str]] = {
@@ -63,6 +97,68 @@ _UNSUPPORTED_VECTOR_DIALECTS: Final[frozenset[str]] = frozenset({"TSQL"})
 
 _ORACLE_MIN_ACCURACY: Final[int] = 1
 _ORACLE_MAX_ACCURACY: Final[int] = 100
+
+
+def validate_vector_elements(value: Any) -> list[int | float]:
+    """Validate and materialize a 1-D finite numeric vector sequence.
+
+    Supports Python sequences and 1-D array-like objects exposing ``dtype`` and
+    ``tolist()`` without importing optional array libraries.
+
+    Args:
+        value: Input vector sequence or 1-D array.
+
+    Returns:
+        Validated list of finite ``int | float`` values.
+
+    Raises:
+        TypeError: If ``value`` is not a valid vector container or holds non-numeric/boolean values.
+        ValueError: If ``value`` is empty, multi-dimensional, or holds ``NaN``/``Inf`` values.
+    """
+    if hasattr(value, "dtype") and hasattr(value, "tolist") and not isinstance(value, (str, bytes, bytearray)):
+        if hasattr(value, "ndim") and getattr(value, "ndim", 1) != 1:
+            msg = "Vector must be 1-dimensional"
+            raise ValueError(msg)
+        dtype = getattr(value, "dtype", None)
+        kind = getattr(dtype, "kind", None)
+        if kind is not None and kind not in {"i", "u", "f"}:
+            msg = f"Unsupported vector element dtype: {dtype}"
+            raise TypeError(msg)
+        items_raw = value.tolist()
+        if not isinstance(items_raw, list):
+            msg = f"Unsupported vector type: {type(value)}"
+            raise TypeError(msg)
+        if not items_raw:
+            msg = "Vector cannot be empty"
+            raise ValueError(msg)
+        validated_array: list[int | float] = []
+        for item in items_raw:
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                msg = f"Vector elements must be int or float, got {type(item).__name__}"
+                raise TypeError(msg)
+            if not math.isfinite(item):
+                msg = f"Vector elements must be finite numbers, got {item!r}"
+                raise ValueError(msg)
+            validated_array.append(item)
+        return validated_array
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if not value:
+            msg = "Vector cannot be empty"
+            raise ValueError(msg)
+        validated_seq: list[int | float] = []
+        for item in value:
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                msg = f"Vector elements must be int or float, got {type(item).__name__}"
+                raise TypeError(msg)
+            if not math.isfinite(item):
+                msg = f"Vector elements must be finite numbers, got {item!r}"
+                raise ValueError(msg)
+            validated_seq.append(item)
+        return validated_seq
+
+    msg = f"Unsupported vector type: {type(value)}"
+    raise TypeError(msg)
 
 
 def is_vector_distance_expression(expression: object) -> bool:
@@ -211,12 +307,25 @@ def build_oracle_hnsw_subquery(
     ``approximate=False``, ``FETCH FIRST :k ROWS ONLY`` is emitted instead of
     ``FETCH APPROX FIRST`` for unindexed tables or exact top-K evaluation.
     """
-    oracle_metric = _ORACLE_METRIC_MAP.get(metric.lower(), metric.upper())
+    table = _validate_oracle_identifier(table, allow_qualified=True)
+    vector_column = _validate_oracle_identifier(vector_column)
+    id_column = _validate_oracle_identifier(id_column)
+    rank_alias = _validate_oracle_identifier(rank_alias)
+    distance_alias = _validate_oracle_identifier(distance_alias)
+    oracle_metric = _validate_oracle_metric(metric)
     vec_bind = _format_oracle_bind(query_vector_bind if query_vector_bind is not None else vector_param)
     limit_bind = _format_oracle_bind(top_k_bind if top_k_bind is not None else top_k_param)
-    cols = (id_column,) if tuple(select_columns) == ("id",) and id_column != "id" else tuple(select_columns)
+    if (
+        isinstance(select_columns, (str, bytes, bytearray))
+        or not isinstance(select_columns, Sequence)
+        or not select_columns
+    ):
+        msg = "select_columns must be a non-empty sequence of column identifiers"
+        raise ValueError(msg)
+    raw_cols = (id_column,) if tuple(select_columns) == ("id",) and id_column != "id" else tuple(select_columns)
+    cols = tuple(_validate_oracle_identifier(col, allow_qualified=True, allow_star=True) for col in raw_cols)
     cols_sql = ", ".join(cols)
-    where_sql = f" WHERE {where_clause}" if where_clause else ""
+    where_sql = f" WHERE ({_validate_oracle_where_clause(where_clause)})" if where_clause is not None else ""
     accuracy_sql = ""
     if target_accuracy is not None:
         if (
@@ -265,7 +374,11 @@ def build_oracle_hybrid_rrf_sql(
     where_clause: str | None = None,
 ) -> str:
     """Build an Oracle 26ai Hybrid Search query fusing vector similarity and Oracle Text FTS via RRF."""
-    resolved_id_col = key_column if key_column is not None else id_column
+    table = _validate_oracle_identifier(table, allow_qualified=True)
+    vector_column = _validate_oracle_identifier(vector_column)
+    text_column = _validate_oracle_identifier(text_column)
+    resolved_id_col = _validate_oracle_identifier(key_column if key_column is not None else id_column)
+    _validate_oracle_metric(metric)
     if top_k_param is not None:
         if candidate_limit_param == ":candidate_limit":
             candidate_limit_param = top_k_param
@@ -274,7 +387,15 @@ def build_oracle_hybrid_rrf_sql(
     cand_bind = _format_oracle_bind(candidate_limit_param)
     final_bind = _format_oracle_bind(final_limit_param)
     txt_bind = _format_oracle_bind(text_param)
-    rrf_k_expr = _format_oracle_bind(rrf_k_param) if rrf_k_param is not None else str(rrf_k)
+    if rrf_k_param is not None:
+        rrf_k_expr = _format_oracle_bind(rrf_k_param)
+    else:
+        if isinstance(rrf_k, bool) or not isinstance(rrf_k, (int, float)) or not math.isfinite(rrf_k) or rrf_k <= 0:
+            msg = f"rrf_k must be a positive finite number, got {rrf_k!r}"
+            raise ValueError(msg)
+        rrf_k_expr = str(rrf_k)
+
+    validated_where = _validate_oracle_where_clause(where_clause) if where_clause is not None else None
 
     vec_subquery = build_oracle_hnsw_subquery(
         table=table,
@@ -286,13 +407,13 @@ def build_oracle_hybrid_rrf_sql(
         top_k_param=cand_bind,
         target_accuracy=target_accuracy,
         approximate=approximate,
-        where_clause=where_clause,
+        where_clause=validated_where,
         rank_alias="vector_rank",
         distance_alias="vector_distance",
     )
     fts_where_parts = [f"CONTAINS({text_column}, {txt_bind}, 1) > 0"]
-    if where_clause:
-        fts_where_parts.append(f"({where_clause})")
+    if validated_where is not None:
+        fts_where_parts.append(f"({validated_where})")
     fts_where_sql = " AND ".join(fts_where_parts)
     fts_subquery = (
         f"SELECT {resolved_id_col}, fts_score, ROWNUM AS fts_rank "
@@ -305,8 +426,18 @@ def build_oracle_hybrid_rrf_sql(
         f") fts_top"
     )
 
-    if select_columns:
-        base_cols = ", ".join(col if "." in col or col == "*" else f"base.{col}" for col in select_columns)
+    if select_columns is not None:
+        if (
+            isinstance(select_columns, (str, bytes, bytearray))
+            or not isinstance(select_columns, Sequence)
+            or not select_columns
+        ):
+            msg = "select_columns must be a non-empty sequence of column identifiers"
+            raise ValueError(msg)
+        validated_select_cols = [
+            _validate_oracle_identifier(col, allow_qualified=True, allow_star=True) for col in select_columns
+        ]
+        base_cols = ", ".join(col if "." in col or col == "*" else f"base.{col}" for col in validated_select_cols)
     else:
         base_cols = "base.*"
 
@@ -370,11 +501,103 @@ def build_oracle_hybrid_rrf_query(
     )
 
 
-def _format_oracle_bind(param: str) -> str:
-    stripped = param.strip()
-    if stripped.startswith(":") or stripped.isdigit() or "(" in stripped:
+def _validate_oracle_identifier(name: str, *, allow_qualified: bool = False, allow_star: bool = False) -> str:
+    if not isinstance(name, str) or not name.strip() or "\x00" in name:
+        msg = f"Invalid Oracle identifier: {name!r}"
+        raise ValueError(msg)
+    stripped = name.strip()
+    if allow_star and stripped == "*":
         return stripped
-    return f":{stripped}"
+    parts = stripped.split(".")
+    max_parts = 2 if allow_qualified else 1
+    if not (1 <= len(parts) <= max_parts):
+        msg = f"Invalid Oracle identifier: {name!r}"
+        raise ValueError(msg)
+    for index, part in enumerate(parts):
+        if allow_star and len(parts) == max_parts and index == 1 and part == "*":
+            continue
+        if _ORACLE_IDENTIFIER_SEGMENT_RE.fullmatch(part) is None:
+            msg = f"Invalid Oracle identifier: {name!r}"
+            raise ValueError(msg)
+    return stripped
+
+
+def _validate_oracle_metric(metric: str) -> str:
+    if not isinstance(metric, str) or not metric.strip():
+        msg = f"Invalid Oracle vector metric: {metric!r}"
+        raise ValueError(msg)
+    stripped = metric.strip()
+    upper = stripped.upper()
+    if upper not in _VALID_ORACLE_METRICS:
+        msg = f"Invalid Oracle vector metric: {metric!r}"
+        raise ValueError(msg)
+    return _ORACLE_METRIC_MAP.get(stripped.lower(), upper)
+
+
+def _validate_oracle_where_clause(where_clause: str) -> str:
+    if not isinstance(where_clause, str) or not where_clause.strip() or "\x00" in where_clause:
+        msg = f"Invalid Oracle WHERE clause: {where_clause!r}"
+        raise ValueError(msg)
+    stripped = where_clause.strip()
+    if contains_statement_terminator(stripped, dialect="oracle"):
+        msg = f"Invalid Oracle WHERE clause: {where_clause!r}"
+        raise ValueError(msg)
+    try:
+        tokens = list(Dialect.get_or_raise("oracle").tokenize(stripped))
+        statements = sqlglot.parse(stripped, read="oracle")
+    except SqlglotError as exc:
+        msg = f"Invalid Oracle WHERE clause: {where_clause!r}"
+        raise ValueError(msg) from exc
+    if (
+        not tokens
+        or any(token.comments or token.token_type == TokenType.SEMICOLON for token in tokens)
+        or len(statements) != 1
+        or statements[0] is None
+    ):
+        msg = f"Invalid Oracle WHERE clause: {where_clause!r}"
+        raise ValueError(msg)
+    parsed = statements[0]
+    if isinstance(parsed, _FORBIDDEN_ORACLE_WHERE_NODES) or parsed.find(*_FORBIDDEN_ORACLE_WHERE_NODES) is not None:
+        msg = f"Invalid Oracle WHERE clause: {where_clause!r}"
+        raise ValueError(msg)
+    return stripped
+
+
+def _format_oracle_bind(param: str) -> str:
+    if not isinstance(param, str) or "\x00" in param:
+        msg = f"Invalid Oracle bind parameter: {param!r}"
+        raise ValueError(msg)
+    stripped = param.strip()
+    if not stripped or (stripped.isdigit() and not stripped.startswith(":")):
+        msg = f"Invalid Oracle bind parameter: {param!r}"
+        raise ValueError(msg)
+    if _ORACLE_BIND_RE.fullmatch(stripped) is None:
+        msg = f"Invalid Oracle bind parameter: {param!r}"
+        raise ValueError(msg)
+    return stripped if stripped.startswith(":") else f":{stripped}"
+
+
+def _extract_array_number_literal(item: exp.Expr) -> str:
+    negated = False
+    target = item
+    if isinstance(target, exp.Neg) and isinstance(target.this, exp.Expr):
+        negated = True
+        target = target.this
+    if not isinstance(target, exp.Literal) or target.is_string:
+        msg = f"Vector array literal elements must be numeric literals, got {item!r}"
+        raise ValueError(msg)
+    raw_text = str(target.this).strip()
+    try:
+        numeric_val = float(raw_text)
+    except ValueError as exc:
+        msg = f"Vector array literal elements must be numeric literals, got {item!r}"
+        raise ValueError(msg) from exc
+    if not math.isfinite(numeric_val):
+        msg = f"Vector array literal elements must be finite numbers, got {item!r}"
+        raise ValueError(msg)
+    if negated and not raw_text.startswith("-"):
+        return f"-{raw_text}"
+    return raw_text
 
 
 def _render_with_metric(generator: "Generator", expression: exp.Operator, dialect: str) -> str:
@@ -393,18 +616,18 @@ def _render_with_metric(generator: "Generator", expression: exp.Operator, dialec
         return render_vector_distance_postgres(left_sql, right_sql, metric)
     if dialect == "mysql":
         if isinstance(expression.expression, exp.Array):
-            values = [
-                str(item.this) if isinstance(item, exp.Literal) else generator.sql(item)
-                for item in expression.expression.expressions
-            ]
+            if not expression.expression.expressions:
+                msg = "Vector cannot be empty"
+                raise ValueError(msg)
+            values = [_extract_array_number_literal(item) for item in expression.expression.expressions]
             right_sql = f"STRING_TO_VECTOR('[{', '.join(values)}]')"
         return render_vector_distance_mysql(left_sql, right_sql, metric)
     if dialect == "oracle":
         if isinstance(expression.expression, exp.Array):
-            values = [
-                str(item.this) if isinstance(item, exp.Literal) else generator.sql(item)
-                for item in expression.expression.expressions
-            ]
+            if not expression.expression.expressions:
+                msg = "Vector cannot be empty"
+                raise ValueError(msg)
+            values = [_extract_array_number_literal(item) for item in expression.expression.expressions]
             right_sql = f"TO_VECTOR('[{', '.join(values)}]')"
         return render_vector_distance_oracle(left_sql, right_sql, metric)
     if dialect == "bigquery":
@@ -510,15 +733,27 @@ def _register_with_sqlglot() -> None:
 
 
 def _normalize_metric(metric: Any) -> str:
-    """Normalize vector metrics to a lowercase string."""
+    """Normalize and validate vector metrics to a lowercase string."""
     if isinstance(metric, exp.Literal):
-        return str(metric.this).lower()
-    if isinstance(metric, exp.Identifier):
+        if not metric.is_string:
+            msg = f"Invalid metric type: {type(metric).__name__}"
+            raise TypeError(msg)
+        normalized = str(metric.this).strip().lower()
+    elif isinstance(metric, exp.Identifier):
         identifier = metric.this
-        return identifier.lower() if isinstance(identifier, str) else "euclidean"
-    if isinstance(metric, str):
-        return metric.lower()
-    return "euclidean"
+        if not isinstance(identifier, str):
+            msg = f"Invalid metric type: {type(metric).__name__}"
+            raise TypeError(msg)
+        normalized = identifier.strip().lower()
+    elif isinstance(metric, str):
+        normalized = metric.strip().lower()
+    else:
+        msg = f"Invalid metric type: {type(metric).__name__}"
+        raise TypeError(msg)
+    if normalized not in _VALID_VECTOR_METRICS:
+        msg = f"Invalid metric: {metric}. Must be one of {sorted(_VALID_VECTOR_METRICS)}"
+        raise ValueError(msg)
+    return normalized
 
 
 def _build_vector_distance(this: exp.Expr, expression: exp.Expr, metric: Any = "euclidean") -> exp.Operator:

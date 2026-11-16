@@ -234,7 +234,7 @@ PREDICATE_VALUES = [
         ),
         pytest.param(
             lambda q, v: q.where_between("a", v, 9),
-            '"t"."a" <= :a_high AND "t"."a" >= {fragment}',
+            '"t"."a" BETWEEN {fragment} AND :a_high',
             {"a_high": 9},
             id="where-between",
         ),
@@ -287,7 +287,7 @@ def test_not_between_renders_expression_bound() -> None:
     """A NOT BETWEEN bound renders as SQL beside a bound parameter."""
     statement = sql.select("z").from_("t").where(("a", "NOT BETWEEN", (sql.column("b"), 9))).build()
 
-    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" < "t"."b" OR "t"."a" > :a_high'
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + 'NOT "t"."a" BETWEEN "t"."b" AND :a_high'
     assert statement.parameters == {"a_high": 9}
 
 
@@ -298,7 +298,7 @@ def test_not_between_renders_expression_bound() -> None:
         pytest.param(lambda q: q.where_in("a", [1, 2]), '"t"."a" IN (:a_1, :a_2)', {"a_1": 1, "a_2": 2}, id="where-in"),
         pytest.param(
             lambda q: q.where_between("a", 1, 9),
-            '"t"."a" <= :a_high AND "t"."a" >= :a_low',
+            '"t"."a" BETWEEN :a_low AND :a_high',
             {"a_low": 1, "a_high": 9},
             id="where-between",
         ),
@@ -463,7 +463,7 @@ def test_where_not_any_renders_expression_elements() -> None:
     """Expression elements of a where_not_any list render as SQL."""
     statement = sql.select("z").from_("t").where_not_any("a", [sql.column("b")]).build()
 
-    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" <> ALL ( ARRAY("t"."b") )'
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + 'NOT "t"."a" = ANY( ARRAY("t"."b") )'
     assert statement.parameters == {}
 
 
@@ -494,12 +494,12 @@ def test_any_predicates_reject_strings(apply: Any, value: str) -> None:
         ),
         pytest.param(
             lambda q: q.where_not_any("a", sql.select("x").from_("y")),
-            '"t"."a" <> ALL ( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
+            'NOT "t"."a" = ANY( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
             id="where-not-any",
         ),
         pytest.param(
             lambda q: q.where(sql.not_any_("a", sql.select("x").from_("y"))),
-            '"t"."a" <> ALL ( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
+            'NOT "t"."a" = ANY( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
             id="factory-not-any",
         ),
     ],
@@ -607,3 +607,26 @@ def test_subquery_fragments_accept_query_objects(fragment: Any, expected: str) -
 
     assert _normalized_sql(statement) == QUALIFIED_PREFIX + expected
     assert statement.parameters == ({"p": 3})
+
+
+def test_where_eq_parenthesizes_binary_scalar_column_expression() -> None:
+    """Binary scalar expressions in where_eq are parenthesized before comparison."""
+    query = sql.select("*").from_("t").where_eq("a + b", 10)
+    query.enable_optimization = False
+    stmt = query.build()
+    rendered = " ".join(stmt.sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    assert "(a + b) = :a_b" in rendered
+    assert stmt.parameters == {"a_b": 10}
+
+
+@pytest.mark.parametrize("bad_hint", ["", "   ", "INDEX(t) */ SELECT 1 /*", "INDEX\x00(t)"])
+def test_with_hint_rejects_comment_terminators_and_empty_hints(bad_hint: str) -> None:
+    """Optimizer hints reject empty strings, NUL bytes, and comment terminators."""
+    with pytest.raises(SQLBuilderError):
+        sql.select("*").from_("t").with_hint(bad_hint)
+
+
+def test_join_rejects_multi_statement_on_clause() -> None:
+    """Join conditions reject multi-statement strings."""
+    with pytest.raises(SQLBuilderError):
+        sql.select("*").from_("t").join("u", on="t.id = u.id; DROP TABLE u")

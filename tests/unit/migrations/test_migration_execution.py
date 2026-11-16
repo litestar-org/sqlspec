@@ -10,8 +10,10 @@ Tests migration execution including:
 """
 
 import ast
+import os
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -31,7 +33,7 @@ from sqlspec.migrations.base import (
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer, MigrationRename
-from sqlspec.migrations.loaders import PythonFileLoader, SQLFileLoader
+from sqlspec.migrations.loaders import PythonFileLoader, SQLFileLoader, find_project_root
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
@@ -65,6 +67,10 @@ class MockMigrationTracker(BaseMigrationTracker):
     def ensure_tracking_table(self, driver: Any) -> None:
         """Mock ensure tracking table."""
         pass
+
+    def renew_lock(self, driver: Any) -> None:
+        """Mock lease renewal."""
+        _ = driver
 
     def get_current_version(self, driver: Any) -> str | None:
         """Mock get current version."""
@@ -622,10 +628,8 @@ CREATE TABLE second (id INTEGER);
 
     runner = MockMigrationRunner(migrations_dir)
 
-    files = runner.get_migration_files()
-
-    versions = [version for version, _ in files]
-    assert versions.count("0001") == 2
+    with pytest.raises(MigrationError, match="Duplicate migration version '0001'"):
+        runner.get_migration_files()
 
 
 def test_upgrade_records_migration_returning_no_statements(temp_workspace_with_migrations: Path) -> None:
@@ -694,7 +698,7 @@ def test_squash_update_database_reads_target_file_and_retains_backup_until_commi
     f2 = tmp_path / "0002_second.sql"
     f2.write_text("-- name: migrate-0002-up\nSELECT 2;\n-- name: migrate-0002-down\nSELECT 2;\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -723,7 +727,7 @@ def test_stamp_records_all_ancestor_migrations_and_supports_base(tmp_path: Path)
     f3 = tmp_path / "0003_third.sql"
     f3.write_text("-- name: migrate-0003-up\nSELECT 3;\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -778,7 +782,7 @@ def test_downgrade_aborts_when_migration_lacks_downgrade(tmp_path: Path) -> None
     f2 = tmp_path / "0002_second.sql"
     f2.write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);\n")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -795,13 +799,14 @@ def test_downgrade_aborts_when_migration_lacks_downgrade(tmp_path: Path) -> None
     )
     commands.tracker.remove_migration = MagicMock()
 
-    commands.downgrade(revision="base", echo=False)
+    with pytest.raises(MigrationError):
+        commands.downgrade(revision="base", echo=False)
     commands.tracker.remove_migration.assert_not_called()
 
 
 def test_execute_migration_sql_resets_session_schema_before_on_success(tmp_path: Path) -> None:
     """Verify _execute_migration_sql resets session schema before invoking on_success."""
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.supports_migration_schemas = True
     runner = SyncMigrationRunner(tmp_path, context=MigrationContext(config=config))
     driver = MagicMock()
@@ -827,7 +832,7 @@ def test_upgrade_failure_logs_failed_summary_and_records_partial_metrics(tmp_pat
     f1 = tmp_path / "0001_first.sql"
     f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -843,7 +848,8 @@ def test_upgrade_failure_logs_failed_summary_and_records_partial_metrics(tmp_pat
     commands.runner.execute_upgrade = MagicMock(side_effect=RuntimeError("boom"))
 
     with patch("sqlspec.migrations.commands._log_command_summary") as mock_summary:
-        commands.upgrade(echo=False)
+        with pytest.raises(MigrationError, match="boom"):
+            commands.upgrade(echo=False)
         assert mock_summary.call_args.kwargs["status"] == "failed"
         assert isinstance(mock_summary.call_args.kwargs["error"], RuntimeError)
 
@@ -855,7 +861,7 @@ def test_synchronize_version_records_reconciles_with_pending_timestamp_present(t
     f2 = tmp_path / "20251011150000_new.sql"
     f2.write_text("-- name: migrate-20251011150000-up\nCREATE TABLE t2 (id INT);\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -896,7 +902,7 @@ def test_squash_when_target_filename_matches_first_source_file(tmp_path: Path) -
 
 def test_downgrade_to_core_revision_does_not_revert_extension_migrations(tmp_path: Path) -> None:
     """Verify _collect_revert_migrations('0001') ignores applied ext_* migrations."""
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -1029,7 +1035,7 @@ def test_downgrade_records_reverted_metric(tmp_path: Path) -> None:
     f1 = tmp_path / "0001_first.sql"
     f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n-- name: migrate-0001-down\nSELECT 1;\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -1041,7 +1047,10 @@ def test_downgrade_records_reverted_metric(tmp_path: Path) -> None:
 
     commands = SyncMigrationCommands(config)
     commands.tracker.ensure_tracking_table = MagicMock()
-    commands.tracker.get_applied_migrations = MagicMock(return_value=[{"version_num": "0001", "description": "first"}])
+    checksum = commands.runner.calculate_checksum(f1.read_text(encoding="utf-8"))
+    commands.tracker.get_applied_migrations = MagicMock(
+        return_value=[{"version_num": "0001", "description": "first", "checksum": checksum}]
+    )
     commands.tracker.remove_migration = MagicMock()
     commands._record_command_metric = MagicMock()
 
@@ -1094,3 +1103,48 @@ def test_dataclasses_and_exports_hygiene() -> None:
         SQLFileLoader,
         generate_conversion_map,
     )
+
+
+def test_find_project_root_stops_before_foreign_uid_ancestor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """find_project_root stops climbing on POSIX before entering a different non-root UID directory."""
+    if not hasattr(os, "getuid"):
+        pytest.skip("POSIX os.getuid required")
+
+    foreign_root = tmp_path / "foreign_workspace"
+    user_parent = foreign_root / "team"
+    migrations_dir = user_parent / "migrations"
+    migrations_dir.mkdir(parents=True)
+    (foreign_root / "pyproject.toml").write_text("[project]\nname = 'foreign'\n", encoding="utf-8")
+
+    current_uid = os.getuid()
+    foreign_uid = current_uid + 1000
+    resolved_foreign = foreign_root.resolve()
+    orig_stat = Path.stat
+
+    def _mock_stat(self_path: Path, *, follow_symlinks: bool = True) -> Any:
+        result = orig_stat(self_path, follow_symlinks=follow_symlinks)
+        if self_path == resolved_foreign:
+            return SimpleNamespace(st_uid=foreign_uid, st_mode=result.st_mode)
+        return SimpleNamespace(st_uid=current_uid, st_mode=result.st_mode)
+
+    monkeypatch.setattr(Path, "stat", _mock_stat)
+    assert find_project_root(migrations_dir) == user_parent.resolve()
+
+    user_migrations_directly_under_foreign = foreign_root / "direct_migrations"
+    user_migrations_directly_under_foreign.mkdir()
+    assert find_project_root(user_migrations_directly_under_foreign) == user_migrations_directly_under_foreign.resolve()
+
+    root_owned_workspace = tmp_path / "root_workspace"
+    child_dir = root_owned_workspace / "migrations"
+    child_dir.mkdir(parents=True)
+    (root_owned_workspace / "pyproject.toml").write_text("[project]\nname = 'rootpkg'\n", encoding="utf-8")
+    resolved_root_ws = root_owned_workspace.resolve()
+
+    def _mock_stat_root(self_path: Path, *, follow_symlinks: bool = True) -> Any:
+        result = orig_stat(self_path, follow_symlinks=follow_symlinks)
+        if self_path == resolved_root_ws:
+            return SimpleNamespace(st_uid=0, st_mode=result.st_mode)
+        return SimpleNamespace(st_uid=current_uid, st_mode=result.st_mode)
+
+    monkeypatch.setattr(Path, "stat", _mock_stat_root)
+    assert find_project_root(child_dir) == resolved_root_ws

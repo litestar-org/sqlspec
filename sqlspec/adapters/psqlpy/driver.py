@@ -5,9 +5,12 @@ and transaction management.
 """
 
 from contextlib import suppress
+from inspect import isawaitable
 from itertools import chain
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.psqlpy._typing import (
     PsqlpyConnectionExecuteError,
@@ -17,16 +20,17 @@ from sqlspec.adapters.psqlpy._typing import (
     PsqlpySessionContext,
 )
 from sqlspec.adapters.psqlpy.core import (
-    _DML_COUNT_COLUMN,
+    _CAST_DIALECTS,
     PsqlpyStreamSource,
-    _dml_count_query,
     coerce_json_columns,
     coerce_numeric_for_write,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
     extract_rows_affected,
+    fetch_dml_rowcount,
     format_execute_many_parameters,
     format_table_identifier,
     get_parameter_casts,
@@ -35,9 +39,8 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, DMLResult, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.core.sqlcommenter import split_sqlcomment
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
@@ -51,9 +54,8 @@ if TYPE_CHECKING:
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
 
-_CAST_DIALECTS = frozenset({"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch"})
 
-
+@mypyc_attr(allow_interpreted_subclasses=False)
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling psqlpy database exceptions.
 
@@ -73,6 +75,7 @@ class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class PsqlpyDriver(AsyncDriverAdapterBase):
     """PostgreSQL driver implementation using psqlpy.
 
@@ -99,6 +102,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         self._transaction_active = False
         pooler_mode = self.driver_features.get("pooler_mode", "session")
         self._pooler_unprepared = pooler_mode in {"transaction", "statement"}
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), PsqlpyDriver) else None
+        self._cache_hit_state = (self.driver_features, self._pooler_unprepared)
 
     @property
     def data_dictionary(self) -> "PsqlpyDataDictionary":
@@ -155,29 +160,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=rows_affected)
 
-    async def _fetch_dml_rowcount(
-        self, cursor: "PsqlpyConnection", sql: str, params: "Sequence[Any] | Mapping[str, Any]"
-    ) -> int | None:
-        base_sql, comment_suffix = split_sqlcomment(sql)
-        count_sql = _dml_count_query(base_sql)
-        if count_sql is None:
-            return None
-        wire_count_sql = f"{count_sql} {comment_suffix}" if comment_suffix else count_sql
-        count_result = (
-            await cursor.fetch(wire_count_sql, params, prepared=False)
-            if self._pooler_unprepared
-            else await cursor.fetch(wire_count_sql, params)
-        )
-        count_rows, _ = collect_rows(count_result)
-        if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
-            msg = "psqlpy DML row count query returned an invalid result"
-            raise SQLSpecError(msg)
-        rows_affected = count_rows[0][_DML_COUNT_COLUMN]
-        if type(rows_affected) is not int or rows_affected < 0:
-            msg = "psqlpy DML row count query returned an invalid count"
-            raise SQLSpecError(msg)
-        return rows_affected
-
     async def dispatch_execute_many(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets.
 
@@ -214,6 +196,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution metadata
         """
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return await self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config
@@ -274,6 +260,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def commit(self) -> None:
         """Commit the current transaction."""
+        if not await self._connection_in_transaction_async():
+            self._transaction_active = False
+            return
         try:
             await self.connection.execute("COMMIT")
         except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
@@ -283,6 +272,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
+        if not await self._connection_in_transaction_async():
+            self._transaction_active = False
+            return
         try:
             await self.connection.execute("ROLLBACK")
         except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
@@ -613,6 +605,21 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         synchronously; the state is tracked via a flag toggled in begin/commit/rollback.
         """
         return self._transaction_active
+
+    async def _connection_in_transaction_async(self) -> bool:
+        """Return whether the driver or underlying connection holds an open transaction."""
+        if self._transaction_active:
+            return True
+        in_transaction = getattr(self.connection, "in_transaction", None)
+        if callable(in_transaction):
+            res = in_transaction()
+            return bool(await res) if isawaitable(res) else bool(res)
+        return False
+
+    async def _fetch_dml_rowcount(
+        self, cursor: "PsqlpyConnection", sql: str, params: "Sequence[Any] | Mapping[str, Any]"
+    ) -> int | None:
+        return await fetch_dml_rowcount(cursor, sql, params, self._pooler_unprepared)
 
     def _is_transaction_pooler_mode(self) -> bool:
         return self._pooler_unprepared

@@ -20,6 +20,9 @@ Central registry for database configurations, connection pools, driver sessions,
         - get_session
         - provide_connection
         - provide_session
+        - provide_replica_connection
+        - provide_replica_session
+        - provide_routing_session
         - get_pool
         - close_pool
         - close_all_pools

@@ -17,6 +17,7 @@ from mypy_extensions import mypyc_attr
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage._paths import is_file_destination, parse_file_uri_path
+from sqlspec.storage._utils import sanitize_uri_for_log
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.storage.backends.local import LocalStore
 from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -74,7 +75,7 @@ class StorageRegistry:
             logging.DEBUG,
             "storage.alias.register",
             alias=alias,
-            uri=uri,
+            uri=sanitize_uri_for_log(uri),
             backend_type=backend_cls.__name__,
             base_path=base_path or None,
         )
@@ -127,12 +128,14 @@ class StorageRegistry:
             path_obj = Path(path_str).expanduser().resolve()
             base_uri = _local_backend_uri(path_obj)
         else:
-            msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
+            sanitized_input = sanitize_uri_for_log(path_str)
+            msg = f"Unknown storage alias or invalid URI: '{sanitized_input}'"
             raise ImproperConfigurationError(msg)
 
+        sanitized_log_uri = sanitize_uri_for_log(path_str)
         cache_key = (base_uri, self._make_hashable(cache_params)) if cache_params else base_uri
         if cache_key in self._instances:
-            log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=True)
+            log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=sanitized_log_uri, cached=True)
             return self._instances[cache_key]
 
         if not is_alias:
@@ -144,7 +147,7 @@ class StorageRegistry:
             instance = backend_cls(stored_uri, **{**config, **kwargs})
 
         self._instances[cache_key] = instance
-        log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=False)
+        log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=sanitized_log_uri, cached=False)
         return instance
 
     def is_alias_registered(self, alias: str) -> bool:

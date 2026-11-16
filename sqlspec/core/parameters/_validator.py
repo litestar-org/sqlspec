@@ -1,24 +1,36 @@
 """Parameter extraction utilities."""
 
 import re
+from bisect import bisect_left
 from collections import OrderedDict
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
 
-__all__ = ("PARAMETER_REGEX", "SNOWFLAKE_PARAMETER_REGEX", "ParameterValidator", "unescape_qmark_operator")
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+__all__ = (
+    "ANSI_PARAMETER_REGEX",
+    "BRACKET_PARAMETER_REGEX",
+    "MYSQL_PARAMETER_REGEX",
+    "PARAMETER_REGEX",
+    "SNOWFLAKE_PARAMETER_REGEX",
+    "ParameterValidator",
+    "unescape_qmark_operator",
+)
 
 _PARAM_CHARS: Final[frozenset[str]] = frozenset("?%:@$")
 
-PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
-    r"""
-    (?P<dquote>"(?:""|\\.|[^"\\])*") |
-    (?P<squote>'(?:''|\\.|[^'\\])*') |
-    (?P<dollar_quoted_string>\$(?P<dollar_quote_tag_inner>\w*)\$[\s\S]*?\$(?P=dollar_quote_tag_inner)\$) |
-    (?P<line_comment>--[^\r\n]*) |
-    (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
+_REGEX_FLAGS: Final = re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL
+_BLOCK_COMMENT_PATTERN: Final = r"(?P<block_comment>/\*(?:[^*]|\*(?!/))*(?:\*/|\Z))"
+_DOLLAR_QUOTED_PATTERN: Final = (
+    r"(?P<dollar_quoted_string>(?<![A-Za-z0-9_$])\$(?P<dollar_quote_tag_inner>(?:[A-Za-z_]\w*)?)\$"
+    r"[\s\S]*?(?:\$(?P=dollar_quote_tag_inner)\$|\Z))"
+)
+_PLACEHOLDER_PATTERNS: Final = r"""
     (?P<pg_q_operator>\?\?|\?\||\?&) |
     (?P<pg_cast>::(?P<cast_type>\w+)) |
     (?P<sql_server_global>@@(?P<global_var_name>\w+)) |
@@ -27,20 +39,83 @@ PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     (?P<positional_colon>(?<![A-Za-z0-9_]):(?P<colon_num>\d+)) |
     (?P<named_colon>(?<![A-Za-z0-9_]):(?P<colon_name>\w+)) |
     (?P<named_at>(?<![A-Za-z0-9_])@(?!sqlspec_)(?P<at_name>\w+)) |
-    (?P<numeric>(?<![A-Za-z0-9_])\$(?P<numeric_num>\d+)) |
-    (?P<named_dollar_param>(?<![A-Za-z0-9_])\$(?P<dollar_param_name>\w+)) |
+    (?P<numeric>(?<![A-Za-z0-9_$])\$(?P<numeric_num>\d+)) |
+    (?P<named_dollar_param>(?<![A-Za-z0-9_$])\$(?P<dollar_param_name>\w+)) |
     (?P<qmark>\?)
+"""
+
+PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
+    rf"""
+    (?P<dquote>"(?:""|\\.|[^"\\])*(?:"|\\?\Z)) |
+    (?P<squote>'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
+    {_DOLLAR_QUOTED_PATTERN} |
+    (?P<line_comment>--[^\r\n]*) |
+    {_BLOCK_COMMENT_PATTERN} |
+    {_PLACEHOLDER_PATTERNS}
     """,
-    re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    _REGEX_FLAGS,
+)
+
+ANSI_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
+    rf"""
+    (?P<dquote>"(?:""|[^"])*(?:"|\Z)) |
+    (?P<escape_squote>(?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
+    (?P<q_squote>(?<![A-Za-z0-9_])N?Q'(?:
+        \[[\s\S]*?(?:\]'|\Z) |
+        \{{[\s\S]*?(?:\}}'|\Z) |
+        \([\s\S]*?(?:\)'|\Z) |
+        <[\s\S]*?(?:>'|\Z) |
+        (?P<q_delimiter>[^\s\[{{(<'])[\s\S]*?(?:(?P=q_delimiter)'|\Z)
+    )) |
+    (?P<squote>'(?:''|[^'])*(?:'|\Z)) |
+    {_DOLLAR_QUOTED_PATTERN} |
+    (?P<line_comment>--[^\r\n]*) |
+    {_BLOCK_COMMENT_PATTERN} |
+    {_PLACEHOLDER_PATTERNS}
+    """,
+    _REGEX_FLAGS,
+)
+
+BRACKET_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
+    rf"""
+    (?P<dquote>"(?:""|[^"])*(?:"|\Z)) |
+    (?P<escape_squote>(?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
+    (?P<q_squote>(?<![A-Za-z0-9_])N?Q'(?:
+        \[[\s\S]*?(?:\]'|\Z) |
+        \{{[\s\S]*?(?:\}}'|\Z) |
+        \([\s\S]*?(?:\)'|\Z) |
+        <[\s\S]*?(?:>'|\Z) |
+        (?P<q_delimiter>[^\s\[{{(<'])[\s\S]*?(?:(?P=q_delimiter)'|\Z)
+    )) |
+    (?P<squote>'(?:''|[^'])*(?:'|\Z)) |
+    (?P<bracket_identifier>\[(?:\]\]|[^\]])*(?:\]|\Z)) |
+    {_DOLLAR_QUOTED_PATTERN} |
+    (?P<line_comment>--[^\r\n]*) |
+    {_BLOCK_COMMENT_PATTERN} |
+    {_PLACEHOLDER_PATTERNS}
+    """,
+    _REGEX_FLAGS,
+)
+
+MYSQL_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
+    rf"""
+    (?P<dquote>"(?:""|\\.|[^"\\])*(?:"|\\?\Z)) |
+    (?P<squote>'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
+    (?P<bquote>`(?:``|[^`])*(?:`|\Z)) |
+    (?P<line_comment>(?:--|\#)[^\r\n]*) |
+    {_BLOCK_COMMENT_PATTERN} |
+    {_PLACEHOLDER_PATTERNS}
+    """,
+    _REGEX_FLAGS,
 )
 
 SNOWFLAKE_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
-    r"""
-    (?P<dquote>"(?:""|\\.|[^"\\])*") |
-    (?P<squote>'(?:''|\\.|[^'\\])*') |
-    (?P<dollar_quoted_string>\$\$[\s\S]*?\$\$) |
+    rf"""
+    (?P<dquote>"(?:""|\\.|[^"\\])*(?:"|\\?\Z)) |
+    (?P<squote>'(?:''|\\.|[^'\\])*(?:'|\\?\Z)) |
+    (?P<dollar_quoted_string>\$\$[\s\S]*?(?:\$\$|\Z)) |
     (?P<line_comment>--[^\r\n]*) |
-    (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
+    {_BLOCK_COMMENT_PATTERN} |
     (?P<pg_q_operator>\?\?) |
     (?P<pg_cast>::(?P<cast_type>\w+)) |
     (?P<sql_server_global>@@(?P<global_var_name>\w+)) |
@@ -58,18 +133,97 @@ SNOWFLAKE_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     (?P<sf_word>[A-Za-z_][A-Za-z0-9_$]*) |
     (?P<sf_other>[^\s])
     """,
-    re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    _REGEX_FLAGS,
 )
 
-_SKIP_GROUPS: Final[tuple[str, ...]] = (
+_SKIP_GROUPS: Final[frozenset[str]] = frozenset({
     "dquote",
     "squote",
     "dollar_quoted_string",
     "line_comment",
     "block_comment",
+    "bracket_identifier",
     "pg_q_operator",
     "pg_cast",
     "sql_server_global",
+})
+_PARAMETER_GROUP_DISPATCH: Final[dict[str, tuple[ParameterStyle, str | None]]] = {
+    "qmark": (ParameterStyle.QMARK, None),
+    "named_colon": (ParameterStyle.NAMED_COLON, "colon_name"),
+    "numeric": (ParameterStyle.NUMERIC, "numeric_num"),
+    "named_at": (ParameterStyle.NAMED_AT, "at_name"),
+    "pyformat_named": (ParameterStyle.NAMED_PYFORMAT, "pyformat_name"),
+    "pyformat_pos": (ParameterStyle.POSITIONAL_PYFORMAT, None),
+    "positional_colon": (ParameterStyle.POSITIONAL_COLON, "colon_num"),
+    "named_dollar_param": (ParameterStyle.NAMED_DOLLAR, "dollar_param_name"),
+}
+_SNOWFLAKE_GROUP_DISPATCH: Final[dict[str, tuple[ParameterStyle, str | None]]] = {
+    "qmark": (ParameterStyle.QMARK, None),
+    "named_colon": (ParameterStyle.NAMED_COLON, "colon_name"),
+    "pyformat_named": (ParameterStyle.NAMED_PYFORMAT, "pyformat_name"),
+    "pyformat_pos": (ParameterStyle.POSITIONAL_PYFORMAT, None),
+    "positional_colon": (ParameterStyle.POSITIONAL_COLON, "colon_num"),
+}
+_SCANNER_ANSI: Final = "ansi"
+_SCANNER_BRACKET: Final = "bracket"
+_SCANNER_NESTED: Final = "ansi_nested"
+_SCANNER_MYSQL: Final = "mysql"
+_SCANNER_SNOWFLAKE: Final = "snowflake"
+_ANSI_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "postgresql",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "cockroach",
+    "cockroachdb",
+    "spangres",
+    "duckdb",
+    "oracle",
+    "db2",
+    "teradata",
+    "vantage",
+})
+_BRACKET_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
+    "sqlite",
+    "tsql",
+    "mssql",
+    "sqlserver",
+    "sybase",
+    "ase",
+    "sqlanywhere",
+})
+_NESTED_COMMENT_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "postgresql",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "cockroach",
+    "cockroachdb",
+    "spangres",
+    "duckdb",
+})
+_BACKSLASH_STRING_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb", "bigquery", "spanner"})
+_OPERAND_LOOKBEHIND_CHARS: Final = 128
+_ARRAY_SLICE_STOP_CHARS: Final[frozenset[str]] = frozenset(",;]=<>!|'\"`")
+_EMPTY_INT_FROZENSET: Final[frozenset[int]] = frozenset()
+_MYSQL_SET_BLOCK_OPENERS: Final[frozenset[str]] = frozenset({"BEGIN", "THEN", "ELSE", "DO"})
+_MYSQL_ASSIGN_SCAN_REGEX: Final[re.Pattern[str]] = re.compile(
+    r"""
+    "(?:""|\\.|[^"\\])*(?:"|\\?\Z) |
+    '(?:''|\\.|[^'\\])*(?:'|\\?\Z) |
+    `(?:``|[^`])*(?:`|\Z) |
+    --[^\r\n]* |
+    \#[^\r\n]* |
+    /\*(?:[^*]|\*(?!/))*(?:\*/|\Z) |
+    @@[A-Za-z_]\w* |
+    := |
+    (?P<at_var>(?<![A-Za-z0-9_@])@(?!sqlspec_)\w+) |
+    (?P<word>[A-Za-z_][A-Za-z0-9_$]*) |
+    (?P<punct>[(),;=])
+    """,
+    re.VERBOSE,
 )
 
 
@@ -78,22 +232,15 @@ _SNOWFLAKE_COLON_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
     ParameterStyle.NAMED_COLON,
     ParameterStyle.POSITIONAL_COLON,
 })
-_SNOWFLAKE_SKIP_GROUPS: Final[tuple[str, ...]] = (
-    *_SKIP_GROUPS,
+_SNOWFLAKE_SKIP_GROUPS: Final[frozenset[str]] = _SKIP_GROUPS | frozenset({
     "sf_slash_comment",
     "sf_user_stage",
     "sf_table_stage",
     "sf_named_stage",
     "sf_numeric_dollar",
     "sf_session_var",
-)
-
-
-def _normalize_dialect(dialect: str | None) -> str | None:
-    """Normalize an optional dialect identifier for lexical selection and caching."""
-    if dialect is None:
-        return None
-    return dialect.strip().lower() or None
+})
+_SNOWFLAKE_COMMENT_GROUPS: Final[frozenset[str]] = frozenset({"line_comment", "block_comment", "sf_slash_comment"})
 
 
 _OPERAND_START: Final = re.compile(r"\s*(?:'|\$\d|:[A-Za-z_]|%s(?!\w)|%\(\w+\)s|@\w|\?)")
@@ -195,7 +342,7 @@ class ParameterValidator:
 
     def extract_parameters(self, sql: str, dialect: str | None = None) -> "list[ParameterInfo]":
         """Extract ordered parameter metadata from SQL text."""
-        normalized_dialect = "snowflake" if _normalize_dialect(dialect) == "snowflake" else None
+        normalized_dialect = _resolve_scanner(dialect)
         if self._cache_max_size <= 0:
             return self._extract_parameters_uncached(sql, normalized_dialect)
 
@@ -216,38 +363,26 @@ class ParameterValidator:
     @staticmethod
     def _extract_parameter_style(match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
         """Map a regex match to a placeholder style and optional name."""
-        if match.group("qmark"):
-            return ParameterStyle.QMARK, None
-        if match.group("named_colon"):
-            return ParameterStyle.NAMED_COLON, match.group("colon_name")
-        if match.group("numeric"):
-            return ParameterStyle.NUMERIC, match.group("numeric_num")
-        if match.group("named_at"):
-            return ParameterStyle.NAMED_AT, match.group("at_name")
-        if match.group("pyformat_named"):
-            return ParameterStyle.NAMED_PYFORMAT, match.group("pyformat_name")
-        if match.group("pyformat_pos"):
-            return ParameterStyle.POSITIONAL_PYFORMAT, None
-        if match.group("positional_colon"):
-            return ParameterStyle.POSITIONAL_COLON, match.group("colon_num")
-        if match.group("named_dollar_param"):
-            return ParameterStyle.NAMED_DOLLAR, match.group("dollar_param_name")
-        return None, None
+        lastgroup = match.lastgroup
+        if lastgroup is None:
+            return None, None
+        entry = _PARAMETER_GROUP_DISPATCH.get(lastgroup)
+        if entry is None:
+            return None, None
+        style, name_group = entry
+        return style, (match.group(name_group) if name_group is not None else None)
 
     @staticmethod
     def _extract_snowflake_parameter_style(match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
         """Map the binding styles supported by the Snowflake lexical grammar."""
-        if match.group("qmark"):
-            return ParameterStyle.QMARK, None
-        if match.group("named_colon"):
-            return ParameterStyle.NAMED_COLON, match.group("colon_name")
-        if match.group("pyformat_named"):
-            return ParameterStyle.NAMED_PYFORMAT, match.group("pyformat_name")
-        if match.group("pyformat_pos"):
-            return ParameterStyle.POSITIONAL_PYFORMAT, None
-        if match.group("positional_colon"):
-            return ParameterStyle.POSITIONAL_COLON, match.group("colon_num")
-        return None, None
+        lastgroup = match.lastgroup
+        if lastgroup is None:
+            return None, None
+        entry = _SNOWFLAKE_GROUP_DISPATCH.get(lastgroup)
+        if entry is None:
+            return None, None
+        style, name_group = entry
+        return style, (match.group(name_group) if name_group is not None else None)
 
     def _extract_snowflake_parameters(self, sql: str) -> "list[ParameterInfo]":
         """Distinguish colon binds from path access using preceding meaningful tokens.
@@ -260,47 +395,122 @@ class ParameterValidator:
         parameters: list[ParameterInfo] = []
         preceding_operand = False
         for match in SNOWFLAKE_PARAMETER_REGEX.finditer(sql):
-            if match.group("line_comment") or match.group("block_comment") or match.group("sf_slash_comment"):
+            lastgroup = match.lastgroup
+            if lastgroup is None or lastgroup in _SNOWFLAKE_COMMENT_GROUPS:
                 continue
-            word = match.group("sf_word")
-            if word is not None:
-                preceding_operand = word.lower() not in _SNOWFLAKE_NON_OPERAND_KEYWORDS
+            if lastgroup == "sf_word":
+                preceding_operand = match.group(0).lower() not in _SNOWFLAKE_NON_OPERAND_KEYWORDS
                 continue
-            other = match.group("sf_other")
-            if other is not None:
+            if lastgroup == "sf_other":
+                other = match.group(0)
                 preceding_operand = other in ")]" or other.isdigit()
                 continue
-            if any(match.group(*_SNOWFLAKE_SKIP_GROUPS)):
-                preceding_operand = match.group("pg_q_operator") is None
+            if lastgroup in _SNOWFLAKE_SKIP_GROUPS:
+                preceding_operand = lastgroup != "pg_q_operator"
                 continue
-            style, name = self._extract_snowflake_parameter_style(match)
-            if style is None:
+            entry = _SNOWFLAKE_GROUP_DISPATCH.get(lastgroup)
+            if entry is None:
                 continue
+            style, name_group = entry
             if preceding_operand and style in _SNOWFLAKE_COLON_STYLES:
                 continue
             preceding_operand = True
+            name = match.group(name_group) if name_group is not None else None
             parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
         return parameters
 
     def _extract_parameters_uncached(self, sql: str, normalized_dialect: str | None = None) -> "list[ParameterInfo]":
-        if normalized_dialect == "snowflake":
+        if normalized_dialect == _SCANNER_SNOWFLAKE:
             return self._extract_snowflake_parameters(sql)
         if not _PARAM_CHARS.intersection(sql):
             return []
+        regex = _scanner_regex(normalized_dialect)
+        mysql_variable_assignment_positions = (
+            _mysql_variable_assignment_positions(sql) if normalized_dialect == _SCANNER_MYSQL else ()
+        )
         parameters: list[ParameterInfo] = []
-        for match in PARAMETER_REGEX.finditer(sql):
-            if any(match.group(*_SKIP_GROUPS)):
+        for match in _iter_matches(regex, sql, nested_comments=normalized_dialect == _SCANNER_NESTED):
+            lastgroup = match.lastgroup
+            if lastgroup is None:
                 continue
-            style, name = self._extract_parameter_style(match)
-            if style is None:
+            entry = _PARAMETER_GROUP_DISPATCH.get(lastgroup)
+            if entry is None:
                 continue
-            if match.group("qmark") and _OPERAND_START.match(sql, match.end()) and _follows_operand(sql, match.start()):
+            style, name_group = entry
+            if (
+                style is ParameterStyle.QMARK
+                and _OPERAND_START.match(sql, match.end())
+                and _follows_operand(sql, match.start())
+            ):
                 continue
+            if style is ParameterStyle.POSITIONAL_COLON and _is_positional_array_slice(sql, match.start()):
+                continue
+            if style is ParameterStyle.NAMED_AT and match.start() in mysql_variable_assignment_positions:
+                continue
+            name = match.group(name_group) if name_group is not None else None
             parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
         return parameters
 
 
 _QMARK_ESCAPE: Final[str] = "??"
+
+
+def _scanner_regex(scanner: str | None) -> "re.Pattern[str]":
+    """Return the compiled grammar for a resolved scanner key."""
+    if scanner == _SCANNER_SNOWFLAKE:
+        return SNOWFLAKE_PARAMETER_REGEX
+    if scanner in {_SCANNER_ANSI, _SCANNER_NESTED}:
+        return ANSI_PARAMETER_REGEX
+    if scanner == _SCANNER_BRACKET:
+        return BRACKET_PARAMETER_REGEX
+    if scanner == _SCANNER_MYSQL:
+        return MYSQL_PARAMETER_REGEX
+    return PARAMETER_REGEX
+
+
+def _nested_comment_end(sql: str, start: int) -> int:
+    """Return the index after the block comment that opens at ``start``, honoring nesting.
+
+    Args:
+        sql: SQL text.
+        start: Index of the opening ``/*``.
+
+    Returns:
+        Index just past the matching ``*/`` at depth zero, or ``len(sql)`` when unterminated.
+    """
+    depth = 0
+    index = start
+    length = len(sql)
+    while index < length - 1:
+        pair = sql[index : index + 2]
+        if pair == "/*":
+            depth += 1
+            index += 2
+        elif pair == "*/":
+            depth -= 1
+            index += 2
+            if depth == 0:
+                return index
+        else:
+            index += 1
+    return length
+
+
+def _iter_matches(regex: "re.Pattern[str]", sql: str, *, nested_comments: bool) -> "Iterator[re.Match[str]]":
+    """Yield grammar matches, resuming after the full extent of nested block comments."""
+    if not nested_comments:
+        yield from regex.finditer(sql)
+        return
+    position = 0
+    while True:
+        match = regex.search(sql, position)
+        if match is None:
+            return
+        yield match
+        if match.lastgroup == "block_comment":
+            position = max(match.end(), _nested_comment_end(sql, match.start()))
+        else:
+            position = match.end()
 
 
 def unescape_qmark_operator(
@@ -316,9 +526,10 @@ def unescape_qmark_operator(
     segments: list[str] = []
     escape_positions: list[int] = []
     last_end = 0
-    regex = SNOWFLAKE_PARAMETER_REGEX if _normalize_dialect(dialect) == "snowflake" else PARAMETER_REGEX
-    for match in regex.finditer(sql):
-        if match.group("pg_q_operator") != _QMARK_ESCAPE:
+    scanner = _resolve_scanner(dialect)
+    regex = _scanner_regex(scanner)
+    for match in _iter_matches(regex, sql, nested_comments=scanner == _SCANNER_NESTED):
+        if match.lastgroup != "pg_q_operator" or match.group(0) != _QMARK_ESCAPE:
             continue
         segments.extend((sql[last_end : match.start()], "?"))
         escape_positions.append(match.start())
@@ -326,29 +537,158 @@ def unescape_qmark_operator(
     if not escape_positions:
         return sql, infos
     segments.append(sql[last_end:])
-    shifted: list[ParameterInfo] = []
-    for info in infos:
-        removed = 0
-        for position in escape_positions:
-            if position < info.position:
-                removed += 1
-        shifted.append(
-            ParameterInfo(
-                name=info.name,
-                style=info.style,
-                position=info.position - removed,
-                ordinal=info.ordinal,
-                placeholder_text=info.placeholder_text,
-            )
+    shifted: list[ParameterInfo] = [
+        ParameterInfo(
+            name=info.name,
+            style=info.style,
+            position=info.position - bisect_left(escape_positions, info.position),
+            ordinal=info.ordinal,
+            placeholder_text=info.placeholder_text,
         )
+        for info in infos
+    ]
     return "".join(segments), shifted
 
 
 def _follows_operand(sql: str, start: int) -> bool:
-    head = sql[:start].rstrip()
-    if not head:
+    end = start
+    while end > 0 and sql[end - 1].isspace():
+        end -= 1
+    if end == 0:
         return False
-    if head[-1] in ")]\"'":
+    if sql[end - 1] in ")]\"'":
         return True
-    match = _PRECEDING_WORD.search(head)
+    match = _PRECEDING_WORD.search(sql, max(0, end - _OPERAND_LOOKBEHIND_CHARS), end)
     return bool(match and match.group(1).lower() not in _NON_OPERAND_KEYWORDS)
+
+
+def _preceding_bracket_is_subscript(sql: str, bracket_pos: int) -> bool:
+    idx = bracket_pos - 1
+    while idx >= 0 and sql[idx].isspace():
+        idx -= 1
+    if idx < 0:
+        return False
+    ch = sql[idx]
+    if ch in ")]":
+        return True
+    if ch.isalnum() or ch == "_":
+        word_end = idx + 1
+        while idx >= 0 and (sql[idx].isalnum() or sql[idx] == "_"):
+            idx -= 1
+        word = sql[idx + 1 : word_end].lower()
+        if word == "array":
+            while idx >= 0 and sql[idx].isspace():
+                idx -= 1
+            return idx >= 0 and sql[idx] == "."
+        return word not in _NON_OPERAND_KEYWORDS
+    return False
+
+
+def _is_positional_array_slice(sql: str, colon_pos: int) -> bool:
+    idx = colon_pos - 1
+    paren_depth = 0
+    while idx >= 0:
+        ch = sql[idx]
+        if ch == ")":
+            paren_depth += 1
+        elif ch == "(":
+            if paren_depth == 0:
+                return False
+            paren_depth -= 1
+        elif paren_depth == 0:
+            if ch == "[":
+                return _preceding_bracket_is_subscript(sql, idx)
+            if ch in _ARRAY_SLICE_STOP_CHARS:
+                return False
+        idx -= 1
+    return False
+
+
+def _mysql_variable_assignment_positions(sql: str) -> "frozenset[int] | set[int]":
+    if "@" not in sql or "=" not in sql:
+        return _EMPTY_INT_FROZENSET
+    lhs_positions: set[int] = set()
+    stmt_keyword: str | None = None
+    paren_depth = 0
+    expecting_set_lhs = False
+    prev_at_start: int | None = None
+    is_candidate_set_lhs = False
+    for match in _MYSQL_ASSIGN_SCAN_REGEX.finditer(sql):
+        group_name = match.lastgroup
+        lexeme = match.group(0)
+        if lexeme == ":=":
+            if prev_at_start is not None:
+                lhs_positions.add(prev_at_start)
+            prev_at_start = None
+            is_candidate_set_lhs = False
+            expecting_set_lhs = False
+            continue
+        if group_name == "at_var":
+            prev_at_start = match.start()
+            is_candidate_set_lhs = expecting_set_lhs and paren_depth == 0
+            expecting_set_lhs = False
+            continue
+        if group_name == "punct":
+            if lexeme == ";":
+                stmt_keyword = None
+                paren_depth = 0
+                expecting_set_lhs = False
+            elif lexeme == "(":
+                paren_depth += 1
+                expecting_set_lhs = False
+            elif lexeme == ")":
+                if paren_depth > 0:
+                    paren_depth -= 1
+                expecting_set_lhs = False
+            elif lexeme == ",":
+                expecting_set_lhs = paren_depth == 0 and stmt_keyword == "SET"
+            elif lexeme == "=":
+                if prev_at_start is not None and is_candidate_set_lhs:
+                    lhs_positions.add(prev_at_start)
+                expecting_set_lhs = False
+            prev_at_start = None
+            is_candidate_set_lhs = False
+            continue
+        if group_name == "word":
+            upper = lexeme.upper()
+            if upper in _MYSQL_SET_BLOCK_OPENERS and paren_depth == 0:
+                stmt_keyword = None
+                expecting_set_lhs = False
+            elif stmt_keyword is None:
+                stmt_keyword = upper
+                expecting_set_lhs = upper == "SET"
+            else:
+                expecting_set_lhs = False
+            prev_at_start = None
+            is_candidate_set_lhs = False
+    return lhs_positions
+
+
+def _normalize_dialect(dialect: str | None) -> str | None:
+    """Normalize an optional dialect identifier for lexical selection and caching."""
+    if dialect is None:
+        return None
+    return dialect.strip().lower() or None
+
+
+def _resolve_scanner(dialect: str | None) -> str | None:
+    """Select the lexical grammar for a dialect.
+
+    Dialects whose string literals treat backslashes literally use the ANSI
+    grammar. MySQL-family dialects add ``#`` comments and backtick identifiers.
+    Unknown dialects keep the permissive default grammar.
+    """
+    normalized = _normalize_dialect(dialect)
+    if normalized is None:
+        return None
+    if normalized == _SCANNER_SNOWFLAKE:
+        return _SCANNER_SNOWFLAKE
+    if normalized in _NESTED_COMMENT_DIALECTS:
+        return _SCANNER_NESTED
+    if normalized in _BRACKET_STRING_DIALECTS:
+        return _SCANNER_BRACKET
+    if normalized in _ANSI_STRING_DIALECTS:
+        return _SCANNER_ANSI
+    if normalized in _BACKSLASH_STRING_DIALECTS:
+        return _SCANNER_MYSQL
+    return None

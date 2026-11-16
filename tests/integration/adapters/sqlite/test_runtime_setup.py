@@ -5,12 +5,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-import aiosqlite
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import OperationalError, SQLSpecError
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -275,7 +274,7 @@ async def test_extension_loading_attempts_paths(runtime_config_factory: RuntimeC
     """Configured extension paths are attempted by both drivers."""
     config = runtime_config_factory(driver_features={"extensions": [str(tmp_path / "missing_extension.so")]})
     try:
-        with pytest.raises((sqlite3.OperationalError, aiosqlite.OperationalError)):
+        with pytest.raises(OperationalError):
             await _select(config, "SELECT 1")
     finally:
         await _close_config(config)

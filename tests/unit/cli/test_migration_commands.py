@@ -531,10 +531,59 @@ def get_config():
 """
     module_name = _create_module(config_module, tmp_path)
 
-    result = runner.invoke(add_migration_commands(), ["--config", f"{module_name}.get_config", "stamp", "abc123"])
+    result = runner.invoke(
+        add_migration_commands(), ["--config", f"{module_name}.get_config", "stamp", "abc123", "--no-prompt"]
+    )
 
     assert result.exit_code == 0
     mock_commands.stamp.assert_called_once_with(revision="abc123")
+
+
+@pytest.mark.parametrize(
+    ("cli_extra_args", "cli_input", "expected_called"),
+    [(["--no-prompt"], None, True), ([], "y\n", True), ([], "n\n", False)],
+    ids=["no-prompt", "confirm-yes", "confirm-no"],
+)
+@patch("sqlspec.migrations.commands.create_migration_commands")
+def test_stamp_confirmation_prompt(
+    mock_create_commands: "Mock",
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_test_modules: None,
+    cli_extra_args: list[str],
+    cli_input: str | None,
+    expected_called: bool,
+) -> None:
+    """stamp prompts for confirmation unless --no-prompt is provided."""
+    runner = CliRunner()
+    monkeypatch.chdir(tmp_path)
+
+    mock_commands = Mock()
+    mock_commands.stamp = Mock(return_value=None)
+    mock_create_commands.return_value = mock_commands
+
+    config_module = """
+from sqlspec.adapters.sqlite.config import SqliteConfig
+
+def get_config():
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    config.bind_key = "stamp_prompt_test"
+    config.migration_config = {"enabled": True}
+    return config
+"""
+    module_name = _create_module(config_module, tmp_path)
+
+    result = runner.invoke(
+        add_migration_commands(),
+        ["--config", f"{module_name}.get_config", "stamp", "0001", *cli_extra_args],
+        input=cli_input,
+    )
+
+    assert result.exit_code == 0
+    if expected_called:
+        mock_commands.stamp.assert_called_once_with(revision="0001")
+    else:
+        mock_commands.stamp.assert_not_called()
 
 
 @patch("sqlspec.migrations.commands.create_migration_commands")

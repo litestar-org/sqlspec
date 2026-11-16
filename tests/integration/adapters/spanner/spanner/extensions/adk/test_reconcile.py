@@ -32,19 +32,19 @@ def _drop_index_if_exists(database: "Database", index_name: str, kind: str = "IN
 
 
 def _table_names(config: SpannerSyncConfig) -> set[str]:
-    with config.provide_read_session() as driver:
+    with config.provide_replica_session() as driver:
         rows = driver.data_dictionary.get_tables(driver)
     return {str(row["table_name"]) for row in rows}
 
 
 def _index_names(config: SpannerSyncConfig, table_name: str) -> set[str]:
-    with config.provide_read_session() as driver:
+    with config.provide_replica_session() as driver:
         rows = driver.data_dictionary.get_indexes(driver, table=table_name)
     return {str(row["index_name"]) for row in rows}
 
 
 def _column_names(config: SpannerSyncConfig, table_name: str) -> set[str]:
-    with config.provide_read_session() as driver:
+    with config.provide_replica_session() as driver:
         rows = driver.data_dictionary.get_columns(driver, table=table_name)
     return {str(row["column_name"]) for row in rows}
 
@@ -201,7 +201,7 @@ async def test_spanner_emulator_reconciles_litestar_events_adk_and_artifact_end_
         assert await litestar_store.get("ls-1") == b"payload"
 
         if ledger_table in _table_names(evolved_config):
-            with evolved_config.provide_read_session() as driver:
+            with evolved_config.provide_replica_session() as driver:
                 ledger_rows = driver.select(f"SELECT version_num FROM {ledger_table}")
             ext_versions = [
                 str(row["version_num"]) for row in ledger_rows if str(row["version_num"]).startswith("ext_")

@@ -122,7 +122,7 @@ async def test_aiosqlite_memory_store_delete_by_session() -> None:
         record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
         await store.insert_memory_entries([record1, record2])
 
-        deleted = await store.delete_entries_by_session("s1")
+        deleted = await store.delete_entries_by_session("s1", "app", "user")
         assert deleted == 1
 
         remaining = await store.search_entries(query="latte", app_name="app", user_id="user")
@@ -301,7 +301,7 @@ async def test_aiosqlite_fts_companions_create_for_empty_source() -> None:
             assert len(await fts_store.search_entries("latte", "app", "user")) == 1
             assert len(await fts_store.search_entries("espresso", "app", "user")) == 0
 
-            await fts_store.delete_entries_by_session("s1")
+            await fts_store.delete_entries_by_session("s1", "app", "user")
             assert len(await fts_store.search_entries("latte", "app", "user")) == 0
         finally:
             await plain_config.close_pool()

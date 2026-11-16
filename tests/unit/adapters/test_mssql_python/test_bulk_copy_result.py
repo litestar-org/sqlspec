@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver, _coerce_bulk_copy_result
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 class _FakeCursor:
@@ -49,3 +50,17 @@ def test_bulk_copy_defaults_match_upstream(driver_cls: Any) -> None:
         "use_internal_transaction",
     ):
         assert wrapper[name].default == upstream[name].default
+
+
+@pytest.mark.parametrize("bad_table", ["", "dbo.", "[unclosed", "users\x00", "bad;table"])
+def test_bulk_copy_rejects_invalid_target_table(bad_table: str) -> None:
+    driver = MssqlPythonDriver(cast("Any", object()))
+    with pytest.raises(ImproperConfigurationError):
+        driver.bulk_copy(bad_table, [(1,)])
+
+
+@pytest.mark.parametrize("bad_mappings", [["bad;col"], ["col\x00"], ["dbo.col"], [(0, "[unclosed")], [(-1, "col")]])
+def test_bulk_copy_rejects_invalid_column_mappings(bad_mappings: Any) -> None:
+    driver = MssqlPythonDriver(cast("Any", object()))
+    with pytest.raises((ImproperConfigurationError, SQLSpecError)):
+        driver.bulk_copy("dbo.users", [(1,)], column_mappings=bad_mappings)

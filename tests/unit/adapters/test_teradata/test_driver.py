@@ -257,3 +257,36 @@ def test_teradata_collect_rows_stream_casing_and_nested_exception_paths() -> Non
     handler = TeradataExceptionHandler()
     assert handler._handle_exception(None, RuntimeError("ignored")) is False
     assert handler._handle_exception(UniqueViolationError, UniqueViolationError("already mapped")) is False
+
+
+def test_teradata_driver_tracks_session_query_band_dirty_across_execution_paths() -> None:
+    """_session_query_band_dirty stays False for normal/tx queries and flips True on session query-band writes."""
+    connection = MagicMock()
+    connection.autocommit = True
+    cursor = connection.cursor.return_value
+    cursor.description = None
+    cursor.rowcount = 0
+
+    clean_driver = TeradataDriver(connection)
+    assert clean_driver._session_query_band_dirty is False
+    clean_driver.execute("INSERT INTO orders VALUES (?)", (1,))
+    clean_driver.begin()
+    clean_driver.set_query_band({"tx": "1"}, transaction=True)
+    clean_driver.commit()
+    assert clean_driver._session_query_band_dirty is False
+
+    band_driver = TeradataDriver(connection)
+    band_driver.set_query_band({"app": "etl"})
+    assert band_driver._session_query_band_dirty is True
+
+    raw_first = TeradataDriver(connection)
+    raw_first.execute("SET QUERY_BAND = 'app=raw;' FOR SESSION")
+    assert raw_first._session_query_band_dirty is True
+
+    raw_cached = TeradataDriver(connection)
+    raw_cached.execute("SET QUERY_BAND = 'app=raw;' FOR SESSION")
+    assert raw_cached._session_query_band_dirty is True
+
+    script_driver = TeradataDriver(connection)
+    script_driver.execute_script("SELECT 1; SET QUERY_BAND = 'app=script;' FOR SESSION;")
+    assert script_driver._session_query_band_dirty is True

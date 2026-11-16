@@ -5,6 +5,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,22 +13,28 @@ pytest.importorskip("starlette")
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
 from sqlspec.extensions.starlette import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
+from sqlspec.extensions.starlette._utils import _get_connected_db_session, get_state_value, set_state_value
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 from sqlspec.extensions.starlette.middleware import (
-    SQLSpecAutocommitMiddleware,
-    SQLSpecManualMiddleware,
-    acquire_pending_connection_async,
+    SQLSpecTransactionMiddleware,
+    _finalize_request_transaction,
+    _response_completion_key,
+    _ResponseCompletion,
+    ensure_request_connection_async,
 )
+from sqlspec.observability import ObservabilityConfig
+from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.tenant import TenantContext
 from tests.unit.extensions._tenant_configs import AsyncRecordingStrategy, TenantAiosqliteConfig
 
@@ -36,7 +43,7 @@ if TYPE_CHECKING:
 
     from starlette.types import Message
 
-    from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.config import DatabaseConfigProtocol, LifecycleConfig
     from sqlspec.extensions.starlette._state import CommitMode
 
 
@@ -143,7 +150,9 @@ class _Config:
         return self.manager
 
 
-def _make_state(config: _Config | SimpleNamespace, commit_mode: "CommitMode" = "manual") -> SQLSpecConfigState:
+def _make_state(
+    config: "DatabaseConfigProtocol[Any, Any, Any] | _Config | SimpleNamespace", commit_mode: "CommitMode" = "manual"
+) -> SQLSpecConfigState:
     return SQLSpecConfigState(
         config=cast("DatabaseConfigProtocol[Any, Any, Any]", config),
         connection_key="db_connection",
@@ -160,82 +169,96 @@ def _make_request(pool: Any = None) -> Any:
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)), state=SimpleNamespace())
 
 
-async def test_middleware_manual_middleware_connection_cm_no_pool_sets_and_closes_connection() -> None:
+async def _serve_request(
+    state: SQLSpecConfigState, *, pool: Any = None, status: int = 200, error: BaseException | None = None
+) -> "list[Message]":
+    """Run one HTTP request through ``SQLSpecTransactionMiddleware`` and return the messages sent.
+
+    The downstream app checks out the request connection, then raises ``error`` or responds with ``status``.
+
+    Returns:
+        The ASGI messages the middleware forwarded to ``send``.
+    """
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        await ensure_request_connection_async(Request(scope), state)
+        if error is not None:
+            raise error
+        await send({"type": "http.response.start", "status": status, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    async def receive() -> "Message":
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    messages: list[Message] = []
+
+    async def send(message: "Message") -> None:
+        messages.append(message)
+
+    scope = {"type": "http", "app": SimpleNamespace(state=SimpleNamespace(db_pool=pool))}
+    await SQLSpecTransactionMiddleware(app, [state])(scope, receive, send)
+    return messages
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("commit_mode", "status", "expect_commit"),
+    [
+        ("manual", 200, False),
+        ("autocommit", 201, True),
+        ("autocommit", 302, False),
+        ("autocommit_include_redirect", 302, True),
+    ],
+)
+async def test_transaction_middleware_closes_direct_connection_per_commit_mode(
+    commit_mode: str, status: int, expect_commit: bool
+) -> None:
     connection = _Connection()
     config = _Config(pooled=False, connection=connection)
-    middleware = SQLSpecManualMiddleware(app=object(), config_state=_make_state(config))
-    request = _make_request()
-    seen: list[_Connection] = []
+    state = _make_state(config, cast("CommitMode", commit_mode))
 
-    async def call_next(request_: Any) -> Response:
-        seen.append(await acquire_pending_connection_async(request_, middleware.config_state))
-        return Response(status_code=204)
+    messages = await _serve_request(state, status=status)
 
-    response = await middleware.dispatch(request, call_next)
-    assert response.status_code == 204
-    assert seen == [connection]
+    assert messages[0]["status"] == status
     assert config.created is True
+    assert connection.committed is expect_commit
+    assert connection.rolled_back is not expect_commit
     assert connection.closed is True
-    assert not hasattr(request.state, "db_connection")
 
 
-async def test_middleware_manual_middleware_connection_cm_pool_uses_pool_context() -> None:
+@pytest.mark.anyio
+@pytest.mark.parametrize("commit_mode", ["manual", "autocommit"])
+async def test_transaction_middleware_pool_context_wraps_the_request(commit_mode: str) -> None:
     connection = _Connection()
     manager = _ConnectionManager(connection)
     pool = object()
     config = _Config(pooled=True, connection=connection, manager=manager)
-    middleware = SQLSpecManualMiddleware(app=object(), config_state=_make_state(config))
-    request = _make_request(pool)
+    state = _make_state(config, cast("CommitMode", commit_mode))
 
-    async def call_next(request_: Any) -> Response:
-        assert await acquire_pending_connection_async(request_, middleware.config_state) is connection
-        return Response(status_code=200)
+    messages = await _serve_request(state, pool=pool)
 
-    response = await middleware.dispatch(request, call_next)
-    assert response.status_code == 200
+    assert messages[0]["status"] == 200
     assert config.pool_seen is pool
     assert manager.entered is True
     assert manager.exited is True
+    assert connection.committed is (commit_mode == "autocommit")
     assert connection.closed is False
-    assert not hasattr(request.state, "db_connection")
 
 
-async def test_middleware_autocommit_middleware_connection_cm_no_pool_commits_and_closes() -> None:
-    connection = _Connection()
-    config = _Config(pooled=False, connection=connection)
-    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config, "autocommit"))
-    request = _make_request()
-
-    async def call_next(request_: Any) -> Response:
-        assert await acquire_pending_connection_async(request_, middleware.config_state) is connection
-        return Response(status_code=201)
-
-    response = await middleware.dispatch(request, call_next)
-    assert response.status_code == 201
-    assert connection.committed is True
-    assert connection.rolled_back is False
-    assert connection.closed is True
-    assert not hasattr(request.state, "db_connection")
-
-
-async def test_middleware_autocommit_middleware_connection_cm_pool_rolls_back_on_exception() -> None:
+@pytest.mark.anyio
+@pytest.mark.parametrize("commit_mode", ["manual", "autocommit", "autocommit_include_redirect"])
+async def test_transaction_middleware_rolls_back_and_reraises_handler_errors(commit_mode: str) -> None:
     connection = _Connection()
     manager = _ConnectionManager(connection)
     config = _Config(pooled=True, connection=connection, manager=manager)
-    middleware = SQLSpecAutocommitMiddleware(app=object(), config_state=_make_state(config, "autocommit"))
-    request = _make_request(object())
-
-    async def call_next(_request: Any) -> Response:
-        await acquire_pending_connection_async(_request, middleware.config_state)
-        raise RuntimeError("boom")
+    state = _make_state(config, cast("CommitMode", commit_mode))
 
     with pytest.raises(RuntimeError, match="boom"):
-        await middleware.dispatch(request, call_next)
+        await _serve_request(state, pool=object(), error=RuntimeError("boom"))
+
     assert connection.committed is False
     assert connection.rolled_back is True
-    assert connection.closed is False
     assert manager.exited is True
-    assert not hasattr(request.state, "db_connection")
 
 
 def test_duplicate_state_keys_raise_improper_configuration_error() -> None:
@@ -336,7 +359,7 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
             raise ValueError("background failure")
 
     async def endpoint(request: Request) -> StreamingResponse:
-        await acquire_pending_connection_async(request, state)
+        await ensure_request_connection_async(request, state)
         return StreamingResponse(body(), background=BackgroundTask(background))
 
     if framework == "fastapi":
@@ -349,8 +372,7 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
     app.state.db_pool = object()
     config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
     state = _make_state(config, cast("CommitMode", mode))
-    middleware_type = SQLSpecManualMiddleware if mode == "manual" else SQLSpecAutocommitMiddleware
-    middleware = middleware_type(app=app, config_state=state)
+    middleware = SQLSpecTransactionMiddleware(app=app, config_states=[state])
     scope = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.4"},
@@ -398,6 +420,9 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
             gate.set()
             if failure is None:
                 await asyncio.wait_for(task, timeout=3)
+            elif failure == "send":
+                with pytest.raises(ClientDisconnect):
+                    await asyncio.wait_for(task, timeout=3)
             else:
                 with pytest.raises((ValueError, OSError), match=f"{failure} failure"):
                     await asyncio.wait_for(task, timeout=3)
@@ -408,10 +433,11 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
     if failure is None:
         assert events.index("body_query") < events.index("final_sent")
         assert events.index("background_query") < events.index("release")
-        if mode == "autocommit":
-            assert events.index("background_query") < events.index("commit") < events.index("release")
+        op = "commit" if mode == "autocommit" else "rollback"
+        assert events.index("background_query") < events.index(op) < events.index("release")
     if mode == "manual":
-        assert "commit" not in events and "rollback" not in events
+        assert "commit" not in events
+        assert events.count("rollback") == 1
     elif failure is not None:
         assert "commit" not in events
         assert events.count("rollback") == 1
@@ -426,7 +452,7 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
         yield connection
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
-        await acquire_pending_connection_async(Request(scope), state)
+        await ensure_request_connection_async(Request(scope), state)
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"partial", "more_body": True})
 
@@ -440,28 +466,30 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
 
     config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
     state = _make_state(config, "autocommit")
-    middleware = SQLSpecAutocommitMiddleware(app=app, config_state=state)
+    middleware = SQLSpecTransactionMiddleware(app=app, config_states=[state])
     scope = {"type": "http", "app": SimpleNamespace(state=SimpleNamespace(db_pool=object()))}
     await middleware(scope, receive, send)
-    assert messages[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
+    assert messages[-1] == {"type": "http.response.body", "body": b"partial", "more_body": True}
     assert connection.rolled_back is True
     assert connection.committed is False
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("scope_type", ["lifespan", "websocket"])
-@pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
-async def test_tenant_connection_middleware_non_http_passthrough(scope_type: str, middleware_type: Any) -> None:
+@pytest.mark.parametrize("commit_mode", ["manual", "autocommit"])
+async def test_tenant_connection_middleware_non_http_passthrough(scope_type: str, commit_mode: str) -> None:
     events = []
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
         events.append((scope["type"], TenantContext.get_tenant_id()))
 
     config = _Config(pooled=False, connection=_Connection())
-    state = _make_state(config)
+    state = _make_state(config, cast("CommitMode", commit_mode))
     state.tenant_extractor = lambda scope: pytest.fail("non-http extractor invoked")
     with TenantContext.scope("outer"):
-        await middleware_type(app=app, config_state=state)({"type": scope_type}, None, None)
+        await SQLSpecTransactionMiddleware(app=app, config_states=[state])(
+            {"type": scope_type}, cast("Any", None), cast("Any", None)
+        )
         assert TenantContext.get_tenant_id() == "outer"
     assert events == [(scope_type, "outer")]
     assert config.created is False
@@ -488,7 +516,7 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
             events.append("release")
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
-        await acquire_pending_connection_async(Request(scope), state)
+        await ensure_request_connection_async(Request(scope), state)
         raise body_error
 
     async def receive() -> "Message":
@@ -503,7 +531,7 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
     scope = {"type": "http", "app": SimpleNamespace(state=SimpleNamespace(db_pool=object()))}
     with TenantContext.scope("outer"):
         with pytest.raises(ValueError) as caught:
-            await SQLSpecAutocommitMiddleware(app=app, config_state=state)(scope, receive, send)
+            await SQLSpecTransactionMiddleware(app=app, config_states=[state])(scope, receive, send)
         assert caught.value is body_error
         assert TenantContext.get_tenant_id() == "outer"
     assert events == ["rollback", "body_forwarded", "release"]
@@ -516,8 +544,25 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
     events: list[str] = []
 
     class _SessionDriver:
-        def __init__(self, connection: Any, **_kwargs: Any) -> None:
-            self.connection = connection
+        _cache_holder = None
+
+        def __init__(self, connection: Any, statement_config: Any = None, driver_features: Any = None) -> None:
+            self.connection: Any = connection
+            self.statement_config = statement_config
+            self.driver_features = driver_features or {}
+            self.observability = SimpleNamespace(is_idle=True)
+
+        def attach_observability(self, observability: Any) -> None:
+            self.observability = observability
+
+        async def commit(self) -> None:
+            await self.connection.commit()
+
+        async def rollback(self) -> None:
+            await self.connection.rollback()
+
+        def _mark_closed(self) -> None:
+            self.connection = None
 
     class _DeferredTenantConfig(AiosqliteConfig):
         driver_type: ClassVar[type[Any]] = _SessionDriver
@@ -682,3 +727,379 @@ def test_request_connection_is_checked_out_on_first_access_only(framework: str, 
         assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
     finally:
         reader.close()
+
+
+def test_starlette_session_lifecycle_events_detachment_and_response_completion() -> None:
+    """Starlette builds sessions via _prepare_driver, emits start/end, uses slotted _ResponseCompletion, keeps StreamingResponse connected, and detaches."""
+    lifecycle_events: list[tuple[str, Any]] = []
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"starlette": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast(
+                "LifecycleConfig",
+                {
+                    "on_session_start": [lambda ctx: lifecycle_events.append(("start", ctx["session"]))],
+                    "on_session_end": [lambda ctx: lifecycle_events.append(("end", ctx["session"]))],
+                },
+            )
+        ),
+    )
+    prepare_calls: list[Any] = []
+    original_prepare = config._prepare_driver
+
+    def _tracking_prepare(driver: Any) -> Any:
+        prepare_calls.append(driver)
+        return original_prepare(driver)
+
+    config._prepare_driver = _tracking_prepare  # type: ignore[method-assign]
+    retained_sessions: list[Any] = []
+    seen_completions: list[Any] = []
+
+    async def stream_route(request: Request) -> StreamingResponse:
+        session = await plugin.get_session_async(request)
+        assert await plugin.get_session_async(request) is session
+        retained_sessions.append(session)
+        owner = get_state_value(request.state, _response_completion_key("db_connection"))
+        seen_completions.append(owner)
+
+        async def chunks() -> "AsyncIterator[bytes]":
+            first = await session.select_value("SELECT 1")
+            yield f"{first}:".encode()
+            second = await session.select_value("SELECT 2")
+            yield f"{second}".encode()
+
+        return StreamingResponse(chunks())
+
+    app = Starlette(routes=[Route("/stream", stream_route)])
+    plugin = SQLSpecPlugin(config, app)
+
+    with TestClient(app) as client:
+        resp = client.get("/stream")
+        assert resp.status_code == 200
+        assert resp.text == "1:2"
+
+    assert len(prepare_calls) == 1
+    assert len(retained_sessions) == 1
+    session = retained_sessions[0]
+    assert lifecycle_events == [("start", session), ("end", session)]
+    assert len(seen_completions) == 1
+    assert isinstance(seen_completions[0], _ResponseCompletion)
+    assert not hasattr(seen_completions[0], "__dict__")
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        _ = session.connection.cursor
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("adapter_kind", "commit_mode", "in_tx", "expect_auto_begin", "expect_commit"),
+    [
+        ("asyncpg", "autocommit", False, True, False),
+        ("asyncpg", "autocommit", True, True, True),
+        ("asyncpg", "autocommit_include_redirect", False, True, False),
+        ("asyncpg", "manual", False, True, False),
+        ("asyncpg", "manual", True, True, False),
+        ("aiosqlite", "autocommit", False, False, True),
+    ],
+)
+async def test_starlette_armed_and_unarmed_session_finalization(
+    adapter_kind: str, commit_mode: str, in_tx: bool, expect_auto_begin: bool, expect_commit: bool
+) -> None:
+    """Starlette arms _auto_begin_on_write on lazy-begin adapters and skips commit when idle outside a transaction."""
+    config: Any = (
+        AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"})
+        if adapter_kind == "asyncpg"
+        else AiosqliteConfig(connection_config={"database": ":memory:"})
+    )
+    state = _make_state(config, cast("CommitMode", commit_mode))
+    request = _make_request()
+    tx = AsyncMock()
+    if adapter_kind == "asyncpg":
+        conn: Any = AsyncMock(is_in_transaction=MagicMock(return_value=in_tx))
+    else:
+        conn = AsyncMock(_conn=None, autocommit=False, in_transaction=in_tx)
+    set_state_value(request.state, state.connection_key, conn)
+
+    session = _get_connected_db_session(request, state)
+    assert session._auto_begin_on_write is expect_auto_begin
+    if adapter_kind == "asyncpg":
+        session._transaction = tx
+
+    if commit_mode == "manual":
+        await _finalize_request_transaction(request, state, conn, commit=False)
+        rolled_back = (tx.rollback.await_count > 0) if adapter_kind == "asyncpg" else (conn.rollback.await_count > 0)
+        assert rolled_back is in_tx
+    else:
+        await _finalize_request_transaction(request, state, conn, commit=True)
+
+    committed = (tx.commit.await_count > 0) if adapter_kind == "asyncpg" else (conn.commit.await_count > 0)
+    assert committed is expect_commit
+
+
+@pytest.mark.anyio
+async def test_starlette_autocommit_rolls_back_on_cancellation() -> None:
+    """SQLSpecTransactionMiddleware rolls back the connection on asyncio.CancelledError."""
+    conn = AsyncMock(_conn=None, autocommit=False, in_transaction=True)
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    config.provide_connection = MagicMock(return_value=_AsyncConnCtx(conn))  # type: ignore[method-assign]
+    state = _make_state(config, "autocommit")
+
+    with pytest.raises(asyncio.CancelledError):
+        await _serve_request(state, pool=object(), error=asyncio.CancelledError())
+
+    conn.rollback.assert_awaited_once()
+    conn.commit.assert_not_awaited()
+
+
+class _AsyncConnCtx:
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> Any:
+        return self._conn
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+@pytest.mark.parametrize("use_deferred", [False, True])
+def test_starlette_async_lifecycle_hooks_execute_on_async_and_deferred_sessions(
+    use_deferred: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Starlette awaits async on_session_start and on_session_end hooks across async and deferred sessions."""
+    events: list[str] = []
+
+    async def _on_start(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("start")
+
+    async def _on_end(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("end")
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"starlette": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_start": [_on_start], "on_session_end": [_on_end]})
+        ),
+    )
+
+    async def route(request: Request) -> JSONResponse:
+        session = plugin.get_session(request) if use_deferred else await plugin.get_session_async(request)
+        value = await session.select_value("SELECT 1")
+        return JSONResponse({"value": value})
+
+    app = Starlette(routes=[Route("/items", route)])
+    plugin = SQLSpecPlugin(config, app)
+
+    with caplog.at_level("WARNING"), TestClient(app) as client:
+        response = client.get("/items")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
+
+    assert events == ["start", "end"]
+    assert "Async lifecycle hook invoked on sync path" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("commit_mode", "status_code", "explicit_commit", "extra_commit", "expect_persisted"),
+    [
+        (None, 200, False, None, True),
+        (None, 303, False, None, False),
+        ("autocommit", 200, False, None, True),
+        ("autocommit", 302, False, None, False),
+        ("autocommit", 303, False, None, False),
+        ("autocommit", 400, False, None, False),
+        ("autocommit_include_redirect", 200, False, None, True),
+        ("autocommit_include_redirect", 302, False, None, True),
+        ("autocommit_include_redirect", 303, False, None, True),
+        ("autocommit_include_redirect", 400, False, None, False),
+        ("manual", 200, False, None, False),
+        ("manual", 200, False, {200}, False),
+        ("manual", 200, True, None, True),
+    ],
+)
+def test_starlette_commit_mode_redirect_and_manual_rollback_behavior(
+    tmp_path: Any,
+    commit_mode: str | None,
+    status_code: int,
+    explicit_commit: bool,
+    extra_commit: "set[int] | None",
+    expect_persisted: bool,
+) -> None:
+    """Verify Starlette default autocommit, Inertia 302/303 redirect commit, and manual rollback."""
+    import sqlite3
+
+    database = str(tmp_path / "starlette_modes.db")
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE items (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    starlette_cfg: dict[str, Any] = {}
+    if commit_mode is not None:
+        starlette_cfg["commit_mode"] = commit_mode
+    if extra_commit is not None:
+        starlette_cfg["extra_commit_statuses"] = extra_commit
+
+    config = AiosqliteConfig(
+        connection_config={"database": database}, extension_config={"starlette": starlette_cfg} if starlette_cfg else {}
+    )
+
+    async def write_route(request: Request) -> Response:
+        session = await plugin.get_session_async(request)
+        await session.execute("INSERT INTO items VALUES (:val)", {"val": "written"})
+        if explicit_commit:
+            await session.commit()
+        return JSONResponse({"status": status_code}, status_code=status_code)
+
+    app = Starlette(routes=[Route("/write", write_route, methods=["POST"])])
+    plugin = SQLSpecPlugin(config, app)
+
+    with TestClient(app) as client:
+        resp = client.post("/write")
+        assert resp.status_code == status_code
+
+    reader = sqlite3.connect(database)
+    try:
+        rows = reader.execute("SELECT value FROM items").fetchall()
+    finally:
+        reader.close()
+    assert rows == ([("written",)] if expect_persisted else [])
+
+
+def test_starlette_plugin_cursor_config_and_conflicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Starlette SQLSpecPlugin cursor configuration, env fallback, and conflict detection."""
+    import datetime as dt
+
+    monkeypatch.delenv("SQLSPEC_PAGINATION_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    base = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    assert base.pagination_cursor_secret is None
+    assert base.pagination_cursor_ttl is None
+    assert base.pagination_cursor_encrypted is None
+
+    monkeypatch.setenv("SECRET_KEY", "flask-style-secret")
+    monkeypatch.setenv("SQLSPEC_PAGINATION_CURSOR_SECRET", "primary-env-secret")
+    from_env = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    assert from_env.pagination_cursor_secret == "primary-env-secret"
+    monkeypatch.setenv("SQLSPEC_PAGINATION_CURSOR_SECRET", "mutated-later")
+    assert from_env.pagination_cursor_secret == "primary-env-secret"
+
+    explicit = SQLSpecPlugin(
+        AiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={"starlette": {"pagination_cursor_ttl": 60, "pagination_cursor_encrypted": True}},
+        ),
+        pagination_cursor_secret="kwarg-secret",
+        pagination_cursor_ttl=dt.timedelta(seconds=60),
+        pagination_cursor_encrypted=True,
+    )
+    assert explicit.pagination_cursor_secret == "kwarg-secret"
+    assert explicit.pagination_cursor_ttl == dt.timedelta(seconds=60)
+    assert explicit.pagination_cursor_encrypted is True
+
+    with pytest.raises(ImproperConfigurationError, match="pagination_cursor_secret"):
+        SQLSpecPlugin([
+            AiosqliteConfig(
+                bind_key="one",
+                connection_config={"database": ":memory:"},
+                extension_config={"starlette": {"pagination_cursor_secret": b"abc"}},
+            ),
+            AiosqliteConfig(
+                bind_key="two",
+                connection_config={"database": ":memory:"},
+                extension_config={"starlette": {"pagination_cursor_secret": "abc"}},
+            ),
+        ])
+
+    with pytest.raises(ImproperConfigurationError, match="pagination_cursor_ttl"):
+        SQLSpecPlugin(
+            AiosqliteConfig(
+                connection_config={"database": ":memory:"},
+                extension_config={"starlette": {"pagination_cursor_ttl": 30}},
+            ),
+            pagination_cursor_ttl=60,
+        )
+
+    with pytest.raises(ImproperConfigurationError, match="pagination_cursor_encrypted"):
+        SQLSpecPlugin(
+            AiosqliteConfig(
+                connection_config={"database": ":memory:"},
+                extension_config={"starlette": {"pagination_cursor_encrypted": False}},
+            ),
+            pagination_cursor_encrypted=True,
+        )
+
+
+def test_starlette_middleware_skips_inactive_routing_states() -> None:
+    """Default single-database configs do not populate precomputed routing states."""
+    plain_config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "starlette": {
+                "session_key": "plain_session",
+                "connection_key": "plain_connection",
+                "pool_key": "plain_pool",
+            }
+        },
+    )
+    active_config = AiosqliteConfig(
+        bind_key="active", connection_config={"database": ":memory:"}, replicas=[{"database": ":memory:"}]
+    )
+    app = Starlette()
+    plugin = SQLSpecPlugin([plain_config, active_config], app)
+    lease = SQLSpecTransactionMiddleware(app, plugin._config_states)  # pyright: ignore[reportPrivateUsage]
+    assert len(lease._routing_states) == 1  # pyright: ignore[reportPrivateUsage]
+    assert lease._routing_states[0].config is active_config  # pyright: ignore[reportPrivateUsage]
+
+    plain_app = Starlette()
+    plain_plugin = SQLSpecPlugin(plain_config, plain_app)
+    plain_lease = SQLSpecTransactionMiddleware(plain_app, plain_plugin._config_states)  # pyright: ignore[reportPrivateUsage]
+    assert plain_lease._routing_states == ()  # pyright: ignore[reportPrivateUsage]
+
+    async def index(_request: Request) -> JSONResponse:
+        return JSONResponse({"has_scope": RoutingContext.current() is not None})
+
+    plain_route_app = Starlette(routes=[Route("/index", index)])
+    SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}), plain_route_app)
+    with TestClient(plain_route_app) as client:
+        assert client.get("/index").json() == {"has_scope": False}
+
+
+@pytest.mark.parametrize(("path", "expected_error"), [("/ok", False), ("/fail", True)])
+def test_deferred_session_streams_close_with_request_outcome(
+    monkeypatch: pytest.MonkeyPatch, path: str, expected_error: bool
+) -> None:
+    """Deferred request sessions close their streams with the request's own error outcome."""
+    from sqlspec.driver import DeferredAsyncSession
+
+    recorded: list[bool] = []
+
+    async def record_close(self: Any, *, error: bool = False) -> None:
+        recorded.append(error)
+
+    monkeypatch.setattr(DeferredAsyncSession, "_close_open_streams", record_close)
+
+    async def ok_route(request: Request) -> JSONResponse:
+        plugin.get_session(request)
+        return JSONResponse({"ok": True})
+
+    async def fail_route(request: Request) -> JSONResponse:
+        plugin.get_session(request)
+        raise RuntimeError("boom")
+
+    app = Starlette(routes=[Route("/ok", ok_route), Route("/fail", fail_route)])
+    plugin = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}), app)
+
+    async def dispatch_while_handling_error(scope: Any, receive: Any, send: Any) -> None:
+        try:
+            raise LookupError("handled by an outer layer")
+        except LookupError:
+            await app(scope, receive, send)
+
+    with TestClient(dispatch_while_handling_error, raise_server_exceptions=False) as client:
+        client.get(path)
+    assert recorded == [expected_error]

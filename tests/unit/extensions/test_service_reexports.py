@@ -9,7 +9,7 @@ import asyncio
 import importlib
 import inspect
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -194,16 +194,32 @@ def test_paginate_honors_pre_attached_limit_offset_and_cursor_rejects_count_with
     asyncio.run(_run_async())
 
 
-def test_adk_sanitize_path_component_rejects_slashes_and_empty() -> None:
+@pytest.mark.parametrize(
+    "bad_component",
+    [
+        "",
+        ".",
+        "..",
+        "/",
+        "bob/",
+        "/bob",
+        "foo/bar",
+        "foo\\bar",
+        "foo\x00bar",
+        "*.pdf",
+        "report?.pdf",
+        "report[0].pdf",
+        "report]0.pdf",
+    ],
+)
+def test_adk_sanitize_path_component_rejects_unsafe_components(bad_component: str) -> None:
     with pytest.raises(ValueError, match="Unsafe path component"):
-        _sanitize_path_component("")
-    with pytest.raises(ValueError, match="Unsafe path component"):
-        _sanitize_path_component("..")
-    with pytest.raises(ValueError, match="Unsafe path component"):
-        _sanitize_path_component("foo/bar")
-    with pytest.raises(ValueError, match="Unsafe path component"):
-        _sanitize_path_component("foo\\bar")
+        _sanitize_path_component(bad_component)
+
+
+def test_adk_sanitize_path_component_allows_normal_filenames() -> None:
     assert _sanitize_path_component("report.v2.pdf") == "report.v2.pdf"
+    assert _sanitize_path_component("user:profile.txt") == "user:profile.txt"
 
 
 def test_adk_base_async_store_abstract_methods() -> None:
@@ -223,7 +239,7 @@ def test_adk_memory_store_validates_table_name_and_commits_drop() -> None:
         def search_entries(self, *args: Any, **kwargs: Any) -> list[Any]:
             return []
 
-        def delete_entries_by_session(self, session_id: str) -> int:
+        def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
             return 0
 
         def delete_entries_older_than(self, days: int, app_name: Any = None, scope: Any = None) -> int:
@@ -266,7 +282,7 @@ async def test_adk_async_memory_store_drop_tables_commits_and_bridges_sync_sessi
         async def search_entries(self, *args: Any, **kwargs: Any) -> list[Any]:
             return []
 
-        async def delete_entries_by_session(self, session_id: str) -> int:
+        async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
             return 0
 
         async def delete_entries_older_than(self, days: int, app_name: Any = None, scope: Any = None) -> int:
@@ -368,8 +384,16 @@ def test_events_queue_retention_zero_deletes_immediately_on_ack() -> None:
     config.extension_config = {"events": {"retention_seconds": 0, "cleanup_on_ack": True}}
     config.provide_session.return_value = session_cm
 
+    leased_until = datetime.now(UTC) + timedelta(minutes=5)
+    driver.select_one_or_none.return_value = {
+        "event_id": "evt-1",
+        "channel": "alerts",
+        "attempts": 1,
+        "lease_expires_at": leased_until,
+    }
     queue = SyncTableEventQueue(config)
-    queue.ack("evt-1")
+    queue._record_lease("evt-1", "alerts", leased_until)
+    assert queue.ack("evt-1") is True
     executed_stmt = driver.execute.call_args[0][0]
     assert "DELETE FROM" in executed_stmt.sql
 

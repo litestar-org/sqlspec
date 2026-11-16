@@ -14,11 +14,11 @@ statements inside compiled ``__anext__`` methods.
 """
 
 import builtins
-from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Generic, Protocol, Self, TypeVar, cast, overload
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import to_schema
 
@@ -36,6 +36,8 @@ __all__ = (
     "SyncRowStream",
     "rows_to_dicts",
 )
+
+_CLOSED_CONNECTION_MESSAGE: Final[str] = "Database session has already closed and its connection has been released."
 
 logger = get_logger("sqlspec.driver")
 
@@ -93,7 +95,7 @@ def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[st
 class SyncRowStream(Generic[RowT]):
     """Bounded-memory iterator backed by a chunk source."""
 
-    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_source", "_started")
+    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_session_closed", "_source", "_started")
 
     def __init__(self, source: SyncRowSource, schema_type: "type[RowT] | None" = None) -> None:
         self._source = source
@@ -101,6 +103,7 @@ class SyncRowStream(Generic[RowT]):
         self._buffer: list[RowT] = []
         self._buffer_index = 0
         self._closed = False
+        self._session_closed = False
         self._started = False
 
     def __enter__(self) -> Self:
@@ -115,6 +118,8 @@ class SyncRowStream(Generic[RowT]):
         return self
 
     def __next__(self) -> RowT:
+        if self._session_closed:
+            raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
         if self._closed:
             raise StopIteration
         if not self._started:
@@ -141,6 +146,11 @@ class SyncRowStream(Generic[RowT]):
 
     def close(self) -> None:
         self._close(error=False)
+
+    def _close_for_session_exit(self, *, error: bool) -> None:
+        if not self._closed:
+            self._session_closed = True
+        self._close(error=error)
 
     @property
     def column_types(self) -> "dict[str, str] | None":
@@ -181,7 +191,7 @@ class SyncRowStream(Generic[RowT]):
 class AsyncRowStream(Generic[RowT]):
     """Async bounded-memory iterator backed by an async chunk source."""
 
-    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_source", "_started")
+    __slots__ = ("_buffer", "_buffer_index", "_closed", "_schema_type", "_session_closed", "_source", "_started")
 
     def __init__(self, source: AsyncRowSource, schema_type: "type[RowT] | None" = None) -> None:
         self._source = source
@@ -189,6 +199,7 @@ class AsyncRowStream(Generic[RowT]):
         self._buffer: list[RowT] = []
         self._buffer_index = 0
         self._closed = False
+        self._session_closed = False
         self._started = False
 
     def __aiter__(self) -> "AsyncRowStream[RowT]":
@@ -203,21 +214,30 @@ class AsyncRowStream(Generic[RowT]):
         await self._aclose(error=exc_type is not None)
 
     async def __anext__(self) -> RowT:
+        if self._session_closed:
+            raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
         if self._closed:
             raise _StopAsync
         if not self._started:
             self._started = True
+            start_error: BaseException | None = None
             try:
                 await self._source.start()
-            except BaseException:
+            except BaseException as exc:
+                start_error = exc
+            if start_error is not None:
                 await self._aclose(error=True)
-                raise
+                raise start_error
         if self._buffer_index >= len(self._buffer):
+            chunk: list[dict[str, Any]] = []
+            fetch_error: BaseException | None = None
             try:
                 chunk = await self._source.fetch_chunk()
-            except BaseException:
+            except BaseException as exc:
+                fetch_error = exc
+            if fetch_error is not None:
                 await self._aclose(error=True)
-                raise
+                raise fetch_error
             if not chunk:
                 await self.aclose()
                 raise _StopAsync
@@ -229,6 +249,15 @@ class AsyncRowStream(Generic[RowT]):
 
     async def aclose(self) -> None:
         await self._aclose(error=False)
+
+    async def _aclose_for_session_exit(self, *, error: bool) -> None:
+        if not self._closed:
+            self._session_closed = True
+        await self._aclose(error=error)
+
+    def _mark_session_closed(self) -> None:
+        if not self._closed:
+            self._session_closed = True
 
     @property
     def column_types(self) -> "dict[str, str] | None":

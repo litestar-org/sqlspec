@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.version import generate_conversion_map
@@ -109,7 +110,8 @@ DROP TABLE users;
 
     commands_after = SyncMigrationCommands(sqlite_config)
 
-    commands_after.upgrade()
+    with pytest.raises(MigrationError, match="table users already exists"):
+        commands_after.upgrade()
 
     with sqlite_config.provide_session() as session:
         applied_after = commands_after.tracker.get_applied_migrations(session)
@@ -149,7 +151,8 @@ DROP TABLE users;
 
     commands_after = SyncMigrationCommands(sqlite_config)
 
-    commands_after.upgrade()
+    with pytest.raises(MigrationError, match="table users already exists"):
+        commands_after.upgrade()
 
     with sqlite_config.provide_session() as session:
         applied_after = commands_after.tracker.get_applied_migrations(session)
@@ -186,7 +189,8 @@ DROP TABLE users;
 
     commands_after = SyncMigrationCommands(sqlite_config)
 
-    commands_after.upgrade(auto_sync=False)
+    with pytest.raises(MigrationError, match="table users already exists"):
+        commands_after.upgrade(auto_sync=False)
 
     with sqlite_config.provide_session() as session:
         applied_after = commands_after.tracker.get_applied_migrations(session)

@@ -429,7 +429,7 @@ def _run_failing_encoder(format_hint: StorageFormat) -> tuple[int, _TrackingByte
 
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc"])
-def test_poisoned_failure_writes_nothing_further(format_hint: StorageFormat) -> None:
+def test_aborted_stream_writes_nothing_further(format_hint: StorageFormat) -> None:
     before_len, sink = _run_failing_encoder(format_hint)
     gc.collect()
 
@@ -624,8 +624,8 @@ async def test_async_reject_invalid_chunk_size() -> None:
 
 
 @pytest.mark.parametrize("format_hint", ["parquet", "arrow-ipc", "csv"])
-def test_poisonable_counting_sink_loops_on_partial_writes(format_hint: StorageFormat) -> None:
-    """_PoisonableCountingSink loops until all bytes are written when sink.write returns partial counts."""
+def test_byte_counting_sink_loops_on_partial_writes(format_hint: StorageFormat) -> None:
+    """_ByteCountingSink loops until all bytes are written when sink.write returns partial counts."""
 
     class _PartialWriteSink:
         def __init__(self, max_step: int) -> None:

@@ -17,6 +17,7 @@ from sqlspec.base import SQLSpec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.sanic._utils import has_context_value
+from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 pytestmark = pytest.mark.anyio
@@ -46,66 +47,74 @@ async def test_request_middleware_acquires_pooled_connection() -> None:
 
 
 async def test_manual_response_middleware_cleans_connection_without_transaction() -> None:
-    """Manual mode should release connection state without commit or rollback."""
+    """Manual mode should roll back uncommitted work and release connection state on lifecycle response."""
     connection = _make_connection()
-    config = _make_config(connection=connection)
+    config = _make_config(connection=connection, commit_mode="manual")
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=200)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_not_awaited()
-    connection.rollback.assert_not_awaited()
+    connection.rollback.assert_awaited_once_with()
     assert not has_context_value(request.ctx, "db_connection")
     assert not has_context_value(request.ctx, "db_session_instance")
 
 
 async def test_autocommit_response_commits_success_status() -> None:
-    """Autocommit mode should commit 2xx responses."""
+    """Autocommit mode should commit 2xx responses on lifecycle response."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit")
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=201)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=201))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_awaited_once_with()
     connection.rollback.assert_not_awaited()
 
 
 async def test_autocommit_response_rolls_back_error_status() -> None:
-    """Autocommit mode should rollback non-success responses."""
+    """Autocommit mode should rollback non-success responses on lifecycle response."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit")
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=500)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=500))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_not_awaited()
     connection.rollback.assert_awaited_once_with()
 
 
 async def test_autocommit_include_redirect_commits_redirect_status() -> None:
-    """autocommit_include_redirect should commit 3xx responses."""
+    """autocommit_include_redirect should commit 3xx responses on lifecycle response."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit_include_redirect")
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=302)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=302))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_awaited_once_with()
     connection.rollback.assert_not_awaited()
@@ -117,11 +126,13 @@ async def test_non_pooled_response_closes_connection() -> None:
     config = _make_config(connection=connection, supports_connection_pooling=False)
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=None)
+    response = SimpleNamespace(status=200)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     config.create_connection.assert_awaited_once_with()
     connection.close.assert_awaited_once_with()
@@ -136,11 +147,13 @@ async def test_request_middleware_wraps_sync_connection_manager() -> None:
     config.provide_connection = MagicMock(return_value=manager)
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=200)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     assert manager.entered == 1
     assert manager.exited == 1
@@ -159,9 +172,9 @@ def test_init_app_registers_request_middleware() -> None:
 
 
 def test_disable_di_skips_request_middleware_registration() -> None:
-    """disable_di should leave pool lifecycle intact but skip request management."""
+    """disable_di with routing middleware disabled skips request management."""
     app = Sanic(f"SQLSpecMiddlewareDisabled{uuid4().hex}")
-    config = _make_config(connection=_make_connection(), disable_di=True)
+    config = _make_config(connection=_make_connection(), disable_di=True, enable_routing_middleware=False)
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
 
     plugin.init_app(app)
@@ -169,6 +182,18 @@ def test_disable_di_skips_request_middleware_registration() -> None:
     assert len(app.request_middleware) == 0
     assert len(app.response_middleware) == 0
     assert "server.init.before" in app.signal_router.name_index
+
+
+def test_disable_di_with_routing_middleware_registers_request_middleware() -> None:
+    """disable_di with enable_routing_middleware=True registers request routing middleware."""
+    app = Sanic(f"SQLSpecRoutingMiddlewareEnabled{uuid4().hex}")
+    config = _make_config(connection=_make_connection(), disable_di=True, enable_routing_middleware=True)
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
+
+    plugin.init_app(app)
+
+    assert len(app.request_middleware) == 1
+    assert len(app.response_middleware) == 1
 
 
 def _make_connection() -> MagicMock:
@@ -185,16 +210,23 @@ def _make_config(
     commit_mode: str = "manual",
     supports_connection_pooling: bool = True,
     disable_di: bool = False,
+    enable_routing_middleware: bool = True,
 ) -> MagicMock:
     config = MagicMock()
     config.supports_connection_pooling = supports_connection_pooling
     config.extension_config = {
-        "sanic": {"commit_mode": commit_mode, "disable_di": disable_di, "enable_correlation_middleware": False}
+        "sanic": {
+            "commit_mode": commit_mode,
+            "disable_di": disable_di,
+            "enable_routing_middleware": enable_routing_middleware,
+            "enable_correlation_middleware": False,
+        }
     }
     config.provide_connection = MagicMock(return_value=_AsyncConnectionManager(connection))
     config.create_connection = AsyncMock(return_value=connection)
     config.statement_config = {}
     config.driver_features = {}
+    config._prepare_driver.side_effect = lambda driver: driver
     return config
 
 
@@ -203,7 +235,15 @@ def _make_request(*, pool: object | None) -> SimpleNamespace:
     if pool is not None:
         app_ctx.db_pool = pool
     return SimpleNamespace(
-        app=SimpleNamespace(ctx=app_ctx), ctx=SimpleNamespace(db_session_instance=object()), headers={}
+        app=SimpleNamespace(ctx=app_ctx),
+        ctx=SimpleNamespace(
+            db_session_instance=SimpleNamespace(
+                observability=SimpleNamespace(is_idle=True),
+                _close_open_streams=lambda error=False: None,
+                _mark_closed=lambda: None,
+            )
+        ),
+        headers={},
     )
 
 
@@ -277,7 +317,14 @@ async def test_sanic_defers_tenant_connection_until_handler_sets_tenant(status: 
     config = _make_config(connection=connection, commit_mode="autocommit")
     config.driver_features["tenant_strategy"] = object()
     config.driver_type = lambda *, connection, statement_config, driver_features: SimpleNamespace(
-        connection=connection, statement_config=statement_config, driver_features=driver_features
+        connection=connection,
+        statement_config=statement_config,
+        driver_features=driver_features,
+        observability=SimpleNamespace(is_idle=True),
+        commit=connection.commit,
+        rollback=connection.rollback,
+        _close_open_streams=lambda error=False: None,
+        _mark_closed=lambda: None,
     )
     original = config.provide_connection
 
@@ -290,8 +337,10 @@ async def test_sanic_defers_tenant_connection_until_handler_sets_tenant(status: 
     plugin.init_app(Sanic("deferred_" + uuid4().hex))
 
     untouched = _make_request(pool=object())
+    response = SimpleNamespace(status=status)
     await plugin._on_request(untouched)  # pyright: ignore[reportPrivateUsage]
-    await plugin._on_response(untouched, SimpleNamespace(status=status))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(untouched, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=untouched, response=response)  # pyright: ignore[reportPrivateUsage]
     assert seen == []
     connection.commit.assert_not_awaited()
     connection.rollback.assert_not_awaited()
@@ -304,7 +353,8 @@ async def test_sanic_defers_tenant_connection_until_handler_sets_tenant(status: 
     session = await plugin.get_session_async(active)
     assert session.connection is connection
     assert seen == [TenantContextPayload("acme", {"role": "editor"})]
-    await plugin._on_response(active, SimpleNamespace(status=status))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(active, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=active, response=response)  # pyright: ignore[reportPrivateUsage]
     if status == 200:
         connection.commit.assert_awaited_once_with()
         connection.rollback.assert_not_awaited()
@@ -453,3 +503,102 @@ def test_sanic_request_connection_is_checked_out_on_first_access_only(tmp_path: 
         assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
     finally:
         reader.close()
+
+
+@pytest.mark.parametrize(
+    ("commit_mode", "status_code", "explicit_commit", "extra_commit", "expect_persisted"),
+    [
+        (None, 200, False, None, True),
+        (None, 303, False, None, False),
+        ("autocommit_include_redirect", 302, False, None, True),
+        ("autocommit_include_redirect", 303, False, None, True),
+        ("autocommit_include_redirect", 400, False, None, False),
+        ("manual", 200, False, {200}, False),
+        ("manual", 200, True, None, True),
+    ],
+)
+async def test_sanic_commit_mode_redirect_and_manual_rollback_behavior(
+    tmp_path: Any,
+    commit_mode: str | None,
+    status_code: int,
+    explicit_commit: bool,
+    extra_commit: "set[int] | None",
+    expect_persisted: bool,
+) -> None:
+    """Verify Sanic default autocommit, Inertia 302/303 redirect commit, and manual rollback."""
+    import sqlite3
+
+    from sanic import response
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+    database = str(tmp_path / "sanic_modes.db")
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE items (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    sanic_cfg: dict[str, Any] = {}
+    if commit_mode is not None:
+        sanic_cfg["commit_mode"] = commit_mode
+    if extra_commit is not None:
+        sanic_cfg["extra_commit_statuses"] = extra_commit
+
+    config = AiosqliteConfig(
+        connection_config={"database": database}, extension_config={"sanic": sanic_cfg} if sanic_cfg else {}
+    )
+    app = Sanic(f"SQLSpecModes_{uuid4().hex}")
+    app.config.USE_UVLOOP = False
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.post("/write")
+    async def write_route(request: Any) -> Any:
+        session = await plugin.get_session_async(request)
+        await session.execute("INSERT INTO items VALUES (:val)", {"val": "written"})
+        if explicit_commit:
+            await session.commit()
+        return response.json({"status": status_code}, status=status_code)
+
+    try:
+        _, resp = await app.asgi_client.post("/write")
+        assert resp.status == status_code
+    finally:
+        Sanic.unregister_app(app)
+
+    reader = sqlite3.connect(database)
+    try:
+        rows = reader.execute("SELECT value FROM items").fetchall()
+    finally:
+        reader.close()
+    assert rows == ([("written",)] if expect_persisted else [])
+
+
+async def test_disable_di_with_routing_middleware_binds_routing_context_in_handler() -> None:
+    """disable_di with active routing middleware binds RoutingContext inside live handlers."""
+    from sanic import response
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        replicas=[{"database": ":memory:"}],
+        bind_key="orders",
+        extension_config={
+            "sanic": {"disable_di": True, "enable_routing_middleware": True, "default_routing_mode": "primary"}
+        },
+    )
+    app = Sanic(f"SQLSpecDisableDiRouting_{uuid4().hex}")
+    app.config.USE_UVLOOP = False
+    SQLSpecPlugin(config, app)
+
+    @app.get("/routing-state")
+    async def routing_state(_request: Any) -> Any:
+        payload = RoutingContext.current()
+        entry = RoutingContext.get_entry("orders")
+        return response.json({"has_scope": payload is not None, "mode": entry.mode if entry is not None else None})
+
+    try:
+        _, resp = await app.asgi_client.get("/routing-state")
+        assert resp.status == 200
+        assert resp.json == {"has_scope": True, "mode": "primary"}
+    finally:
+        Sanic.unregister_app(app)
+    assert RoutingContext.current() is None

@@ -493,3 +493,26 @@ def test_storage_and_backends_pep562_lazy_exports() -> None:
     assert storage_backends_pkg.__getattr__("ObjectStoreBase") is ObjectStoreBase
     with pytest.raises(AttributeError):
         storage_backends_pkg.__getattr__("NonExistentBackend")
+
+
+def test_log_storage_event_strips_credentials(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from sqlspec.storage._utils import log_storage_event
+
+    with caplog.at_level(logging.DEBUG):
+        log_storage_event(
+            "storage.read",
+            backend_type="obstore",
+            protocol="s3",
+            path="s3://user:secret@bucket/key?sig=abc",
+            source_path="s3://user:secret@bucket/src?sig=abc",
+            destination_path="s3://user:secret@bucket/dst?sig=abc",
+        )
+
+    rendered = " ".join(
+        f"{record.getMessage()} {getattr(record, 'extra_fields', '')} {record.__dict__}" for record in caplog.records
+    )
+    assert "s3://bucket/key" in rendered
+    assert "user:secret@" not in rendered
+    assert "sig=abc" not in rendered

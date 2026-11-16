@@ -1,3 +1,5 @@
+import pytest
+
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -190,3 +192,30 @@ def test_root_exports_and_typing_stubs_contracts() -> None:
     assert isinstance(frag_err, SQLFileNotFoundError)
     custom_file_err = SQLFileNotFoundError("q.sql", message="custom file error")
     assert str(custom_file_err) == "custom file error"
+
+
+@pytest.mark.parametrize(
+    ("name", "parent"),
+    [
+        ("ReadOnlyTransactionError", "TransactionError"),
+        ("ReplicaUnavailableError", "OperationalError"),
+        ("RoutingContextError", "ImproperConfigurationError"),
+    ],
+)
+def test_routing_exception_contract(name: str, parent: str) -> None:
+    from sqlspec import exceptions
+
+    error_type = getattr(exceptions, name)
+    cause = ValueError("native failure")
+    with pytest.raises(getattr(exceptions, parent)) as caught:
+        raise error_type("routing failed", detail="replica") from cause
+    assert "routing failed" in str(caught.value)
+    assert caught.value.detail == "replica"
+    assert caught.value.__cause__ is cause
+
+
+def test_read_only_sqlstate_mapping() -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError, UniqueViolationError, map_sqlstate_to_exception
+
+    assert map_sqlstate_to_exception("25006") is ReadOnlyTransactionError
+    assert map_sqlstate_to_exception("23505") is UniqueViolationError

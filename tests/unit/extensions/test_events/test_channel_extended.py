@@ -3,6 +3,7 @@
 
 import asyncio
 import importlib
+import logging
 import threading
 import time
 from datetime import UTC, datetime
@@ -11,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from sqlspec import ObservabilityRuntime
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
@@ -547,3 +549,101 @@ async def test_events_migration_resolves_subclass_via_mro_and_custom_store_class
     ThirdPartyConfig.__module__ = "third_party_pkg.config"
     custom_up = await events_migration.up(MigrationContext(config=ThirdPartyConfig(), dialect="sqlite"))
     assert any("CUSTOM_JSON" in stmt and "CUSTOM_META" in stmt for stmt in custom_up)
+
+
+def test_sync_iter_events_drops_and_logs_malformed_payloads(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """SyncEventChannel.iter_events drops malformed notification payloads without stopping iteration."""
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "sync_iter_bad.db")})
+    channel = SyncEventChannel(config)
+    good_event = EventMessage(
+        event_id="evt_valid",
+        channel="notifications",
+        payload={"ok": True},
+        metadata=None,
+        attempts=0,
+        available_at=datetime.now(UTC),
+        lease_expires_at=None,
+        created_at=datetime.now(UTC),
+    )
+
+    class _SyncBadThenGoodBackend:
+        supports_sync = True
+        supports_async = False
+        backend_name = "notify"
+
+        def __init__(self) -> None:
+            self._calls = 0
+
+        def dequeue(self, _channel: str, _poll_interval: float) -> EventMessage | None:
+            self._calls += 1
+            if self._calls == 1:
+                raise EventChannelError("Malformed event notification payload")
+            if self._calls == 2:
+                raise ValueError("Invalid JSON")
+            return good_event
+
+    channel._backend = _SyncBadThenGoodBackend()  # type: ignore[assignment]
+    iterator = channel.iter_events("notifications", poll_interval=0.01)
+
+    with caplog.at_level(logging.WARNING, logger="sqlspec.events.channel"):
+        received = next(iterator)
+
+    assert received is good_event
+    malformed_statuses = [
+        getattr(record, "extra_fields", {}).get("status")
+        for record in caplog.records
+        if record.getMessage() == "event.receive"
+    ]
+    assert malformed_statuses[:2] == ["malformed_payload", "malformed_payload"]
+    assert channel.metrics_snapshot().get("SqliteConfig.events.dequeue.error") == pytest.approx(2.0)
+
+
+@pytest.mark.anyio
+async def test_async_iter_events_drops_and_logs_malformed_payloads(caplog: pytest.LogCaptureFixture, tmp_path) -> None:
+    """AsyncEventChannel.iter_events drops malformed notification payloads without stopping iteration."""
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "async_iter_bad.db")})
+    try:
+        channel = AsyncEventChannel(config)
+        good_event = EventMessage(
+            event_id="evt_async_valid",
+            channel="notifications",
+            payload={"ok": True},
+            metadata=None,
+            attempts=0,
+            available_at=datetime.now(UTC),
+            lease_expires_at=None,
+            created_at=datetime.now(UTC),
+        )
+
+        class _AsyncBadThenGoodBackend:
+            supports_sync = False
+            supports_async = True
+            backend_name = "notify"
+
+            def __init__(self) -> None:
+                self._calls = 0
+
+            async def dequeue(self, _channel: str, _poll_interval: float) -> EventMessage | None:
+                self._calls += 1
+                if self._calls == 1:
+                    raise EventChannelError("Malformed event notification payload")
+                if self._calls == 2:
+                    raise ValueError("Invalid JSON")
+                return good_event
+
+        channel._backend = _AsyncBadThenGoodBackend()  # type: ignore[assignment]
+        iterator = channel.iter_events("notifications", poll_interval=0.01)
+
+        with caplog.at_level(logging.WARNING, logger="sqlspec.events.channel"):
+            received = await anext(iterator)
+
+        assert received is good_event
+        malformed_statuses = [
+            getattr(record, "extra_fields", {}).get("status")
+            for record in caplog.records
+            if record.getMessage() == "event.receive"
+        ]
+        assert malformed_statuses[:2] == ["malformed_payload", "malformed_payload"]
+        assert channel.metrics_snapshot().get("AiosqliteConfig.events.dequeue.error") == pytest.approx(2.0)
+    finally:
+        await config.close_pool()

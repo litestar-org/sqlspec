@@ -206,7 +206,7 @@ def test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions
     assert len(keys) == len(set(keys))
     assert keys.index("`dsn`") < keys.index("`min_size`")
     assert "| `dsn` | `str` | - |" in asyncpg_table
-    assert "| `port` | `int` | `5432` |" in asyncpg_table
+    assert "| `port` | `int or Sequence[int]` | `5432` |" in asyncpg_table
     assert "| `connection_class` | `type[AsyncpgConnection]` |" in asyncpg_table
     assert "NotRequired" not in asyncpg_table
     assert all(" | " not in span for line in lines for span in line.split("`")[1::2])
@@ -214,7 +214,10 @@ def test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions
     flask_table = render_typeddict_table(["sqlspec.config.FlaskConfig"])
     assert "| `session_key` | `str` | `'db_session'` |" in flask_table
     assert "| `connection_key` | `str` | - |" in flask_table
-    assert "`'manual'`" in flask_table
+    assert (
+        "| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` |"
+        in flask_table
+    )
 
     litestar_table = render_typeddict_table(["sqlspec.config.LitestarConfig"])
     assert "| `manage_lifespan` | `bool` | - |" in litestar_table

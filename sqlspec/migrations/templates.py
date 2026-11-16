@@ -1,7 +1,8 @@
 """Migration template rendering and configuration utilities."""
 
+import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.exceptions import SQLSpecError
 
@@ -16,6 +17,8 @@ __all__ = (
     "TemplateDescriptionHints",
     "TemplateValidationError",
     "build_template_settings",
+    "escape_python_docstring",
+    "sanitize_header_field",
 )
 
 
@@ -49,10 +52,11 @@ class SQLTemplateDefinition:
     ) -> str:
         """Render the SQL template using the supplied context."""
 
-        rendered_lines: list[str] = [_format_template(self.header, context, "SQL")]
-        rendered_lines.extend(_format_template(line, context, "SQL") for line in self.metadata if line)
+        sanitized_context = {key: sanitize_header_field(value) for key, value in context.items()}
+        rendered_lines: list[str] = [_format_template(self.header, sanitized_context, "SQL")]
+        rendered_lines.extend(_format_template(line, sanitized_context, "SQL") for line in self.metadata if line)
         if up_sql is not None or down_sql is not None:
-            version = context.get("version", "")
+            version = sanitized_context.get("version", "")
             up_statements = _normalize_sql_statements(up_sql)
             down_statements = _normalize_sql_statements(down_sql)
             body_lines: list[str] = [f"-- name: migrate-{version}-up"]
@@ -62,7 +66,7 @@ class SQLTemplateDefinition:
                 body_lines.extend(("", f"-- name: migrate-{version}-down", "\n\n".join(down_statements)))
             rendered_lines.extend(("", "\n".join(body_lines)))
         else:
-            rendered_lines.extend(("", _format_template(self.body, context, "SQL")))
+            rendered_lines.extend(("", _format_template(self.body, sanitized_context, "SQL")))
         return "\n".join(_normalize_newlines(rendered_lines)).rstrip() + "\n"
 
 
@@ -84,7 +88,9 @@ class PythonTemplateDefinition:
     ) -> str:
         """Render the Python template using the supplied context."""
 
-        docstring_block = f'"""{_format_template(self.docstring, context, "Python")}"""'
+        sanitized_context = {key: sanitize_header_field(value) for key, value in context.items()}
+        docstring_content = escape_python_docstring(_format_template(self.docstring, sanitized_context, "Python"))
+        docstring_block = f'"""{docstring_content}"""'
         rendered_lines: list[str] = [docstring_block, ""]
         rendered_lines.extend(self.imports)
         if self.imports:
@@ -112,7 +118,7 @@ class PythonTemplateDefinition:
                 py_lines.append("    return None")
             rendered_lines.append("\n".join(py_lines))
         else:
-            rendered_lines.append(_format_template(self.body, context, "Python"))
+            rendered_lines.append(_format_template(self.body, sanitized_context, "Python"))
         return "\n".join(_normalize_newlines(rendered_lines)).rstrip() + "\n"
 
 
@@ -164,6 +170,31 @@ def build_template_settings(migration_config: dict[str, Any] | None) -> "Migrati
     python_definition = _build_python_definition(templates_config.get("py"))
     profile = MigrationTemplateProfile(name="default", title=title, sql=sql_definition, python=python_definition)
     return MigrationTemplateSettings(default_format=default_format, profile=profile)
+
+
+def sanitize_header_field(value: str) -> str:
+    """Fold control characters and line separators so comment header fields stay single-line.
+
+    Removes NUL bytes and replaces every run of C0/C1 control characters, line separators, and
+    paragraph separators with one space. The result is always one line under ``str.splitlines()``.
+
+    Args:
+        value: Raw header field text.
+
+    Returns:
+        The single-line, stripped field text.
+    """
+    return _HEADER_UNSAFE_PATTERN.sub(" ", value.replace("\x00", "")).strip()
+
+
+def escape_python_docstring(text: str) -> str:
+    """Escape backslashes and triple double-quotes inside a triple-quoted Python docstring."""
+    cleaned = text.replace("\x00", "").replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+    if cleaned.endswith('"'):
+        preceding_backslashes = len(cleaned) - 1 - len(cleaned[:-1].rstrip("\\"))
+        if preceding_backslashes % 2 == 0:
+            return f'{cleaned[:-1]}\\"'
+    return cleaned
 
 
 def _build_sql_definition(overrides: Any) -> "SQLTemplateDefinition":
@@ -231,6 +262,7 @@ def _format_template(template: str, context: "Mapping[str, str]", template_kind:
         raise TemplateValidationError(msg) from exc
 
 
+_HEADER_UNSAFE_PATTERN: Final[re.Pattern[str]] = re.compile("[\x01-\x1f\x7f-\x9f\u2028\u2029]+")
 _DEFAULT_TITLE = "SQLSpec Migration"
 
 _DEFAULT_SQL_TEMPLATE = SQLTemplateDefinition(

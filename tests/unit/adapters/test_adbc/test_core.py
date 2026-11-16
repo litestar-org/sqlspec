@@ -19,6 +19,7 @@ from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc import driver as adbc_driver_mod
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
+    _GO_DURATION_PATTERN,
     _TERADATA_INDEX_EXISTS_SQL,
     _TERADATA_TABLE_EXISTS_SQL,
     build_connection_config,
@@ -26,6 +27,7 @@ from sqlspec.adapters.adbc.core import (
     driver_from_uri,
     driver_kind_from_uri,
     get_statement_config,
+    normalize_column_names,
     prepare_batch_with_casts,
     prepare_parameters_with_casts,
     prepare_postgres_parameters,
@@ -1311,7 +1313,7 @@ def test_snowflake_script_binds_only_real_placeholders() -> None:
     connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
     driver = AdbcDriver(cast("Any", connection), dialect="snowflake")
     result = driver.execute_script("SELECT $1 FROM @stage; SELECT ? AS value; SELECT ? AS other", (7, 8))
-    assert executed == [("SELECT $1 FROM @stage", None), ("SELECT 7 AS value", None), ("SELECT 8 AS other", None)]
+    assert executed == [("SELECT $1 FROM @stage", None), ("SELECT ? AS value", [7]), ("SELECT ? AS other", [8])]
     assert result.successful_statements == 3
 
 
@@ -1484,3 +1486,34 @@ def test_null_parameters_compile_as_sql_literals(dialect: str) -> None:
 
     assert "NULL" in compiled_sql.upper()
     assert list(parameters) == ["x"]
+
+
+def test_read_only_transaction_maps_native_error_with_cause() -> None:
+    from adbc_driver_manager import OperationalError
+
+    from sqlspec.adapters.adbc.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = OperationalError("cannot write", status_code=AdbcStatusCode.INVALID_STATE, sqlstate="25006")
+
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+    assert "read-only transaction" in str(mapped).lower()
+
+
+@pytest.mark.parametrize(
+    "bad_host", ["", "td.corp/extra", "td.corp?x=1", "td.corp#frag", "user@td.corp", "td corp", "[::1"]
+)
+def test_teradata_rejects_invalid_discrete_host(bad_host: str) -> None:
+    """Discrete Teradata host values containing URI delimiters or whitespace raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError, match="Teradata host"):
+        build_connection_config({"driver": "teradata", "host": bad_host})
+
+
+def test_adbc_validation_patterns_reject_trailing_newlines() -> None:
+    """ADBC identifier, header key, and Go duration patterns reject trailing newlines."""
+    assert normalize_column_names(["COL\n"], {"enable_lowercase_column_names": True}) == ["COL\n"]
+    assert _GO_DURATION_PATTERN.match("10s\n") is None
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config({"driver": "flightsql", "headers": {"X-Key\n": "val"}})

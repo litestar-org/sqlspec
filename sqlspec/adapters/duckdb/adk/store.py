@@ -13,7 +13,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import SerializationConflictError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -31,6 +33,7 @@ __all__ = ("DuckDBADKConfig", "DuckDBADKFTSOptions", "DuckDBADKMemoryStore", "Du
 logger = get_logger("sqlspec.adapters.duckdb.adk.store")
 
 DUCKDB_TABLE_NOT_FOUND_ERROR: Final = "does not exist"
+_MAX_STATE_MERGE_ATTEMPTS: Final[int] = 32
 DUCKDB_EVENT_PROJECTION_STRUCT: Final = "STRUCT(author VARCHAR, node_info STRUCT(path VARCHAR))"
 DUCKDB_FTS_ALLOWED_OPTIONS: Final = ("stemmer", "stopwords", "ignore", "strip_accents", "lower", "overwrite")
 DUCKDB_FTS_CREATE_OPTION_ORDER: Final = ("stemmer", "stopwords", "ignore", "strip_accents", "lower", "overwrite")
@@ -82,31 +85,6 @@ class DuckDBADKConfig(ADKConfig):
     """DuckDB FTS ``PRAGMA create_fts_index`` options for ADK memory search."""
 
 
-def _duckdb_index_name(table_name: str, suffix: str) -> str:
-    """Generate a valid DuckDB index name for an optionally schema-qualified table."""
-    parts = split_qualified_identifier(table_name.strip(), quote_chars='"')
-    bare_name = parts[-1]
-    if len(parts) > 1 and parts[0].lower() != "main":
-        return f"idx_{parts[0]}_{bare_name}_{suffix}"
-    return f"idx_{bare_name}_{suffix}"
-
-
-def _split_duckdb_table_name(table_name: str) -> tuple[str, str]:
-    """Split an optionally schema-qualified table name into schema and bare table name.
-
-    Returns:
-        Tuple of (schema, bare_table_name). If unqualified, schema defaults to 'main'.
-    """
-    parts = split_qualified_identifier(table_name.strip(), quote_chars='"')
-    if not parts:
-        msg = "DuckDB table name must not be empty."
-        raise ValueError(msg)
-    first_part = parts[0]
-    if len(parts) > 1:
-        return first_part, parts[1]
-    return "main", first_part
-
-
 class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
     """DuckDB ADK store for Google Agent Development Kit.
 
@@ -127,13 +105,14 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "DuckDBConfig") -> None:
+    def __init__(self, config: "DuckDBConfig", *, read_config: "DuckDBConfig | None" = None) -> None:
         """Initialize DuckDB ADK store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: DuckDBConfig instance.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -144,9 +123,17 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         self._create_tables()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session.
+        """Create a new session and optionally merge scoped state deltas.
 
         Args:
             session_id: Unique session identifier.
@@ -154,11 +141,21 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             user_id: User identifier.
             state: Initial session state.
             owner_id: Optional owner ID value for owner_id_column (if configured).
+            app_state_delta: Optional app-scoped state delta to merge.
+            user_state_delta: Optional user-scoped state delta to merge.
 
         Returns:
-            Created session record.
+            Created session record with merged scoped state.
         """
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
+        return self._create_session(
+            session_id,
+            app_name,
+            user_id,
+            state,
+            owner_id,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
+        )
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -174,7 +171,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         Returns:
             Session record or None if not found.
         """
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        return self._get_session(app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
@@ -211,7 +208,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             List of session records.
         """
         return self._list_sessions(
-            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
         )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -240,27 +237,32 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update the session's durable state.
 
         The event insert and state update succeed together or fail together
         within a single DuckDB transaction; the updated StoredSession is
-        returned via UPDATE...RETURNING.
+        returned with merged scoped state.
 
         Args:
             event_record: Event record to store.
             app_name: Application name.
             user_id: User identifier.
             session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (``temp:`` keys already
-                stripped by the service layer).
-            app_state: Optional app-scoped state snapshot.
-            user_state: Optional user-scoped state snapshot.
+            state: Post-append durable session-scoped state snapshot.
+            app_state_delta: Optional app-scoped state delta to merge.
+            user_state_delta: Optional user-scoped state delta to merge.
         """
         return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+            event_record,
+            app_name,
+            user_id,
+            session_id,
+            state,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
         )
 
     def get_events(
@@ -283,7 +285,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        return self._get_events(app_name, user_id, session_id, after_timestamp, limit, read=True)
 
     def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than a timestamp, optionally scoped to one application."""
@@ -329,8 +331,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
     def _session_index_statements(self) -> list[str]:
         """Return canonical CREATE INDEX statements for the sessions table."""
         return [
-            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, 'app_user')} ON {self._session_table}(app_name, user_id)",
-            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, 'update_time')} ON {self._session_table}(update_time DESC)",
+            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, 'app_user')} ON {self._session_table}(app_name, user_id)"
         ]
 
     def _event_generated_column_index_statements(self) -> list[str]:
@@ -491,11 +492,20 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.commit()
 
     def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Synchronous implementation of create_session."""
         now = datetime.now(UTC)
-        state_json = to_json(state)
+        session_state = dict(state)
+        state_json = to_json(session_state)
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -512,37 +522,87 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             """
             params = (session_id, app_name, user_id, state_json, now, now)
 
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
         with self._config.provide_connection() as conn:
-            conn.execute(sql, params)
-            conn.commit()
-
-        return StoredSession(
-            id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
-        )
+            for _ in range(max_attempts):
+                scoped_started = False
+                in_tx = False
+                try:
+                    conn.execute("BEGIN TRANSACTION")
+                    in_tx = True
+                    conn.execute(sql, params)
+                    scoped_started = True
+                    current_app_state = (
+                        self._apply_app_state_delta(conn, app_name, app_state_delta)
+                        if app_state_delta
+                        else self._select_state(
+                            conn, f"SELECT state FROM {self._app_state_table} WHERE app_name = ?", (app_name,)
+                        )
+                    )
+                    current_user_state = (
+                        self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
+                        if user_state_delta
+                        else self._select_state(
+                            conn,
+                            f"SELECT state FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?",
+                            (app_name, user_id),
+                        )
+                    )
+                    if (app_state_delta and current_app_state is None) or (
+                        user_state_delta and current_user_state is None
+                    ):
+                        conn.rollback()
+                        in_tx = False
+                        continue
+                    conn.commit()
+                    in_tx = False
+                    return StoredSession(
+                        id=session_id,
+                        app_name=app_name,
+                        user_id=user_id,
+                        state=merge_scoped_state(session_state, current_app_state, current_user_state),
+                        create_time=now,
+                        update_time=now,
+                    )
+                except Exception as exc:
+                    if in_tx:
+                        with contextlib.suppress(Exception):
+                            conn.rollback()
+                    if scoped_started and _is_retryable_error(exc, allow_unique_conflict=has_deltas):
+                        continue
+                    raise
+        msg = f"Failed to merge scoped state during create_session after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     def _get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        *,
+        renew_for: "int | timedelta | None" = None,
+        read: bool = False,
     ) -> "StoredSession | None":
         """Synchronous implementation of get_session."""
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-            sql = f"""
-            UPDATE {self._session_table}
-            SET update_time = ?
-            WHERE app_name = ? AND user_id = ? AND id = ?
-            RETURNING id, app_name, user_id, state, create_time, update_time
-            """
-            params: list[Any] = [datetime.now(UTC), app_name, user_id, session_id]
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = ? AND user_id = ? AND id = ?
-            """
-            params = [app_name, user_id, session_id]
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE app_name = ? AND user_id = ? AND id = ?
+        """
+        params: list[Any] = [app_name, user_id, session_id]
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.execute(sql, params)
+            with self._provide_replica_connection(primary=not read) as conn:
+                if self._is_renewal_requested(renew_for):
+                    renew_sql = f"""
+                    UPDATE {self._session_table}
+                    SET update_time = ?
+                    WHERE app_name = ? AND user_id = ? AND id = ?
+                    """
+                    conn.execute(renew_sql, [datetime.now(UTC), app_name, user_id, session_id])
+                    conn.commit()
+                cursor = conn.execute(select_sql, params)
                 row = cursor.fetchone()
 
                 if row is None:
@@ -582,13 +642,23 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Synchronous implementation of delete_session."""
-        delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = ?"
+        owner_check_sql = f"SELECT 1 FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
+        delete_events_sql = f"DELETE FROM {self._events_table} WHERE app_name = ? AND user_id = ? AND session_id = ?"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
         with self._config.provide_connection() as conn:
-            conn.execute(delete_events_sql, (session_id,))
-            conn.execute(delete_session_sql, (app_name, user_id, session_id))
-            conn.commit()
+            if conn.execute(owner_check_sql, (app_name, user_id, session_id)).fetchone() is None:
+                return
+            conn.begin()
+            try:
+                conn.execute(delete_events_sql, (app_name, user_id, session_id))
+                conn.commit()
+                conn.begin()
+                conn.execute(delete_session_sql, (app_name, user_id, session_id))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     def _list_sessions(
         self,
@@ -599,6 +669,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         descending: bool = True,
         limit: "int | None" = None,
         offset: "int | None" = None,
+        read: bool = False,
     ) -> "list[StoredSession]":
         """Synchronous implementation of list_sessions."""
         column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
@@ -610,7 +681,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -632,28 +703,43 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _append_event(self, event_record: StoredEvent) -> None:
         """Synchronous implementation of append_event."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
         event_data_str = to_json(event_record["event_data"])
 
         sql = f"""
         INSERT INTO {self._events_table}
         (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        SELECT ?, ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (
+            SELECT 1 FROM {self._session_table}
+            WHERE id = ? AND app_name = ? AND user_id = ?
+        )
+        RETURNING 1
         """
 
         with self._config.provide_connection() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 sql,
                 (
                     event_record["id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
-                    event_record["session_id"],
+                    app_name,
+                    user_id,
+                    session_id,
                     event_record["invocation_id"],
                     event_record["timestamp"],
                     event_data_str,
+                    session_id,
+                    app_name,
+                    user_id,
                 ),
             )
+            inserted = cursor.fetchone()
             conn.commit()
+            if inserted is None:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
 
     def _append_event_and_update_state(
         self,
@@ -663,12 +749,23 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Synchronous implementation of append_event_and_update_state."""
-        now = datetime.now(UTC)
-        state_json = to_json(state)
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = (
+                f"Event scope ({event_record['app_name']!r}, {event_record['user_id']!r}, "
+                f"{event_record['session_id']!r}) does not match target ({app_name!r}, {user_id!r}, {session_id!r})."
+            )
+            raise ValueError(msg)
+
+        session_state = dict(state)
+        state_json = to_json(session_state)
         event_data_str = to_json(event_record["event_data"])
 
         insert_sql = f"""
@@ -681,62 +778,143 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
         WHERE app_name = ? AND user_id = ? AND id = ?
-        RETURNING id, app_name, user_id, state, create_time, update_time
         """
-        app_upsert_sql = f"""
-        INSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES (?, ?, ?)
-        ON CONFLICT(app_name) DO UPDATE SET
-            state = excluded.state,
-            update_time = excluded.update_time
-        """
-        user_upsert_sql = f"""
-        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(app_name, user_id) DO UPDATE SET
-            state = excluded.state,
-            update_time = excluded.update_time
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
         with self._config.provide_connection() as conn:
-            try:
-                conn.execute("BEGIN TRANSACTION")
-                conn.execute(
-                    insert_sql,
-                    (
-                        event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        event_data_str,
-                    ),
-                )
-                cursor = conn.execute(update_sql, (state_json, now, app_name, user_id, session_id))
-                row = cursor.fetchone()
-                if row is None:
-                    _raise_session_not_found(session_id)
-                assert row is not None
-                if app_state is not None:
-                    conn.execute(app_upsert_sql, (app_name, to_json(app_state), now))
-                if user_state is not None:
-                    conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now))
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+            for _ in range(max_attempts):
+                now = datetime.now(UTC)
+                in_tx = False
+                try:
+                    conn.execute("BEGIN TRANSACTION")
+                    in_tx = True
+                    conn.execute(update_sql, (state_json, now, app_name, user_id, session_id))
+                    row = conn.execute(select_sql, (app_name, user_id, session_id)).fetchone()
+                    if row is None:
+                        _raise_session_not_found(session_id)
+                    assert row is not None
+                    conn.execute(
+                        insert_sql,
+                        (
+                            event_record["id"],
+                            event_record["app_name"],
+                            event_record["user_id"],
+                            event_record["session_id"],
+                            event_record["invocation_id"],
+                            event_record["timestamp"],
+                            event_data_str,
+                        ),
+                    )
+                    merged_app_state: dict[str, Any] | None = None
+                    if app_state_delta:
+                        merged_app_state = self._apply_app_state_delta(conn, app_name, app_state_delta)
+                        if merged_app_state is None:
+                            conn.rollback()
+                            in_tx = False
+                            continue
+                    merged_user_state: dict[str, Any] | None = None
+                    if user_state_delta:
+                        merged_user_state = self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
+                        if merged_user_state is None:
+                            conn.rollback()
+                            in_tx = False
+                            continue
+                    conn.commit()
+                    in_tx = False
+                    session_id_val, row_app_name, row_user_id, state_data, create_time, update_time = row
+                    stored_session_state = from_json(state_data) if isinstance(state_data, str) else state_data
+                    return StoredSession(
+                        id=session_id_val,
+                        app_name=row_app_name,
+                        user_id=row_user_id,
+                        state=merge_scoped_state(stored_session_state or {}, merged_app_state, merged_user_state),
+                        create_time=create_time,
+                        update_time=update_time,
+                    )
+                except Exception as exc:
+                    if in_tx:
+                        with contextlib.suppress(Exception):
+                            conn.rollback()
+                    if _is_retryable_error(exc, allow_unique_conflict=has_deltas):
+                        continue
+                    raise
+        msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
-        assert row is not None
-        session_id_val, app_name, user_id, state_data, create_time, update_time = row
-        return StoredSession(
-            id=session_id_val,
-            app_name=app_name,
-            user_id=user_id,
-            state=from_json(state_data) if isinstance(state_data, str) else state_data,
-            create_time=create_time,
-            update_time=update_time,
+    def _select_state(self, conn: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
+        try:
+            row = conn.execute(sql, params).fetchone()
+        except Exception as exc:
+            if DUCKDB_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+        if row is None:
+            return None
+        return cast("dict[str, Any]", from_json(row[0]) if isinstance(row[0], str) else row[0])
+
+    def _apply_app_state_delta(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any] | None":
+        return self._apply_state_delta(
+            conn,
+            table=self._app_state_table,
+            where_sql="app_name = ?",
+            insert_cols="app_name",
+            insert_vals="?",
+            conflict_cols="app_name",
+            key_params=(app_name,),
+            delta=delta,
         )
+
+    def _apply_user_state_delta(
+        self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any] | None":
+        return self._apply_state_delta(
+            conn,
+            table=self._user_state_table,
+            where_sql="app_name = ? AND user_id = ?",
+            insert_cols="app_name, user_id",
+            insert_vals="?, ?",
+            conflict_cols="app_name, user_id",
+            key_params=(app_name, user_id),
+            delta=delta,
+        )
+
+    def _apply_state_delta(
+        self,
+        conn: Any,
+        *,
+        table: str,
+        where_sql: str,
+        insert_cols: str,
+        insert_vals: str,
+        conflict_cols: str,
+        key_params: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any] | None":
+        row = conn.execute(f"SELECT state, update_time FROM {table} WHERE {where_sql}", key_params).fetchone()
+        if row is None:
+            merged = dict(delta)
+            now = datetime.now(UTC)
+            inserted = conn.execute(
+                f"INSERT INTO {table} ({insert_cols}, state, update_time) VALUES ({insert_vals}, ?, ?) "
+                f"ON CONFLICT({conflict_cols}) DO NOTHING RETURNING state",
+                (*key_params, to_json(merged), now),
+            ).fetchone()
+            return merged if inserted is not None else None
+        existing = cast("dict[str, Any]", from_json(row[0]) if isinstance(row[0], str) else (row[0] or {}))
+        expected_update_time = row[1]
+        merged = {**existing, **delta}
+        new_update_time = _next_monotonic_timestamp(expected_update_time)
+        updated = conn.execute(
+            f"UPDATE {table} SET state = ?, update_time = ? WHERE {where_sql} AND update_time = ? RETURNING state",
+            (to_json(merged), new_update_time, *key_params, expected_update_time),
+        ).fetchone()
+        return merged if updated is not None else None
 
     def _get_events(
         self,
@@ -745,12 +923,14 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredEvent]":
         """Synchronous implementation of get_events."""
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = ?", "s.user_id = ?", "e.session_id = ?"]
+        where_clauses = ["s.app_name = ?", "s.user_id = ?", "s.id = ?"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -758,20 +938,26 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit is not None else ""
+        if limit is not None:
+            params.append(limit)
+            order_and_limit = "ORDER BY e.timestamp DESC, e.rowid DESC LIMIT ?"
+        else:
+            order_and_limit = "ORDER BY e.timestamp ASC"
 
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_and_limit}
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_replica_connection(primary=not read) as conn:
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
+                if limit is not None:
+                    rows = list(reversed(rows))
 
                 return [
                     StoredEvent(
@@ -824,6 +1010,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         try:
             with self._config.provide_connection() as conn:
                 conn.execute(delete_events_sql, params)
+                conn.commit()
                 cursor = conn.execute(delete_sessions_sql, params)
                 count = len(cursor.fetchall())
                 conn.commit()
@@ -935,8 +1122,8 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         - Session memory storage with native JSON type
         - Simple ILIKE search or BM25 full-text search via FTS extension
         - Native TIMESTAMP type support
-        - Deduplication via event_id unique constraint
-        - Efficient upserts using INSERT OR IGNORE
+        - Deduplication via (app_name, user_id, event_id) unique constraint
+        - Efficient upserts using ON CONFLICT DO NOTHING
         - Columnar storage for analytical queries
 
     Args:
@@ -947,13 +1134,14 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "DuckDBConfig") -> None:
+    def __init__(self, config: "DuckDBConfig", *, read_config: "DuckDBConfig | None" = None) -> None:
         """Initialize DuckDB ADK memory store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: DuckDBConfig instance.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -990,15 +1178,26 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         if embedding is not None:
             msg = "DuckDB ADK memory store does not support embedding-based search."
             raise NotImplementedError(msg)
-        return self._search_entries(query, app_name, user_id, limit, scope_filter)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter, read=True)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return self._delete_entries_by_session(session_id)
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
+        return self._delete_entries_by_session(session_id, app_name=app_name, user_id=user_id)
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
         return self._delete_entries_older_than(days, app_name, scope)
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing DuckDB memory companion indexes and FTS schema without committing."""
+        if not self._enabled:
+            return
+        fts_present = self._fts_index_exists(driver) if self._use_fts else True
+        for statement in self._memory_index_statements():
+            driver.execute(statement)
+        if self._use_fts and not fts_present:
+            self._load_fts_extension(driver)
+            driver.execute(self._fts_index_ddl(overwrite=False))
 
     def _ensure_fts_extension(self, conn: Any) -> bool:
         """Ensure the DuckDB FTS extension is available for this connection."""
@@ -1087,17 +1286,6 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             driver.execute("INSTALL fts")
         driver.execute("LOAD fts")
 
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing DuckDB memory companion indexes and FTS schema without committing."""
-        if not self._enabled:
-            return
-        fts_present = self._fts_index_exists(driver) if self._use_fts else True
-        for statement in self._memory_index_statements():
-            driver.execute(statement)
-        if self._use_fts and not fts_present:
-            self._load_fts_extension(driver)
-            driver.execute(self._fts_index_ddl(overwrite=False))
-
     def _memory_index_statements(self) -> list[str]:
         """Return canonical CREATE INDEX statements for the memory table."""
         idx_app_scope_user_time = _duckdb_index_name(self._memory_table, "app_scope_user_time")
@@ -1127,13 +1315,14 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             f"            app_name VARCHAR(128) NOT NULL,\n"
             f"            user_id VARCHAR(128) NOT NULL,\n"
             f"            scope VARCHAR(16) NOT NULL DEFAULT 'user',\n"
-            f"            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
+            f"            event_id VARCHAR(128) NOT NULL,\n"
             f"            author VARCHAR(256){owner_id_line},\n"
             f"            timestamp TIMESTAMP NOT NULL,\n"
             f"            content_json JSON NOT NULL,\n"
             f"            content_text TEXT NOT NULL,\n"
             f"            metadata_json JSON,\n"
-            f"            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+            f"            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+            f"            UNIQUE (app_name, user_id, event_id)\n"
             f"        );\n"
             f"{index_lines}\n"
             f"        "
@@ -1171,7 +1360,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(event_id) DO NOTHING RETURNING 1
+            ON CONFLICT DO NOTHING RETURNING 1
             """
         else:
             sql = f"""
@@ -1179,7 +1368,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                 id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(event_id) DO NOTHING RETURNING 1
+            ON CONFLICT DO NOTHING RETURNING 1
             """
 
         with self._config.provide_connection() as conn:
@@ -1240,6 +1429,8 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         """Synchronous implementation of search_entries."""
         if not self._enabled:
@@ -1254,7 +1445,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         rows: list[Any] | None = None
         columns: list[str] = []
 
-        with self._config.provide_connection() as conn:
+        with self._provide_replica_connection(primary=not read) as conn:
             if use_fts and not self._ensure_fts_extension(conn):
                 use_fts = False
 
@@ -1267,14 +1458,15 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             JOIN (
                 SELECT id, {fts_macro}.match_bm25(id, ?, fields := 'content_text') AS score
                 FROM {self._memory_table}
+                WHERE app_name = ?
             ) fts ON m.id = fts.id
             WHERE {where_scope} AND fts.score IS NOT NULL
             ORDER BY fts.score DESC
             LIMIT ?
             """
-                fts_params = (query, *scope_params, limit_value)
+                fts_params = (query, app_name, *scope_params, limit_value)
                 try:
-                    rows = conn.execute(fts_sql, fts_params).fetchall()
+                    rows = cast("list[Any]", conn.execute(fts_sql, fts_params).fetchall())
                     columns = [col[0] for col in conn.description or []]
                 except Exception as exc:
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
@@ -1289,7 +1481,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             """
                 params = (*scope_params, f"%{query}%", limit_value)
                 try:
-                    rows = conn.execute(sql, params).fetchall()
+                    rows = cast("list[Any]", conn.execute(sql, params).fetchall())
                     columns = [col[0] for col in conn.description or []]
                 except Exception as exc:
                     if DUCKDB_TABLE_NOT_FOUND_ERROR in str(exc):
@@ -1309,15 +1501,22 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             records.append(record)
         return records
 
-    def _delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         """Synchronous implementation of delete_entries_by_session."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = ? RETURNING 1"
+        clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+        clauses.append("app_name = ?")
+        params.append(app_name)
+        clauses.append("user_id = ?")
+        params.append(user_id)
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql} RETURNING 1"
         with self._config.provide_connection() as conn:
-            result = conn.execute(sql, (session_id,))
+            result = conn.execute(sql, tuple(params))
             deleted_count = len(result.fetchall())
             conn.commit()
             if self._use_fts and deleted_count > 0:
@@ -1401,6 +1600,31 @@ def _build_duckdb_scope_where(
     return f"{pfx}app_name = ? AND {pfx}scope = 'app'", (app_name,)
 
 
+def _duckdb_index_name(table_name: str, suffix: str) -> str:
+    """Generate a valid DuckDB index name for an optionally schema-qualified table."""
+    parts = split_qualified_identifier(table_name.strip(), quote_chars='"')
+    bare_name = parts[-1]
+    if len(parts) > 1 and parts[0].lower() != "main":
+        return f"idx_{parts[0]}_{bare_name}_{suffix}"
+    return f"idx_{bare_name}_{suffix}"
+
+
+def _split_duckdb_table_name(table_name: str) -> tuple[str, str]:
+    """Split an optionally schema-qualified table name into schema and bare table name.
+
+    Returns:
+        Tuple of (schema, bare_table_name). If unqualified, schema defaults to 'main'.
+    """
+    parts = split_qualified_identifier(table_name.strip(), quote_chars='"')
+    if not parts:
+        msg = "DuckDB table name must not be empty."
+        raise ValueError(msg)
+    first_part = parts[0]
+    if len(parts) > 1:
+        return first_part, parts[1]
+    return "main", first_part
+
+
 def _session_list_query(
     session_table: str,
     app_name: str,
@@ -1429,3 +1653,20 @@ def _session_list_query(
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """
     return sql, tuple(params)
+
+
+def _next_monotonic_timestamp(previous: "datetime | None") -> datetime:
+    now = datetime.now(UTC)
+    if previous is None:
+        return now
+    comparable = previous if previous.tzinfo is not None else previous.replace(tzinfo=UTC)
+    if now <= comparable:
+        return comparable + timedelta(microseconds=1)
+    return now
+
+
+def _is_retryable_error(exc: Exception, *, allow_unique_conflict: bool) -> bool:
+    message = str(exc).lower()
+    if "conflict" in message or "transactioncontext" in message:
+        return True
+    return allow_unique_conflict and ("duplicate key" in message or "constraint" in message)

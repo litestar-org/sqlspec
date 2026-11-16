@@ -14,12 +14,16 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
 )
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
 from sqlspec.adapters.cockroach_psycopg.core import (
+    DEFAULT_FOLLOWER_READ_STALENESS,
     CockroachPsycopgRetryConfig,
     build_native_export,
     build_native_import,
     build_statement_config,
     calculate_backoff_seconds,
+    create_mapped_exception,
     driver_profile,
+    execute_cache_hit,
+    execute_cache_hit_async,
     is_retryable_error,
     native_export_telemetry,
     native_import_telemetry,
@@ -30,7 +34,6 @@ from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
     CockroachPsycopgAsyncDataDictionary,
     CockroachPsycopgSyncDataDictionary,
 )
-from sqlspec.adapters.psycopg.core import create_mapped_exception
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
@@ -39,6 +42,8 @@ from sqlspec.adapters.psycopg.driver import (
 )
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncRowStream, SyncRowStream
+from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.exceptions import ReadOnlyTransactionError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -68,7 +73,7 @@ _T = TypeVar("_T")
 class CockroachPsycopgSyncStreamSource:
     """Sync chunk source for CockroachDB Psycopg with follower read support."""
 
-    __slots__ = ("_auto_started", "_driver", "_underlying")
+    __slots__ = ("_auto_started", "_connection", "_driver", "_underlying")
 
     def __init__(
         self, driver: "CockroachPsycopgSyncDriver", underlying: "PsycopgSyncStreamSource", auto_started: bool
@@ -76,6 +81,7 @@ class CockroachPsycopgSyncStreamSource:
         self._driver = driver
         self._underlying = underlying
         self._auto_started = auto_started
+        self._connection = driver.connection
 
     @property
     def column_types(self) -> "dict[str, str] | None":
@@ -97,7 +103,13 @@ class CockroachPsycopgSyncStreamSource:
         try:
             self._underlying.close(error=error)
         finally:
-            if self._auto_started and self._driver._connection_in_transaction():
+            connection = self._connection
+            self._connection = None
+            if (
+                self._auto_started
+                and self._driver.connection is connection
+                and self._driver._connection_in_transaction()
+            ):
                 if error:
                     with suppress(Exception):
                         self._driver.rollback()
@@ -108,7 +120,7 @@ class CockroachPsycopgSyncStreamSource:
 class CockroachPsycopgAsyncStreamSource:
     """Async chunk source for CockroachDB Psycopg with follower read support."""
 
-    __slots__ = ("_auto_started", "_driver", "_statement", "_underlying")
+    __slots__ = ("_auto_started", "_connection", "_driver", "_statement", "_underlying")
 
     def __init__(
         self, driver: "CockroachPsycopgAsyncDriver", statement: "SQL", underlying: "PsycopgAsyncStreamSource"
@@ -117,12 +129,14 @@ class CockroachPsycopgAsyncStreamSource:
         self._statement = statement
         self._underlying = underlying
         self._auto_started = False
+        self._connection: Any = None
 
     @property
     def column_types(self) -> "dict[str, str] | None":
         return getattr(self._underlying, "column_types", None)
 
     async def start(self) -> None:
+        self._connection = self._driver.connection
         if self._driver._wants_follower_read(self._statement):
             self._auto_started = await self._driver._begin_follower_read_transaction()
         try:
@@ -140,7 +154,13 @@ class CockroachPsycopgAsyncStreamSource:
         try:
             await self._underlying.close(error=error)
         finally:
-            if self._auto_started and self._driver._connection_in_transaction():
+            connection = self._connection
+            self._connection = None
+            if (
+                self._auto_started
+                and self._driver.connection is connection
+                and self._driver._connection_in_transaction()
+            ):
                 if error:
                     with suppress(Exception):
                         await self._driver.rollback()
@@ -182,9 +202,21 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
         self._follower_reads_enabled = bool(self.driver_features.get("enable_follower_reads", False))
-        raw_staleness = cast("str | None", self.driver_features.get("default_staleness"))
+        raw_staleness = cast(
+            "str | None",
+            self.driver_features.get("default_staleness")
+            or (DEFAULT_FOLLOWER_READ_STALENESS if self.driver_features.get("enable_follower_reads") else None),
+        )
         self._follower_staleness = validate_follower_read_staleness(raw_staleness) if raw_staleness else None
         self._data_dictionary = None
+        self._cache_hit_state = (
+            self.driver_features,
+            self._follower_reads_enabled,
+            PsycopgSyncDriver.cache_hit_function,
+        )
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), CockroachPsycopgSyncDriver) else None
+        )
 
     @property
     def data_dictionary(self) -> "CockroachPsycopgSyncDataDictionary":  # type: ignore[override]
@@ -222,8 +254,9 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
                 query is not None
                 and not prepared.is_script
                 and not prepared.is_many
-                and prepared.operation_type == "SELECT"
                 and isinstance(values, (list, tuple))
+                and self._wants_follower_read(prepared)
+                and prepared.operation_type == "SELECT"
             ):
                 command, bound = build_native_export(
                     query,
@@ -263,6 +296,9 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         transactions use the inherited path. CSV needs explicit skip (0 for no
         header); nullif is never inferred. Native failures are never replayed.
         """
+        if self.driver_features.get("read_only_session"):
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         options = self.driver_features.get("native_storage_csv_options", {})
         resolved = None
         if (
@@ -282,9 +318,9 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
-    def _wants_follower_read(self, statement: "SQL") -> bool:
-        """Return True when a statement may run under a follower-read transaction."""
-        return statement.returns_rows() and not statement.is_modifying_operation()
+    def dispatch_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
+        self._wants_follower_read(statement)
+        return super().dispatch_special_handling(cursor, statement)
 
     def begin(self) -> None:
         """Begin a transaction and apply follower-read staleness to it.
@@ -373,15 +409,25 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
     def handle_database_exceptions(self) -> "CockroachPsycopgSyncExceptionHandler":
         return CockroachPsycopgSyncExceptionHandler()
 
+    def _wants_follower_read(self, statement: "SQL") -> bool:
+        """Return True when a statement may run under a follower-read transaction."""
+        safe = statement.is_read_only()
+        if self.driver_features.get("read_only_session") and not safe:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
+        return safe
+
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
+        if self.driver_features.get("read_only_session") and not cached.operation_profile.is_read_only:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         auto_started = (
             self._begin_follower_read_transaction()
             if (
-                self._follower_reads_enabled
-                and cached.operation_profile.returns_rows
-                and not cached.operation_profile.modifies_rows
+                (self._follower_reads_enabled or self.driver_features.get("read_only_session"))
+                and cached.operation_profile.is_read_only
             )
             else False
         )
@@ -423,9 +469,13 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         return rows
 
     def _apply_follower_reads(self) -> None:
-        if not self._follower_reads_enabled or not self._follower_staleness:
+        if self._follower_reads_enabled and self._follower_staleness:
+            command = f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}, READ ONLY"
+        elif self.driver_features.get("read_only_session"):
+            command = "SET TRANSACTION READ ONLY"
+        else:
             return
-        self.connection.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")).close()
+        self.connection.execute(cast("Any", command)).close()
 
     def _begin_follower_read_transaction(self) -> bool:
         """Open the transaction a follower read needs so the staleness clause can lead it.
@@ -434,7 +484,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         clause with nowhere to go, so a read opens one here when the caller has
         not already done so.
         """
-        if not self._follower_reads_enabled or not self._follower_staleness:
+        if not (self._follower_reads_enabled or self.driver_features.get("read_only_session")):
             return False
         if self._connection_in_transaction():
             return False
@@ -464,9 +514,21 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
         self._follower_reads_enabled = bool(self.driver_features.get("enable_follower_reads", False))
-        raw_staleness = cast("str | None", self.driver_features.get("default_staleness"))
+        raw_staleness = cast(
+            "str | None",
+            self.driver_features.get("default_staleness")
+            or (DEFAULT_FOLLOWER_READ_STALENESS if self.driver_features.get("enable_follower_reads") else None),
+        )
         self._follower_staleness = validate_follower_read_staleness(raw_staleness) if raw_staleness else None
         self._data_dictionary = None
+        self._cache_hit_state = (
+            self.driver_features,
+            self._follower_reads_enabled,
+            PsycopgAsyncDriver.cache_hit_function,
+        )
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), CockroachPsycopgAsyncDriver) else None
+        )
 
     @property
     def data_dictionary(self) -> "CockroachPsycopgAsyncDataDictionary":  # type: ignore[override]
@@ -504,8 +566,9 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
                 query is not None
                 and not prepared.is_script
                 and not prepared.is_many
-                and prepared.operation_type == "SELECT"
                 and isinstance(values, (list, tuple))
+                and self._wants_follower_read(prepared)
+                and prepared.operation_type == "SELECT"
             ):
                 command, bound = build_native_export(
                     query,
@@ -545,6 +608,9 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         transactions use the inherited path. CSV needs explicit skip (0 for no
         header); nullif is never inferred. Native failures are never replayed.
         """
+        if self.driver_features.get("read_only_session"):
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         options = self.driver_features.get("native_storage_csv_options", {})
         resolved = None
         if (
@@ -564,9 +630,9 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
-    def _wants_follower_read(self, statement: "SQL") -> bool:
-        """Return True when a statement may run under a follower-read transaction."""
-        return statement.returns_rows() and not statement.is_modifying_operation()
+    async def dispatch_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
+        self._wants_follower_read(statement)
+        return await super().dispatch_special_handling(cursor, statement)
 
     async def begin(self) -> None:
         """Begin a transaction and apply follower-read staleness to it.
@@ -644,15 +710,25 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
     def handle_database_exceptions(self) -> "CockroachPsycopgAsyncExceptionHandler":
         return CockroachPsycopgAsyncExceptionHandler()
 
+    def _wants_follower_read(self, statement: "SQL") -> bool:
+        """Return True when a statement may run under a follower-read transaction."""
+        safe = statement.is_read_only()
+        if self.driver_features.get("read_only_session") and not safe:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
+        return safe
+
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
+        if self.driver_features.get("read_only_session") and not cached.operation_profile.is_read_only:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         auto_started = (
             await self._begin_follower_read_transaction()
             if (
-                self._follower_reads_enabled
-                and cached.operation_profile.returns_rows
-                and not cached.operation_profile.modifies_rows
+                (self._follower_reads_enabled or self.driver_features.get("read_only_session"))
+                and cached.operation_profile.is_read_only
             )
             else False
         )
@@ -694,11 +770,13 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         return rows
 
     async def _apply_follower_reads(self) -> None:
-        if not self._follower_reads_enabled or not self._follower_staleness:
+        if self._follower_reads_enabled and self._follower_staleness:
+            command = f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}, READ ONLY"
+        elif self.driver_features.get("read_only_session"):
+            command = "SET TRANSACTION READ ONLY"
+        else:
             return
-        cursor = await self.connection.execute(
-            cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")
-        )
+        cursor = await self.connection.execute(cast("Any", command))
         await cursor.close()
 
     async def _begin_follower_read_transaction(self) -> bool:
@@ -708,7 +786,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         clause with nowhere to go, so a read opens one here when the caller has
         not already done so.
         """
-        if not self._follower_reads_enabled or not self._follower_staleness:
+        if not (self._follower_reads_enabled or self.driver_features.get("read_only_session")):
             return False
         if self._connection_in_transaction():
             return False

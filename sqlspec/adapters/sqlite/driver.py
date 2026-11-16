@@ -1,13 +1,14 @@
 """SQLite driver implementation."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.adapters.sqlite.core import (
+    ROWID_SAFE_OPERATIONS,
     SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT,
     SqliteStreamSource,
     build_insert_statement,
@@ -16,6 +17,7 @@ from sqlspec.adapters.sqlite.core import (
     default_statement_config,
     driver_profile,
     end_transaction,
+    execute_cache_hit,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -25,8 +27,7 @@ from sqlspec.adapters.sqlite.core import (
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters._registry import register_driver_profile
-from sqlspec.core.result._base import ArrowResult, DMLResult
-from sqlspec.driver._common import validate_savepoint_name
+from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_savepoint_name
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
@@ -40,14 +41,12 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.core.compiler import OperationType
-    from sqlspec.core.result._base import SQLResult
+    from sqlspec.core.result._base import ArrowResult, SQLResult
     from sqlspec.core.statement import SQL, StatementConfig
     from sqlspec.driver._common import CachedQuery, ExecutionResult
     from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
-
-_ROWID_SAFE_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -102,6 +101,8 @@ class SqliteDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), SqliteDriver) else None
+        self._cache_hit_state = self._rowid_target_cache
 
     @property
     def data_dictionary(self) -> "SqliteDataDictionary":
@@ -139,7 +140,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 cursor,
                 statement.operation_type,
                 effective_rowcount,
-                statement._peek_expression(),
+                statement._get_shared_expression(),
                 self._rowid_target_cache,
             )
 
@@ -159,7 +160,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             cursor,
             statement.operation_type,
             affected_rows,
-            statement._peek_expression(),
+            statement._get_shared_expression(),
             self._rowid_target_cache,
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
@@ -413,67 +414,11 @@ class SqliteDriver(SyncDriverAdapterBase):
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Execute cached query through SQLite connection.execute fast path.
-
-        This bypasses cursor context-manager overhead for repeated cached
-        statements while preserving driver exception mapping behavior.
-        """
-        cursor = None
-        returns_rows = cached.operation_profile.returns_rows
-        normalized_parameters = normalize_execute_parameters(params)
-        self._invalidate_rowid_target_cache(cached.operation_type)
-        try:
-            try:
-                cursor = self.connection.execute(cached.compiled_sql, normalized_parameters)
-            except sqlite3.Error as exc:
-                raise create_mapped_exception(exc) from exc
-
-            if not returns_rows:
-                rowcount = cursor.rowcount
-                affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
-                last_inserted_id = resolve_lastrowid(
-                    self.connection,
-                    cursor,
-                    cached.operation_type,
-                    affected_rows,
-                    cached.processed_state.parsed_expression,
-                    self._rowid_target_cache,
-                )
-                return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
-
-            fetched_data = cursor.fetchall()
-            affected_rows = resolve_rowcount(cursor)
-            effective_rowcount = affected_rows or (len(fetched_data) if cached.operation_type == "INSERT" else 0)
-            last_inserted_id = None
-            if cached.operation_type != "SELECT":
-                last_inserted_id = resolve_lastrowid(
-                    self.connection,
-                    cursor,
-                    cached.operation_type,
-                    effective_rowcount,
-                    cached.processed_state.parsed_expression,
-                    self._rowid_target_cache,
-                )
-            description = cursor.description
-            column_names = [col[0] for col in description] if description else []
-            row_format = resolve_row_format(fetched_data)
-            return self.build_cached_select_result(
-                sql,
-                params,
-                cached,
-                selected_data=fetched_data,
-                column_names=column_names,
-                data_row_count=len(fetched_data),
-                row_format=row_format,
-                last_inserted_id=last_inserted_id,
-            )
-        finally:
-            if cursor is not None:
-                with contextlib.suppress(Exception):
-                    cursor.close()
+        """Execute a cached statement through the compiled SQLite cache-hit executor."""
+        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._rowid_target_cache)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
-        if operation_type not in _ROWID_SAFE_OPERATIONS:
+        if operation_type not in ROWID_SAFE_OPERATIONS:
             self._rowid_target_cache.clear()
 
     def _connection_in_transaction(self) -> bool:

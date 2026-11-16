@@ -1,7 +1,10 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for mysql-connector Litestar session store DDL configuration."""
 
-from unittest.mock import MagicMock
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from sqlspec.adapters.mysqlconnector.litestar import MysqlConnectorAsyncStore, MysqlConnectorSyncStore
 
@@ -61,8 +64,6 @@ def test_mysqlconnector_drop_table_sql_omits_drop_index() -> None:
 
 async def test_mysqlconnector_set_uses_mariadb_compatible_upsert() -> None:
     """set must use VALUES(col) in ON DUPLICATE KEY UPDATE for MySQL and MariaDB compatibility."""
-    from unittest.mock import AsyncMock
-
     cursor = MagicMock()
     cursor.execute = AsyncMock()
     cursor.close = AsyncMock()
@@ -99,3 +100,57 @@ def test_mysqlconnector_sync_create_table_does_not_commit() -> None:
 
     assert driver.execute_script.called
     assert not driver.commit.called
+
+
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_mysqlconnector_get_renews_only_for_positive_duration(
+    is_async: bool, renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """Async and sync mysql-connector stores renew expires_at only when renew_for is positive."""
+    future = datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=5)
+    cursor = MagicMock()
+    conn = MagicMock()
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchone = AsyncMock(return_value=(b"payload", future))
+        cursor.close = AsyncMock()
+        conn.cursor = AsyncMock(return_value=cursor)
+        conn.commit = AsyncMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=None)
+        data = await MysqlConnectorAsyncStore(config).get("session-1", renew_for=renew_for)
+        if expect_renew:
+            assert cursor.execute.await_count == 2
+            assert "UPDATE litestar_session" in cursor.execute.await_args_list[1].args[0]
+            conn.commit.assert_awaited_once()
+        else:
+            assert cursor.execute.await_count == 1
+            conn.commit.assert_not_awaited()
+    else:
+        cursor.fetchone.return_value = (b"payload", future)
+        conn.cursor.return_value = cursor
+        conn.__enter__.return_value = conn
+        data = await MysqlConnectorSyncStore(config).get("session-1", renew_for=renew_for)
+        if expect_renew:
+            assert cursor.execute.call_count == 2
+            assert "UPDATE litestar_session" in cursor.execute.call_args_list[1].args[0]
+            conn.commit.assert_called_once()
+        else:
+            assert cursor.execute.call_count == 1
+            conn.commit.assert_not_called()
+
+    assert data == b"payload"

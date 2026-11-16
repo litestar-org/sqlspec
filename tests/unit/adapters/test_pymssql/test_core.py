@@ -286,3 +286,14 @@ def test_quote_bracket_identifier() -> None:
     assert quote_bracket_identifier('user"name') == '[user"name]'
     assert quote_bracket_identifier("[user]]name]") == "[user]]name]"
     assert quote_bracket_identifier("user]name") == "[user]]name]"
+
+
+@pytest.mark.parametrize("code", (3906, 3908, 978, 976))
+def test_replica_error_mapping_preserves_native_cause(code: int) -> None:
+    from sqlspec.adapters.pymssql.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError, ReplicaUnavailableError
+
+    error = Exception(code, b"SQL Server availability group error")
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReplicaUnavailableError if code == 976 else ReadOnlyTransactionError)
+    assert mapped.__cause__ is error

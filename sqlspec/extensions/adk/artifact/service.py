@@ -14,7 +14,8 @@ import inspect
 import logging
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import urlsplit
 
 from google.adk.artifacts import artifact_util
 from google.adk.artifacts.base_artifact_service import ArtifactVersion, BaseArtifactService, ensure_part
@@ -35,6 +36,18 @@ __all__ = ("SQLSpecArtifactService",)
 logger = get_logger("sqlspec.extensions.adk.artifact.service")
 
 _REWIND_TOMBSTONE = types.Part(inline_data=types.Blob(mime_type="application/octet-stream", data=b""))
+_CLOUD_PREFIX_SCHEMES: Final[frozenset[str]] = frozenset({
+    "abfs",
+    "abfss",
+    "az",
+    "azure",
+    "gcs",
+    "gs",
+    "memory",
+    "s3",
+    "s3a",
+})
+_UNSAFE_PATH_CHARS: Final[re.Pattern[str]] = re.compile(r"[/\\\x00*?\[\]]")
 
 
 class SQLSpecArtifactService(BaseArtifactService):
@@ -63,6 +76,7 @@ class SQLSpecArtifactService(BaseArtifactService):
     ) -> None:
         self._store = store
         self._artifact_storage_uri = artifact_storage_uri.rstrip("/")
+        self._storage_prefix = _extract_cloud_prefix(self._artifact_storage_uri)
         self._registry = registry or storage_registry
 
     @property
@@ -125,9 +139,10 @@ class SQLSpecArtifactService(BaseArtifactService):
             app_name=app_name, user_id=user_id, filename=filename, version=version, session_id=effective_session_id
         )
         canonical_uri = f"{self._artifact_storage_uri}/{content_path}"
+        object_key = self._to_backend_key(content_path)
         content_bytes = _serialize_artifact(artifact_part)
         backend = self._registry.get(self._artifact_storage_uri)
-        await _call_storage_backend(backend, "write_bytes_async", "write_bytes_sync", content_path, content_bytes)
+        await _call_storage_backend(backend, "write_bytes_async", "write_bytes_sync", object_key, content_bytes)
         record = StoredArtifact(
             app_name=app_name,
             user_id=user_id,
@@ -389,7 +404,7 @@ class SQLSpecArtifactService(BaseArtifactService):
             )
             return None
 
-        content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
+        content_path = self._backend_key_from_record(record["canonical_uri"])
         backend = self._registry.get(self._artifact_storage_uri)
         content_bytes = await _call_storage_backend(backend, "read_bytes_async", "read_bytes_sync", content_path)
 
@@ -447,7 +462,7 @@ class SQLSpecArtifactService(BaseArtifactService):
 
         backend = self._registry.get(self._artifact_storage_uri)
         for record in records:
-            content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
+            content_path = self._backend_key_from_record(record["canonical_uri"])
             try:
                 await _call_storage_backend(backend, "delete_async", "delete_sync", content_path)
             except Exception:
@@ -459,27 +474,47 @@ class SQLSpecArtifactService(BaseArtifactService):
                     version=record["version"],
                 )
 
+    def _to_backend_key(self, relative_path: str) -> str:
+        """Prepend any cloud URI path prefix to a relative artifact key."""
+        if not self._storage_prefix:
+            return relative_path
+        return f"{self._storage_prefix}/{relative_path}"
 
-_UNSAFE_PATH_CHARS = re.compile(r"(?:^|/)\.\.(?:/|$)|[/\\\x00]")
+    def _backend_key_from_record(self, canonical_uri: str) -> str:
+        """Resolve the backend object key corresponding to a stored canonical URI."""
+        relative_path = canonical_uri.removeprefix(f"{self._artifact_storage_uri}/")
+        return self._to_backend_key(relative_path)
+
+
+def _extract_cloud_prefix(artifact_storage_uri: str) -> str:
+    """Return normalized path prefix for cloud object-store URIs, or empty string otherwise."""
+    parsed = urlsplit(artifact_storage_uri)
+    if parsed.scheme.lower() not in _CLOUD_PREFIX_SCHEMES:
+        return ""
+    segments = [part for part in parsed.path.split("/") if part]
+    for segment in segments:
+        if segment in {".", ".."}:
+            msg = f"Unsafe URI prefix component: {segment!r}"
+            raise ValueError(msg)
+    return "/".join(segments)
 
 
 def _sanitize_path_component(value: str) -> str:
-    """Sanitize a path component to prevent directory traversal and namespace injection.
+    """Validate an artifact path component without normalizing away slashes or metacharacters.
 
-    Removes leading/trailing slashes and rejects empty values, ``..`` traversals,
-    internal slashes/backslashes, and NUL bytes.
+    Rejects empty values, dot segments (``.`` and ``..``), slashes, backslashes,
+    NUL bytes, and glob metacharacters (``*``, ``?``, ``[``, ``]``).
 
     Args:
         value: Raw path component.
 
     Returns:
-        Sanitized path component.
+        Validated path component.
 
     Raises:
-        ValueError: If the value is empty or contains unsafe path sequences.
+        ValueError: If the value is empty, a dot segment, or contains unsafe characters.
     """
-    value = value.strip("/")
-    if not value or _UNSAFE_PATH_CHARS.search(value):
+    if not value or value in {".", ".."} or _UNSAFE_PATH_CHARS.search(value):
         msg = f"Unsafe path component: {value!r}"
         raise ValueError(msg)
     return value

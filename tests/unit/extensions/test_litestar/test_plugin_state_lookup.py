@@ -145,4 +145,4 @@ def test_bind_key_wins_over_colliding_dependency_key() -> None:
     scope = cast("HTTPScope", {"type": "http"})
     connection = object()
     set_sqlspec_scope_state(scope, DEFAULT_CONNECTION_KEY, connection)
-    assert plugin.provide_request_connection(DEFAULT_SESSION_KEY, State(), scope) is connection
+    assert plugin.provide_db_connection(DEFAULT_SESSION_KEY, State(), scope) is connection

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.db2._typing import connection_autocommit_enabled
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
 from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
@@ -37,26 +38,6 @@ def validate_global_variable(name: object) -> str:
         msg = "Db2 tenant global variables must be schema-qualified identifiers such as APP.CURRENT_TENANT_ID"
         raise ImproperConfigurationError(msg)
     return name.upper()
-
-
-def _read_sql(names: tuple[str, ...]) -> str:
-    return f"SELECT {', '.join(names)} FROM SYSIBM.SYSDUMMY1"
-
-
-def _assign_sql(names: tuple[str, ...]) -> str:
-    if len(names) == 1:
-        return f"SET {names[0]} = ?"
-    return f"SET ({', '.join(names)}) = ({', '.join('?' for _ in names)})"
-
-
-def _row_values(row: Any, count: int) -> tuple[str | None, ...]:
-    if row is None or len(row) != count:
-        msg = "Db2 tenant global variable read returned an unexpected row"
-        raise ValueError(msg)
-    if any(value is not None and not isinstance(value, str) for value in row):
-        msg = "Db2 tenant global variables must hold character values"
-        raise ValueError(msg)
-    return tuple(cast("str | None", value) for value in row)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -151,6 +132,12 @@ class Db2SyncGlobalVariableStrategy(_Db2GlobalVariables):
         if restored != values:
             msg = "Db2 tenant global variable restore verification failed"
             raise TenantCleanupError(msg)
+        if not connection_autocommit_enabled(connection):
+            try:
+                connection.rollback()
+            except Exception as exc:
+                msg = "Db2 tenant checkin could not end its verification unit of work"
+                raise with_cause(TenantCleanupError(msg), exc)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -165,19 +152,29 @@ class Db2AsyncGlobalVariableStrategy(_Db2GlobalVariables):
     async def checkout(self, connection: Any, payload: "TenantContextPayload") -> TenantLeaseState:
         """Capture the previous values, assign the payload, and verify the server values."""
         names, values = self._assignments(payload)
+        cursor: Any = None
+        assign_error: BaseException | None = None
+        prior: tuple[Any, ...] = ()
+        current: tuple[Any, ...] = ()
         try:
             cursor = await connection.cursor()
+            await cursor.execute(_read_sql(names))
+            prior = _row_values(await cursor.fetchone(), len(names))
+            await cursor.execute(_assign_sql(names), values)
+            await cursor.execute(_read_sql(names))
+            current = _row_values(await cursor.fetchone(), len(names))
+        except BaseException as exc:
+            assign_error = exc
+        if cursor is not None:
             try:
-                await cursor.execute(_read_sql(names))
-                prior = _row_values(await cursor.fetchone(), len(names))
-                await cursor.execute(_assign_sql(names), values)
-                await cursor.execute(_read_sql(names))
-                current = _row_values(await cursor.fetchone(), len(names))
-            finally:
                 await cursor.close()
-        except Exception as exc:
-            msg = "Db2 tenant global variables could not be set"
-            raise with_cause(TenantContextError(msg), exc)
+            except BaseException as exc:
+                assign_error = exc
+        if assign_error is not None:
+            if isinstance(assign_error, Exception):
+                msg = "Db2 tenant global variables could not be set"
+                raise with_cause(TenantContextError(msg), assign_error)
+            raise assign_error
         if current != values:
             msg = "Db2 tenant global variable verification failed"
             raise TenantContextError(msg)
@@ -189,20 +186,35 @@ class Db2AsyncGlobalVariableStrategy(_Db2GlobalVariables):
             return
         names = tuple(state.baseline)
         values = tuple(state.baseline.values())
+        cursor: Any = None
+        restore_error: BaseException | None = None
+        restored: tuple[Any, ...] = ()
         try:
             cursor = await connection.cursor()
+            await cursor.execute(_assign_sql(names), values)
+            await cursor.execute(_read_sql(names))
+            restored = _row_values(await cursor.fetchone(), len(names))
+        except BaseException as exc:
+            restore_error = exc
+        if cursor is not None:
             try:
-                await cursor.execute(_assign_sql(names), values)
-                await cursor.execute(_read_sql(names))
-                restored = _row_values(await cursor.fetchone(), len(names))
-            finally:
                 await cursor.close()
-        except Exception as exc:
-            msg = "Db2 tenant global variables could not be restored"
-            raise with_cause(TenantCleanupError(msg), exc)
+            except BaseException as exc:
+                restore_error = exc
+        if restore_error is not None:
+            if isinstance(restore_error, Exception):
+                msg = "Db2 tenant global variables could not be restored"
+                raise with_cause(TenantCleanupError(msg), restore_error)
+            raise restore_error
         if restored != values:
             msg = "Db2 tenant global variable restore verification failed"
             raise TenantCleanupError(msg)
+        if not connection_autocommit_enabled(connection):
+            try:
+                await connection.rollback()
+            except Exception as exc:
+                msg = "Db2 tenant checkin could not end its verification unit of work"
+                raise with_cause(TenantCleanupError(msg), exc)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -258,3 +270,23 @@ class Db2AsyncTenantLease(AsyncTenantLease):
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         await connection.rollback()
+
+
+def _read_sql(names: tuple[str, ...]) -> str:
+    return f"SELECT {', '.join(names)} FROM SYSIBM.SYSDUMMY1"
+
+
+def _assign_sql(names: tuple[str, ...]) -> str:
+    if len(names) == 1:
+        return f"SET {names[0]} = ?"
+    return f"SET ({', '.join(names)}) = ({', '.join('?' for _ in names)})"
+
+
+def _row_values(row: Any, count: int) -> tuple[str | None, ...]:
+    if row is None or len(row) != count:
+        msg = "Db2 tenant global variable read returned an unexpected row"
+        raise ValueError(msg)
+    if any(value is not None and not isinstance(value, str) for value in row):
+        msg = "Db2 tenant global variables must hold character values"
+        raise ValueError(msg)
+    return tuple(cast("str | None", value) for value in row)

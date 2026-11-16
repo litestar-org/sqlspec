@@ -1682,3 +1682,68 @@ async def test_obstore_s3_attributes_refused_on_stream_and_fallback_on_write_arr
     assert recorded_ops[0][2] == "prefix/item.bin"
     assert recorded_ops[0][3] == {"overwrite": False}
     assert recorded_ops[1] == ("delete", recorded_ops[0][1], None, {})
+
+
+def test_obstore_file_root_refused(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f.txt").write_text("x")
+    (tmp_path / "keep.txt").write_text("k")
+    backend = ObStoreBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync(".")
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync("a")
+
+    assert (tmp_path / "keep.txt").exists()
+    assert (tmp_path / "a" / "f.txt").exists()
+
+    backend.delete_sync("a", recursive=True)
+    assert not (tmp_path / "a").exists()
+
+
+def test_obstore_file_root_refused_even_recursive(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f.txt").write_text("x")
+    (tmp_path / "keep.txt").write_text("k")
+    backend = ObStoreBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync(".", recursive=True)
+
+    assert (tmp_path / "keep.txt").exists()
+    assert (tmp_path / "a" / "f.txt").exists()
+
+
+@pytest.mark.anyio
+async def test_obstore_file_root_refused_async(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f.txt").write_text("x")
+    (tmp_path / "keep.txt").write_text("k")
+    backend = ObStoreBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        await backend.delete_async(".", recursive=True)
+    with pytest.raises(StorageOperationFailedError):
+        await backend.delete_async("a")
+
+    assert (tmp_path / "keep.txt").exists()
+    assert (tmp_path / "a" / "f.txt").exists()
+
+    await backend.delete_async("a", recursive=True)
+    assert not (tmp_path / "a").exists()
+
+
+def test_obstore_init_error_hides_uri_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    import obstore.store as obs_store
+
+    def _fail(uri: str, **kwargs: Any) -> Any:
+        raise RuntimeError(uri)
+
+    monkeypatch.setattr(obs_store, "from_url", _fail)
+
+    with pytest.raises(StorageOperationFailedError) as exc_info:
+        ObStoreBackend("s3://key:secret@bucket/p?token=x")
+
+    assert "secret" not in str(exc_info.value)
+    assert "token=x" not in str(exc_info.value)

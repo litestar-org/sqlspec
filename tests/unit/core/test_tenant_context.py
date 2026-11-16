@@ -434,15 +434,15 @@ def test_request_binding_rejects_synchronous_access_to_asynchronous_resolution()
     with pytest.raises(ImproperConfigurationError, match="await TenantContext"):
         binding.resolve()
     assert inspect.getcoroutinestate(coroutines[0]) == inspect.CORO_CLOSED
-    assert asyncio.run(binding.aresolve()) == TenantContextPayload("async")
+    assert asyncio.run(binding.resolve_async()) == TenantContextPayload("async")
 
 
 def test_require_outside_a_request_raises_tenant_context_error() -> None:
     with pytest.raises(TenantContextError):
         TenantContext.require()
     with pytest.raises(TenantContextError):
-        asyncio.run(TenantContext.arequire())
-    assert asyncio.run(TenantContext.aget()) is None
+        asyncio.run(TenantContext.require_async())
+    assert asyncio.run(TenantContext.get_async()) is None
 
 
 def test_tenant_bypass_marks_route_handlers_and_wrapped_functions() -> None:
@@ -461,3 +461,23 @@ def test_tenant_bypass_marks_route_handlers_and_wrapped_functions() -> None:
     assert is_tenant_bypass_route(SimpleNamespace(fn=public))
     assert not is_tenant_bypass_route(private)
     assert not is_tenant_bypass_route(None)
+
+
+@pytest.mark.anyio
+async def test_aget_forwards_key_to_request_binding() -> None:
+    from sqlspec.utils.tenant import TenantRequestBinding
+
+    first = object()
+    second = object()
+
+    async def resolve(key: object) -> str:
+        return "first-tenant" if key is first else "second-tenant"
+
+    binding = TenantRequestBinding(resolve, keys=(first, second))
+    token = TenantContext.bind_request(binding)
+    try:
+        assert await TenantContext.get_async(second) == TenantContextPayload("second-tenant")
+        assert await TenantContext.get_async(first) == TenantContextPayload("first-tenant")
+        assert await TenantContext.get_async() == TenantContextPayload("first-tenant")
+    finally:
+        TenantContext.reset(token)

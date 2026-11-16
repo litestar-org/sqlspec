@@ -7,17 +7,16 @@ from enum import Enum
 from functools import partial
 from pathlib import Path, PurePath
 from types import UnionType
-from typing import Annotated, Any, Final, TypeGuard, Union, cast, get_args, get_origin, overload
+from typing import TYPE_CHECKING, Annotated, Any, Final, TypeGuard, Union, cast, get_args, get_origin, overload
 from uuid import UUID
 
 from typing_extensions import TypeVar
 
-from sqlspec.data_dictionary import ForeignKeyMetadata
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import CATTRS_INSTALLED, NUMPY_INSTALLED, MsgspecValidationError, SchemaT, convert, get_type_adapter
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_optional_attr
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import decode_json as from_json
 from sqlspec.utils.type_guards import (
     is_attrs_instance,
     is_attrs_schema,
@@ -28,6 +27,9 @@ from sqlspec.utils.type_guards import (
     is_typed_dict,
 )
 from sqlspec.utils.uuids import uuid_from_bytes, uuid_from_string
+
+if TYPE_CHECKING:
+    from sqlspec.data_dictionary._types import ForeignKeyMetadata
 
 __all__ = (
     "_DEFAULT_TYPE_DECODERS",
@@ -560,11 +562,11 @@ def _normalize_msgspec_struct(data: Any, schema_type: type) -> Any:
     fields, python_names, encoded_names = _msgspec_field_plan(schema_type)
     normalized = {key: value for key, value in data.items() if key not in python_names and key not in encoded_names}
 
-    for name, encode_name, field_type in fields:
+    for name, encode_name, _ in fields:
         if encode_name in data:
-            normalized[encode_name] = _normalize_msgspec_input(data[encode_name], field_type)
+            normalized[encode_name] = data[encode_name]
         elif name in data:
-            normalized[encode_name] = _normalize_msgspec_input(data[name], field_type)
+            normalized[encode_name] = data[name]
 
     return normalized
 
@@ -656,6 +658,19 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
 
 
 _SCHEMA_CONVERTER_CACHE: "dict[type, Callable[[Any, Any], Any] | None]" = {}
+_FOREIGN_KEY_METADATA_TYPE: "type[ForeignKeyMetadata] | None" = None
+
+
+def _is_foreign_key_metadata_type(schema_type: Any) -> bool:
+    global _FOREIGN_KEY_METADATA_TYPE
+    if not isinstance(schema_type, type):
+        return False
+    if _FOREIGN_KEY_METADATA_TYPE is None:
+        resolved = import_optional_attr("sqlspec.data_dictionary._types", "ForeignKeyMetadata")
+        if resolved is None:
+            return False
+        _FOREIGN_KEY_METADATA_TYPE = cast("type[ForeignKeyMetadata]", resolved)
+    return issubclass(schema_type, _FOREIGN_KEY_METADATA_TYPE)
 
 
 def _reset_schema_caches() -> None:
@@ -689,7 +704,7 @@ def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | Non
             conv = _convert_pydantic
         elif is_attrs_schema(schema_type):
             conv = _convert_attrs
-        elif isinstance(schema_type, type) and issubclass(schema_type, ForeignKeyMetadata):
+        elif _is_foreign_key_metadata_type(schema_type):
             conv = _convert_foreign_key_metadata
         else:
             conv = None

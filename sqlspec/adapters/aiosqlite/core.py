@@ -6,12 +6,16 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from sqlglot import exp
 
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -25,6 +29,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -32,18 +37,20 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
-from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.compiler import OperationType
 
 _T = TypeVar("_T")
 
 __all__ = (
     "JULIAN_EPOCH",
+    "ROWID_SAFE_OPERATIONS",
     "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "AiosqliteStreamSource",
@@ -53,6 +60,7 @@ __all__ = (
     "build_connection_config",
     "build_insert_statement",
     "build_profile",
+    "build_readonly_sqlite_uri",
     "build_statement_config",
     "collect_rows",
     "create_mapped_exception",
@@ -62,11 +70,13 @@ __all__ = (
     "end_transaction",
     "execute_and_resolve_metadata",
     "execute_and_resolve_rowcount",
+    "execute_cache_hit",
     "execute_fetchall_with_description",
     "execute_fetchall_with_metadata",
     "execute_many_on_worker_thread",
     "extension_pragma_statements",
     "format_identifier",
+    "is_read_only_sqlite_config",
     "julian_to_datetime",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -81,8 +91,8 @@ __all__ = (
 
 _TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
-_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_PRAGMA_NAME_PATTERN = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
+_PRAGMA_VALUE_PATTERN = re.compile(r"\A[A-Za-z0-9_.\-]+\Z")
 _EXTENSION_PRAGMA_PROFILE = (
     "PRAGMA foreign_keys = ON",
     "PRAGMA cache_size = -64000",
@@ -91,6 +101,7 @@ _EXTENSION_PRAGMA_PROFILE = (
 )
 
 JULIAN_EPOCH = 2440587.5
+ROWID_SAFE_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"})
 SECONDS_PER_DAY = 86400.0
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
@@ -215,6 +226,75 @@ def execute_and_resolve_rowcount(connection: "AiosqliteConnection", sql: str, pa
     """Execute a statement and resolve rowcount on the worker thread."""
     rowcount, _last_inserted_id = _execute_and_resolve_metadata(connection, sql, parameters, "COMMAND", None, {})
     return rowcount
+
+
+async def execute_cache_hit(
+    connection: "AiosqliteConnection",
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    rowid_target_cache: "dict[tuple[str | None, str], bool]",
+) -> "SQLResult":
+    """Execute a cached statement on the aiosqlite worker thread and build its result.
+
+    Args:
+        connection: aiosqlite connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        rowid_target_cache: Driver-local rowid eligibility cache, cleared when the statement can change schema.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any SQLite error the statement raises.
+    """
+    operation_type = cached.operation_type
+    if operation_type not in ROWID_SAFE_OPERATIONS:
+        rowid_target_cache.clear()
+    try:
+        if not cached.operation_profile.returns_rows:
+            affected_rows, dml_last_inserted_id = await run_on_worker_thread(
+                connection,
+                _execute_and_resolve_metadata,
+                connection,
+                cached.compiled_sql,
+                params,
+                operation_type,
+                cached.processed_state.parsed_expression,
+                rowid_target_cache,
+            )
+            return DMLResult(operation_type, affected_rows, dml_last_inserted_id)
+        fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
+            connection,
+            _execute_fetchall_with_metadata,
+            connection,
+            cached.compiled_sql,
+            params,
+            operation_type,
+            cached.processed_state.parsed_expression,
+            rowid_target_cache,
+        )
+    except (aiosqlite.Error, sqlite3.Error) as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    data, column_names, row_count = collect_rows(fetched_data, description)
+    return SQLResult.create_cached_select(
+        sql,
+        statement_config,
+        cached.processed_state,
+        cached.compiled_sql,
+        params,
+        data,
+        column_names,
+        row_count,
+        resolve_row_format(data),
+        last_inserted_id,
+    )
 
 
 def normalize_lastrowid(cursor: Any, operation_type: "OperationType", rowcount: int) -> "int | None":
@@ -405,7 +485,10 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
+_INSERT_TARGET_CACHE_SIZE: Final[int] = 512
+_INSERT_TARGET_CACHE: "dict[int, tuple[Any, tuple[str | None, str] | None]]" = {}
 _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
+    "query_only",
     "enable_foreign_keys",
     "enable_optimizations",
     "pool_size",
@@ -425,15 +508,37 @@ _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
 })
 
 
-def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-    """Filter connection parameters to only those accepted by SQLite/aiosqlite."""
-    return {
-        key: value
-        for key, value in mapping.items()
-        if key not in _EXCLUDED_CONNECTION_KEYS
-        and (value is not None or key == "isolation_level")
-        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-    }
+def is_read_only_sqlite_config(connection_config: Mapping[str, Any]) -> bool:
+    """Return whether a configuration requests SQLite read-only enforcement."""
+    if connection_config.get("query_only"):
+        return True
+    explicit_uri = connection_config.get("uri")
+    if explicit_uri is None:
+        extra = connection_config.get("extra")
+        if isinstance(extra, Mapping):
+            explicit_uri = extra.get("uri")
+    if explicit_uri is not True:
+        return False
+    database = str(connection_config.get("database", ""))
+    return database.startswith("file:") and dict(parse_qsl(urlsplit(database).query)).get("mode") == "ro"
+
+
+def build_readonly_sqlite_uri(database: str) -> str:
+    """Build a read-only URI for a file-backed SQLite database."""
+    uri = urlsplit(database) if database.startswith("file:") else None
+    query = dict(parse_qsl(uri.query)) if uri is not None else {}
+    if (
+        not database
+        or database == ":memory:"
+        or (uri is not None and unquote(uri.path) == ":memory:")
+        or query.get("mode") == "memory"
+    ):
+        msg = "SQLite read replicas require a file-backed database"
+        raise ImproperConfigurationError(msg)
+    if uri is None:
+        uri = urlsplit(Path(database).resolve().as_uri())
+    query["mode"] = "ro"
+    return urlunsplit((uri.scheme, uri.netloc, uri.path, urlencode(query), uri.fragment))
 
 
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
@@ -484,6 +589,13 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         error_name = None
     error_msg = str(error).lower()
     primary_code = (error_code & 0xFF) if isinstance(error_code, int) else None
+    if (
+        primary_code == sqlite3.SQLITE_READONLY
+        or (isinstance(error_name, str) and error_name.startswith("SQLITE_READONLY"))
+        or "readonly database" in error_msg
+        or "read-only database" in error_msg
+    ):
+        return _create_aiosqlite_error(error, error_code, ReadOnlyTransactionError, "read-only database")
 
     constraint_error = _map_constraint_exception(error, error_code, error_name, primary_code, error_msg)
     if constraint_error is not None:
@@ -644,20 +756,31 @@ async def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]"
 def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
     rendered: list[tuple[str, str]] = []
     for pragma_name, pragma_value in pragmas.items():
-        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.fullmatch(pragma_name) is None:
             msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
             raise ImproperConfigurationError(msg)
         if isinstance(pragma_value, bool):
             rendered_value = "1" if pragma_value else "0"
         elif isinstance(pragma_value, int):
             rendered_value = str(pragma_value)
-        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.fullmatch(pragma_value) is not None:
             rendered_value = pragma_value
         else:
             msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
             raise ImproperConfigurationError(msg)
         rendered.append((pragma_name, rendered_value))
     return rendered
+
+
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters to only those accepted by SQLite/aiosqlite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
 
 
 driver_profile = build_profile()
@@ -767,6 +890,22 @@ def _normalize_metadata_row(row: Any) -> Any:
 
 
 def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":
+    """Return the schema and table an INSERT writes to, remembered per compiled expression.
+
+    Compiled expressions are shared by every execution of a cached statement, so the target is
+    derived once and looked up by identity afterwards.
+    """
+    cached = _INSERT_TARGET_CACHE.get(id(expression))
+    if cached is not None and cached[0] is expression:
+        return cached[1]
+    target = _read_insert_target(expression)
+    if len(_INSERT_TARGET_CACHE) >= _INSERT_TARGET_CACHE_SIZE:
+        _INSERT_TARGET_CACHE.clear()
+    _INSERT_TARGET_CACHE[id(expression)] = (expression, target)
+    return target
+
+
+def _read_insert_target(expression: Any) -> "tuple[str | None, str] | None":
     if not isinstance(expression, exp.Insert):
         return None
     target = expression.this

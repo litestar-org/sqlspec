@@ -598,6 +598,15 @@ def test_or_where_eq_renders_expression_value() -> None:
 
     assert (
         " ".join(statement.sql.split())
-        == 'SELECT "t"."z" AS "z" FROM "t" AS "t" WHERE "t"."a" = "t"."b" OR "t"."q" = :q'
+        == 'SELECT "t"."z" AS "z" FROM "t" AS "t" WHERE "t"."q" = :q OR "t"."a" = "t"."b"'
     )
     assert statement.parameters == {"q": 1}
+
+
+def test_or_where_followed_by_where_preserves_parenthesized_precedence() -> None:
+    """Chaining where() after or_where() parenthesizes the OR group before AND."""
+    query = sql.select("*").from_("t").where_eq("a", 1).or_where_eq("b", 2).where_eq("c", 3)
+    query.enable_optimization = False
+    stmt = query.build()
+    rendered = " ".join(stmt.sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    assert rendered.endswith("WHERE (a = :a OR b = :b) AND c = :c")

@@ -35,7 +35,7 @@ def test_update_from_select_builder_matrix() -> None:
     stmt_tsql = query.build(dialect="tsql")
     assert stmt_tsql.sql == (
         "UPDATE [t] SET [a] = :a\nOUTPUT [INSERTED].[id]\nFROM (\n  SELECT\n  TOP 1\n"
-        "    [t].[id] AS [id]\n  FROM [t] AS [t]\n) AS [s]\nWHERE\n  [s].[id] = [t].[id]"
+        "    [t].[id] AS [id]\n  FROM [t] AS [t]\n) AS [s]\nWHERE\n  [t].[id] = [s].[id]"
     )
     assert stmt_tsql.parameters["a"] == 1
 
@@ -236,3 +236,10 @@ def test_update_set_binds_plain_string_values(value: str) -> None:
 
     assert " ".join(statement.sql.split()) == 'UPDATE "t" SET "a" = %(a)s'
     assert statement.parameters == {"a": value}
+
+
+def test_update_set_splits_table_qualified_column_target() -> None:
+    """Qualified column names in UPDATE SET split into table and column identifiers."""
+    statement = sql.update("t", dialect="postgres").set("t.a", 42).build()
+    assert " ".join(statement.sql.split()) == 'UPDATE "t" SET "t"."a" = %(a)s'
+    assert statement.parameters == {"a": 42}

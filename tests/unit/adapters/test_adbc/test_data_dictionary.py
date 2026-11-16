@@ -20,7 +20,7 @@ from sqlspec.adapters.adbc.data_dictionary import (
     _normalize_native_tables,
 )
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
-from sqlspec.exceptions import OperationalError
+from sqlspec.exceptions import OperationalError, SQLSpecError
 
 SQLITE_OBJECTS_PAYLOAD: list[dict[str, Any]] = [
     {
@@ -930,8 +930,6 @@ def test_snowflake_foreign_keys_reject_nul_identifier() -> None:
 
 def test_snowflake_qualified_table_and_database_scope_reflection() -> None:
     """Qualified 2-part and 3-part Snowflake table names resolve schema and database scopes across catalog methods."""
-    from sqlspec.exceptions import SQLSpecError
-
     dictionary = AdbcDataDictionary()
     driver = Mock()
     driver.dialect = "snowflake"
@@ -986,9 +984,18 @@ def test_snowflake_qualified_table_and_database_scope_reflection() -> None:
     unsupported_views = dictionary.get_views(sqlite_driver)
     assert unsupported_views.capability.support == MetadataSupport.UNSUPPORTED
 
-    for bad_identifier in ("", "sales.", "sales..orders", '""'):
-        with pytest.raises(SQLSpecError):
-            dictionary.get_columns(driver, table=bad_identifier)
+
+@pytest.mark.parametrize(
+    "bad_identifier", ("", "sales.", "sales..orders", '""', "orders\n", "sales.orders\n", "sales\n.orders")
+)
+def test_snowflake_get_columns_rejects_invalid_identifiers(bad_identifier: str) -> None:
+    """Snowflake column lookups reject malformed and newline-containing table identifiers."""
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    with pytest.raises(SQLSpecError):
+        dictionary.get_columns(driver, table=bad_identifier)
 
 
 @pytest.mark.parametrize(

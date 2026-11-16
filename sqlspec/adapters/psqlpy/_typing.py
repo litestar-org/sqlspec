@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any
 from psqlpy import Connection as PsqlpyConnection
 from psqlpy import ConnectionPool as PsqlpyConnectionPool
 from psqlpy import Listener as PsqlpyListener
+from psqlpy import LoadBalanceHosts, TargetSessionAttrs
+from psqlpy.exceptions import BaseConnectionError as PsqlpyBaseConnectionError
+from psqlpy.exceptions import BaseConnectionPoolError as PsqlpyBaseConnectionPoolError
 from psqlpy.exceptions import ConnectionExecuteError as PsqlpyConnectionExecuteError
 from psqlpy.exceptions import DatabaseError as PsqlpyDatabaseError
 from psqlpy.exceptions import DataError as PsqlpyDataError
@@ -31,6 +34,9 @@ if TYPE_CHECKING:
 
 __all__ = (
     "PSQLPY_JSONB",
+    "LoadBalanceHosts",
+    "PsqlpyBaseConnectionError",
+    "PsqlpyBaseConnectionPoolError",
     "PsqlpyConnection",
     "PsqlpyConnectionExecuteError",
     "PsqlpyConnectionPool",
@@ -44,6 +50,7 @@ __all__ = (
     "PsqlpyOperationalError",
     "PsqlpySessionContext",
     "RustPSQLDriverPyBaseError",
+    "TargetSessionAttrs",
 )
 
 
@@ -123,21 +130,41 @@ class PsqlpySessionContext:
             )
             return self._prepare_driver(self._driver)
         except BaseException as exc:
+            driver, self._driver = self._driver, None
             connection, self._connection = self._connection, None
-            await self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            try:
+                if connection is not None:
+                    await self._release_connection(
+                        connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__
+                    )
+            finally:
+                if driver is not None:
+                    driver._mark_closed()
             raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         driver = self._driver
-        self._driver = None
-        if driver is not None and getattr(driver, "_transaction_active", False):
-            with contextlib.suppress(Exception):
-                await driver.rollback()
-        if self._connection is not None:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        try:
+            if driver is not None:
+                await driver._close_open_streams(error=exc_type is not None)
+            if driver is not None and getattr(driver, "_transaction_active", False):
+                with contextlib.suppress(Exception):
+                    await driver.rollback()
+        except BaseException as close_exc:
+            if exc_type is None:
+                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
+            raise
+        finally:
+            try:
+                if self._connection is not None:
+                    await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                    self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._mark_closed()
         return None
 
 

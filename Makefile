@@ -9,6 +9,12 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .EXPORT_ALL_VARIABLES:
 MAKEFLAGS += --no-print-directory
+ifneq (,$(wildcard /etc/uv/uv.toml))
+export UV_DEFAULT_INDEX ?= https://pypi.org/simple
+endif
+ifneq (,$(wildcard /etc/npmrc))
+export npm_config_registry ?= https://registry.npmjs.org
+endif
 MYPY_WORKERS ?= 2
 UNIT_WORKERS ?= 4
 INTEGRATION_WORKERS ?= 2
@@ -49,8 +55,12 @@ install-uv:                                         ## Install latest version of
 	@curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
 	@echo "${OK} UV installed successfully"
 
+.PHONY: setup-env
+setup-env:                                          ## Configure PyPI index when a system-level uv configuration exists
+	@bash tools/scripts/setup-env.sh
+
 .PHONY: install
-install: destroy clean                              ## Install the project and dependencies
+install: destroy clean setup-env                    ## Install the project and dependencies
 	@echo "${INFO} Starting fresh installation..."
 	@uv python pin 3.11 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
@@ -58,7 +68,7 @@ install: destroy clean                              ## Install the project and d
 	@echo "${OK} Installation complete! 🎉"
 
 .PHONY: install-compiled
-install-compiled: destroy clean                  ## Install with mypyc compilation for performance
+install-compiled: destroy clean setup-env           ## Install with mypyc compilation for performance
 	@echo "${INFO} Starting fresh installation with mypyc compilation..."
 	@uv python pin 3.11 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
@@ -155,7 +165,7 @@ pre-release:                                       ## Start a pre-release: make 
 .PHONY: clean
 clean:                                              ## Cleanup temporary build artifacts
 	@echo "${INFO} Cleaning working directory... 🧹"
-	@rm -rf .pytest_cache .ruff_cache .hypothesis build/ -rf dist/ .eggs/ .coverage coverage.xml coverage.json htmlcov/ .pytest_cache tests/.pytest_cache tests/**/.pytest_cache .mypy_cache .unasyncd_cache/ .auto_pytabs_cache >/dev/null 2>&1
+	@rm -rf .pytest_cache .ruff_cache .hypothesis build/ dist/ .eggs/ .coverage coverage.xml coverage.json htmlcov/ tests/.pytest_cache tests/**/.pytest_cache .mypy_cache .unasyncd_cache/ .auto_pytabs_cache >/dev/null 2>&1
 	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '*.egg-info' -exec rm -rf {} + >/dev/null 2>&1
 	@find . \( -path ./.venv -o -path ./.git \) -prune -o -type f -name '*.egg' -exec rm -f {} + >/dev/null 2>&1
 	@find . \( -path ./.venv -o -path ./.git \) -prune -o -name '*.pyc' -exec rm -f {} + >/dev/null 2>&1

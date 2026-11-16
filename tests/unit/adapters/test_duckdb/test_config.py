@@ -1,11 +1,16 @@
 """DuckDB configuration tests covering statement config builders."""
 
+import asyncio
+import tempfile
+from pathlib import Path
 from typing import Any, NotRequired, get_type_hints
 from unittest.mock import patch
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import duckdb
+import pytest
 
+from sqlspec.adapters.adbc.core import build_connection_config as build_adbc_connection_config
 from sqlspec.adapters.duckdb.config import (
     DuckDBConfig,
     DuckDBConnectionParams,
@@ -14,6 +19,7 @@ from sqlspec.adapters.duckdb.config import (
     DuckDBSecretConfig,
 )
 from sqlspec.adapters.duckdb.core import (
+    _parse_memory_size_bytes,
     apply_driver_features,
     build_connection_config,
     build_statement_config,
@@ -21,6 +27,9 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.adapters.duckdb.pool import _SQL_IDENTIFIER_RE, DuckDBConnectionPool, _validate_sql_identifier
+from sqlspec.driver._common import _CLOSED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializer() -> None:
@@ -247,3 +256,298 @@ def test_version_tuple_parsing() -> None:
     assert _parse_duckdb_version("2.0.0rc1") == (2, 0, 0)
     assert _parse_duckdb_version("v0.9.2") == (0, 9, 2)
     assert duckdb_version_tuple() >= (0, 0, 0)
+
+
+def test_duckdb_replica_paths_reject_writer_file_and_memory(tmp_path) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    database = str(tmp_path / "writer.duckdb")
+    for replica in (True, database, ":memory:"):
+        with pytest.raises(ImproperConfigurationError):
+            DuckDBConfig(connection_config={"database": database}, replicas=replica)
+    primary = DuckDBConfig(connection_config={"database": database}, replicas=str(tmp_path / "snapshot.duckdb"))
+    reader = primary.replica_groups["default"].configs[0]
+    assert reader.connection_config["read_only"] is True
+    assert primary.connection_config.get("read_only", False) is False
+    shared_reader = DuckDBConfig(connection_config={"database": database, "read_only": True}, replicas=database)
+    assert shared_reader.replica_groups["default"].configs[0].connection_config["read_only"] is True
+
+
+def test_duckdb_snapshot_reader_enforces_native_read_only(tmp_path) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    snapshot_path = str(tmp_path / "snapshot.duckdb")
+    snapshot = DuckDBConfig(connection_config={"database": snapshot_path})
+    with snapshot.provide_session() as session:
+        session.execute("CREATE TABLE entries (id INTEGER)")
+        session.execute("INSERT INTO entries VALUES (1)")
+    snapshot.close_pool()
+    primary = DuckDBConfig(connection_config={"database": str(tmp_path / "writer.duckdb")}, replicas=snapshot_path)
+    with primary.provide_replica_session() as reader:
+        assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        with pytest.raises(ReadOnlyTransactionError):
+            reader.execute("INSERT INTO entries VALUES (2)")
+    primary.close_pool()
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "error-exit"])
+def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) -> None:
+    """DuckDB provide_session rolls back uncommitted work and detaches the driver on clean and error exit."""
+    config = DuckDBConfig(connection_config={"database": ":memory:session_rollback_test"})
+    try:
+        with config.provide_session() as setup_session:
+            setup_session.execute("CREATE TABLE IF NOT EXISTS items (id INTEGER); DELETE FROM items;")
+        if body_raises:
+            with pytest.raises(ValueError, match="abort"), config.provide_session() as session:
+                session.begin()
+                session.execute("INSERT INTO items VALUES (1)")
+                raise ValueError("abort")
+        else:
+            with config.provide_session() as session:
+                session.begin()
+                session.execute("INSERT INTO items VALUES (1)")
+        assert session.connection is _CLOSED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+        with config.provide_session() as check_session:
+            assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
+    finally:
+        config.close_pool()
+
+
+def test_provide_session_failed_rollback_forwards_exception_to_pool_and_avoids_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clean-exit rollback failure forwards error metadata to pool release, detaches the driver, and avoids commit."""
+    db_file = tmp_path / "failed_rollback.duckdb"
+    config = DuckDBConfig(connection_config={"database": str(db_file)})
+    try:
+        with config.provide_session() as setup_session:
+            setup_session.execute("CREATE TABLE items (id INTEGER)")
+
+        def fail_rollback(_self: DuckDBDriver) -> None:
+            raise RuntimeError("duckdb rollback failed")
+
+        monkeypatch.setattr(DuckDBDriver, "rollback", fail_rollback)
+        with pytest.raises(RuntimeError, match="duckdb rollback failed"), config.provide_session() as session:
+            session.begin()
+            session.execute("INSERT INTO items VALUES (42)")
+
+        assert session.connection is _CLOSED_CONNECTION
+        assert config.provide_pool().size() == 0
+        monkeypatch.undo()
+        with config.provide_session() as check_session:
+            assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_patterns_reject_trailing_newline() -> None:
+    """DuckDB secret identifier and memory limit patterns reject trailing newlines."""
+    assert _SQL_IDENTIFIER_RE.match("secret_name\n") is None
+    assert _parse_memory_size_bytes("10MB\n") is None
+    with pytest.raises(ValueError, match="Invalid SQL identifier"):
+        _validate_sql_identifier("bad_secret\n", "secret_name")
+    cfg = DuckDBConfig(
+        connection_config={"database": ":memory:bad_secret_nl"},
+        driver_features={
+            "secrets": [{"name": "bad_secret\n", "secret_type": "s3", "value": {"key_id": "a"}, "required": True}]
+        },
+    )
+    try:
+        with pytest.raises(ValueError, match="Invalid SQL identifier"), cfg.provide_session():
+            pass
+    finally:
+        cfg.close_pool()
+
+
+@pytest.mark.parametrize("db_value", [None, "", ":memory:"])
+def test_duckdb_default_in_memory_configs_are_isolated(db_value: str | None) -> None:
+    """Separate DuckDBConfig instances with omitted, empty, or ':memory:' database stay isolated."""
+    conn_cfg_a: DuckDBPoolParams = {} if db_value is None else {"database": db_value}
+    conn_cfg_b: DuckDBPoolParams = {} if db_value is None else {"database": db_value}
+    cfg_a = DuckDBConfig(connection_config=conn_cfg_a)
+    cfg_b = DuckDBConfig(connection_config=conn_cfg_b)
+    try:
+        db_a = cfg_a.connection_config["database"]
+        db_b = cfg_b.connection_config["database"]
+        assert isinstance(db_a, str)
+        assert isinstance(db_b, str)
+        assert db_a.startswith(":memory:sqlspec_")
+        assert db_b.startswith(":memory:sqlspec_")
+        assert db_a != db_b
+
+        with cfg_a.provide_session() as s_a:
+            s_a.execute("CREATE TABLE iso_items (id INTEGER)")
+            s_a.execute("INSERT INTO iso_items VALUES (1)")
+        with cfg_b.provide_session() as s_b:
+            rows = s_b.select_value("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'iso_items'")
+            assert rows == 0
+    finally:
+        cfg_a.close_pool()
+        cfg_b.close_pool()
+
+
+def test_duckdb_explicit_named_memory_database_is_shared() -> None:
+    """Explicit ':memory:<name>' databases remain shared across independent DuckDBConfig instances."""
+    shared_name = f":memory:shared_{uuid4().hex}"
+    cfg_a = DuckDBConfig(connection_config={"database": shared_name})
+    cfg_b = DuckDBConfig(connection_config={"database": shared_name})
+    try:
+        assert cfg_a.connection_config["database"] == shared_name
+        assert cfg_b.connection_config["database"] == shared_name
+        with cfg_a.provide_session() as s_a:
+            s_a.execute("CREATE TABLE shared_items (id INTEGER)")
+            s_a.execute("INSERT INTO shared_items VALUES (42)")
+        with cfg_b.provide_session() as s_b:
+            assert s_b.select_value("SELECT id FROM shared_items") == 42
+    finally:
+        cfg_a.close_pool()
+        cfg_b.close_pool()
+
+
+def test_duckdb_in_memory_creates_and_cleans_private_temp_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In-memory DuckDB pools allocate an isolated temp_directory and remove it on close_pool."""
+    cwd_dir = tmp_path / "cwd"
+    temp_root = tmp_path / "sys_tmp"
+    cwd_dir.mkdir()
+    temp_root.mkdir()
+    monkeypatch.chdir(cwd_dir)
+    monkeypatch.setenv("TMPDIR", str(temp_root))
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    managed_dir: Path | None = None
+    try:
+        with config.provide_session() as session:
+            configured = session.select_value("SELECT current_setting('temp_directory')")
+            assert isinstance(configured, str)
+            managed_dir = Path(configured)
+            assert managed_dir.exists()
+            assert managed_dir.name.startswith("sqlspec_duckdb_")
+            assert managed_dir.parent == temp_root
+            assert not (cwd_dir / ".tmp").exists()
+    finally:
+        config.close_pool()
+
+    assert managed_dir is not None
+    assert not managed_dir.exists()
+    assert list(cwd_dir.iterdir()) == []
+
+
+def test_duckdb_explicit_temp_directory_is_preserved_on_close(tmp_path: Path) -> None:
+    """An explicit temp_directory on an in-memory DuckDBConfig is respected and not deleted on close."""
+    explicit_dir = tmp_path / "user_spill"
+    explicit_dir.mkdir()
+    marker = explicit_dir / "keep.txt"
+    marker.write_text("ok", encoding="utf-8")
+
+    config = DuckDBConfig(connection_config={"database": ":memory:", "temp_directory": str(explicit_dir)})
+    try:
+        with config.provide_session() as session:
+            configured = session.select_value("SELECT current_setting('temp_directory')")
+            assert isinstance(configured, str)
+            assert Path(configured) == explicit_dir
+    finally:
+        config.close_pool()
+
+    assert explicit_dir.exists()
+    assert marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("conn_cfg"),
+    [
+        {"driver_name": "duckdb", "path": ":memory:"},
+        {"driver_name": "duckdb", "uri": ":memory:"},
+        {"driver_name": "duckdb", "uri": "duckdb://:memory:"},
+        {"driver_name": "duckdb", "uri": "duckdb:///:memory:"},
+        {"driver_name": "adbc_driver_duckdb", "entrypoint": "duckdb_adbc_init", "uri": ":memory:"},
+    ],
+)
+def test_adbc_duckdb_memory_uri_normalizes_to_path(conn_cfg: dict[str, Any]) -> None:
+    """DuckDB ADBC configurations normalize ':memory:' URIs to path=':memory:' without uri."""
+    normalized = build_adbc_connection_config(conn_cfg)
+    assert normalized["path"] == ":memory:"
+    assert "uri" not in normalized
+
+
+@pytest.mark.parametrize(
+    ("conn_cfg"),
+    [
+        {"driver_name": "duckdb", "path": ":memory:shared_db"},
+        {"driver_name": "duckdb", "uri": ":memory:shared_db"},
+        {"driver_name": "duckdb", "uri": "duckdb://:memory:shared_db"},
+        {"driver_name": "duckdb", "uri": "duckdb:///:memory:shared_db"},
+    ],
+)
+def test_adbc_duckdb_rejects_named_memory_database(conn_cfg: dict[str, Any]) -> None:
+    """Named ':memory:<name>' identifiers are rejected for DuckDB ADBC to avoid local file creation."""
+    with pytest.raises(ImproperConfigurationError, match="DuckDB ADBC"):
+        build_adbc_connection_config(conn_cfg)
+
+
+@pytest.mark.parametrize("use_memory", [False, True])
+def test_duckdb_config_reuses_idle_task_connections_sequentially_and_isolates_concurrent(
+    tmp_path: Path, use_memory: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sequential asyncio tasks reuse idle DuckDB connections while concurrent tasks isolate them."""
+    db_target = ":memory:" if use_memory else str(tmp_path / "seq_tasks.duckdb")
+    config = DuckDBConfig(connection_config={"database": db_target})
+    pool = config.provide_pool()
+    original_new_connection = DuckDBConnectionPool.new_connection
+    created_connections: list[Any] = []
+
+    def counting_new_connection(pool_self: DuckDBConnectionPool, record_thread_state: bool = False) -> Any:
+        conn = original_new_connection(pool_self, record_thread_state=record_thread_state)
+        if pool_self is pool:
+            created_connections.append(conn)
+        return conn
+
+    monkeypatch.setattr(DuckDBConnectionPool, "new_connection", counting_new_connection)
+
+    async def _run() -> None:
+        seq_ids: list[int] = []
+
+        async def sequential_worker(idx: int) -> None:
+            with config.provide_session() as session:
+                seq_ids.append(id(session.connection))
+                assert session.select_value("SELECT ?", idx) == idx
+
+        for idx in range(12):
+            await asyncio.create_task(sequential_worker(idx))
+        await asyncio.sleep(0)
+
+        assert len(created_connections) == 1
+        assert len(set(seq_ids)) == 1
+        assert len(pool._idle_task_holders) == 1
+
+        all_entered = asyncio.Event()
+        entered = 0
+        conc_ids: list[int] = []
+
+        async def concurrent_worker() -> None:
+            nonlocal entered
+            with config.provide_session() as session:
+                conc_ids.append(id(session.connection))
+                entered += 1
+                if entered == 10:
+                    all_entered.set()
+                await all_entered.wait()
+
+        tasks = [asyncio.create_task(concurrent_worker()) for _ in range(10)]
+        await asyncio.gather(*tasks)
+        await asyncio.sleep(0)
+        assert len(set(conc_ids)) == 10
+        assert len(created_connections) == 10
+        assert len(pool._idle_task_holders) == 8
+
+    try:
+        asyncio.run(_run())
+    finally:
+        config.close_pool()
+
+    assert pool._idle_task_holders == []
+    assert pool.size() == 0

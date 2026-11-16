@@ -379,10 +379,11 @@ class ObservabilityRuntime:
     ) -> StatementEvent:
         """Create a redacted and enriched StatementEvent instance."""
         correlation_id = CorrelationContext.get()
-        sanitized_sql = self._redact_sql(sql)
-        sanitized_params = self._redact_parameters(parameters)
-        logging_config = self.config.logging
         resolved_db_system = resolve_effective_db_system(self.config_name, driver, db_system)
+        sanitized_sql = self._redact_sql(sql, resolved_db_system)
+        sanitized_params = self._redact_parameters(parameters)
+        sanitized_profile = self._redact_profile(profile, resolved_db_system)
+        logging_config = self.config.logging
         sql_hash = None
         if logging_config and logging_config.include_sql_hash:
             if precomputed_sql_hash is not None and (self._redaction is None or not self._redaction.mask_literals):
@@ -423,7 +424,7 @@ class ObservabilityRuntime:
             trace_id=trace_id,
             span_id=span_id,
             sampled=sampled,
-            profile=profile,
+            profile=sanitized_profile,
             script_ordinal=script_ordinal,
             script_statement_index=script_statement_index,
             script_statement_count=script_statement_count,
@@ -505,13 +506,18 @@ class ObservabilityRuntime:
         if self.config.sampling is not None and not self.config.sampling.should_sample(correlation_id=correlation_id):
             return None
 
-        redacted_sql = self._redact_sql(sql) if (self._redaction is not None and self._redaction.mask_literals) else sql
+        resolved_db_system = resolve_effective_db_system(self.config_name, driver, db_system)
+        redacted_sql = (
+            self._redact_sql(sql, resolved_db_system)
+            if (self._redaction is not None and self._redaction.mask_literals)
+            else sql
+        )
         if sql_hash is None or (self._redaction is not None and self._redaction.mask_literals):
             sql_hash = compute_sql_hash(redacted_sql)
         connection_info: dict[str, Any] = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}
         sql_payload = ""
         if self.config.print_sql:
-            sql_payload = self._redact_sql(sql)
+            sql_payload = self._redact_sql(sql, resolved_db_system)
             sql_payload, truncated = _truncate_text(sql_payload, max_chars=4096)
             if truncated:
                 connection_info["sqlspec.statement.truncated"] = True
@@ -634,11 +640,11 @@ class ObservabilityRuntime:
         if "correlation_id" in telemetry and telemetry["correlation_id"] is not None:
             span.set_attribute("sqlspec.correlation_id", telemetry["correlation_id"])
 
-    def _redact_sql(self, sql: str) -> str:
+    def _redact_sql(self, sql: str, dialect: str | None = None) -> str:
         config = self._redaction
         if config is None or not config.mask_literals:
             return sql
-        return redact_sql_literals(sql)
+        return redact_sql_literals(sql, dialect=dialect or self.config_name)
 
     def _redact_parameters(self, parameters: Any) -> Any:
         config = self._redaction
@@ -646,6 +652,27 @@ class ObservabilityRuntime:
             return parameters
         allow_list = set(config.parameter_allow_list or ())
         return _mask_parameters(parameters, allow_list)
+
+    def _redact_profile(self, profile: dict[str, Any] | None, dialect: str | None = None) -> dict[str, Any] | None:
+        if profile is None:
+            return None
+        config = self._redaction
+        if config is None or (not config.mask_literals and not config.mask_parameters):
+            return profile
+        return cast("dict[str, Any]", _redact_profile_value(profile, dialect or self.config_name))
+
+
+def _redact_profile_value(value: Any, dialect: str | None = None) -> Any:
+    """Recursively mask SQL literals inside nested statement profile dictionaries without mutating inputs."""
+    if isinstance(value, str):
+        return redact_sql_literals(value, dialect=dialect)
+    if isinstance(value, Mapping):
+        return {key: _redact_profile_value(item, dialect) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_profile_value(item, dialect) for item in value]
+    if isinstance(value, tuple):
+        return tuple([_redact_profile_value(item, dialect) for item in value])
+    return value
 
 
 def _mask_parameters(value: Any, allow_list: set[str], *, is_allowed: bool = False) -> Any:

@@ -4,11 +4,13 @@ This module tests the filter system that provides dynamic WHERE clauses,
 ORDER BY, LIMIT/OFFSET, and other SQL modifications with proper parameter naming.
 """
 
+import sqlite3
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, assert_type, cast
 
+import duckdb
 import pytest
 from sqlglot import exp, parse_one
 
@@ -37,7 +39,13 @@ from sqlspec.core import (
     apply_filter,
     canonicalize_filters,
 )
-from sqlspec.core.filters import NotInSearchFilter, OnBeforeAfterFilter, PaginationFilter
+from sqlspec.core.filters import (
+    LIKE_ESCAPE_CHAR,
+    NotAnyCollectionFilter,
+    NotInSearchFilter,
+    OnBeforeAfterFilter,
+    PaginationFilter,
+)
 from sqlspec.core.parameters import TypedParameter
 from sqlspec.driver import AsyncDriverAdapterBase, CommonDriverAttributesMixin, SyncDriverAdapterBase
 from sqlspec.exceptions import NotFoundError
@@ -89,7 +97,7 @@ def test_canonicalize_filters_deduplicates_and_sorts_by_class_and_field() -> Non
         ("InCollectionFilter", "status", ("pending",)),
         ("OrderByFilter", "alpha", "asc", None),
         ("OrderByFilter", "zeta", "desc", None),
-        ("SearchFilter", "name", "needle", False),
+        ("SearchFilter", "name", "needle", False, False),
     ]
 
 
@@ -1544,13 +1552,14 @@ def test_not_in_search_filter_accepts_expression_field_name() -> None:
 
 
 def test_search_filter_escape_like_value() -> None:
-    """escape_like_value escapes backslash, percent, and underscore."""
+    """escape_like_value escapes escape character, percent, and underscore."""
 
     assert SearchFilter.escape_like_value("plain") == "plain"
-    assert SearchFilter.escape_like_value("50% off") == "50\\% off"
-    assert SearchFilter.escape_like_value("a_b") == "a\\_b"
-    assert SearchFilter.escape_like_value("a\\b") == "a\\\\b"
-    assert SearchFilter.escape_like_value("\\%_") == "\\\\\\%\\_"
+    assert SearchFilter.escape_like_value("50% off") == "50/% off"
+    assert SearchFilter.escape_like_value("a_b") == "a/_b"
+    assert SearchFilter.escape_like_value("a/b") == "a//b"
+    assert SearchFilter.escape_like_value("/%_") == "///%/_"
+    assert SearchFilter.escape_like_value("50% off\\a_b", escape_char="\\") == "50\\% off\\\\a\\_b"
 
 
 def test_boolean_filter_uses_column_based_parameters() -> None:
@@ -1630,3 +1639,73 @@ def test_filters_on_cte_union_keep_cte_and_outer_order() -> None:
     assert "ORDER BY" in rendered.rsplit(") AS filtered", 1)[-1]
     with sqlite3.connect(":memory:") as connection:
         assert connection.execute(rendered, parameters or ()).fetchall() == [(1,), (1,), (2,), (2,)]
+
+
+@pytest.mark.parametrize(
+    ("filter_cls", "expected_sql"),
+    [
+        (AnyCollectionFilter, "SELECT id FROM t WHERE tags = ANY(ARRAY[?, ?])"),
+        (NotAnyCollectionFilter, "SELECT id FROM t WHERE NOT tags = ANY(ARRAY[?, ?])"),
+    ],
+)
+def test_any_collection_filters_render_valid_postgres_array_syntax(filter_cls: type[Any], expected_sql: str) -> None:
+    stmt = filter_cls("tags", ["a", "b"]).append_to_statement(
+        SQL("SELECT id FROM t", statement_config=StatementConfig(dialect="postgres"))
+    )
+    rendered, parameters = stmt.compile()
+    assert rendered == expected_sql
+    assert tuple(parameters) == ("a", "b")
+
+
+@pytest.mark.parametrize(("filter_cls", "expected_ids"), [(AnyCollectionFilter, [1, 3]), (NotAnyCollectionFilter, [2])])
+def test_any_collection_filters_execute_on_duckdb(filter_cls: type[Any], expected_ids: list[int]) -> None:
+    stmt = filter_cls("tag", ["alpha", "gamma"]).append_to_statement(
+        SQL("SELECT id FROM items ORDER BY id", statement_config=StatementConfig(dialect="duckdb"))
+    )
+    rendered, parameters = stmt.compile()
+    with duckdb.connect(":memory:") as conn:
+        conn.execute("CREATE TABLE items (id INTEGER, tag VARCHAR)")
+        conn.executemany("INSERT INTO items VALUES (?, ?)", [(1, "alpha"), (2, "beta"), (3, "gamma")])
+        rows = conn.execute(rendered, list(parameters)).fetchall()
+    assert [row[0] for row in rows] == expected_ids
+
+
+@pytest.mark.parametrize(
+    ("raw", "escape_char", "expected"),
+    [("plain", LIKE_ESCAPE_CHAR, "plain"), ("100%_a/b", LIKE_ESCAPE_CHAR, "100/%/_a//b"), ("50%_x!", "!", "50!%!_x!!")],
+)
+def test_search_filter_escape_like_value_cases(raw: str, escape_char: str, expected: str) -> None:
+    assert SearchFilter.escape_like_value(raw, escape_char=escape_char) == expected
+
+
+@pytest.mark.parametrize(
+    ("filter_cls", "ignore_case", "escape_wildcards", "search_val", "expected_rows"),
+    [
+        (SearchFilter, False, False, "100%", ["100%", "1000"]),
+        (SearchFilter, False, True, "100%", ["100%"]),
+        (SearchFilter, True, True, "FOO_BAR", ["foo_bar"]),
+        (SearchFilter, False, True, "a/b", ["a/b"]),
+        (NotInSearchFilter, False, False, "100%", ["foo_bar", "fooxbar", "a/b"]),
+        (NotInSearchFilter, False, True, "100%", ["1000", "foo_bar", "fooxbar", "a/b"]),
+        (NotInSearchFilter, True, True, "FOO_BAR", ["100%", "1000", "fooxbar", "a/b"]),
+    ],
+)
+def test_search_filter_wildcard_escaping_executes_against_sqlite(
+    filter_cls: type[Any], ignore_case: bool, escape_wildcards: bool, search_val: str, expected_rows: list[str]
+) -> None:
+    stmt = filter_cls("v", search_val, ignore_case=ignore_case, escape_wildcards=escape_wildcards).append_to_statement(
+        SQL("SELECT v FROM t", statement_config=StatementConfig(dialect="sqlite"))
+    )
+    rendered, parameters = stmt.compile()
+    assert ("ESCAPE" in rendered) is escape_wildcards
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute("CREATE TABLE t (v TEXT)")
+        conn.executemany("INSERT INTO t VALUES (?)", [("100%",), ("1000",), ("foo_bar",), ("fooxbar",), ("a/b",)])
+        rows = conn.execute(rendered, list(parameters)).fetchall()
+    assert [row[0] for row in rows] == expected_rows
+
+
+def test_search_filter_cache_key_distinguishes_escape_wildcards() -> None:
+    f1 = SearchFilter("v", "100%", escape_wildcards=False)
+    f2 = SearchFilter("v", "100%", escape_wildcards=True)
+    assert f1.get_cache_key() != f2.get_cache_key()

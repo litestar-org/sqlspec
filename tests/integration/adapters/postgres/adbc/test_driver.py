@@ -10,7 +10,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, SQLSpecError
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, MigrationError, SQLSpecError
+from sqlspec.migrations.tracker import SyncMigrationTracker
 from tests.integration.adapters._shared.adbc_backends import postgresql_session, test_postgresql_specific_features
 from tests.integration.adapters._shared.adbc_connection import (
     test_connection,
@@ -448,6 +449,55 @@ def test_postgresql_autocommit_transaction_boundaries(adbc_postgres_connection_c
         session.commit()
         assert session.select_value("SELECT value FROM sqlspec_adbc_autocommit_transactions") == 42
         assert session.connection.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+
+
+@pytest.mark.xdist_group("postgres")
+@pytest.mark.adbc
+def test_postgresql_migration_advisory_lock_contention_and_release(
+    adbc_postgres_connection_config: dict[str, str],
+) -> None:
+    """Verify PostgreSQL advisory migration locking, timeout contention, and unlock via ADBC."""
+    tracker = SyncMigrationTracker(version_table_name="adbc_advisory_lock_test")
+    with (
+        _pooled_postgresql_config(adbc_postgres_connection_config, max_size=2) as config,
+        config.provide_session() as first,
+        config.provide_session() as second,
+    ):
+        with tracker.acquire_lock(first, timeout_seconds=1):
+            assert (
+                first.select_value(
+                    "SELECT COUNT(*) FROM pg_locks WHERE locktype = ? AND pid = pg_backend_pid()", "advisory"
+                )
+                == 1
+            )
+            with pytest.raises(MigrationError, match="Failed to acquire PostgreSQL migration lock"):
+                with tracker.acquire_lock(second, timeout_seconds=0):
+                    pytest.fail("second ADBC session acquired held advisory lock")
+
+        assert (
+            first.select_value(
+                "SELECT COUNT(*) FROM pg_locks WHERE locktype = ? AND pid = pg_backend_pid()", "advisory"
+            )
+            == 0
+        )
+
+        with pytest.raises(RuntimeError, match="simulated migration failure"):
+            with tracker.acquire_lock(first, timeout_seconds=1):
+                raise RuntimeError("simulated migration failure")
+
+        with tracker.acquire_lock(second, timeout_seconds=1):
+            assert (
+                second.select_value(
+                    "SELECT COUNT(*) FROM pg_locks WHERE locktype = ? AND pid = pg_backend_pid()", "advisory"
+                )
+                == 1
+            )
+        assert (
+            second.select_value(
+                "SELECT COUNT(*) FROM pg_locks WHERE locktype = ? AND pid = pg_backend_pid()", "advisory"
+            )
+            == 0
+        )
 
 
 @contextmanager

@@ -23,6 +23,7 @@ from sqlspec.adapters.mysqlconnector.core import (
     MysqlConnectorAsyncStreamSource,
     MysqlConnectorSyncStreamSource,
     _resolve_column_types,
+    build_gtid_wait_query,
     build_insert_statement,
     build_load_data_statement,
     can_use_local_infile_records,
@@ -31,6 +32,8 @@ from sqlspec.adapters.mysqlconnector.core import (
     default_statement_config,
     driver_profile,
     encode_records_for_local_infile,
+    execute_cache_hit,
+    execute_cache_hit_async,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -52,6 +55,7 @@ from sqlspec.driver import (
     SyncDriverAdapterBase,
     SyncRowStream,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -117,12 +121,31 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         )
         cursor_options = cast("dict[str, Any] | None", self.driver_features.get("cursor_options"))
         self._cursor_options: dict[str, Any] | None = dict(cursor_options) if cursor_options else None
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), MysqlConnectorSyncDriver) else None
+        )
+        self._cache_hit_state = (self._json_deserializer, MYSQLCONNECTOR_JSON_TYPE_CODES, self._cursor_options)
 
     @property
     def data_dictionary(self) -> "MysqlConnectorSyncDataDictionary":
         if self._data_dictionary is None:
             self._data_dictionary = MysqlConnectorSyncDataDictionary()
         return self._data_dictionary
+
+    def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
+        """Wait for the server to apply a GTID set within a bounded timeout.
+
+        Args:
+            gtid_set: Native GTID position to await.
+            timeout: Nonnegative wait duration in seconds.
+            mariadb: Use MariaDB's native GTID wait function.
+
+        Returns:
+            Whether the server reached the requested position.
+        """
+        query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
+        result = self.select_value(query, (gtid_set, timeout))
+        return bool(result == 0)
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
@@ -387,12 +410,31 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         )
         cursor_options = cast("dict[str, Any] | None", self.driver_features.get("cursor_options"))
         self._cursor_options: dict[str, Any] | None = dict(cursor_options) if cursor_options else None
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), MysqlConnectorAsyncDriver) else None
+        )
+        self._cache_hit_state = (self._json_deserializer, MYSQLCONNECTOR_JSON_TYPE_CODES, self._cursor_options)
 
     @property
     def data_dictionary(self) -> "MysqlConnectorAsyncDataDictionary":
         if self._data_dictionary is None:
             self._data_dictionary = MysqlConnectorAsyncDataDictionary()
         return self._data_dictionary
+
+    async def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
+        """Wait for the server to apply a GTID set within a bounded timeout.
+
+        Args:
+            gtid_set: Native GTID position to await.
+            timeout: Nonnegative wait duration in seconds.
+            mariadb: Use MariaDB's native GTID wait function.
+
+        Returns:
+            Whether the server reached the requested position.
+        """
+        query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
+        result = await self.select_value(query, (gtid_set, timeout))
+        return bool(result == 0)
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)

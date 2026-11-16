@@ -4,6 +4,7 @@ import contextlib
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -38,6 +39,7 @@ from sqlspec.adapters.duckdb._typing import (
     duckdb_module,
 )
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -50,6 +52,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -58,16 +61,19 @@ from sqlspec.exceptions import (
 from sqlspec.storage import ResolvedStorageTarget
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.storage.backends.obstore import ObStoreBackend
+from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_rowcount
-from sqlspec.utils.uuids import uuid4, uuid_from_string
+from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
+    from sqlspec.core.cache import CachedQuery, StatementCacheHolder
+    from sqlspec.core.result._base import RowFormat
     from sqlspec.storage import StorageDestination, SyncStoragePipeline
 
 
@@ -87,11 +93,13 @@ __all__ = (
     "driver_profile",
     "duckdb_copy_filename_follows_query",
     "duckdb_version_tuple",
+    "execute_cache_hit",
     "format_identifier",
     "normalize_execute_parameters",
     "read_duckdb_profile_json",
     "resolve_duckdb_memory_limit",
     "resolve_rowcount",
+    "validate_duckdb_replica_config",
     "validate_duckdb_temp_directory",
 )
 
@@ -100,7 +108,7 @@ logger = get_logger("sqlspec.adapters.duckdb.core")
 ARROW_MIN_ROWS: Final[int] = 64
 _VERSION_COMPONENTS: Final[int] = 3
 _CGROUP_UNBOUNDED_THRESHOLD: Final[int] = 1 << 60
-_MEMORY_LIMIT_RE: Final[re.Pattern[str]] = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([A-Za-z]*)\s*$")
+_MEMORY_LIMIT_RE: Final[re.Pattern[str]] = re.compile(r"\A[ \t]*(\d+(?:\.\d+)?)[ \t]*([A-Za-z]*)[ \t]*\Z")
 _MEMORY_UNIT_MULTIPLIERS: Final[dict[str, int]] = {
     "": 1,
     "B": 1,
@@ -411,6 +419,106 @@ def resolve_rowcount(cursor: Any) -> int:
     return 0
 
 
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[str, Any], StatementCacheHolder]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a DuckDB connection and build its result.
+
+    Row-returning statements materialize through Arrow when PyArrow is installed and the
+    statement's last observed row count is unknown or at least ``ARROW_MIN_ROWS``; otherwise
+    rows come from ``fetchall``. The observed row count is recorded on the cache holder.
+
+    Args:
+        connection: DuckDB connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: The session's driver features and statement cache holder.
+
+    Returns:
+        The statement result, or ``None`` when statement profiling is enabled or the
+        connection exposes no ``sql`` method.
+
+    Raises:
+        SQLSpecError: Mapped from any ``duckdb.Error`` the statement raises.
+    """
+    if state[0].get("enable_statement_profiling", False):
+        return None
+    wire_sql = cached.compiled_sql
+    data: list[Any]
+    column_names: list[str]
+    row_format: RowFormat
+    try:
+        if not cached.operation_profile.returns_rows:
+            connection.execute(wire_sql, params or ())
+            return DMLResult(cached.operation_type, resolve_rowcount(connection))
+        sql_method = getattr(connection, "sql", None)
+        if not callable(sql_method):
+            return None
+        cache_holder = state[1]
+        hint = cache_holder.get_row_count_hint(wire_sql)
+        if PYARROW_INSTALLED and (hint is None or hint >= ARROW_MIN_ROWS):
+            relation: Any = sql_method(wire_sql, params=params or None)
+            if relation is None:
+                data = []
+                column_names = []
+                row_format = "tuple"
+            else:
+                try:
+                    description = relation.description
+                    if description_has_arrow_divergent_types(description):
+                        data, column_names = collect_rows(relation.fetchall(), description)
+                        row_format = "tuple"
+                    else:
+                        arrow_table = relation.to_arrow_table()
+                        data = arrow_table.to_pylist()
+                        _restore_uuid_columns(data, description)
+                        column_names = list(arrow_table.column_names)
+                        row_format = "dict"
+                finally:
+                    _close_relation(relation)
+        else:
+            connection.execute(wire_sql, params or ())
+            description = connection.description
+            data, column_names = collect_rows(connection.fetchall(), description)
+            row_format = "tuple"
+        row_count = len(data)
+        if hint != row_count:
+            cache_holder.set_row_count_hint(wire_sql, row_count)
+        return SQLResult.create_cached_select(
+            sql,
+            statement_config,
+            cached.processed_state,
+            wire_sql,
+            params,
+            data,
+            column_names,
+            row_count,
+            row_format,
+            None,
+        )
+    except duckdb_module.Error as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_relation(relation: Any) -> None:
+    """Close a DuckDB relation, ignoring one that cannot be closed."""
+    close_method = getattr(relation, "close", None)
+    if callable(close_method):
+        try:
+            close_method()
+        except Exception:
+            return
+
+
 def build_profile() -> "DriverParameterProfile":
     """Create the DuckDB driver parameter profile."""
 
@@ -465,8 +573,17 @@ def apply_driver_features(
 
 
 def create_duckdb_profile_path() -> Path:
-    """Allocate a unique temporary file path for DuckDB JSON statement profiling."""
-    return Path(tempfile.gettempdir()) / f"sqlspec_duckdb_profile_{uuid4().hex}.json"
+    """Create a 0600 temporary file path for DuckDB JSON statement profiling."""
+    fd, raw_path = tempfile.mkstemp(prefix="sqlspec_duckdb_profile_", suffix=".json", dir=tempfile.gettempdir())
+    path = Path(raw_path)
+    try:
+        os.close(fd)
+        path.chmod(0o600)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
+        raise
+    return path
 
 
 def cleanup_duckdb_profile_path(profile_path: Path | str | None) -> None:
@@ -546,6 +663,21 @@ _EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], st
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
 
 
+def validate_duckdb_replica_config(primary_config: Mapping[str, Any], replica_config: Mapping[str, Any]) -> None:
+    """Reject in-memory replicas and incompatible access to the writer's local file."""
+    target = str(replica_config.get("database", ""))
+    if not target or target.startswith(":memory:") or target == "memory":
+        msg = "DuckDB replicas require a persistent snapshot or remote database"
+        raise ImproperConfigurationError(msg)
+    primary = str(primary_config.get("database", ""))
+    remote = ("md:", "motherduck:", "s3://", "gcs://", "http://", "https://")
+    if target.startswith(remote) or primary.startswith(remote) or primary_config.get("read_only", False):
+        return
+    if Path(target).expanduser().resolve() == Path(primary).expanduser().resolve():
+        msg = "A DuckDB read replica cannot open the read-write primary file; use a separate snapshot"
+        raise ImproperConfigurationError(msg)
+
+
 def create_mapped_exception(error: "BaseException", *, logger: Any | None = None) -> SQLSpecError:
     """Map DuckDB exceptions to SQLSpec exceptions.
 
@@ -569,6 +701,10 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
     """
     del logger
     exc_type = type(error)
+    if isinstance(error, (DuckDBInvalidInputException, DuckDBCatalogException)) and (
+        "read-only" in str(error).lower() or "read only" in str(error).lower()
+    ):
+        return _create_duckdb_error(error, ReadOnlyTransactionError, "read-only database")
     if isinstance(error, DuckDBConstraintException):
         return _classify_duckdb_constraint(error)
     if isinstance(error, DuckDBTransactionException):
@@ -652,7 +788,7 @@ def duckdb_copy_filename_follows_query() -> bool:
 
 
 def _parse_memory_size_bytes(memory_limit: str) -> "int | None":
-    match = _MEMORY_LIMIT_RE.match(memory_limit)
+    match = _MEMORY_LIMIT_RE.fullmatch(memory_limit)
     if match is None:
         return None
     amount = float(match.group(1))

@@ -6,12 +6,15 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from sqlglot import exp
 
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -25,6 +28,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -32,16 +36,18 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
-from sqlspec.utils.type_guards import has_sqlite_error
+from sqlspec.utils.type_guards import has_sqlite_error, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from sqlspec.adapters.sqlite._typing import SqliteConnection
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.compiler import OperationType
 
 __all__ = (
     "JULIAN_EPOCH",
+    "ROWID_SAFE_OPERATIONS",
     "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "SqliteStreamSource",
@@ -51,6 +57,7 @@ __all__ = (
     "build_connection_config",
     "build_insert_statement",
     "build_profile",
+    "build_readonly_sqlite_uri",
     "build_statement_config",
     "collect_rows",
     "create_mapped_exception",
@@ -58,8 +65,10 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "end_transaction",
+    "execute_cache_hit",
     "extension_pragma_statements",
     "format_identifier",
+    "is_read_only_sqlite_config",
     "julian_to_datetime",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -71,6 +80,7 @@ __all__ = (
 )
 
 JULIAN_EPOCH = 2440587.5
+ROWID_SAFE_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"})
 SECONDS_PER_DAY = 86400.0
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
@@ -81,6 +91,7 @@ SQLITE_CONSTRAINT_CHECK_CODE = 275
 SQLITE_CONSTRAINT_DATATYPE_CODE = 3091
 SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
+SQLITE_NOTADB_CODE = 26
 SQLITE_IOERR_CODE = 10
 SQLITE_CORRUPT_CODE = 11
 SQLITE_MISMATCH_CODE = 20
@@ -95,8 +106,8 @@ SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
 SQLITE_TABLE_INFO_MIN_COLUMNS = 2
 SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
-_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_PRAGMA_NAME_PATTERN = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
+_PRAGMA_VALUE_PATTERN = re.compile(r"\A[A-Za-z0-9_.\-]+\Z")
 _EXTENSION_PRAGMA_PROFILE = (
     "PRAGMA foreign_keys = ON",
     "PRAGMA cache_size = -64000",
@@ -193,14 +204,14 @@ def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> N
 def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
     rendered: list[tuple[str, str]] = []
     for pragma_name, pragma_value in pragmas.items():
-        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.fullmatch(pragma_name) is None:
             msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
             raise ImproperConfigurationError(msg)
         if isinstance(pragma_value, bool):
             rendered_value = "1" if pragma_value else "0"
         elif isinstance(pragma_value, int):
             rendered_value = str(pragma_value)
-        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.fullmatch(pragma_value) is not None:
             rendered_value = pragma_value
         else:
             msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
@@ -329,6 +340,99 @@ def resolve_lastrowid(
     return normalize_lastrowid(cursor, operation_type, rowcount)
 
 
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    rowid_target_cache: "dict[tuple[str | None, str], bool]",
+) -> "SQLResult":
+    """Execute a cached statement on a SQLite connection and build its result.
+
+    Args:
+        connection: SQLite connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        rowid_target_cache: Driver-local rowid eligibility cache, cleared when the statement can change schema.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any ``sqlite3.Error`` the statement raises.
+    """
+    operation_type = cached.operation_type
+    if operation_type not in ROWID_SAFE_OPERATIONS:
+        rowid_target_cache.clear()
+    try:
+        cursor = connection.execute(cached.compiled_sql, params or ())
+    except sqlite3.Error as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    try:
+        if not cached.operation_profile.returns_rows:
+            rowcount = cursor.rowcount
+            affected_rows: int = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+            if operation_type != "INSERT" or affected_rows == 0:
+                return DMLResult(operation_type, affected_rows, None)
+            return DMLResult(
+                operation_type,
+                affected_rows,
+                resolve_lastrowid(
+                    connection,
+                    cursor,
+                    operation_type,
+                    affected_rows,
+                    cached.processed_state.parsed_expression,
+                    rowid_target_cache,
+                ),
+            )
+        fetched_data: list[Any] = cursor.fetchall()
+        last_inserted_id: int | None = None
+        if operation_type != "SELECT":
+            effective_rowcount = resolve_rowcount(cursor) or (len(fetched_data) if operation_type == "INSERT" else 0)
+            last_inserted_id = resolve_lastrowid(
+                connection,
+                cursor,
+                operation_type,
+                effective_rowcount,
+                cached.processed_state.parsed_expression,
+                rowid_target_cache,
+            )
+        description = cursor.description
+        column_names: list[str] = [column[0] for column in description] if description else []
+        return SQLResult.create_cached_select(
+            sql,
+            statement_config,
+            cached.processed_state,
+            cached.compiled_sql,
+            params,
+            fetched_data,
+            column_names,
+            len(fetched_data),
+            resolve_row_format(fetched_data),
+            last_inserted_id,
+        )
+    except sqlite3.Error as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    finally:
+        _close_cursor(cursor)
+
+
 def require_python_version(feature: str, minimum: "tuple[int, int]") -> None:
     """Raise when the running Python version does not provide a sqlite3 API."""
     if sys.version_info < minimum:
@@ -407,7 +511,10 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
+_INSERT_TARGET_CACHE_SIZE: Final[int] = 512
+_INSERT_TARGET_CACHE: "dict[int, tuple[Any, tuple[str | None, str] | None]]" = {}
 _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
+    "query_only",
     "enable_foreign_keys",
     "enable_optimizations",
     "health_check_interval",
@@ -422,15 +529,37 @@ _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
 })
 
 
-def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-    """Filter connection parameters for SQLite."""
-    return {
-        key: value
-        for key, value in mapping.items()
-        if key not in _EXCLUDED_CONNECTION_KEYS
-        and (value is not None or key == "isolation_level")
-        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-    }
+def is_read_only_sqlite_config(connection_config: Mapping[str, Any]) -> bool:
+    """Return whether a configuration requests SQLite read-only enforcement."""
+    if connection_config.get("query_only"):
+        return True
+    explicit_uri = connection_config.get("uri")
+    if explicit_uri is None:
+        extra = connection_config.get("extra")
+        if isinstance(extra, Mapping):
+            explicit_uri = extra.get("uri")
+    if explicit_uri is not True:
+        return False
+    database = str(connection_config.get("database", ""))
+    return database.startswith("file:") and dict(parse_qsl(urlsplit(database).query)).get("mode") == "ro"
+
+
+def build_readonly_sqlite_uri(database: str) -> str:
+    """Build a read-only URI for a file-backed SQLite database."""
+    uri = urlsplit(database) if database.startswith("file:") else None
+    query = dict(parse_qsl(uri.query)) if uri is not None else {}
+    if (
+        not database
+        or database == ":memory:"
+        or (uri is not None and unquote(uri.path) == ":memory:")
+        or query.get("mode") == "memory"
+    ):
+        msg = "SQLite read replicas require a file-backed database"
+        raise ImproperConfigurationError(msg)
+    if uri is None:
+        uri = urlsplit(Path(database).resolve().as_uri())
+    query["mode"] = "ro"
+    return urlunsplit((uri.scheme, uri.netloc, uri.path, urlencode(query), uri.fragment))
 
 
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
@@ -490,6 +619,13 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         error_name = None
     error_msg = str(error).lower()
     primary_code = (error_code & 0xFF) if isinstance(error_code, int) else None
+    if (
+        primary_code == sqlite3.SQLITE_READONLY
+        or (isinstance(error_name, str) and error_name.startswith("SQLITE_READONLY"))
+        or "readonly database" in error_msg
+        or "read-only database" in error_msg
+    ):
+        return _create_sqlite_error(error, error_code, ReadOnlyTransactionError, "read-only database")
 
     constraint_error = _map_constraint_exception(error, error_code, error_name, primary_code, error_msg)
     if constraint_error is not None:
@@ -527,8 +663,8 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_sqlite_error(error, 0, PermissionDeniedError, "permission denied")
 
-    if primary_code == SQLITE_CANTOPEN_CODE or (
-        isinstance(error_name, str) and error_name.startswith("SQLITE_CANTOPEN")
+    if primary_code in (SQLITE_CANTOPEN_CODE, SQLITE_NOTADB_CODE) or (
+        isinstance(error_name, str) and error_name.startswith(("SQLITE_CANTOPEN", "SQLITE_NOTADB"))
     ):
         return _create_sqlite_error(error, error_code, DatabaseConnectionError, "connection error")
     if primary_code in (SQLITE_IOERR_CODE, SQLITE_CORRUPT_CODE) or (
@@ -618,6 +754,17 @@ def apply_driver_features(
     return statement_config, features
 
 
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters for SQLite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
+
+
 def _normalize_metadata_row(row: Any) -> Any:
     if isinstance(row, dict):
         return tuple(row.values())
@@ -625,6 +772,22 @@ def _normalize_metadata_row(row: Any) -> Any:
 
 
 def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":
+    """Return the schema and table an INSERT writes to, remembered per compiled expression.
+
+    Compiled expressions are shared by every execution of a cached statement, so the target is
+    derived once and looked up by identity afterwards.
+    """
+    cached = _INSERT_TARGET_CACHE.get(id(expression))
+    if cached is not None and cached[0] is expression:
+        return cached[1]
+    target = _read_insert_target(expression)
+    if len(_INSERT_TARGET_CACHE) >= _INSERT_TARGET_CACHE_SIZE:
+        _INSERT_TARGET_CACHE.clear()
+    _INSERT_TARGET_CACHE[id(expression)] = (expression, target)
+    return target
+
+
+def _read_insert_target(expression: Any) -> "tuple[str | None, str] | None":
     if not isinstance(expression, exp.Insert):
         return None
     target = expression.this

@@ -180,7 +180,7 @@ def _print_per_execute_summary(stats: pstats.Stats, console: Console) -> None:
         "prepare_driver_parameters",
         "_driver_parameters",
         "_stmt_cache_prepare",
-        "_cached_execution",
+        "run_cached_execution",
         "_stmt_cache_build",
         "_execute_cached_statement",
         "_cache_statement",

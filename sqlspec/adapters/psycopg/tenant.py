@@ -10,6 +10,7 @@ from sqlspec.adapters.psycopg._typing import psycopg_tuple_row as tuple_row
 from sqlspec.core.tenant.base import TenantLeaseState, require_session_pooler, with_cause
 from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.tenant._postgres import PostgresTenantSettings, pyformat_binds, pyformat_query
 
 if TYPE_CHECKING:
@@ -77,11 +78,19 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
             msg = "Tenant checkout requires an idle connection"
             raise TenantContextError(msg)
         sql, params = self.prepare_checkout(payload)
-        async with connection.cursor(row_factory=tuple_row) as cursor:
+        cursor_context = connection.cursor(row_factory=tuple_row)
+        cursor = await cursor_context.__aenter__()
+        checkout_error: BaseException | None = None
+        state: TenantLeaseState | None = None
+        try:
             await cursor.execute(pyformat_query(sql), pyformat_binds(params))
             state = self.capture(payload, params, await cursor.fetchone())
+        except BaseException as caught:
+            checkout_error = caught
+        await exit_async_context(cursor_context, checkout_error)
         if not connection.autocommit:
             await connection.commit()
+        assert state is not None
         return state
 
     async def checkin(self, connection: "PsycopgAsyncConnection", state: TenantLeaseState) -> None:
@@ -92,9 +101,15 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
             if connection.info.transaction_status != pq.TransactionStatus.IDLE:
                 await connection.rollback()
             sql, params = self.prepare_checkin(state)
-            async with connection.cursor(row_factory=tuple_row) as cursor:
+            cursor_context = connection.cursor(row_factory=tuple_row)
+            cursor = await cursor_context.__aenter__()
+            checkin_error: BaseException | None = None
+            try:
                 await cursor.execute(pyformat_query(sql), pyformat_binds(params))
                 self.verify_checkin(params, await cursor.fetchone())
+            except BaseException as caught:
+                checkin_error = caught
+            await exit_async_context(cursor_context, checkin_error)
             if not connection.autocommit:
                 await connection.commit()
         except TenantCleanupError:
@@ -191,14 +206,17 @@ class PsycopgAsyncTenantLease(AsyncTenantLease):
             await current.__aexit__(None, None, None)
 
     async def _invalidate(self, connection: Any) -> None:
+        close_error: BaseException | None = None
         try:
             await connection.close()
-        except BaseException as close_error:
+        except BaseException as exc:
+            close_error = exc
+        if close_error is not None:
             try:
                 await self._pool.close(timeout=0)
             except BaseException as quarantine_error:
                 raise _quarantine_error(close_error, quarantine_error)
-            raise
+            raise close_error
         await self._release(connection)
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:

@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from sqlspec.extensions.litestar.plugin import TenantRequestMiddleware
+from sqlspec.extensions.litestar.plugin import SQLSpecTenantRequestMiddleware
 
 __all__ = ("within_tenant_request",)
 
@@ -21,5 +21,5 @@ async def within_tenant_request(targets: Any, scope: Any, body: Callable[[], Awa
     async def send(_message: Any) -> None:
         return None
 
-    await TenantRequestMiddleware(app, targets=targets)(scope, receive, send)
+    await SQLSpecTenantRequestMiddleware(app, targets=targets)(scope, receive, send)
     return result.get("value")

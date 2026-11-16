@@ -42,14 +42,14 @@ async def oracle_family_session(
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))
-async def test_connection(mode: str, oracle_23ai_service: OracleService) -> None:
+async def test_connection(mode: str, oracle_26ai_service: OracleService) -> None:
     """Test native pool and cursor behavior for both Oracle modes."""
     base_config = OraclePoolParams(
-        host=oracle_23ai_service.host,
-        port=oracle_23ai_service.port,
-        service_name=oracle_23ai_service.service_name,
-        user=oracle_23ai_service.user,
-        password=oracle_23ai_service.password,
+        host=oracle_26ai_service.host,
+        port=oracle_26ai_service.port,
+        service_name=oracle_26ai_service.service_name,
+        user=oracle_26ai_service.user,
+        password=oracle_26ai_service.password,
         retry_count=5,
         retry_delay=1,
     )
@@ -178,17 +178,17 @@ async def _tenant_oracle_session(
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_tenant_identifier_reuse_clear_hooks_and_tracing(mode: str, oracle_23ai_service: OracleService) -> None:
+async def test_tenant_identifier_reuse_clear_hooks_and_tracing(mode: str, oracle_26ai_service: OracleService) -> None:
     hook = OracleSessionContextConfig(nls_parameters={"NLS_DATE_FORMAT": "YYYY-MM-DD"})
     config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
     strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
     config = config_cls(
         connection_config={
-            "host": oracle_23ai_service.host,
-            "port": oracle_23ai_service.port,
-            "service_name": oracle_23ai_service.service_name,
-            "user": oracle_23ai_service.user,
-            "password": oracle_23ai_service.password,
+            "host": oracle_26ai_service.host,
+            "port": oracle_26ai_service.port,
+            "service_name": oracle_26ai_service.service_name,
+            "user": oracle_26ai_service.user,
+            "password": oracle_26ai_service.password,
             "min": 1,
             "max": 1,
         },
@@ -255,16 +255,16 @@ async def test_tenant_identifier_reuse_clear_hooks_and_tracing(mode: str, oracle
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_tenant_bypass_applies_session_context_hook(mode: str, oracle_23ai_service: OracleService) -> None:
+async def test_tenant_bypass_applies_session_context_hook(mode: str, oracle_26ai_service: OracleService) -> None:
     hook = OracleSessionContextConfig(nls_parameters={"NLS_DATE_FORMAT": "YYYY-MM-DD"})
     config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
     config = config_cls(
         connection_config={
-            "host": oracle_23ai_service.host,
-            "port": oracle_23ai_service.port,
-            "service_name": oracle_23ai_service.service_name,
-            "user": oracle_23ai_service.user,
-            "password": oracle_23ai_service.password,
+            "host": oracle_26ai_service.host,
+            "port": oracle_26ai_service.port,
+            "service_name": oracle_26ai_service.service_name,
+            "user": oracle_26ai_service.user,
+            "password": oracle_26ai_service.password,
             "min": 1,
             "max": 1,
         },
@@ -307,16 +307,16 @@ class _OracleAsyncResetFailureStrategy(OracleAsyncIdentifierStrategy):
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_tenant_failed_reset_replaces_physical_session(mode: str, oracle_23ai_service: OracleService) -> None:
+async def test_tenant_failed_reset_replaces_physical_session(mode: str, oracle_26ai_service: OracleService) -> None:
     config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
     strategy_cls = _OracleSyncResetFailureStrategy if mode == "sync" else _OracleAsyncResetFailureStrategy
     config = config_cls(
         connection_config={
-            "host": oracle_23ai_service.host,
-            "port": oracle_23ai_service.port,
-            "service_name": oracle_23ai_service.service_name,
-            "user": oracle_23ai_service.user,
-            "password": oracle_23ai_service.password,
+            "host": oracle_26ai_service.host,
+            "port": oracle_26ai_service.port,
+            "service_name": oracle_26ai_service.service_name,
+            "user": oracle_26ai_service.user,
+            "password": oracle_26ai_service.password,
             "min": 1,
             "max": 1,
         },
@@ -344,18 +344,18 @@ async def test_tenant_failed_reset_replaces_physical_session(mode: str, oracle_2
 
 
 @pytest.fixture
-async def oracle_tenant_vpd_schema(oracle_23ai_service: OracleService) -> AsyncGenerator[dict[str, Any], None]:
+async def oracle_tenant_vpd_schema(oracle_26ai_service: OracleService) -> AsyncGenerator[dict[str, Any], None]:
     import oracledb
 
     owner = f"TENANT_{uuid4().hex[:8].upper()}"
     namespace = f"CTX_{uuid4().hex[:8].upper()}"
     password = "Tenant_native_42"
     params = {
-        "host": oracle_23ai_service.host,
-        "port": oracle_23ai_service.port,
-        "service_name": oracle_23ai_service.service_name,
+        "host": oracle_26ai_service.host,
+        "port": oracle_26ai_service.port,
+        "service_name": oracle_26ai_service.service_name,
     }
-    with oracledb.connect(**params, user="system", password=oracle_23ai_service.system_password) as admin:
+    with oracledb.connect(**params, user="system", password=oracle_26ai_service.system_password) as admin:
         with admin.cursor() as cursor:
             cursor.execute(f'CREATE USER {owner} IDENTIFIED BY "{password}"')
             try:

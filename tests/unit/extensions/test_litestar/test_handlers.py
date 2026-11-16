@@ -7,19 +7,25 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from litestar.constants import HTTP_RESPONSE_START
 from litestar.datastructures import State
+from litestar.utils.scope.state import ScopeState
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig
+from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.handlers import (
     autocommit_handler_maker,
-    connection_provider_maker,
+    build_db_session,
+    db_connection_provider_maker,
+    db_pool_provider_maker,
+    db_session_provider_maker,
     lifespan_handler_maker,
     manual_handler_maker,
-    pool_provider_maker,
-    session_provider_maker,
 )
+from sqlspec.observability import ObservabilityConfig
 from tests.unit.extensions.test_litestar._request import within_tenant_request
 
 if TYPE_CHECKING:
@@ -27,7 +33,7 @@ if TYPE_CHECKING:
 
     from litestar.types import Message, Scope
 
-    from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.config import DatabaseConfigProtocol, LifecycleConfig
 
 pytestmark = pytest.mark.anyio
 
@@ -76,7 +82,7 @@ def test_session_provider_documents_mypyc_blockers() -> None:
 
 
 async def test_async_manual_handler_closes_connection() -> None:
-    """Test async manual handler closes connection on terminus event."""
+    """Test async manual handler closes connection on terminal body event."""
     connection_key = "test_connection"
     handler = manual_handler_maker(connection_key)
 
@@ -86,9 +92,11 @@ async def test_async_manual_handler_closes_connection() -> None:
     scope = cast("Scope", {})
     set_sqlspec_scope_state(scope, connection_key, mock_connection)
 
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+    mock_connection.close.assert_not_awaited()
+    assert get_sqlspec_scope_state(scope, connection_key) is mock_connection
 
-    await handler(message, scope)
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
 
     mock_connection.close.assert_awaited_once()
     assert get_sqlspec_scope_state(scope, connection_key) is None
@@ -114,7 +122,7 @@ async def test_async_manual_handler_ignores_non_terminus_events() -> None:
 
 
 async def test_async_autocommit_handler_commits_on_success() -> None:
-    """Test async autocommit handler commits on 2xx status."""
+    """Test async autocommit handler commits on 2xx start and closes on terminal body."""
     connection_key = "test_connection"
     handler = autocommit_handler_maker(connection_key)
 
@@ -126,17 +134,18 @@ async def test_async_autocommit_handler_commits_on_success() -> None:
     scope = cast("Scope", {})
     set_sqlspec_scope_state(scope, connection_key, mock_connection)
 
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
-
-    await handler(message, scope)
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
 
     mock_connection.commit.assert_awaited_once()
     mock_connection.rollback.assert_not_awaited()
+    mock_connection.close.assert_not_awaited()
+
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
     mock_connection.close.assert_awaited_once()
 
 
 async def test_async_autocommit_handler_rolls_back_on_error() -> None:
-    """Test async autocommit handler rolls back on 4xx/5xx status."""
+    """Test async autocommit handler rolls back on 4xx/5xx start and closes on terminal body."""
     connection_key = "test_connection"
     handler = autocommit_handler_maker(connection_key)
 
@@ -148,12 +157,13 @@ async def test_async_autocommit_handler_rolls_back_on_error() -> None:
     scope = cast("Scope", {})
     set_sqlspec_scope_state(scope, connection_key, mock_connection)
 
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 500})
-
-    await handler(message, scope)
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 500}), scope)
 
     mock_connection.commit.assert_not_awaited()
     mock_connection.rollback.assert_awaited_once()
+    mock_connection.close.assert_not_awaited()
+
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
     mock_connection.close.assert_awaited_once()
 
 
@@ -229,7 +239,7 @@ async def test_async_pool_provider_returns_pool() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
 
-    provider = pool_provider_maker(config, pool_key)
+    provider = db_pool_provider_maker(config, pool_key)
 
     mock_pool = MagicMock()
     state = MagicMock()
@@ -247,7 +257,7 @@ async def test_async_pool_provider_raises_when_pool_missing() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     pool_key = "test_pool"
 
-    provider = pool_provider_maker(config, pool_key)
+    provider = db_pool_provider_maker(config, pool_key)
 
     state = MagicMock()
     state.get.return_value = None
@@ -266,7 +276,7 @@ async def test_async_connection_provider_creates_connection() -> None:
     pool_key = "test_pool"
     connection_key = "test_connection"
 
-    provider = connection_provider_maker(config, pool_key, connection_key)
+    provider = db_connection_provider_maker(config, pool_key, connection_key)
 
     try:
         pool = await config.create_pool()
@@ -288,7 +298,7 @@ async def test_async_connection_provider_raises_when_pool_missing() -> None:
     pool_key = "test_pool"
     connection_key = "test_connection"
 
-    provider = connection_provider_maker(config, pool_key, connection_key)
+    provider = db_connection_provider_maker(config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = None
@@ -307,7 +317,7 @@ async def test_sync_connection_provider_supports_context_manager() -> None:
     pool_key = "test_pool"
     connection_key = "test_connection"
 
-    provider = connection_provider_maker(config, pool_key, connection_key)
+    provider = db_connection_provider_maker(config, pool_key, connection_key)
 
     pool = config.create_pool()
     state = MagicMock()
@@ -329,7 +339,7 @@ async def test_async_session_provider_creates_session() -> None:
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
     connection_key = "test_connection"
 
-    provider = session_provider_maker(config, connection_key)
+    provider = db_session_provider_maker(config, connection_key)
 
     mock_connection = AsyncMock()
 
@@ -353,12 +363,12 @@ def test_handlers_use_ensure_async_unconditionally() -> None:
     assert "from sqlspec.utils.sync_tools import ensure_async_" in content
     assert "is_async" not in content, "handlers should not branch on is_async"
     assert "await ensure_async_(connection.close)()" in content, "close should go through ensure_async_"
-    assert "await ensure_async_(connection.commit)()" in content, "commit should go through ensure_async_"
-    assert "await ensure_async_(connection.rollback)()" in content, "rollback should go through ensure_async_"
+    assert "await ensure_async_(commit_target.commit)()" in content, "commit should go through ensure_async_"
+    assert "await ensure_async_(rollback_target.rollback)()" in content, "rollback should go through ensure_async_"
 
 
 async def test_sync_manual_handler_closes_connection() -> None:
-    """Test manual handler closes sync connections through ensure_async_."""
+    """Test manual handler closes sync connections through ensure_async_ on terminal body."""
     connection_key = "test_connection"
     handler = manual_handler_maker(connection_key)
 
@@ -368,16 +378,17 @@ async def test_sync_manual_handler_closes_connection() -> None:
     scope = cast("Scope", {})
     set_sqlspec_scope_state(scope, connection_key, mock_connection)
 
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+    mock_connection.close.assert_not_called()
 
-    await handler(message, scope)
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
 
     mock_connection.close.assert_called_once()
     assert get_sqlspec_scope_state(scope, connection_key) is None
 
 
 async def test_sync_autocommit_handler_commits_on_success() -> None:
-    """Test autocommit handler commits sync connections through ensure_async_."""
+    """Test autocommit handler commits sync connections on start and closes on terminal body."""
     connection_key = "test_connection"
     handler = autocommit_handler_maker(connection_key)
 
@@ -389,12 +400,13 @@ async def test_sync_autocommit_handler_commits_on_success() -> None:
     scope = cast("Scope", {})
     set_sqlspec_scope_state(scope, connection_key, mock_connection)
 
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
-
-    await handler(message, scope)
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
 
     mock_connection.commit.assert_called_once()
     mock_connection.rollback.assert_not_called()
+    mock_connection.close.assert_not_called()
+
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
     mock_connection.close.assert_called_once()
 
 
@@ -426,7 +438,7 @@ async def test_connection_provider_handover_on_http() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -458,7 +470,7 @@ async def test_manual_handler_terminus_after_handover() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -470,9 +482,10 @@ async def test_manual_handler_terminus_after_handover() -> None:
         await anext(gen)
 
     handler = manual_handler_maker(connection_key)
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+    assert cm_fake.exit_args is None
 
-    await handler(message, scope)
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
 
     assert cm_fake.exit_args == (None, None, None)
     assert get_sqlspec_scope_state(scope, f"{connection_key}_ctx") is None
@@ -489,7 +502,7 @@ async def test_connection_provider_websocket_clean_exit() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -517,7 +530,7 @@ async def test_connection_provider_response_already_started() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -544,7 +557,7 @@ async def test_connection_provider_body_error_forwards_exception() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -576,7 +589,7 @@ async def test_connection_provider_suppressing_context_propagates_exception() ->
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -604,7 +617,7 @@ async def test_connection_provider_sync_manager_receives_exception() -> None:
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -634,7 +647,7 @@ async def test_connection_provider_exit_failure_propagates_after_cleanup() -> No
     mock_config = MagicMock()
     mock_config.provide_connection.return_value = cm_fake
 
-    provider: Any = connection_provider_maker(mock_config, pool_key, connection_key)
+    provider: Any = db_connection_provider_maker(mock_config, pool_key, connection_key)
 
     state = MagicMock()
     state.get.return_value = MagicMock()
@@ -668,8 +681,10 @@ async def test_manual_handler_forwards_on_demand_exception() -> None:
     exc = RuntimeError("handler exploded")
     await record_request_exception(exc, scope)
 
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 500})
-    await handler(message, scope)
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 500}), scope)
+    assert cm_fake.exit_args is None
+
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
 
     assert cm_fake.exit_args is not None
     assert cm_fake.exit_args[0] is RuntimeError
@@ -679,7 +694,7 @@ async def test_manual_handler_forwards_on_demand_exception() -> None:
 
 
 async def test_autocommit_handler_forwards_exception_after_rollback() -> None:
-    """Autocommit handler rolls back on 500 and forwards recorded exception to context exit."""
+    """Autocommit handler rolls back on 500 start and forwards recorded exception on terminal body."""
     from sqlspec.extensions.litestar.handlers import record_request_exception
 
     connection_key = "test_connection"
@@ -699,11 +714,13 @@ async def test_autocommit_handler_forwards_exception_after_rollback() -> None:
     exc = ValueError("bad request state")
     await record_request_exception(exc, scope)
 
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 500})
-    await handler(message, scope)
-
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 500}), scope)
     mock_conn.commit.assert_not_awaited()
     mock_conn.rollback.assert_awaited_once()
+    assert cm_fake.exit_args is None
+
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
+
     assert cm_fake.exit_args is not None
     assert cm_fake.exit_args[0] is ValueError
     assert cm_fake.exit_args[1] is exc
@@ -740,11 +757,13 @@ async def test_autocommit_handler_rolls_back_when_exception_recorded_despite_200
     exc = RuntimeError("mapped to 200 fallback")
     await record_request_exception(exc, scope)
 
-    message = cast("Message", {"type": HTTP_RESPONSE_START, "status": 200})
-    await handler(message, scope)
-
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
     mock_conn.commit.assert_not_awaited()
     mock_conn.rollback.assert_awaited_once()
+    assert cm_fake.exit_args is None
+
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
+
     assert cm_fake.exit_args is not None
     assert cm_fake.exit_args[0] is RuntimeError
     assert cm_fake.exit_args[1] is exc
@@ -805,6 +824,7 @@ async def test_connection_cleanup_middleware_handles_aborts_and_post_start_sessi
         await send({"type": HTTP_RESPONSE_START, "status": 200, "headers": []})
         set_sqlspec_scope_state(scope, "db_connection", conn_stream)
         set_sqlspec_scope_state(scope, "db_connection_ctx", cm_stream)
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
         await send({"type": "http.response.body", "body": b"ok", "more_body": False})
 
     middleware_stream = ConnectionCleanupMiddleware(streaming_app, targets=(target,))
@@ -902,6 +922,7 @@ async def test_connection_cleanup_middleware_commit_failure_rolls_back_and_forwa
         await send({"type": HTTP_RESPONSE_START, "status": 200, "headers": []})
         set_sqlspec_scope_state(scope, "db_connection", conn_stream)
         set_sqlspec_scope_state(scope, "db_connection_ctx", cm_stream)
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
 
     middleware = ConnectionCleanupMiddleware(streaming_app, targets=(target,))
     scope = cast("Scope", {"type": "http", "state": {}})
@@ -950,6 +971,7 @@ async def test_connection_cleanup_middleware_isolates_multi_db_teardown() -> Non
         set_sqlspec_scope_state(scope, "db1_connection_ctx", cm1)
         set_sqlspec_scope_state(scope, "db2_connection", conn2)
         set_sqlspec_scope_state(scope, "db2_connection_ctx", cm2)
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
 
     middleware = ConnectionCleanupMiddleware(two_db_app, targets=(target1, target2))
     scope = cast("Scope", {"type": "http", "state": {}})
@@ -975,6 +997,7 @@ async def test_connection_cleanup_middleware_isolates_multi_db_teardown() -> Non
         set_sqlspec_scope_state(scope, "db1_connection_ctx", cm1_b)
         set_sqlspec_scope_state(scope, "db2_connection", conn2_b)
         set_sqlspec_scope_state(scope, "db2_connection_ctx", cm2_b)
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
 
     middleware_b = ConnectionCleanupMiddleware(cancel_second_app, targets=(target1, target2))
     scope_b = cast("Scope", {"type": "http", "state": {}})
@@ -1029,7 +1052,9 @@ async def test_tenant_provider_captures_payload_for_acquisition_and_checkin(
         provide_connection=async_connection if is_async else sync_connection,
     )
     scope = cast("Scope", {"type": "http"})
-    provider = connection_provider_maker(cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "tenant_conn")
+    provider = db_connection_provider_maker(
+        cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "tenant_conn"
+    )
     targets = (_TenantResolutionTarget(config, TenantResolutionSettings(tenant_extractor=extractor), ()),)
 
     async def run_request() -> None:
@@ -1048,11 +1073,13 @@ async def test_tenant_provider_captures_payload_for_acquisition_and_checkin(
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
         handler = manual_handler_maker("tenant_conn")
+        await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+        body_msg = cast("Message", {"type": "http.response.body", "body": b"", "more_body": False})
         if failure == "exit":
             with pytest.raises(RuntimeError, match="checkin"):
-                await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+                await handler(body_msg, scope)
         else:
-            await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+            await handler(body_msg, scope)
 
     await within_tenant_request(targets, scope, run_request)
     assert events == ([("enter", "acme")] if failure == "enter" else [("enter", "acme"), ("exit", "acme")])
@@ -1095,13 +1122,13 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
 
     async def run_request() -> None:
         if is_async:
-            connection = await plugin.provide_request_connection_async("db_connection", state, scope)
+            connection = await plugin.provide_db_connection_async("db_connection", state, scope)
         else:
-            connection = plugin.provide_request_connection_sync("db_connection", state, scope)
+            connection = plugin.provide_db_connection_sync("db_connection", state, scope)
         assert get_sqlspec_scope_state(scope, "db_connection") is connection
-        await manual_handler_maker("db_connection")(
-            cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope
-        )
+        handler = manual_handler_maker("db_connection")
+        await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+        await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
 
     try:
         await within_tenant_request(plugin._tenant_targets(), scope, run_request)
@@ -1138,7 +1165,7 @@ async def test_tenant_sync_on_demand_closes_rejected_extractor_coroutine(monkeyp
     scope = cast("Scope", {"type": "http"})
 
     async def run_request() -> None:
-        plugin.provide_request_connection_sync("db_connection", State({"db_pool": pool}), scope)
+        plugin.provide_db_connection_sync("db_connection", State({"db_pool": pool}), scope)
 
     try:
         with pytest.raises(ImproperConfigurationError, match="synchronous tenant_extractor"):
@@ -1178,7 +1205,9 @@ async def test_tenant_provider_handoff_rebinds_payload_in_each_owning_context(te
         provide_connection=connection_context,
     )
     scope = cast("Scope", {"type": "http"})
-    provider = connection_provider_maker(cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "db_connection")
+    provider = db_connection_provider_maker(
+        cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "db_connection"
+    )
     targets = (_TenantResolutionTarget(config, TenantResolutionSettings(tenant_extractor=lambda scope: "acme"), ()),)
     iterator = provider(State({"pool": object()}), scope)
 
@@ -1195,9 +1224,9 @@ async def test_tenant_provider_handoff_rebinds_payload_in_each_owning_context(te
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
         with TenantContext.scope("cleanup"):
-            await manual_handler_maker("db_connection")(
-                cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope
-            )
+            handler = manual_handler_maker("db_connection")
+            await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+            await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
             assert TenantContext.get_tenant_id() == "cleanup"
 
     with TenantContext.scope("parent"):
@@ -1205,3 +1234,313 @@ async def test_tenant_provider_handoff_rebinds_payload_in_each_owning_context(te
         assert TenantContext.get_tenant_id() == "parent"
     expected = "acme" if tenant_enabled else None
     assert events == [("acquire", expected), ("checkin", expected)]
+
+
+@pytest.mark.parametrize("mode", ["manual", "autocommit"])
+@pytest.mark.parametrize(
+    ("messages", "expect_released", "expect_deferred"),
+    [
+        (
+            [
+                {"type": HTTP_RESPONSE_START, "status": 200},
+                {"type": "http.response.body", "body": b"done", "more_body": False},
+            ],
+            True,
+            False,
+        ),
+        (
+            [
+                {"type": HTTP_RESPONSE_START, "status": 200},
+                {"type": "http.response.body", "body": b"chunk", "more_body": True},
+                {"type": "http.response.body", "body": b"", "more_body": False},
+            ],
+            False,
+            True,
+        ),
+        ([{"type": "websocket.close", "code": 1000}], True, False),
+        ([{"type": "websocket.disconnect", "code": 1000}], True, False),
+    ],
+    ids=["single_body", "streaming_body", "websocket_close", "websocket_disconnect"],
+)
+async def test_before_send_handlers_release_and_stream_deferral(
+    mode: str, messages: "list[dict[str, Any]]", expect_released: bool, expect_deferred: bool
+) -> None:
+    """Before-send handlers release on terminal body or websocket close and defer streaming responses."""
+    connection_key = "db_connection"
+    session_scope_key = "db_session_instance"
+    mock_conn = AsyncMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+    handler = (
+        manual_handler_maker(connection_key, session_scope_key=session_scope_key)
+        if mode == "manual"
+        else autocommit_handler_maker(connection_key, session_scope_key=session_scope_key)
+    )
+    scope = cast("Scope", {"type": "http" if messages[0]["type"].startswith("http.") else "websocket"})
+    set_sqlspec_scope_state(scope, connection_key, mock_conn)
+    set_sqlspec_scope_state(scope, f"{connection_key}_ctx", cm_fake)
+
+    for msg in messages:
+        await handler(cast("Message", msg), scope)
+
+    if expect_released:
+        assert cm_fake.exit_args == (None, None, None)
+        assert get_sqlspec_scope_state(scope, connection_key) is None
+        assert get_sqlspec_scope_state(scope, f"{connection_key}_stream_deferred") is None
+    else:
+        assert cm_fake.exit_args is None
+        assert get_sqlspec_scope_state(scope, connection_key) is mock_conn
+        assert get_sqlspec_scope_state(scope, f"{connection_key}_stream_deferred") is expect_deferred
+
+
+@pytest.mark.parametrize(
+    ("has_session", "auto_begin", "in_tx", "status", "expected_session_op", "expected_conn_op"),
+    [
+        (True, False, True, 200, "commit", None),
+        (True, False, True, 500, "rollback", None),
+        (True, True, False, 200, None, None),
+        (True, True, False, 500, None, None),
+        (True, True, True, 200, "commit", None),
+        (False, False, False, 200, None, "commit"),
+        (False, False, False, 500, None, "rollback"),
+    ],
+    ids=[
+        "session_commit",
+        "session_rollback",
+        "armed_idle_200_skips",
+        "armed_idle_500_skips",
+        "armed_active_tx_commits",
+        "fallback_conn_commit",
+        "fallback_conn_rollback",
+    ],
+)
+async def test_autocommit_handler_finalizes_through_session_and_detaches_on_release(
+    has_session: bool,
+    auto_begin: bool,
+    in_tx: bool,
+    status: int,
+    expected_session_op: str | None,
+    expected_conn_op: str | None,
+) -> None:
+    """Autocommit handler finalizes via Driver session, honors armed idle state, emits session end, and detaches."""
+    connection_key = "db_connection"
+    session_scope_key = "db_session_instance"
+    ended_sessions: list[Any] = []
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/db"},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_end": [lambda ctx: ended_sessions.append(ctx["session"])]})
+        ),
+    )
+    mock_conn = AsyncMock()
+    mock_conn.is_in_transaction = MagicMock(return_value=in_tx)
+    tx = AsyncMock()
+    cm_fake = _AsyncContextManagerFake(mock_conn)
+    scope = cast("Scope", {"type": "http"})
+    set_sqlspec_scope_state(scope, connection_key, mock_conn)
+    set_sqlspec_scope_state(scope, f"{connection_key}_ctx", cm_fake)
+
+    session: Any = None
+    if has_session:
+        session = build_db_session(config, mock_conn, "autocommit")
+        session._auto_begin_on_write = auto_begin
+        session._transaction = tx
+        set_sqlspec_scope_state(scope, session_scope_key, session)
+
+    handler = autocommit_handler_maker(connection_key, session_scope_key=session_scope_key)
+    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": status}), scope)
+    await handler(cast("Message", {"type": "http.response.body", "body": b"", "more_body": False}), scope)
+
+    if expected_session_op == "commit":
+        tx.commit.assert_awaited_once()
+        tx.rollback.assert_not_awaited()
+    elif expected_session_op == "rollback":
+        tx.rollback.assert_awaited_once()
+        tx.commit.assert_not_awaited()
+    else:
+        tx.commit.assert_not_awaited()
+        tx.rollback.assert_not_awaited()
+
+    if expected_conn_op == "commit":
+        mock_conn.commit.assert_awaited_once()
+        mock_conn.rollback.assert_not_awaited()
+    elif expected_conn_op == "rollback":
+        mock_conn.rollback.assert_awaited_once()
+        mock_conn.commit.assert_not_awaited()
+    else:
+        mock_conn.commit.assert_not_awaited()
+        mock_conn.rollback.assert_not_awaited()
+
+    if session is not None:
+        assert ended_sessions == [session]
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            _ = session.connection.cursor
+
+
+@pytest.mark.parametrize(
+    ("adapter_kind", "commit_mode", "expect_auto_begin"),
+    [
+        ("asyncpg", "autocommit", True),
+        ("asyncpg", "autocommit_include_redirect", True),
+        ("asyncpg", "manual", True),
+        ("duckdb", "autocommit", True),
+        ("aiosqlite", "autocommit", False),
+    ],
+)
+async def test_session_provider_prepares_arms_and_emits_session_start(
+    adapter_kind: str, commit_mode: str, expect_auto_begin: bool
+) -> None:
+    """db_session_provider_maker prepares the driver, arms lazy begin on target adapters, caches in scope, and accepts positional calls."""
+    started: list[Any] = []
+
+    async def _on_start(ctx: dict[str, Any]) -> None:
+        started.append(ctx["session"])
+
+    obs = ObservabilityConfig(lifecycle=cast("LifecycleConfig", {"on_session_start": [_on_start]}))
+    if adapter_kind == "asyncpg":
+        config: Any = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"}, observability_config=obs)
+    elif adapter_kind == "duckdb":
+        config = DuckDBConfig(connection_config={"database": ":memory:litestar_arm_test"}, observability_config=obs)
+    else:
+        config = AiosqliteConfig(connection_config={"database": ":memory:"}, observability_config=obs)
+
+    prepared: list[Any] = []
+    original_prepare = config._prepare_driver
+
+    def _tracking_prepare(driver: Any) -> Any:
+        prepared.append(driver)
+        return original_prepare(driver)
+
+    config._prepare_driver = _tracking_prepare
+    provider = db_session_provider_maker(
+        config, "db_connection", session_scope_key="db_session_instance", commit_mode=cast("Any", commit_mode)
+    )
+    mock_conn = MagicMock()
+    scope = cast("Scope", {"type": "http"})
+
+    sessions: list[Any] = [sess async for sess in provider(db_connection=mock_conn, scope=scope)]
+    sessions.extend([sess async for sess in provider(db_connection=mock_conn, scope=scope)])
+
+    assert len(sessions) == 2
+    assert sessions[0] is sessions[1]
+    assert len(prepared) == 1
+    assert started == [sessions[0]]
+    assert sessions[0]._auto_begin_on_write is expect_auto_begin
+    assert get_sqlspec_scope_state(scope, "db_session_instance") is sessions[0]
+
+    positional_sessions: list[Any] = [sess async for sess in provider(MagicMock())]
+    assert len(positional_sessions) == 1
+    assert positional_sessions[0] is not sessions[0]
+
+
+@pytest.mark.parametrize("exit_mode", ["exception", "response_started", "websocket"])
+async def test_connection_provider_direct_exit_emits_session_end_and_detaches_session(
+    tmp_path: Path, exit_mode: str
+) -> None:
+    """Direct exit from db_connection_provider_maker emits on_session_end once and detaches the driver session."""
+    ended_sessions: list[Any] = []
+
+    async def _on_end(ctx: dict[str, Any]) -> None:
+        ended_sessions.append(ctx["session"])
+
+    obs = ObservabilityConfig(lifecycle=cast("LifecycleConfig", {"on_session_end": [_on_end]}))
+    config = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / f"direct_{exit_mode}.db")}, observability_config=obs
+    )
+    conn_provider = db_connection_provider_maker(config, "db_pool", "db_connection")
+    sess_provider = db_session_provider_maker(config, "db_connection", session_scope_key="db_session_instance")
+
+    state = State({"db_pool": await config.create_pool()})
+    scope_type = "websocket" if exit_mode == "websocket" else "http"
+    scope = cast("Scope", {"type": scope_type})
+    if exit_mode == "response_started":
+        ScopeState.from_scope(scope).response_started = True
+
+    conn_gen = conn_provider(state, scope)
+    try:
+        conn = await anext(conn_gen)
+        sess_gen = sess_provider(db_connection=conn, scope=scope)
+        session = await anext(sess_gen)
+        await sess_gen.aclose()
+        if exit_mode == "exception":
+            with pytest.raises(RuntimeError, match="route failure"):
+                await conn_gen.athrow(RuntimeError("route failure"))
+        else:
+            with pytest.raises(StopAsyncIteration):
+                await anext(conn_gen)
+
+        assert ended_sessions == [session]
+        assert session.connection is _CLOSED_CONNECTION
+        assert get_sqlspec_scope_state(scope, "db_connection_session") is None
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            _ = session.connection.cursor
+    finally:
+        await config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("commit_mode", "status_code", "explicit_commit", "extra_commit", "expect_persisted"),
+    [
+        (None, 200, False, None, True),
+        (None, 303, False, None, False),
+        ("autocommit_include_redirect", 302, False, None, True),
+        ("autocommit_include_redirect", 303, False, None, True),
+        ("autocommit_include_redirect", 400, False, None, False),
+        ("manual", 200, False, {200}, False),
+        ("manual", 200, True, None, True),
+    ],
+)
+def test_litestar_commit_mode_redirect_and_manual_rollback_behavior(
+    tmp_path: Path,
+    commit_mode: str | None,
+    status_code: int,
+    explicit_commit: bool,
+    extra_commit: "set[int] | None",
+    expect_persisted: bool,
+) -> None:
+    """Verify Litestar default autocommit, Inertia 302/303 redirect commit, and manual rollback."""
+    import sqlite3
+
+    from litestar import Litestar, Response, post
+    from litestar.di import NamedDependency
+    from litestar.testing import TestClient
+
+    from sqlspec import SQLSpec
+    from sqlspec.extensions.litestar import SQLSpecPlugin
+
+    database = str(tmp_path / "litestar_modes.db")
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE items (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    litestar_cfg: dict[str, Any] = {}
+    if commit_mode is not None:
+        litestar_cfg["commit_mode"] = commit_mode
+    if extra_commit is not None:
+        litestar_cfg["extra_commit_statuses"] = extra_commit
+
+    config = AiosqliteConfig(
+        connection_config={"database": database}, extension_config={"litestar": litestar_cfg} if litestar_cfg else {}
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+
+    @post("/write")
+    async def write_route(db_session: NamedDependency[Any]) -> Response[dict[str, Any]]:
+        await db_session.execute("INSERT INTO items VALUES (:val)", {"val": "written"})
+        if explicit_commit:
+            await db_session.commit()
+        return Response({"status": status_code}, status_code=status_code)
+
+    app = Litestar(route_handlers=[write_route], plugins=[plugin])
+    with TestClient(app) as client:
+        resp = client.post("/write")
+        assert resp.status_code == status_code
+
+    reader = sqlite3.connect(database)
+    try:
+        rows = reader.execute("SELECT value FROM items").fetchall()
+    finally:
+        reader.close()
+    assert rows == ([("written",)] if expect_persisted else [])

@@ -1,15 +1,21 @@
 """SQLite ADK adapter-local configuration tests."""
 
+import gc
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Self, get_type_hints
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
 from sqlspec.adapters.sqlite.adk import SqliteADKConfig, SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.adapters.sqlite.core import end_transaction
+from sqlspec.adapters.sqlite.litestar import SqliteStore
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.adk import StoredMemory
+from sqlspec.extensions.adk import StoredEvent, StoredMemory
 
 
 class RecordingConnection:
@@ -226,9 +232,6 @@ def test_sqlite_adk_get_events_with_limit_binds_parameter() -> None:
 
 def test_sqlite_adk_memory_store_persists_and_retrieves_float32_embeddings() -> None:
     """Verify memory entries persist and retrieve float32 embeddings."""
-    from datetime import UTC, datetime
-    from uuid import uuid4
-
     config = SqliteConfig(connection_config={"database": ":memory:"})
     store = SqliteADKMemoryStore(config)
     try:
@@ -259,7 +262,510 @@ def test_sqlite_adk_memory_store_persists_and_retrieves_float32_embeddings() -> 
         assert results[0]["event_id"] == "evt-1"
         assert results[0]["embedding"] is not None
         assert len(results[0]["embedding"]) == 4
-        for orig, rec in zip(embedding, results[0]["embedding"], strict=True):
-            assert abs(orig - rec) < 1e-6
+        assert results[0]["embedding"] == pytest.approx(embedding, abs=1e-6)
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renewed"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero-int"),
+        pytest.param(-5, False, id="negative-int"),
+        pytest.param(timedelta(seconds=0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+def test_sqlite_adk_get_session_renews_only_for_positive_duration(
+    renew_for: "int | timedelta | None", expect_renewed: bool
+) -> None:
+    """get_session touches update_time only when renew_for is positive."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKStore(config)
+    try:
+        store.create_tables()
+        store.create_session("s1", "app-a", "user-1", {"k": "v"})
+        with config.provide_connection() as conn:
+            conn.execute("UPDATE adk_session SET update_time = ? WHERE id = ?", (2451545.0, "s1")).close()
+            end_transaction(conn, commit=True)
+
+        baseline = store.get_session("app-a", "user-1", "s1")
+        assert baseline is not None
+
+        fetched = store.get_session("app-a", "user-1", "s1", renew_for=renew_for)
+        assert fetched is not None
+        if expect_renewed:
+            assert fetched["update_time"] > baseline["update_time"]
+        else:
+            assert fetched["update_time"] == baseline["update_time"]
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("event_app", "event_user", "event_session", "expect_succeed"),
+    [
+        pytest.param("app-a", "user-1", "s1", True, id="owner"),
+        pytest.param("app-b", "user-1", "s1", False, id="wrong-app"),
+        pytest.param("app-a", "user-2", "s1", False, id="wrong-user"),
+        pytest.param("app-a", "user-1", "missing", False, id="missing-session"),
+    ],
+)
+def test_sqlite_adk_append_event_enforces_session_ownership(
+    event_app: str, event_user: str, event_session: str, expect_succeed: bool
+) -> None:
+    """append_event writes only when (session_id, app_name, user_id) matches an existing session."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKStore(config)
+    try:
+        store.create_tables()
+        store.create_session("s1", "app-a", "user-1", {})
+        event = StoredEvent(
+            id="evt-1",
+            app_name=event_app,
+            user_id=event_user,
+            session_id=event_session,
+            invocation_id="inv-1",
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            event_data={"role": "user"},
+        )
+
+        if expect_succeed:
+            store.append_event(event)
+            events = store.get_events("app-a", "user-1", "s1")
+            assert [item["id"] for item in events] == ["evt-1"]
+        else:
+            with pytest.raises(ValueError, match="not found"):
+                store.append_event(event)
+            with config.provide_connection() as conn:
+                cur = conn.execute(f"SELECT COUNT(*) FROM {store.events_table}")
+                count = cur.fetchone()[0]
+                cur.close()
+            assert count == 0
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("record_app", "record_user", "record_session", "arg_session", "expect_succeed"),
+    [
+        pytest.param("app-a", "user-1", "s1", "s1", True, id="matching-owner"),
+        pytest.param("app-b", "user-1", "s1", "s1", False, id="mismatched-app"),
+        pytest.param("app-a", "user-2", "s1", "s1", False, id="mismatched-user"),
+        pytest.param("app-a", "user-1", "s2", "s1", False, id="mismatched-session"),
+        pytest.param("app-a", "user-1", "missing", "missing", False, id="missing-session"),
+    ],
+)
+def test_sqlite_adk_append_event_and_update_state_validates_scope_and_ownership(
+    record_app: str, record_user: str, record_session: str, arg_session: str, expect_succeed: bool
+) -> None:
+    """append_event_and_update_state rejects mismatched records and missing sessions without inserting events."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKStore(config)
+    try:
+        store.create_tables()
+        store.create_session("s1", "app-a", "user-1", {"step": 0})
+        event = StoredEvent(
+            id="evt-atomic",
+            app_name=record_app,
+            user_id=record_user,
+            session_id=record_session,
+            invocation_id="inv-1",
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            event_data={"role": "model"},
+        )
+
+        if expect_succeed:
+            updated = store.append_event_and_update_state(event, "app-a", "user-1", arg_session, {"step": 1})
+            assert updated["state"] == {"step": 1}
+            assert [item["id"] for item in store.get_events("app-a", "user-1", "s1")] == ["evt-atomic"]
+        else:
+            with pytest.raises(ValueError):
+                store.append_event_and_update_state(event, "app-a", "user-1", arg_session, {"step": 1})
+            with config.provide_connection() as conn:
+                cur = conn.execute(f"SELECT COUNT(*) FROM {store.events_table}")
+                count = cur.fetchone()[0]
+                cur.close()
+            assert count == 0
+    finally:
+        config.close_pool()
+
+
+def test_sqlite_adk_get_events_joins_session_owner_columns() -> None:
+    """get_events omits event rows whose owner columns differ from the owning session row."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKStore(config)
+    try:
+        store.create_tables()
+        store.create_session("s1", "app-a", "user-1", {})
+        store.append_event(
+            StoredEvent(
+                id="evt-owned",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="inv-1",
+                timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+                event_data={"ok": True},
+            )
+        )
+        with config.provide_connection() as conn:
+            conn.execute(
+                f"INSERT INTO {store.events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("evt-foreign", "app-b", "user-2", "s1", "inv-2", 2461042.0, "{}"),
+            ).close()
+            end_transaction(conn, commit=True)
+
+        assert [item["id"] for item in store.get_events("app-a", "user-1", "s1")] == ["evt-owned"]
+        assert store.get_events("app-b", "user-2", "s1") == []
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("second_app", "second_user", "expected_second_inserted", "expected_total"),
+    [
+        pytest.param("app-a", "user-1", 0, 1, id="same-owner-duplicate"),
+        pytest.param("app-b", "user-1", 1, 2, id="different-app-same-event-id"),
+        pytest.param("app-a", "user-2", 1, 2, id="different-user-same-event-id"),
+    ],
+)
+def test_sqlite_adk_memory_deduplicates_per_app_user_event_id(
+    second_app: str, second_user: str, expected_second_inserted: int, expected_total: int
+) -> None:
+    """Memory inserts deduplicate on (app_name, user_id, event_id) rather than event_id alone."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKMemoryStore(config)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    try:
+        store.create_tables()
+        first = StoredMemory(
+            id="m-1",
+            session_id="s1",
+            app_name="app-a",
+            user_id="user-1",
+            scope="user",
+            event_id="shared-evt",
+            author="user",
+            timestamp=now,
+            content_json={"text": "alpha"},
+            content_text="alpha",
+            metadata_json=None,
+            inserted_at=now,
+            embedding=None,
+        )
+        second = StoredMemory(
+            id="m-2",
+            session_id="s2",
+            app_name=second_app,
+            user_id=second_user,
+            scope="user",
+            event_id="shared-evt",
+            author="user",
+            timestamp=now,
+            content_json={"text": "alpha"},
+            content_text="alpha",
+            metadata_json=None,
+            inserted_at=now,
+            embedding=None,
+        )
+
+        assert store.insert_memory_entries([first]) == 1
+        assert store.insert_memory_entries([second]) == expected_second_inserted
+        with config.provide_connection() as conn:
+            cur = conn.execute(f"SELECT COUNT(*) FROM {store.memory_table}")
+            total = cur.fetchone()[0]
+            cur.close()
+        assert total == expected_total
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize("use_fts", [False, True], ids=["simple", "fts5"])
+@pytest.mark.parametrize(
+    ("filter_app", "filter_user", "expected_deleted", "expected_remaining"),
+    [pytest.param("app-a", "user-1", 1, ["m-2", "m-3"], id="app-and-user-scoped")],
+)
+def test_sqlite_adk_delete_entries_by_session_scopes_and_syncs_fts(
+    use_fts: bool, filter_app: str, filter_user: str, expected_deleted: int, expected_remaining: list[str]
+) -> None:
+    """Scoped delete_entries_by_session removes only matching rows and keeps FTS5 content synchronized."""
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"adk": {"memory_use_fts": use_fts}}
+    )
+    store = SqliteADKMemoryStore(config)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    try:
+        store.create_tables()
+        entries = [
+            StoredMemory(
+                id="m-1",
+                session_id="shared-sess",
+                app_name="app-a",
+                user_id="user-1",
+                scope="user",
+                event_id="evt-1",
+                author="user",
+                timestamp=now,
+                content_json={"text": "quartztoken"},
+                content_text="quartztoken",
+                metadata_json=None,
+                inserted_at=now,
+                embedding=None,
+            ),
+            StoredMemory(
+                id="m-2",
+                session_id="shared-sess",
+                app_name="app-a",
+                user_id="user-2",
+                scope="user",
+                event_id="evt-2",
+                author="user",
+                timestamp=now,
+                content_json={"text": "quartztoken"},
+                content_text="quartztoken",
+                metadata_json=None,
+                inserted_at=now,
+                embedding=None,
+            ),
+            StoredMemory(
+                id="m-3",
+                session_id="shared-sess",
+                app_name="app-b",
+                user_id="user-1",
+                scope="user",
+                event_id="evt-3",
+                author="user",
+                timestamp=now,
+                content_json={"text": "quartztoken"},
+                content_text="quartztoken",
+                metadata_json=None,
+                inserted_at=now,
+                embedding=None,
+            ),
+        ]
+        assert store.insert_memory_entries(entries) == 3
+
+        deleted = store.delete_entries_by_session("shared-sess", app_name=filter_app, user_id=filter_user)
+        assert deleted == expected_deleted
+
+        with config.provide_connection() as conn:
+            cur = conn.execute(f"SELECT id FROM {store.memory_table} ORDER BY id ASC")
+            remaining_ids = [row[0] for row in cur.fetchall()]
+            cur.close()
+        assert remaining_ids == expected_remaining
+
+        app_a_u1 = [r["id"] for r in store.search_entries("quartztoken", "app-a", "user-1")]
+        app_a_u2 = [r["id"] for r in store.search_entries("quartztoken", "app-a", "user-2")]
+        app_b_u1 = [r["id"] for r in store.search_entries("quartztoken", "app-b", "user-1")]
+        assert app_a_u1 == (["m-1"] if "m-1" in expected_remaining else [])
+        assert app_a_u2 == (["m-2"] if "m-2" in expected_remaining else [])
+        assert app_b_u1 == (["m-3"] if "m-3" in expected_remaining else [])
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_stores_reapply_pragmas_after_close_pool(tmp_path: Path) -> None:
+    """ADK and Litestar stores evict closed connection tokens and reapply PRAGMA foreign_keys."""
+    db_path = tmp_path / "reopen.db"
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)}, extension_config={"litestar": {"pragma_profile": True}}
+    )
+    adk_store = SqliteADKStore(config)
+    memory_store = SqliteADKMemoryStore(config)
+    litestar_store = SqliteStore(config)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    try:
+        adk_store.create_tables()
+        memory_store.create_tables()
+        await litestar_store.create_table()
+        adk_store.create_session("s1", "app", "user", {"k": "v"})
+        adk_store.append_event(
+            StoredEvent(
+                id="e1",
+                app_name="app",
+                user_id="user",
+                session_id="s1",
+                invocation_id="inv-1",
+                timestamp=now,
+                event_data={"role": "user"},
+            )
+        )
+        assert len(adk_store._configured_connections) == 1
+        assert len(litestar_store._configured_connections) >= 1
+
+        config.close_pool()
+        gc.collect()
+        assert len(adk_store._configured_connections) == 0
+        assert len(memory_store._configured_connections) == 0
+        assert len(litestar_store._configured_connections) == 0
+
+        adk_store.delete_session("app", "user", "s1")
+        assert adk_store.get_session("app", "user", "s1") is None
+        await litestar_store.set("sess-1", b"payload")
+        assert len(litestar_store._configured_connections) >= 1
+        assert memory_store.delete_entries_by_session("s1", app_name="app", user_id="user") == 0
+        with config.provide_connection() as conn:
+            cur = conn.execute(f"SELECT COUNT(*) FROM {adk_store.events_table} WHERE session_id = ?", ("s1",))
+            orphan_count = cur.fetchone()[0]
+            cur.close()
+            fk_cur = conn.execute("PRAGMA foreign_keys")
+            fk_enabled = fk_cur.fetchone()[0]
+            fk_cur.close()
+        assert orphan_count == 0
+        assert fk_enabled == 1
+        assert len(adk_store._configured_connections) == 1
+    finally:
+        config.close_pool()
+
+
+def test_sqlite_adk_fts_tokenize_rejects_trailing_newline() -> None:
+    """FTS5 tokenizer validation uses fullmatch so trailing newlines fail."""
+    with pytest.raises(ImproperConfigurationError, match="fts_tokenize"):
+        SqliteADKMemoryStore(
+            SqliteConfig(extension_config={"adk": {"memory_use_fts": True, "fts_tokenize": "porter\n"}})
+        )
+
+
+class _SpySqliteConnection:
+    def __init__(self, real_conn: Any, executed_sql: "list[str]") -> None:
+        self._real = real_conn
+        self._executed_sql = executed_sql
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        self._executed_sql.append(sql)
+        return self._real.execute(sql, params)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class _SpySqliteProvideConnection:
+    def __init__(self, orig_factory: Any, executed_sql: "list[str]") -> None:
+        self._orig_factory = orig_factory
+        self._executed_sql = executed_sql
+        self._cm: Any = None
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_SpySqliteProvideConnection":
+        self._cm = self._orig_factory(*args, **kwargs)
+        return self
+
+    def __enter__(self) -> _SpySqliteConnection:
+        return _SpySqliteConnection(self._cm.__enter__(), self._executed_sql)
+
+    def __exit__(self, *exc: Any) -> Any:
+        return self._cm.__exit__(*exc)
+
+
+def test_sqlite_adk_writes_use_begin_immediate_and_preserve_untouched_and_falsy_keys() -> None:
+    """SQLite write transactions issue BEGIN IMMEDIATE before reading/writing scoped state."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKStore(config)
+    executed_sql: list[str] = []
+    try:
+        store.create_tables()
+        store.upsert_app_state("app-a", {"app:keep": "ok", "app:drop": "old"})
+        orig_provide = config.provide_connection
+        config.provide_connection = _SpySqliteProvideConnection(orig_provide, executed_sql)  # type: ignore[method-assign]
+
+        created = store.create_session(
+            "s1",
+            "app-a",
+            "user-1",
+            {"sess": 1},
+            app_state_delta={"app:drop": None, "app:zero": 0},
+            user_state_delta=None,
+        )
+        assert created["state"] == {"sess": 1, "app:keep": "ok", "app:drop": None, "app:zero": 0}
+        create_statements = [s for s in executed_sql if not s.startswith("PRAGMA")]
+        assert create_statements[0] == "BEGIN IMMEDIATE"
+
+        executed_sql.clear()
+        now = datetime(2026, 1, 2, tzinfo=UTC)
+        event = StoredEvent(
+            id="evt-1",
+            app_name="app-a",
+            user_id="user-1",
+            session_id="s1",
+            invocation_id="inv-1",
+            timestamp=now,
+            event_data={"author": "user"},
+        )
+        updated = store.append_event_and_update_state(
+            event, "app-a", "user-1", "s1", {"sess": 2}, app_state_delta={}, user_state_delta=None
+        )
+        assert updated["state"] == {"sess": 2}
+        append_statements = [s for s in executed_sql if not s.startswith("PRAGMA")]
+        assert append_statements[0] == "BEGIN IMMEDIATE"
+        assert not any("adk_app_state" in s or "adk_user_state" in s for s in append_statements)
+        config.provide_connection = orig_provide  # type: ignore[method-assign]
+        assert store.get_user_state("app-a", "user-1") is None
+        assert store.get_app_state("app-a") == {"app:keep": "ok", "app:drop": None, "app:zero": 0}
+    finally:
+        config.close_pool()
+
+
+def test_sqlite_adk_get_events_limit_returns_newest_in_chronological_order() -> None:
+    """get_events(limit=N) returns the newest N events in chronological ascending order."""
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    store = SqliteADKStore(config)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    try:
+        store.create_tables()
+        store.create_session("s1", "app-a", "user-1", {})
+        store.append_event(
+            StoredEvent(
+                id="e1",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="i1",
+                timestamp=base + timedelta(seconds=1),
+                event_data={},
+            )
+        )
+        store.append_event(
+            StoredEvent(
+                id="e2",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="i2",
+                timestamp=base + timedelta(seconds=2),
+                event_data={},
+            )
+        )
+        store.append_event(
+            StoredEvent(
+                id="e3",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="i3",
+                timestamp=base + timedelta(seconds=3),
+                event_data={},
+            )
+        )
+        store.append_event(
+            StoredEvent(
+                id="e4",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="i4",
+                timestamp=base + timedelta(seconds=4),
+                event_data={},
+            )
+        )
+
+        recent = store.get_events("app-a", "user-1", "s1", limit=2)
+        assert [event["id"] for event in recent] == ["e3", "e4"]
+
+        filtered = store.get_events("app-a", "user-1", "s1", after_timestamp=base + timedelta(seconds=1), limit=2)
+        assert [event["id"] for event in filtered] == ["e3", "e4"]
     finally:
         config.close_pool()

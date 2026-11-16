@@ -561,7 +561,7 @@ def test_text_quoted_natively_by_its_dialect_stays_one_identifier() -> None:
 def test_lateral_join_keeps_function_schema() -> None:
     query = sql.select("*").from_("t").lateral_join("myschema.f(t.id) x")
     assert " ".join(query.build().sql.split()) == (
-        'SELECT * FROM "t" AS "t" CROSS JOIN LATERAL "myschema".F("t"."id") AS "x"'
+        'SELECT * FROM "t" AS "t" JOIN LATERAL "myschema".F("t"."id") AS "x" ON TRUE'
     )
 
 
@@ -768,7 +768,7 @@ def test_invisible_characters_inside_quotes_stay_one_identifier(dialect: str, ex
         ),
         pytest.param(
             lambda: sql.select("*").from_("t").lateral_join(sql.func("generate_series", 1, 3), alias="g"),
-            'SELECT * FROM "t" AS "t" CROSS JOIN LATERAL GENERATE_SERIES(1, 3) AS "g"',
+            'SELECT * FROM "t" AS "t" JOIN LATERAL GENERATE_SERIES(1, 3) AS "g" ON TRUE',
             {},
             id="lateral-join-sql-func",
         ),
@@ -793,13 +793,13 @@ def test_invisible_characters_inside_quotes_stay_one_identifier(dialect: str, ex
         ),
         pytest.param(
             lambda: sql.update("t").set(a=1).from_(sql.func("generate_series", 1, 3), alias="g").where("t.id = g.id"),
-            'UPDATE "t" SET "a" = %(a)s FROM GENERATE_SERIES(1, 3) AS "g" WHERE "g"."id" = "t"."id"',
+            'UPDATE "t" SET "a" = %(a)s FROM GENERATE_SERIES(1, 3) AS "g" WHERE "t"."id" = "g"."id"',
             {"a": 1},
             id="update-from-sql-func",
         ),
         pytest.param(
             lambda: sql.update("t").set(a=1).from_(sql.raw("my_fn(:n)", n=3), alias="g").where("t.id = g.id"),
-            'UPDATE "t" SET "a" = %(a)s FROM MY_FN(%(n)s) AS "g" WHERE "g"."id" = "t"."id"',
+            'UPDATE "t" SET "a" = %(a)s FROM MY_FN(%(n)s) AS "g" WHERE "t"."id" = "g"."id"',
             {"a": 1, "n": 3},
             id="update-from-sql-raw-params",
         ),

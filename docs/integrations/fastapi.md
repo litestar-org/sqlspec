@@ -48,7 +48,13 @@ Pass multiple synchronous or asynchronous configurations with distinct `session_
 
 ## Transaction Commit Modes and Options
 
-Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `StarletteConfig`) per database bind:
+Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `StarletteConfig`) per database bind; when `"fastapi"` is omitted, `extension_config["starlette"]` is inherited automatically (passing both with differing values raises `ImproperConfigurationError`):
+
+| Commit Mode | Commits On | Rolls Back On | Best For |
+| --- | --- | --- | --- |
+| `"autocommit"` (default) | Clean HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`), raised exceptions, or cancellation | JSON REST APIs where every `2xx` handler mutates state |
+| `"autocommit_include_redirect"` | Clean HTTP `200`–`399` responses | HTTP `>= 400` responses, raised exceptions, or cancellation | HTML, HTMX, and Inertia.js form handlers that commit and return `302` / `303` redirects |
+| `"manual"` | Explicit `session.commit()` calls only | Uncommitted handler work on clean return, raised exceptions, or cancellation | Explicit service-layer transaction boundaries |
 
 <!-- GENERATED:START config-table:sqlspec.config.FastAPIConfig -->
 | Key | Type | Default | Description |
@@ -57,7 +63,7 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `S
 | `connection_key` | `str` | `'db_connection'` | Key for storing the connection in request.state once it is checked out on first access. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.state. Default: 'db_session' |
-| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commit/rollback; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` | Transaction commit mode. Default: 'autocommit'. manual: No automatic commit; uncommitted work rolls back on release; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger commit. Default: set() |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger rollback. Default: set() |
 | `disable_di` | `bool` | `False` | Disable built-in dependency injection. Default: False. When True, the Starlette/FastAPI extension will not add middleware for managing database connections and sessions. Users are responsible for managing the database lifecycle manually via their own DI solution. |
@@ -67,6 +73,18 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `S
 | `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
 | `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
 | `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
+| `replica_session_key` | `str` | - | Request key for a replica session. |
+| `replica_connection_key` | `str` | - | Request key for a replica connection. |
+| `routing_session_key` | `str` | - | Request key for a routing session. |
+| `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
+| `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
+| `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
+| `primary_pin_cookie` | `str or None` | `None` | Optional application primary pin cookie name. Default: None. |
+| `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed primary pin cookies. Default: None. |
+| `replica_pool_key` | `str` | - | Request key for the selected replica pool. |
+| `pagination_cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
+| `pagination_cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
+| `pagination_cursor_encrypted` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
 <!-- GENERATED:END config-table:sqlspec.config.FastAPIConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
@@ -77,7 +95,7 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, an aut
 
 ## Declarative Filter Dependencies
 
-Use `db_ext.provide_filters(FilterConfig(...))` (or `from sqlspec.extensions.fastapi import FilterConfig, provide_filters`) to generate typed FastAPI `Depends` callables that parse query parameters directly into `StatementFilter` lists (`LimitOffsetFilter`, `CursorFilter` returning `HTTP 422` on malformed cursor tokens, `OrderByFilter`, `SearchFilter`, `BeforeAfterFilter`, and `InCollectionFilter`):
+Use `db_ext.provide_filters(FilterConfig(...))` (or `from sqlspec.extensions.fastapi import FilterConfig, provide_filters`) to generate typed FastAPI `Depends` callables that parse query parameters directly into `StatementFilter` lists (`LimitOffsetFilter`, `CursorFilter` returning `HTTP 422` on malformed cursor tokens, `OrderByFilter`, `SearchFilter`, `BeforeAfterFilter`, and `InCollectionFilter`). Application-wide `pagination_cursor_secret`, `pagination_cursor_ttl`, and `pagination_cursor_encrypted` configured via `FastAPIConfig`, `SQLSpecPlugin(...)`, or `SQLSPEC_PAGINATION_CURSOR_SECRET` / `SECRET_KEY` environment variables are inherited by both `db_ext.provide_filters(...)` and standalone `provide_filters(...)` with per-endpoint signing keys. A cursor secret is required: cursor requests raise `ImproperConfigurationError` when none resolves. Tokens are bound to the request tenant of every tenant-enabled configuration, so a token from one tenant is rejected for another. Search filters escape `%`, `_`, and `/` by default; set `search_escape_wildcards=False` in `FilterConfig` to opt out:
 
 ```python
 from typing import Annotated, Any
@@ -93,7 +111,7 @@ user_filters = provide_filters(
         id_filter=UUID,
         sort_field={"created_at", "name"},
         pagination_type="cursor",
-        cursor_keys="id",
+        pagination_cursor_keys="id",
         pagination_size=25,
         search="name,email",
         search_ignore_case=True,
@@ -111,6 +129,20 @@ def register_user_routes(app: FastAPI, db_ext: SQLSpecPlugin) -> None:
             "SELECT id, name, email, created_at FROM users", *filters
         )
 ```
+
+## Read Replica and Routing Dependencies
+
+Use `Depends(db_ext.provide_replica_session())` for a reader dependency. The typed factories are `provide_async_replica_session` and `provide_sync_replica_session`. Raw connections use `provide_replica_connection`, `provide_async_replica_connection`, or `provide_sync_replica_connection`. `key=` selects a registered bind or config. `provide_routing_session()` supplies the lazy routing facade when a handler needs reads and writes.
+
+Add `app.add_middleware(SQLSpecRoutingMiddleware)` for request routing scopes and header/cookie hints. The middleware is exported from `sqlspec.utils.routing`. Read sessions keep the same tenant checks and lazy physical checkout as ordinary sessions. See [Read Replicas](../learn/recipes/read-replicas.md) for topology setup.
+
+## Connection Lifetime
+
+- **Normal responses**: The request connection is committed or rolled back and released after the response is finalized.
+- **Streaming responses**: The connection stays held until the body finishes or the client disconnects, so the request session works inside a `StreamingResponse` body.
+- **Background work**: A `BackgroundTask` keeps the request connection until it completes, so the task can use the request session.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
 
 ## Recap
 

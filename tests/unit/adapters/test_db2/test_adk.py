@@ -16,7 +16,14 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.extensions.adk import StoredEvent
 from sqlspec.extensions.adk._config_utils import _adk_adapter_store_class
 from sqlspec.extensions.adk.memory import StoredMemory
-from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Connection, FakeDb2Cursor, db2_description, db2_error
+from tests.unit.adapters.test_db2._fakes import (
+    DriverMode,
+    FakeDb2Connection,
+    FakeDb2Cursor,
+    FakeDb2IntegrityError,
+    db2_description,
+    db2_error,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -128,19 +135,125 @@ async def test_append_event_and_update_state_binds_utc(db2_mode: DriverMode) -> 
         "u1",
         "s1",
         {"step": 3},
-        app_state={"a": 1},
-        user_state={"u": 1},
+        app_state_delta={"a": 1},
+        user_state_delta={"u": 1},
     )
 
-    update, _, insert, app_merge, user_merge = config.executed
+    update, _, insert, app_lock, app_insert, user_lock, user_insert = config.executed
     _assert_no_server_clock(config.executed)
     _assert_naive_utc_near(update[1][1], _utc_naive_now())
     assert insert[1][5] == datetime(2026, 9, 24, 12, 30)
-    assert app_merge[1][:2] == ("app", '{"a":1}')
-    _assert_naive_utc_near(app_merge[1][2], _utc_naive_now())
-    assert user_merge[1][:3] == ("app", "u1", '{"u":1}')
-    _assert_naive_utc_near(user_merge[1][3], _utc_naive_now())
+    assert "FOR UPDATE WITH RS" in app_lock[0]
+    assert app_insert[1][:2] == ("app", '{"a":1}')
+    _assert_naive_utc_near(app_insert[1][2], _utc_naive_now())
+    assert "FOR UPDATE WITH RS" in user_lock[0]
+    assert user_insert[1][:3] == ("app", "u1", '{"u":1}')
+    _assert_naive_utc_near(user_insert[1][3], _utc_naive_now())
     assert config.connection.commits == 1
+
+
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "expected_state", "expected_executes"),
+    [
+        pytest.param(None, None, {"step": 1, "app:seed": "a", "user:seed": "u"}, 1, id="none-deltas"),
+        pytest.param({}, {}, {"step": 1, "app:seed": "a", "user:seed": "u"}, 1, id="empty-deltas"),
+        pytest.param(
+            {"app:flag": False, "app:cleared": None},
+            {"user:zero": 0},
+            {"step": 1, "app:seed": "a", "app:flag": False, "app:cleared": None, "user:seed": "u", "user:zero": 0},
+            3,
+            id="falsy-and-null-deltas",
+        ),
+    ],
+)
+async def test_db2_create_session_merges_and_reads_scoped_state(
+    db2_mode: DriverMode,
+    app_delta: dict[str, Any] | None,
+    user_delta: dict[str, Any] | None,
+    expected_state: dict[str, Any],
+    expected_executes: int,
+) -> None:
+    """create_session keeps adk_session session-only and returns merged scoped state."""
+    app_cursor = FakeDb2Cursor(rows=[('{"app:seed":"a"}',)], description=db2_description("STATE"))
+    user_cursor = FakeDb2Cursor(rows=[('{"user:seed":"u"}',)], description=db2_description("STATE"))
+    cursors: list[FakeDb2Cursor] = [FakeDb2Cursor(), _session_row(), app_cursor]
+    if app_delta:
+        cursors.append(FakeDb2Cursor())
+    cursors.append(user_cursor)
+    if user_delta:
+        cursors.append(FakeDb2Cursor())
+    store, config = _session_store(db2_mode, *cursors)
+
+    created = await db2_mode.call(
+        store.create_session, "s1", "app", "u1", {"step": 1}, app_state_delta=app_delta, user_state_delta=user_delta
+    )
+
+    assert created["state"] == expected_state
+    assert (
+        len([sql for sql, _ in config.executed if sql.lstrip().startswith(("INSERT", "UPDATE"))]) == expected_executes
+    )
+
+
+async def test_db2_append_event_retries_unique_race_and_merges_existing_state(db2_mode: DriverMode) -> None:
+    """append_event_and_update_state retries missing-row race and preserves falsy/null keys."""
+    dup_error = db2_error(-803, "23505", "duplicate key", FakeDb2IntegrityError)
+    cursors = [
+        FakeDb2Cursor(),
+        _session_row(),
+        FakeDb2Cursor(),
+        FakeDb2Cursor(rows=[], description=db2_description("STATE")),
+        FakeDb2Cursor(error=dup_error),
+        FakeDb2Cursor(),
+        _session_row(),
+        FakeDb2Cursor(),
+        FakeDb2Cursor(rows=[('{"app:peer":true}',)], description=db2_description("STATE")),
+        FakeDb2Cursor(),
+    ]
+    store, config = _session_store(db2_mode, *cursors)
+    event = StoredEvent(
+        id="e1",
+        app_name="app",
+        user_id="u1",
+        session_id="s1",
+        invocation_id="i1",
+        timestamp=datetime(2026, 9, 24, 12, 30, tzinfo=UTC),
+        event_data={"text": "hi"},
+    )
+
+    updated = await db2_mode.call(
+        store.append_event_and_update_state,
+        event,
+        "app",
+        "u1",
+        "s1",
+        {"step": 1},
+        app_state_delta={"app:flag": False, "app:cleared": None},
+    )
+
+    assert config.connection.rollbacks == 1
+    assert config.connection.commits == 1
+    assert updated["state"] == {"step": 1, "app:peer": True, "app:flag": False, "app:cleared": None}
+
+
+async def test_db2_get_events_limit_reverses_desc_rows_to_chronological(db2_mode: DriverMode) -> None:
+    """Bounded get_events queries descending rows and restores chronological ascending order."""
+    t1 = datetime(2026, 9, 24, 12, 0, 0)
+    t2 = datetime(2026, 9, 24, 12, 1, 0)
+    event_desc = db2_description("id", "app_name", "user_id", "session_id", "invocation_id", "timestamp", "event_data")
+    cursor = FakeDb2Cursor(
+        rows=[("e2", "app", "u1", "s1", "i2", t2, '{"step":2}'), ("e1", "app", "u1", "s1", "i1", t1, '{"step":1}')],
+        description=event_desc,
+    )
+    store, config = _session_store(db2_mode, cursor)
+
+    events = await db2_mode.call(store.get_events, "app", "u1", "s1", limit=2)
+
+    assert [event["id"] for event in events] == ["e1", "e2"]
+    assert "ORDER BY e.timestamp DESC, e.id DESC FETCH FIRST 2 ROWS ONLY" in " ".join(config.executed[0][0].split())
+    with pytest.raises(ValueError, match="non-negative"):
+        await db2_mode.call(store.get_events, "app", "u1", "s1", limit=-1)
+    with pytest.raises(ValueError, match="non-negative"):
+        await db2_mode.call(store.get_events, "app", "u1", "s1", limit=True)
 
 
 async def test_upsert_app_state_binds_utc(db2_mode: DriverMode) -> None:
@@ -376,6 +489,10 @@ async def test_get_events_binds_naive_utc_after_timestamp(db2_mode: DriverMode) 
 
     [(sql, params)] = config.executed
     assert params == ("app", "u1", "s1", datetime(2026, 9, 24, 11))
+    assert (
+        "JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id"
+        in " ".join(sql.split())
+    )
     assert "FETCH FIRST 5 ROWS ONLY" in sql
     assert event["timestamp"] == datetime(2026, 9, 24, 12, tzinfo=UTC)
     assert event["event_data"] == {"text": "hi"}
@@ -388,9 +505,13 @@ async def test_session_list_delete_and_drop_use_unquoted_tables(db2_mode: Driver
     [session] = await db2_mode.call(store.list_sessions, "app", "u1", limit=10)
     await db2_mode.call(store.delete_session, "app", "u1", "s1")
 
-    (list_sql, list_params), (delete_sql, delete_params) = config.executed
+    (list_sql, list_params), (delete_events_sql, delete_events_params), (delete_sql, delete_params) = config.executed
     assert f"FROM {store.session_table}\n" in list_sql
     assert list_params == ("app", "u1", 0, 10)
+    assert (
+        delete_events_sql == f"DELETE FROM {store.events_table} WHERE app_name = ? AND user_id = ? AND session_id = ?"
+    )
+    assert delete_events_params == ("app", "u1", "s1")
     assert delete_sql == f"DELETE FROM {store.session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
     assert delete_params == ("app", "u1", "s1")
     assert session["update_time"] == datetime(2026, 9, 24, 12, tzinfo=UTC)
@@ -421,7 +542,7 @@ async def test_insert_memory_entries_binds_naive_utc_and_skips_duplicates(db2_mo
     """Memory inserts bind naive-UTC times, include the owner column, and skip known event ids."""
     store, config = _memory_store(
         db2_mode,
-        FakeDb2Cursor(rows=[("m0", "e0")], description=db2_description("id", "event_id")),
+        FakeDb2Cursor(rows=[("app", "u1", "e0")], description=db2_description("app_name", "user_id", "event_id")),
         adk={"owner_id_column": "tenant_id INTEGER"},
     )
     stamp = datetime(2026, 9, 24, 14, tzinfo=timezone(timedelta(hours=2)))
@@ -478,13 +599,16 @@ async def test_memory_search_decodes_rows_and_session_delete_counts(db2_mode: Dr
     )
 
     [memory] = await db2_mode.call(store.search_entries, query="hi", app_name="app", user_id="u1", scope_filter="user")
-    deleted = await db2_mode.call(store.delete_entries_by_session, "s1")
+    deleted = await db2_mode.call(store.delete_entries_by_session, "s1", "app", "user")
 
     assert memory["inserted_at"] == datetime(2026, 9, 24, 12, tzinfo=UTC)
     assert memory["author"] is None
     assert memory["metadata_json"] is None
     assert deleted == 1
-    assert config.executed[-1] == (f"DELETE FROM {store.memory_table} WHERE session_id = ?", ("s1",))
+    assert config.executed[-1] == (
+        f"DELETE FROM {store.memory_table} WHERE session_id = ? AND app_name = ? AND user_id = ?",
+        ("s1", "app", "user"),
+    )
     assert store._drop_memory_table_sql() == [f"DROP TABLE {store.memory_table}"]
 
 
@@ -616,7 +740,7 @@ async def test_memory_operations_on_missing_table_return_empty_or_zero(db2_mode:
     assert await db2_mode.call(store1.search_entries, query="q", app_name="app", user_id="u1") == []
 
     store2, _ = _memory_store(db2_mode, missing_cursor())
-    assert await db2_mode.call(store2.delete_entries_by_session, "s1") == 0
+    assert await db2_mode.call(store2.delete_entries_by_session, "s1", "app", "user") == 0
 
     store3, _ = _memory_store(db2_mode, missing_cursor())
     assert await db2_mode.call(store3.delete_entries_older_than, 7) == 0
@@ -665,7 +789,10 @@ async def test_memory_replay_deduplicates_event_ids_with_native_casing(
 ) -> None:
     """A replayed event is skipped even when the returned memory ID differs."""
     store, config = _memory_store(
-        db2_mode, FakeDb2Cursor(rows=[("old-memory", "same-event")], description=db2_description("id", "event_id"))
+        db2_mode,
+        FakeDb2Cursor(
+            rows=[("app", "u1", "same-event")], description=db2_description("app_name", "user_id", "event_id")
+        ),
     )
     config.driver_features["enable_lowercase_column_names"] = lowercase_columns
     stamp = datetime.now(UTC)
@@ -827,3 +954,165 @@ async def test_adk_reconcile_companion_objects_scopes_qualified_schema(db2_mode:
         'CREATE INDEX "APP"."IDX_APP_ADK_MEMORY_ENTRIES_INSERTED" ON app.adk_memory_entries (inserted_at)'
     ]
     assert connection.commits == 0
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=200), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_get_session_renews_only_for_positive_duration(
+    db2_mode: DriverMode, renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """get_session runs the touch UPDATE only when renew_for is positive."""
+    cursors = (FakeDb2Cursor(), _session_row()) if expect_renew else (_session_row(),)
+    store, config = _session_store(db2_mode, *cursors)
+
+    session = await db2_mode.call(store.get_session, "app", "u1", "s1", renew_for=renew_for)
+
+    assert session is not None
+    assert session["id"] == "s1"
+    if expect_renew:
+        assert len(config.executed) == 2
+        assert config.executed[0][0].split()[:2] == ["UPDATE", "adk_session"]
+        assert config.connection.commits == 1
+    else:
+        assert len(config.executed) == 1
+        assert config.executed[0][0].lstrip().upper().startswith("SELECT")
+        assert config.connection.commits == 0
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-or-unowned"])
+async def test_append_event_verifies_session_ownership(db2_mode: DriverMode, session_exists: bool) -> None:
+    """append_event checks session ownership with FETCH FIRST 1 ROWS ONLY before inserting."""
+    ownership_cursor = (
+        FakeDb2Cursor(rows=[(1,)], description=db2_description("1")) if session_exists else FakeDb2Cursor()
+    )
+    store, config = _session_store(db2_mode, ownership_cursor, FakeDb2Cursor())
+    event = StoredEvent(
+        id="e1",
+        app_name="app",
+        user_id="u1",
+        session_id="s1",
+        invocation_id="i1",
+        timestamp=datetime(2026, 9, 24, tzinfo=UTC),
+        event_data={"text": "hi"},
+    )
+
+    if session_exists:
+        await db2_mode.call(store.append_event, event)
+        assert len(config.executed) == 2
+        ownership_sql, ownership_params = config.executed[0]
+        insert_sql, _ = config.executed[1]
+        assert " ".join(ownership_sql.split()) == (
+            "SELECT 1 FROM adk_session WHERE id = ? AND app_name = ? AND user_id = ? FETCH FIRST 1 ROWS ONLY"
+        )
+        assert ownership_params == ("s1", "app", "u1")
+        assert insert_sql.lstrip().upper().startswith("INSERT INTO ADK_EVENT")
+        assert config.connection.commits == 1
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+            await db2_mode.call(store.append_event, event)
+        assert len(config.executed) == 1
+        assert config.connection.commits == 0
+        assert config.connection.rollbacks >= 1
+
+
+@pytest.mark.parametrize(
+    ("app_arg", "user_arg", "session_arg"),
+    [
+        pytest.param("other", "u1", "s1", id="app-mismatch"),
+        pytest.param("app", "other", "s1", id="user-mismatch"),
+        pytest.param("app", "u1", "other", id="session-mismatch"),
+    ],
+)
+async def test_append_event_and_update_state_rejects_mismatched_scope(
+    db2_mode: DriverMode, app_arg: str, user_arg: str, session_arg: str
+) -> None:
+    """Mismatched event scope raises ValueError without executing any statement."""
+    store, config = _session_store(db2_mode)
+    event = StoredEvent(
+        id="e1",
+        app_name="app",
+        user_id="u1",
+        session_id="s1",
+        invocation_id="i1",
+        timestamp=datetime(2026, 9, 24, tzinfo=UTC),
+        event_data={},
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        await db2_mode.call(store.append_event_and_update_state, event, app_arg, user_arg, session_arg, {})
+
+    assert config.executed == []
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_where", "expected_params"),
+    [
+        pytest.param(
+            "app",
+            "u1",
+            "session_id = ? AND app_name = ? AND user_id = ?",
+            ("s1", "app", "u1"),
+            id="session-app-and-user",
+        )
+    ],
+)
+async def test_memory_composite_dedup_and_scoped_delete_by_session(
+    db2_mode: DriverMode, app_name: str, user_id: str, expected_where: str, expected_params: "tuple[str, ...]"
+) -> None:
+    """Memory DDL and batch deduplication use (app_name, user_id, event_id) and deletes scope by owner."""
+    existing = FakeDb2Cursor(
+        rows=[("app", "u1", "shared-evt")], description=db2_description("app_name", "user_id", "event_id")
+    )
+    store, config = _memory_store(db2_mode, existing, FakeDb2Cursor(rowcount=1), FakeDb2Cursor(rowcount=2))
+    memory_ddl = await db2_mode.call(store._memory_table_ddl)
+    assert "CONSTRAINT uq_adk_memory_event UNIQUE (app_name, user_id, event_id)" in memory_ddl
+
+    stamp = datetime(2026, 9, 24, tzinfo=UTC)
+    entries = [
+        StoredMemory(
+            id="m-dup",
+            session_id="s1",
+            app_name="app",
+            user_id="u1",
+            scope="user",
+            event_id="shared-evt",
+            author=None,
+            timestamp=stamp,
+            content_json={},
+            content_text="dup",
+            metadata_json=None,
+            inserted_at=stamp,
+            embedding=None,
+        ),
+        StoredMemory(
+            id="m-other-owner",
+            session_id="s2",
+            app_name="app",
+            user_id="u2",
+            scope="user",
+            event_id="shared-evt",
+            author=None,
+            timestamp=stamp,
+            content_json={},
+            content_text="distinct",
+            metadata_json=None,
+            inserted_at=stamp,
+            embedding=None,
+        ),
+    ]
+    inserted = await db2_mode.call(store.insert_memory_entries, entries)
+    assert inserted == 1
+    assert config.executed[1][1][0] == "m-other-owner"
+
+    deleted = await db2_mode.call(store.delete_entries_by_session, "s1", app_name=app_name, user_id=user_id)
+    assert deleted == 2
+    assert config.executed[-1] == (f"DELETE FROM {store.memory_table} WHERE {expected_where}", expected_params)

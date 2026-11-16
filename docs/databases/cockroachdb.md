@@ -116,8 +116,8 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `max_cacheable_statement_size` | `int` | - | Maximum SQL byte length eligible for prepared statement caching. |
     | `server_settings` | `dict[str, str]` | - | Startup CockroachDB session variables passed at connection time. |
     | `target_session_attrs` | `CockroachAsyncpgTargetSessionAttrs` | - | Required node session attribute when connecting across multiple hosts. |
-    | `statement_timeout` | `float or int or None` | - | Statement execution timeout in seconds forwarded via server_settings. |
-    | `idle_in_transaction_session_timeout` | `float or int or None` | - | Idle in transaction timeout in seconds forwarded via server_settings. |
+    | `statement_timeout` | `int` | - | Per-statement execution timeout in milliseconds forwarded via `server_settings`. |
+    | `idle_in_transaction_session_timeout` | `int` | - | Idle-in-transaction timeout in milliseconds before aborting open transactions. |
     | `krbsrvname` | `str` | - | Kerberos service principal name for GSSAPI authentication. |
     | `gsslib` | `CockroachAsyncpgGSSLib` | - | GSSAPI library implementation (`gssapi` or `sspi`). |
     | `min_size` | `int` | - | Minimum number of open connections maintained in the pool. |
@@ -156,6 +156,7 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `enable_json_codecs` | `bool` | `True` | Register automatic `json` and `jsonb` codecs on new connections (defaults to `True`). |
     | `enable_pgvector` | `bool` | - | Register `pgvector` codecs for CockroachDB `VECTOR` columns when `pgvector` is installed. |
     | `on_connection_create` | `Callable[[CockroachAsyncpgConnection], Awaitable[None]]` | - | Async callback invoked with each raw `asyncpg` connection after codec initialization. |
+    | `reset_session_on_release` | `bool` | `False` | Clear cursors, session authorization, and session settings when a connection is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable queue-backed SQLSpec event channel support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` for CockroachDB table-backed polling). |
     <!-- GENERATED:END config-table:sqlspec.adapters.cockroach_asyncpg.config.CockroachAsyncpgDriverFeatures -->
@@ -228,6 +229,7 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to statement parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer retained alongside `json_serializer` (defaults to `from_json`). |
     | `on_connection_create` | `Callable[..., Any]` | - | Sync or async callback invoked with each raw Psycopg connection after internal setup. |
+    | `reset_session_on_release` | `bool` | `False` | Run `DISCARD ALL` on each connection before it returns to the pool (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable queue-backed SQLSpec event channel support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` for CockroachDB table-backed polling). |
     <!-- GENERATED:END config-table:sqlspec.adapters.cockroach_psycopg.config.CockroachPsycopgDriverFeatures -->
@@ -247,6 +249,12 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
 - **Follower Reads (`AS OF SYSTEM TIME`)**: When `enable_follower_reads=True`, read-only queries execute inside an explicit read-only transaction with `SET TRANSACTION AS OF SYSTEM TIME <default_staleness>` (such as `"-10s"` or `"follower_read_timestamp()"`) and commit cleanly afterward so pooled connections never leak stale-read state.
 - **Distributed Primary Keys**: Prefer `UUID DEFAULT gen_random_uuid()` over monotonic `SERIAL` sequences on write-heavy tables to avoid single-range hotspotting across CockroachDB nodes.
 - **Transactional Event Queue**: Because CockroachDB does not implement PostgreSQL `LISTEN/NOTIFY`, `EventChannel` uses SQLSpec's transactional table-backed queue store (`CockroachAsyncpgEventQueueStore`, `CockroachPsycopgSyncEventQueueStore`, `CockroachPsycopgAsyncEventQueueStore`) automatically.
+
+## Follower Reads and Read-Only Sessions
+
+`CockroachAsyncpgConfig`, `CockroachPsycopgSyncConfig`, and `CockroachPsycopgAsyncConfig` can serve follower reads from one shared pool. `provide_replica_session()` defaults to `staleness="follower_read_timestamp()"` and applies a native `AS OF SYSTEM TIME` read. A supported bounded-staleness interval can choose an older timestamp explicitly.
+
+Follower reads can be stale; they are not read-after-write primary reads. Their driver rejects writes with `ReadOnlyTransactionError`. A primary routing scope bypasses the follower path. Use separate endpoint pools only when your topology needs them. See [Replica Operations](../learn/recipes/read-replicas-operations.md).
 
 ## See Also
 

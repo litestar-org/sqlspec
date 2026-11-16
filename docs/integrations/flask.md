@@ -52,13 +52,15 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Flask 
 
 ## Configuration Options
 
+Configure `commit_mode` inside `extension_config["flask"]` (`"autocommit"` by default, `"autocommit_include_redirect"` for HTML/HTMX/Inertia.js `302`/`303` redirects, or `"manual"` for explicit `commit()` with automatic rollback of uncommitted work):
+
 <!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request. |
 | `connection_key` | `str` | - | Key for storing the connection in Flask g once it is checked out on first access. Default: auto-generated from session_key. |
 | `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
-| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` | Transaction commit mode. Default: 'autocommit'. manual: No automatic commit; uncommitted work rolls back on release; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |
 | `extra_commit_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger commit. Default: None. |
 | `extra_rollback_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger rollback. Default: None. |
 | `disable_di` | `bool` | `False` | Disable built-in dependency injection. Default: False. When True, the Flask extension will not register request hooks for managing database connections and sessions. Users are responsible for managing the database lifecycle manually via their own DI solution. |
@@ -67,9 +69,31 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Flask 
 | `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
 | `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
 | `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
+| `replica_session_key` | `str` | - | Request key for a replica session. |
+| `replica_connection_key` | `str` | - | Request key for a replica connection. |
+| `routing_session_key` | `str` | - | Request key for a routing session. |
+| `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
+| `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
+| `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
+| `primary_pin_cookie` | `str or None` | `None` | Optional application primary pin cookie name. Default: None. |
+| `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed primary pin cookies. Default: None. |
 <!-- GENERATED:END config-table:sqlspec.config.FlaskConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
+
+## Read Replica Sessions and Portal Context
+
+`db_ext.get_db_replica_session(key=...)` uses the selected reader on first database use. `get_replica_connection(key=...)` exposes its physical connection after checkout. `get_db_routing_session(key=...)` supplies the opt-in routing facade. A bind key or config instance selects the database.
+
+For an async adapter, Flask runs these calls through `PortalProvider`. Tenant and routing payloads copy into that work. Writes merge their primary pin back to the request; a portal timeout pins conservatively before it raises if completion is uncertain. Each request still owns cleanup. Use explicit worker scopes outside HTTP requests. See [Replica Operations](../learn/recipes/read-replicas-operations.md) for lag and failure behavior.
+
+## Connection Lifetime
+
+- **Normal responses**: The request connection is committed or rolled back and released when the request context tears down after the response.
+- **Streaming responses**: A streamed response keeps the connection until its generator finishes, so the generator can use the request session.
+- **Background work**: Threads or tasks that outlive the request run after the connection is released. Open a new session with `config.provide_session()` in the worker.
+
+A session or stream cannot be used after its connection is released; trying to raises `ImproperConfigurationError`.
 
 ## Recap
 

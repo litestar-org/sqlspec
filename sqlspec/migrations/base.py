@@ -1,11 +1,13 @@
 """Base classes for SQLSpec migrations."""
 
+import hashlib
 import importlib
+import logging
 import os
 from abc import abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, NotRequired, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, NotRequired, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
@@ -17,7 +19,8 @@ from sqlspec.builder._delete import Delete
 from sqlspec.builder._insert import Insert
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, SQLSpecError, SquashValidationError
+from sqlspec.migrations.runner import BaseMigrationRunner, extract_replaces_versions
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import (
@@ -27,11 +30,14 @@ from sqlspec.migrations.utils import (
     resolve_tracker_schema,
 )
 from sqlspec.migrations.version import parse_version
-from sqlspec.utils.logging import get_logger
+from sqlspec.observability import resolve_db_system
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import module_to_os_path
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Sequence
+    from collections.abc import Awaitable
+    from collections.abc import Set as AbstractSet
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.observability import ObservabilityRuntime
@@ -48,6 +54,83 @@ DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.migrations.base")
+_MAX_LOCK_NAME_LENGTH: Final[int] = 64
+_LOCK_NAME_HASH_BYTES: Final[int] = 6
+_LOCK_NAME_PREFIX_LENGTH: Final[int] = _MAX_LOCK_NAME_LENGTH - 1 - (_LOCK_NAME_HASH_BYTES * 2)
+_BRIDGE_DRIVER_CLASS_NAMES: Final[frozenset[str]] = frozenset({"AdbcDriver", "ArrowOdbcDriver"})
+_LEASE_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({
+    "oracle",
+    "duckdb",
+    "spanner",
+    "db2",
+    "sybase",
+    "ase",
+    "sqlanywhere",
+    "teradata",
+    "vantage",
+})
+_UNSUPPORTED_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({"bigquery", "snowflake"})
+_DEFAULT_LOCK_LEASE_SECONDS: Final[int] = 900
+_LEASE_POLL_INTERVAL_SECONDS: Final[float] = 0.25
+_PG_RELATION_GUARD_SQL: Final[str] = (
+    "SELECT "
+    "c.relkind::text AS relkind, "
+    "(COUNT(t.tgrelid) > 0) AS has_user_triggers, "
+    "(pg_catalog.pg_has_role(c.relowner, 'USAGE') "
+    "OR COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = current_user), false)) "
+    "AS owned_by_current_role "
+    "FROM pg_catalog.pg_class c "
+    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+    "LEFT JOIN pg_catalog.pg_trigger t ON t.tgrelid = c.oid AND NOT t.tgisinternal "
+    "WHERE n.nspname = :schema_name AND c.relname = :table_name "
+    "GROUP BY c.oid, c.relkind, c.relowner"
+)
+_PG_RLS_SCHEMA_CHECK_SQL: Final[str] = (
+    "SELECT n.nspname::text AS schema_name, c.relname::text AS table_name "
+    "FROM pg_catalog.pg_class c "
+    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+    "LEFT JOIN pg_catalog.pg_policy p ON p.polrelid = c.oid "
+    "WHERE n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "AND c.relkind IN ('r', 'p') "
+    "GROUP BY n.nspname, c.relname, c.relrowsecurity "
+    "HAVING c.relrowsecurity OR COUNT(p.polrelid) > 0"
+)
+_PG_SCHEMA_OMISSIONS_SQL: Final[str] = (
+    "SELECT 'grant' AS object_kind, n.nspname::text AS schema_name, c.relname::text AS object_name "
+    "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE c.relacl IS NOT NULL AND c.relkind IN ('r', 'p') "
+    "AND n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "UNION ALL "
+    "SELECT 'function', n.nspname::text, p.proname::text "
+    "FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+    "WHERE n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d "
+    "WHERE d.objid = p.oid AND d.classid = 'pg_catalog.pg_proc'::regclass AND d.deptype = 'e') "
+    "UNION ALL "
+    "SELECT 'trigger', n.nspname::text, c.relname::text || '.' || t.tgname::text "
+    "FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid "
+    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE NOT t.tgisinternal AND n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "UNION ALL "
+    "SELECT 'domain', n.nspname::text, ty.typname::text "
+    "FROM pg_catalog.pg_type ty JOIN pg_catalog.pg_namespace n ON n.oid = ty.typnamespace "
+    "WHERE ty.typtype = 'd' AND n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d "
+    "WHERE d.objid = ty.oid AND d.classid = 'pg_catalog.pg_type'::regclass AND d.deptype = 'e')"
+)
+_ORACLE_VPD_POLICY_SQL: Final[str] = (
+    "SELECT object_owner AS schema_name, object_name AS table_name, policy_name "
+    "FROM all_policies "
+    "WHERE object_owner = COALESCE(:schema_name, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'))"
+)
+_MSSQL_SECURITY_POLICY_SQL: Final[str] = (
+    "SELECT OBJECT_SCHEMA_NAME(p.target_object_id) AS schema_name, "
+    "OBJECT_NAME(p.target_object_id) AS table_name, sp.name AS policy_name "
+    "FROM sys.security_policies sp "
+    "JOIN sys.security_predicates p ON p.object_id = sp.object_id "
+    "WHERE sp.is_enabled = 1"
+)
+_MAX_OMITTED_NAMES: Final[int] = 50
 
 
 class LoadedMigrationMetadata(TypedDict):
@@ -113,7 +196,35 @@ class AppliedMigrationRecord(TypedDict):
 class BaseMigrationTracker(Generic[DriverT]):
     """Base class for migration version tracking."""
 
-    def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
+    _POSTGRES_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({
+        "postgres",
+        "postgresql",
+        "pgvector",
+        "paradedb",
+        "pg_textsearch",
+    })
+    _MYSQL_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({"mysql", "mariadb"})
+    _MSSQL_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({"mssql", "tsql"})
+    _SEQUENCED_INSERT_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({
+        *_POSTGRES_LOCK_DIALECTS,
+        *_MYSQL_LOCK_DIALECTS,
+        "sqlite",
+        "duckdb",
+    })
+    _MSSQL_ACQUIRE_LOCK_SQL: "ClassVar[str]" = (
+        "DECLARE @sqlspec_res INT; "
+        "EXEC @sqlspec_res = sp_getapplock :lock_name, 'Exclusive', 'Session', :timeout_ms; "
+        "IF @sqlspec_res < 0 THROW 51000, 'Migration lock acquisition failed', 1; "
+        "SELECT @sqlspec_res"
+    )
+    _MSSQL_RELEASE_LOCK_SQL: "ClassVar[str]" = "EXEC sp_releaseapplock :lock_name, 'Session'"
+
+    def __init__(
+        self,
+        version_table_name: str = "ddl_migrations",
+        version_table_schema: str | None = None,
+        lock_lease_seconds: int = _DEFAULT_LOCK_LEASE_SECONDS,
+    ) -> None:
         """Initialize the migration tracker.
 
         ``version_table_name`` may include a ``"schema.table"`` prefix for adapters
@@ -124,7 +235,15 @@ class BaseMigrationTracker(Generic[DriverT]):
         Args:
             version_table_name: Name of the table to track migrations.
             version_table_schema: Optional schema that stores the tracking table.
+            lock_lease_seconds: Lease length for backends that lock through a lease row.
+
+        Raises:
+            MigrationError: If ``lock_lease_seconds`` is below 1 or the schemas conflict.
         """
+        if lock_lease_seconds < 1:
+            msg = f"lock_lease_seconds must be at least 1, got {lock_lease_seconds}"
+            raise MigrationError(msg)
+        self.lock_lease_seconds = lock_lease_seconds
         parsed_table = _parse_ddl_table(version_table_name)
         table_identifier = (
             parsed_table.this
@@ -134,8 +253,24 @@ class BaseMigrationTracker(Generic[DriverT]):
         embedded_db = parsed_table.args.get("db")
         embedded_schema_identifier = embedded_db if isinstance(embedded_db, exp.Identifier) else None
 
-        explicit_schema_identifier = _parse_ddl_identifier(version_table_schema) if version_table_schema else None
+        clean_schema = version_table_schema.strip() if isinstance(version_table_schema, str) else ""
+        explicit_schema_identifier = _parse_ddl_identifier(clean_schema) if clean_schema else None
         if explicit_schema_identifier is not None:
+            schemas_conflict = False
+            if embedded_schema_identifier is not None:
+                if embedded_schema_identifier.quoted or explicit_schema_identifier.quoted:
+                    schemas_conflict = explicit_schema_identifier.name != embedded_schema_identifier.name
+                else:
+                    schemas_conflict = (
+                        explicit_schema_identifier.name.lower() != embedded_schema_identifier.name.lower()
+                    )
+            if schemas_conflict and embedded_schema_identifier is not None:
+                msg = (
+                    f"Conflicting migration version table schemas: '{embedded_schema_identifier.name}' in "
+                    f"version_table_name '{version_table_name}' vs explicit version_table_schema "
+                    f"'{explicit_schema_identifier.name}'"
+                )
+                raise MigrationError(msg)
             if (
                 embedded_schema_identifier is not None
                 and explicit_schema_identifier.name == embedded_schema_identifier.name
@@ -149,16 +284,61 @@ class BaseMigrationTracker(Generic[DriverT]):
             resolved_schema_identifier = embedded_schema_identifier
 
         self.version_table_name = table_identifier.name
+        self._version_table_sql = table_identifier.sql(copy=False)
+        self._version_table_quoted = bool(table_identifier.quoted)
         self.version_table_schema = resolved_schema_identifier.name if resolved_schema_identifier is not None else None
         self.version_table = self._qualify_version_table(
             table_identifier.sql(copy=False),
             resolved_schema_identifier.sql(copy=False) if resolved_schema_identifier is not None else None,
         )
+        self._version_table_schema_quoted = bool(
+            resolved_schema_identifier is not None and resolved_schema_identifier.quoted
+        )
+        self._configured_version_table = self.version_table
+        self._configured_version_table_schema = self.version_table_schema
+        self._configured_version_table_schema_quoted = self._version_table_schema_quoted
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
+        self._sqlite_lock_owners: set[int] = set()
+        self._lease_owners: dict[int, tuple[str, str]] = {}
+        self._unsupported_lock_warned = False
+
+    def _pin_version_table_schema(self, schema_name: str) -> None:
+        """Bind the tracking table to an explicit schema.
+
+        Args:
+            schema_name: Schema that stores the tracking table.
+        """
+        schema_identifier = exp.to_identifier(schema_name, quoted=True if schema_name != schema_name.lower() else None)
+        self.version_table_schema = schema_name
+        self._version_table_schema_quoted = bool(schema_identifier.quoted)
+        self.version_table = self._qualify_version_table(self._version_table_sql, schema_identifier.sql(copy=False))
+
+    def _reset_version_table_schema(self) -> None:
+        """Restore the tracking table name and schema captured at construction."""
+        self.version_table = self._configured_version_table
+        self.version_table_schema = self._configured_version_table_schema
+        self._version_table_schema_quoted = self._configured_version_table_schema_quoted
+
+    def _pg_relation_guard_parameters(self) -> "dict[str, str]":
+        """Return the bind parameters of the PostgreSQL tracking relation guard.
+
+        Unquoted identifiers are folded to lowercase, matching how PostgreSQL stores them in the catalog.
+        """
+        schema_name = self.version_table_schema or ""
+        if not self._version_table_schema_quoted:
+            schema_name = schema_name.lower()
+        table_name = self.version_table_name
+        if not self._version_table_quoted:
+            table_name = table_name.lower()
+        return {"schema_name": schema_name, "table_name": table_name}
 
     def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
         """Set output policy for tracker console/logging behavior."""
         self._output_policy = {"use_logger": use_logger, "echo": echo, "summary_only": summary_only}
+
+    def holds_transaction_scoped_lock(self, driver: Any) -> bool:
+        """Return True while this tracker owns an outer SQLite transaction lock on ``driver``."""
+        return id(driver) in self._sqlite_lock_owners
 
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> "Awaitable[None] | None":
@@ -200,6 +380,14 @@ class BaseMigrationTracker(Generic[DriverT]):
         """Remove a migration record."""
         ...
 
+    def catalog_schema_name(self) -> "str | None":
+        """Return the tracking table's schema in the form data dictionary getters accept.
+
+        Returns:
+            Schema name for metadata lookups, or None when the table is unqualified.
+        """
+        return self.version_table_schema
+
     @staticmethod
     def _split_version_table(version_table_name: str) -> "tuple[str, str | None]":
         """Split a ``schema.table`` value into unquoted ``(table, schema)`` names."""
@@ -218,14 +406,6 @@ class BaseMigrationTracker(Generic[DriverT]):
         if version_table_schema:
             return f"{version_table_schema}.{version_table_name}"
         return version_table_name
-
-    def catalog_schema_name(self) -> "str | None":
-        """Return the tracking table's schema in the form data dictionary getters accept.
-
-        Returns:
-            Schema name for metadata lookups, or None when the table is unqualified.
-        """
-        return self.version_table_schema
 
     def _tracking_schema_target(self) -> SchemaTarget:
         """Return the schema target that compares the tracking table's columns with its DDL.
@@ -253,7 +433,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             - description: Human-readable migration description
             - applied_at: Timestamp when migration was applied
             - execution_time_ms: Migration execution duration
-            - checksum: MD5 hash for content verification
+            - checksum: SHA-256 hex digest for content verification
             - applied_by: User who applied the migration
 
         Returns:
@@ -322,7 +502,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             execution_sequence: Auto-incrementing application order.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
+            checksum: SHA-256 checksum hex string of the migration content.
             applied_by: User who applied the migration.
 
         Returns:
@@ -375,6 +555,18 @@ class BaseMigrationTracker(Generic[DriverT]):
             .where(Column("version_num") == old_version)
         )
 
+    def _update_checksum_statement(self, version: str, checksum: str) -> "Update":
+        """Get SQL builder for replacing the recorded checksum of one version.
+
+        Args:
+            version: Version whose checksum is replaced.
+            checksum: New checksum hex string.
+
+        Returns:
+            SQL builder object for update.
+        """
+        return Update(self.version_table).set("checksum", checksum).where(Column("version_num") == version)
+
     def _delete_versions_statement(self, versions: "list[str]") -> "Delete":
         """Get SQL builder for deleting multiple version records.
 
@@ -418,7 +610,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             execution_sequence: Auto-incrementing application order.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
+            checksum: SHA-256 checksum hex string of the migration content.
             applied_by: User who applied the migration.
             replaces: Comma-separated list of replaced versions.
 
@@ -448,6 +640,209 @@ class BaseMigrationTracker(Generic[DriverT]):
                 replaces,
             )
         )
+
+    def _record_sequenced_migration_statement(
+        self,
+        version: str,
+        version_type: str,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+        replaces: str | None = None,
+    ) -> "Insert":
+        """Get SQL builder for atomically inserting a migration record with next sequence."""
+        columns: list[str] = [
+            "version_num",
+            "version_type",
+            "execution_sequence",
+            "description",
+            "execution_time_ms",
+            "checksum",
+            "applied_by",
+        ]
+        select_query = Select()
+        _, version_param = select_query.add_parameter(version, name="version_num")
+        _, type_param = select_query.add_parameter(version_type, name="version_type")
+        _, desc_param = select_query.add_parameter(description, name="description")
+        _, duration_param = select_query.add_parameter(execution_time_ms, name="execution_time_ms")
+        _, checksum_param = select_query.add_parameter(checksum, name="checksum")
+        _, actor_param = select_query.add_parameter(applied_by, name="applied_by")
+        projections: list[exp.Expr] = [
+            exp.Placeholder(this=version_param),
+            exp.Placeholder(this=type_param),
+            exp.column("next_seq", table="seq_src"),
+            exp.Placeholder(this=desc_param),
+            exp.Placeholder(this=duration_param),
+            exp.Placeholder(this=checksum_param),
+            exp.Placeholder(this=actor_param),
+        ]
+        if replaces is not None:
+            columns.append("replaces")
+            _, replaces_param = select_query.add_parameter(replaces, name="replaces")
+            projections.append(exp.Placeholder(this=replaces_param))
+        next_seq_subquery = Select("COALESCE(MAX(execution_sequence), 0) + 1 AS next_seq").from_(self.version_table)
+        select_query = select_query.select(*projections).from_(next_seq_subquery, alias="seq_src")
+        return Insert(self.version_table).columns(*columns).from_select(select_query)
+
+    @property
+    def lock_table(self) -> str:
+        """Return the qualified name of the lease lock table."""
+        lock_identifier = exp.to_identifier(
+            f"{self.version_table_name}_lock", quoted=self._version_table_quoted or None
+        )
+        schema_sql: str | None = None
+        if self.version_table_schema:
+            schema_sql = exp.to_identifier(
+                self.version_table_schema,
+                quoted=True if self.version_table_schema != self.version_table_schema.lower() else None,
+            ).sql(copy=False)
+        return self._qualify_version_table(lock_identifier.sql(copy=False), schema_sql)
+
+    def _warn_unsupported_lock(self, driver: Any) -> None:
+        """Log once per tracker that the backend cannot serialize migrations."""
+        if self._unsupported_lock_warned:
+            return
+        self._unsupported_lock_warned = True
+        log_with_context(
+            logger, logging.WARNING, "migration.lock.unsupported", db_system=resolve_db_system(type(driver).__name__)
+        )
+
+    def _lock_table_builder(self) -> "CreateTable":
+        """Return a CREATE TABLE builder for the lease lock table."""
+        return CreateTable(self.lock_table)
+
+    def _lock_schema_target(self) -> SchemaTarget:
+        """Return the schema target that creates the lease lock table.
+
+        Returns:
+            Target describing ``lock_name``, ``owner_token``, and ``expires_at`` (epoch milliseconds).
+        """
+        create_table = (
+            self
+            ._lock_table_builder()
+            .column("lock_name", "VARCHAR(64)", primary_key=True, not_null=True)
+            .column("owner_token", "VARCHAR(64)", not_null=True)
+            .column("expires_at", "BIGINT", not_null=True)
+        )
+        return SchemaTarget(self.lock_table, create_table)
+
+    def _lease_delete_expired(self, lock_name: str, now_ms: int) -> "Delete":
+        """Get SQL builder deleting an expired lease for ``lock_name``."""
+        return (
+            Delete().from_(self.lock_table).where(Column("lock_name") == lock_name).where(Column("expires_at") < now_ms)
+        )
+
+    def _lease_insert(self, lock_name: str, owner_token: str, expires_at: int) -> "Insert":
+        """Get SQL builder inserting a lease row."""
+        return (
+            Insert(self.lock_table)
+            .columns("lock_name", "owner_token", "expires_at")
+            .values(lock_name, owner_token, expires_at)
+        )
+
+    def _lease_renew(self, lock_name: str, owner_token: str, expires_at: int) -> "Update":
+        """Get SQL builder extending a held lease."""
+        return (
+            Update(self.lock_table)
+            .set("expires_at", expires_at)
+            .where(Column("lock_name") == lock_name)
+            .where(Column("owner_token") == owner_token)
+        )
+
+    def _lease_release(self, lock_name: str, owner_token: str) -> "Delete":
+        """Get SQL builder releasing a held lease."""
+        return (
+            Delete()
+            .from_(self.lock_table)
+            .where(Column("lock_name") == lock_name)
+            .where(Column("owner_token") == owner_token)
+        )
+
+    def _lease_owner_query(self, lock_name: str) -> "Select":
+        """Get SQL builder reading the current holder of a lease."""
+        return Select("owner_token", "expires_at").from_(self.lock_table).where(Column("lock_name") == lock_name)
+
+    @staticmethod
+    def _lease_holder(result: Any) -> "tuple[str, int] | None":
+        """Return the owner token and expiry of the lease row in ``result``, or None when no row exists."""
+        for row in result.get_data():
+            values = {str(key).lower(): value for key, value in row.items()}
+            return str(values["owner_token"]), int(values["expires_at"])
+        return None
+
+    def _migration_lock_key(self) -> "tuple[str, int]":
+        """Derive the bounded lock name and signed 64-bit integer advisory lock ID."""
+        raw_key = f"sqlspec_mig_{self._configured_version_table}"
+        digest = hashlib.sha256(raw_key.encode("utf-8")).digest()
+        lock_name = (
+            raw_key
+            if len(raw_key) <= _MAX_LOCK_NAME_LENGTH
+            else f"{raw_key[:_LOCK_NAME_PREFIX_LENGTH]}_{digest[:_LOCK_NAME_HASH_BYTES].hex()}"
+        )
+        lock_id = int.from_bytes(digest[:8], "big", signed=True)
+        return lock_name, lock_id
+
+    @classmethod
+    def _resolve_lock_backend(cls, driver: Any) -> str:
+        """Classify ``driver`` into its migration lock backend family.
+
+        Returns:
+            ``"postgres"``, ``"mysql"``, ``"mssql"``, ``"sqlite"``, ``"lease"`` for backends locking
+            through a lease row, ``"unsupported"`` for backends that cannot be serialized, or an empty
+            string for an unknown dialect.
+        """
+        driver_type = type(driver)
+        is_bridge_driver = any(base.__name__ in _BRIDGE_DRIVER_CLASS_NAMES for base in driver_type.__mro__)
+        raw_dialect = getattr(driver, "dialect", None) if is_bridge_driver else getattr(driver_type, "dialect", None)
+        dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+        if _is_cockroach_driver(driver):
+            return "lease"
+        if not dialect:
+            return ""
+        if dialect in cls._POSTGRES_LOCK_DIALECTS:
+            return "postgres"
+        if dialect in cls._MYSQL_LOCK_DIALECTS:
+            return "mysql"
+        if dialect in cls._MSSQL_LOCK_DIALECTS:
+            return "mssql"
+        if dialect == "sqlite":
+            return "lease" if is_bridge_driver else "sqlite"
+        if dialect in _LEASE_LOCK_DIALECTS:
+            return "lease"
+        if dialect in _UNSUPPORTED_LOCK_DIALECTS:
+            return "unsupported"
+        return ""
+
+    def _uses_sequenced_insert(self, driver: Any) -> bool:
+        """Return True when ``driver`` uses single-statement ``execution_sequence`` inserts."""
+        return str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS
+
+    @staticmethod
+    def _translate_mssql_lock_exception(
+        lock_name: str, timeout_seconds: int, exc: SQLSpecError
+    ) -> MigrationError | None:
+        """Convert T-SQL lock acquisition errors into ``MigrationError`` when matched."""
+        if "Migration lock acquisition failed" in str(exc):
+            msg = f"Failed to acquire SQL Server migration lock {lock_name!r} within {timeout_seconds}s"
+            return MigrationError(msg)
+        return None
+
+    @staticmethod
+    def _validate_mssql_lock_result(lock_name: str, result: Any) -> None:
+        """Raise ``MigrationError`` when ``sp_getapplock`` returns a negative status code."""
+        if result.data:
+            lock_code = result.scalar()
+            if isinstance(lock_code, int) and lock_code < 0:
+                msg = f"Failed to acquire SQL Server migration lock {lock_name!r} (code {lock_code})"
+                raise MigrationError(msg)
+
+    @staticmethod
+    def _validate_mysql_lock_result(lock_name: str, timeout_seconds: int, lock_result: Any) -> None:
+        """Raise ``MigrationError`` when MySQL ``GET_LOCK`` does not acquire ownership."""
+        if lock_result != 1:
+            msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
+            raise MigrationError(msg)
 
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.
@@ -520,6 +915,9 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         Args:
             config: The SQLSpec configuration.
         """
+        if getattr(config, "is_replica", False):
+            msg = "Migrations cannot run against a read replica configuration; use the primary configuration instead"
+            raise MigrationError(msg)
         raw_features = getattr(config, "driver_features", None)
         driver_features = raw_features if isinstance(raw_features, dict) else {}
         direct_dsn = driver_features.get("direct_dsn")
@@ -546,23 +944,33 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         self._last_command_metrics: dict[str, float] | None = None
 
     def init_directory(self, directory: str, package: bool = True) -> None:
-        """Initialize migration directory structure.
+        """Initialize migration directory structure without overwriting existing files.
 
         Args:
             directory: Directory to initialize migrations in.
             package: Whether to create __init__.py file.
+
+        Raises:
+            MigrationError: If target initialization files already exist.
         """
         console = importlib.import_module("rich.console").Console()
 
         migrations_dir = Path(directory)
+        init = migrations_dir / "__init__.py"
+        readme = migrations_dir / "README.md"
+        targets = (init, readme) if package else (readme,)
+        existing = [path for path in targets if path.exists()]
+        if existing:
+            existing_display = ", ".join(str(path) for path in existing)
+            msg = f"Refusing to overwrite existing migration file(s): {existing_display}"
+            raise MigrationError(msg)
+
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
         if package:
-            init = migrations_dir / "__init__.py"
-            init.write_text(self._get_init_init_content())
+            init.write_text(self._get_init_init_content(), encoding="utf-8")
 
-        readme = migrations_dir / "README.md"
-        readme.write_text(self._get_init_readme_content())
+        readme.write_text(self._get_init_readme_content(), encoding="utf-8")
 
         use_logger, echo, summary_only = self._resolve_output_policy(False, None, None)
         if echo and not use_logger:
@@ -632,6 +1040,12 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         """
         migration_config = self._get_migration_config()
         if self._config_supports_schemas():
+            explicit_schema = migration_config.get("version_table_schema")
+            if (
+                not (isinstance(explicit_schema, str) and explicit_schema.strip())
+                and BaseMigrationTracker._split_version_table(self.version_table)[1] is not None
+            ):
+                return None
             return resolve_tracker_schema(migration_config)
         self._reject_schema_options(migration_config)
         return None
@@ -657,9 +1071,11 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
     def _create_tracker(self) -> Any:
         """Create the configured migration tracker without breaking legacy constructors."""
         tracker_schema = self._resolve_tracker_schema()
+        lease_seconds = self._get_migration_config().get("lock_lease_seconds")
+        options: dict[str, Any] = {} if lease_seconds is None else {"lock_lease_seconds": lease_seconds}
         if tracker_schema is None:
-            return self.config.migration_tracker_type(self.version_table)
-        return self.config.migration_tracker_type(self.version_table, version_table_schema=tracker_schema)
+            return self.config.migration_tracker_type(self.version_table, **options)
+        return self.config.migration_tracker_type(self.version_table, version_table_schema=tracker_schema, **options)
 
     def _parse_extension_configs(self) -> "dict[str, dict[str, Any]]":
         """Parse extension configurations from include_extensions.
@@ -815,6 +1231,50 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
                 retained.add(version_num)
         return retained
 
+    def _applied_checksum_audit(
+        self,
+        applied_migrations: "Sequence[AppliedMigrationRecord]",
+        migration_files: "Sequence[tuple[str, Path]]",
+        *,
+        versions: "AbstractSet[str] | None" = None,
+    ) -> "tuple[list[str], dict[str, str]]":
+        """Compare applied records against the migration files on disk.
+
+        Retained reconcile versions, versions without a file, and squashed files that still await
+        reconciliation of their own version are skipped.
+
+        Args:
+            applied_migrations: Applied migration records from the tracking table.
+            migration_files: Migration files on disk as ``(version, path)`` pairs.
+            versions: Optional subset of applied versions to audit. All applied versions when None.
+
+        Returns:
+            Tuple of the versions whose file no longer matches the recorded checksum and a map of
+            ``version -> marker digest`` for records that only match the legacy checksum form.
+        """
+        files_by_version = dict(migration_files)
+        retained = self._retained_reconcile_versions(applied_migrations)
+        mismatched: list[str] = []
+        rerecord: dict[str, str] = {}
+        for record in applied_migrations:
+            version = record["version_num"]
+            if version in retained or (versions is not None and version not in versions):
+                continue
+            file_path = files_by_version.get(version)
+            if file_path is None:
+                continue
+            content = file_path.read_text(encoding="utf-8")
+            if not record.get("replaces") and version in extract_replaces_versions(content, file_path.suffix):
+                continue
+            match = BaseMigrationRunner.match_migration_checksum(content, str(record.get("checksum") or ""))
+            if match is None:
+                mismatched.append(version)
+            elif match == "legacy":
+                rerecord[version] = hashlib.sha256(
+                    BaseMigrationRunner._canonicalize_migration_content(content).encode("utf-8")  # pyright: ignore[reportPrivateUsage]
+                ).hexdigest()
+        return mismatched, rerecord
+
     def _discover_extension_migrations(self) -> "dict[str, Path]":
         """Discover migration paths for configured versioned extensions.
 
@@ -914,8 +1374,7 @@ out-of-order migrations gracefully.
         Returns:
             Python module docstring content for the __init__.py file.
         """
-        return """Migrations.
-"""
+        return '"""Migrations."""\n'
 
     def _record_command_metric(self, name: str, value: float) -> None:
         """Accumulate per-command metrics for decorator flushing."""
@@ -1012,3 +1471,197 @@ out-of-order migrations gracefully.
         resolved_echo = self._resolve_echo(echo)
         resolved_summary_only = self._resolve_summary_only(summary_only)
         return resolved_use_logger, resolved_echo, resolved_summary_only
+
+
+def _is_cockroach_driver(driver: Any) -> bool:
+    """Return True when ``driver`` targets a CockroachDB adapter or resolved dialect."""
+    if type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+        return True
+    resolved_hint = getattr(driver, "_dialect_name", None)
+    return isinstance(resolved_hint, str) and "cockroach" in resolved_hint.lower()
+
+
+def _supports_postgres_row_security(driver: Any) -> bool:
+    """Return True when ``driver`` targets PostgreSQL-family backends excluding CockroachDB."""
+    raw_dialect = getattr(driver, "dialect", None)
+    dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+    if not dialect or _is_cockroach_driver(driver):
+        return False
+    return dialect in BaseMigrationTracker._POSTGRES_LOCK_DIALECTS
+
+
+def _extract_catalog_rows(result: Any) -> "list[Mapping[str, Any]]":
+    """Extract mapping rows from a driver result, pairing positional rows with column names.
+
+    Unset mock return values yield no rows.
+    """
+    if result is None:
+        return []
+    data = getattr(result, "data", result)
+    if not isinstance(data, Sequence) or isinstance(data, (str, bytes)):
+        return []
+    column_names = getattr(result, "column_names", None)
+    names = list(column_names) if isinstance(column_names, (list, tuple)) else []
+    rows: list[Mapping[str, Any]] = []
+    for row in data:
+        if isinstance(row, Mapping):
+            rows.append(row)
+        elif names and isinstance(row, (list, tuple)) and len(row) == len(names):
+            rows.append(dict(zip(names, row, strict=True)))
+        elif callable(getattr(row, "keys", None)) and hasattr(row, "__getitem__"):
+            rows.append(dict(row))
+    return rows
+
+
+def _excluded_table_names(exclude_tables: "Sequence[str] | None") -> set[str]:
+    """Return lowercase bare table names from qualified or quoted ``exclude_tables`` entries."""
+    excluded: set[str] = set()
+    for table_name in exclude_tables or ():
+        parts = split_qualified_identifier(table_name, quote_chars='"`', allow_bracket_quotes=True)
+        bare = parts[-1] if parts else table_name.strip('"`[]')
+        if bare:
+            excluded.add(bare.lower())
+    return excluded
+
+
+def _validate_schema_extraction_rows(
+    refused: "Sequence[Mapping[str, Any]]",
+    omitted: "Sequence[Mapping[str, Any]]",
+    *,
+    backend_label: str,
+    exclude_tables: "Sequence[str] | None" = None,
+    use_squash_error: bool = False,
+) -> None:
+    """Refuse row-security objects on included tables and warn about objects extraction does not emit.
+
+    Args:
+        refused: Catalog rows naming tables protected by row-level security policies.
+        omitted: Catalog rows naming grants, functions, triggers, and domains extraction drops.
+        backend_label: Backend name used in messages.
+        exclude_tables: Tables ignored by both checks.
+        use_squash_error: Raise ``SquashValidationError`` instead of ``MigrationError``.
+
+    Raises:
+        SquashValidationError: When ``use_squash_error`` is set and a protected table is found.
+        MigrationError: When a protected table is found.
+    """
+    excluded = _excluded_table_names(exclude_tables)
+    protected: list[str] = []
+    for row in refused:
+        table_name = str(row.get("table_name") or row.get("relname") or "").strip()
+        if table_name and table_name.lower() in excluded:
+            continue
+        schema_name = str(row.get("schema_name") or row.get("nspname") or "").strip()
+        label = f"{schema_name}.{table_name}" if schema_name and table_name else (table_name or "<table_with_rls>")
+        protected.append(label)
+    if protected:
+        msg = (
+            f"Schema extraction cannot include {backend_label} tables protected by row-level security policies "
+            f"({', '.join(protected)}): extraction does not emit those policies (use --strategy ddl instead)"
+        )
+        if use_squash_error:
+            raise SquashValidationError(msg)
+        raise MigrationError(msg)
+    dropped: list[str] = []
+    kinds: list[str] = []
+    for row in omitted:
+        object_name = str(row.get("object_name") or "").strip()
+        table_part = object_name.split(".", 1)[0].lower()
+        if table_part in excluded:
+            continue
+        kind = str(row.get("object_kind") or "object").strip()
+        schema_name = str(row.get("schema_name") or "").strip()
+        dropped.append(f"{kind}:{schema_name}.{object_name}" if schema_name else f"{kind}:{object_name}")
+        if kind not in kinds:
+            kinds.append(kind)
+    if dropped:
+        log_with_context(
+            logger,
+            logging.WARNING,
+            "migration.schema_extraction.omitted",
+            object_kinds=kinds,
+            object_count=len(dropped),
+            names=dropped[:_MAX_OMITTED_NAMES],
+        )
+
+
+def _schema_extraction_plan(driver: Any) -> "tuple[str, str, str | None, bool] | None":
+    """Return ``(backend_label, refusal_sql, omissions_sql, takes_schema)`` for backends with catalog checks."""
+    if _supports_postgres_row_security(driver):
+        return "PostgreSQL", _PG_RLS_SCHEMA_CHECK_SQL, _PG_SCHEMA_OMISSIONS_SQL, True
+    raw_dialect = getattr(driver, "dialect", None)
+    dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+    if dialect == "oracle":
+        return "Oracle", _ORACLE_VPD_POLICY_SQL, None, True
+    if dialect in {"mssql", "tsql"}:
+        return "SQL Server", _MSSQL_SECURITY_POLICY_SQL, None, False
+    return None
+
+
+def _extraction_check_error(backend_label: str, exc: Exception) -> MigrationError:
+    """Build the error raised when a catalog query cannot prove the schema is free of row-security policies."""
+    msg = (
+        f"Schema extraction cannot prove the {backend_label} schema has no row-security policies "
+        f"because the catalog query failed: {exc}"
+    )
+    return MigrationError(msg)
+
+
+def _ensure_schema_extraction_safe_sync(
+    driver: Any,
+    *,
+    schema: str | None = None,
+    exclude_tables: "Sequence[str] | None" = None,
+    use_squash_error: bool = False,
+) -> None:
+    """Refuse row-security objects and warn about dropped objects before schema extraction.
+
+    Args:
+        driver: Active synchronous driver.
+        schema: Inspected schema, or None for the current schema.
+        exclude_tables: Tables ignored by the checks.
+        use_squash_error: Raise ``SquashValidationError`` instead of ``MigrationError``.
+    """
+    plan = _schema_extraction_plan(driver)
+    if plan is None:
+        return
+    label, refusal_sql, omissions_sql, takes_schema = plan
+    parameters = {"schema_name": schema} if takes_schema else None
+    try:
+        refused = _extract_catalog_rows(driver.execute(refusal_sql, parameters))
+        omitted = _extract_catalog_rows(driver.execute(omissions_sql, parameters)) if omissions_sql else []
+    except SQLSpecError as exc:
+        raise _extraction_check_error(label, exc) from exc
+    _validate_schema_extraction_rows(
+        refused, omitted, backend_label=label, exclude_tables=exclude_tables, use_squash_error=use_squash_error
+    )
+
+
+async def _ensure_schema_extraction_safe_async(
+    driver: Any,
+    *,
+    schema: str | None = None,
+    exclude_tables: "Sequence[str] | None" = None,
+    use_squash_error: bool = False,
+) -> None:
+    """Refuse row-security objects and warn about dropped objects before schema extraction.
+
+    Args:
+        driver: Active asynchronous driver.
+        schema: Inspected schema, or None for the current schema.
+        exclude_tables: Tables ignored by the checks.
+        use_squash_error: Raise ``SquashValidationError`` instead of ``MigrationError``.
+    """
+    plan = _schema_extraction_plan(driver)
+    if plan is None:
+        return
+    label, refusal_sql, omissions_sql, takes_schema = plan
+    parameters = {"schema_name": schema} if takes_schema else None
+    try:
+        refused = _extract_catalog_rows(await driver.execute(refusal_sql, parameters))
+        omitted = _extract_catalog_rows(await driver.execute(omissions_sql, parameters)) if omissions_sql else []
+    except SQLSpecError as exc:
+        raise _extraction_check_error(label, exc) from exc
+    _validate_schema_extraction_rows(
+        refused, omitted, backend_label=label, exclude_tables=exclude_tables, use_squash_error=use_squash_error
+    )

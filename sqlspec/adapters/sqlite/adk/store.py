@@ -4,6 +4,7 @@ import array
 import contextlib
 import math
 import re
+import weakref
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
@@ -17,9 +18,11 @@ from sqlspec.adapters.sqlite.core import (
     julian_to_datetime,
     render_pragmas,
 )
+from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -36,7 +39,7 @@ __all__ = ("JULIAN_EPOCH", "SECONDS_PER_DAY", "SqliteADKConfig", "SqliteADKMemor
 
 SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
 _FTS_DETAIL_VALUES: Final = frozenset({"full", "column", "none"})
-_FTS_TOKENIZE_PATTERN: Final = re.compile(r"^[A-Za-z0-9_ -]+$")
+_FTS_TOKENIZE_PATTERN: Final = re.compile(r"\A[A-Za-z0-9_ -]+\Z")
 
 
 logger: "logging.Logger" = get_logger("sqlspec.adapters.sqlite.adk.store")
@@ -77,17 +80,18 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         config: SqliteConfig instance with extension_config["adk"] settings.
     """
 
-    __slots__ = ("_configured_connection_ids", "_pragma_overrides")
+    __slots__ = ("_configured_connections", "_pragma_overrides")
 
-    def __init__(self, config: "SqliteConfig") -> None:
+    def __init__(self, config: "SqliteConfig", *, read_config: "SqliteConfig | None" = None) -> None:
         """Initialize SQLite ADK store.
 
         Args:
             config: SqliteConfig instance.
+            read_config: Optional compatible configuration for pure reads.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._pragma_overrides = _pragma_overrides(config)
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -105,9 +109,20 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             end_transaction(driver.connection, commit=True)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session.
+        """Create a new session and atomically apply optional scoped state deltas.
+
+        Starts the write transaction with ``BEGIN IMMEDIATE`` so concurrent
+        writers serialize cleanly before reading and merging scoped state.
 
         Args:
             session_id: Unique session identifier.
@@ -115,12 +130,14 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             user_id: User identifier.
             state: Initial session state.
             owner_id: Optional owner ID value for owner ID column.
+            app_state_delta: Optional app-scoped delta merged into ``adk_app_state``.
+            user_state_delta: Optional user-scoped delta merged into ``adk_user_state``.
 
         Returns:
             Created session record.
         """
-        now = datetime.now(UTC)
-        now_julian = _datetime_to_julian(now)
+        now_julian = _datetime_to_julian(datetime.now(UTC))
+        stored_time = _julian_to_datetime(now_julian)
         state_json = to_json(state)
 
         params: tuple[Any, ...]
@@ -140,11 +157,33 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         with self._config.provide_connection() as conn:
             self._ensure_pragmas(conn)
-            _close_cursor(conn.execute(sql, params))
-            end_transaction(conn, commit=True)
+            try:
+                _close_cursor(conn.execute("BEGIN IMMEDIATE"))
+                _close_cursor(conn.execute(sql, params))
+                resolved_app = (
+                    self._apply_app_state_delta(conn, app_name, app_state_delta, now_julian)
+                    if app_state_delta
+                    else self._select_app_state(conn, app_name)
+                )
+                resolved_user = (
+                    self._apply_user_state_delta(conn, app_name, user_id, user_state_delta, now_julian)
+                    if user_state_delta
+                    else self._select_user_state(conn, app_name, user_id)
+                )
+            except Exception:
+                end_transaction(conn, commit=False)
+                raise
+            else:
+                end_transaction(conn, commit=True)
 
+        merged_state = merge_scoped_state(state, resolved_app, resolved_user)
         return StoredSession(
-            id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
+            id=session_id,
+            app_name=app_name,
+            user_id=user_id,
+            state=merged_state,
+            create_time=stored_time,
+            update_time=stored_time,
         )
 
     def get_session(
@@ -163,7 +202,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
         params = (app_name, user_id, session_id)
         update_params: tuple[Any, ...]
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._is_renewal_requested(renew_for):
             update_sql = f"""
             UPDATE {self._session_table}
             SET update_time = ?
@@ -182,7 +221,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 self._ensure_pragmas(conn)
                 if update_sql:
                     _close_cursor(conn.execute(update_sql, update_params))
@@ -265,7 +304,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_replica_connection() as conn:
                 self._ensure_pragmas(conn)
                 cursor = conn.execute(sql, params)
                 try:
@@ -310,31 +349,46 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Args:
             event_record: Event record to store.
         """
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
         event_data_json = to_json(event_record["event_data"])
 
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?
+        FROM {self._session_table}
+        WHERE id = ? AND app_name = ? AND user_id = ?
         """
 
         with self._config.provide_connection() as conn:
             self._ensure_pragmas(conn)
-            _close_cursor(
-                conn.execute(
-                    sql,
-                    (
-                        event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        timestamp_julian,
-                        event_data_json,
-                    ),
-                )
+            cursor = conn.execute(
+                sql,
+                (
+                    event_record["id"],
+                    app_name,
+                    user_id,
+                    session_id,
+                    event_record["invocation_id"],
+                    timestamp_julian,
+                    event_data_json,
+                    session_id,
+                    app_name,
+                    user_id,
+                ),
             )
+            try:
+                inserted = cursor.rowcount
+            finally:
+                _close_cursor(cursor)
+            if inserted == 0:
+                end_transaction(conn, commit=False)
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
             end_transaction(conn, commit=True)
 
     def append_event_and_update_state(
@@ -345,24 +399,40 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update the session's durable state.
 
-        Inserts the event and updates the session state + update_time in a
-        single transaction, returning the updated StoredSession via RETURNING.
+        Starts the write transaction with ``BEGIN IMMEDIATE`` so concurrent
+        writers serialize cleanly without lock-upgrade deadlocks before reading
+        and merging optional scoped deltas.
 
         Args:
             event_record: Event record to store.
             app_name: Application name for scoped state.
             user_id: User identifier for scoped state.
             session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (temp: keys already
+            state: Post-append durable session state snapshot (temp: keys already
                 stripped by the service layer).
-            app_state: App-scoped state snapshot to upsert when changed.
-            user_state: User-scoped state snapshot to upsert when changed.
+            app_state_delta: Optional app-scoped delta merged into ``adk_app_state``.
+            user_state_delta: Optional user-scoped delta merged into ``adk_user_state``.
+
+        Returns:
+            Updated session record with merged view state.
         """
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = (
+                "event_record scope "
+                f"({event_record['app_name']!r}, {event_record['user_id']!r}, {event_record['session_id']!r}) "
+                f"does not match ({app_name!r}, {user_id!r}, {session_id!r})"
+            )
+            raise ValueError(msg)
+
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
         event_data_json = to_json(event_record["event_data"])
         now_julian = _datetime_to_julian(datetime.now(UTC))
@@ -381,25 +451,13 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
-        app_upsert_sql = f"""
-        INSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES (?, ?, ?)
-        ON CONFLICT(app_name) DO UPDATE SET
-            state = excluded.state,
-            update_time = excluded.update_time
-        """
-
-        user_upsert_sql = f"""
-        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(app_name, user_id) DO UPDATE SET
-            state = excluded.state,
-            update_time = excluded.update_time
-        """
+        merged_app: dict[str, Any] | None = None
+        merged_user: dict[str, Any] | None = None
 
         with self._config.provide_connection() as conn:
             self._ensure_pragmas(conn)
             try:
+                _close_cursor(conn.execute("BEGIN IMMEDIATE"))
                 cursor = conn.execute(update_sql, (state_json, now_julian, app_name, user_id, session_id))
                 try:
                     raw_row = cursor.fetchone()
@@ -421,30 +479,29 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                             ),
                         )
                     )
-                    if app_state is not None:
-                        _close_cursor(conn.execute(app_upsert_sql, (app_name, to_json(app_state), now_julian)))
-                    if user_state is not None:
-                        _close_cursor(
-                            conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now_julian))
+                    if app_state_delta:
+                        merged_app = self._apply_app_state_delta(conn, app_name, app_state_delta, now_julian)
+                    if user_state_delta:
+                        merged_user = self._apply_user_state_delta(
+                            conn, app_name, user_id, user_state_delta, now_julian
                         )
             except Exception:
                 end_transaction(conn, commit=False)
                 raise
             else:
-                if row is None:
-                    end_transaction(conn, commit=False)
-                else:
-                    end_transaction(conn, commit=True)
+                end_transaction(conn, commit=row is not None)
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
 
+        persisted_state = from_json(row[3]) if row[3] else {}
+        merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
         return StoredSession(
             id=row[0],
             app_name=row[1],
             user_id=row[2],
-            state=from_json(row[3]) if row[3] else {},
+            state=merged_state,
             create_time=_julian_to_datetime(row[4]),
             update_time=_julian_to_datetime(row[5]),
         )
@@ -459,12 +516,16 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
     ) -> "list[StoredEvent]":
         """Get events for a session.
 
+        When ``limit`` is provided, fetches the ``limit`` most recent events in
+        descending order and reverses them in Python so callers receive the tail
+        window in ascending chronological order.
+
         Args:
             app_name: Application name.
             user_id: User identifier.
             session_id: Session identifier.
             after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
+            limit: Maximum number of most recent events to return.
 
         Returns:
             List of event records ordered by timestamp ASC.
@@ -472,35 +533,39 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         if limit == 0:
             return []
 
-        where_clauses = ["app_name = ?", "user_id = ?", "session_id = ?"]
+        where_clauses = ["s.app_name = ?", "s.user_id = ?", "s.id = ?"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("timestamp > ?")
+            where_clauses.append("e.timestamp > ?")
             params.append(_datetime_to_julian(after_timestamp))
 
         where_clause = " AND ".join(where_clauses)
         if limit is not None:
-            limit_clause = " LIMIT ?"
+            order_clause = "ORDER BY e.timestamp DESC, e.id DESC LIMIT ?"
             params.append(int(limit))
         else:
-            limit_clause = ""
+            order_clause = "ORDER BY e.timestamp ASC, e.id ASC"
 
         sql = f"""
-        SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        FROM {self._events_table}
+        SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
+        FROM {self._events_table} e
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY timestamp ASC{limit_clause}
+        {order_clause}
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_replica_connection() as conn:
                 self._ensure_pragmas(conn)
                 cursor = conn.execute(sql, params)
                 try:
                     rows = [_row_values(row) for row in cursor.fetchall()]
                 finally:
                     _close_cursor(cursor)
+
+                if limit is not None:
+                    rows.reverse()
 
                 return [
                     StoredEvent(
@@ -694,10 +759,86 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             _close_cursor(conn.execute(sql, (key, value)))
             end_transaction(conn, commit=True)
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing SQLite session and event companion indexes without committing."""
+        for statement in self._companion_index_statements():
+            driver.execute(statement)
+
+    def _select_app_state(self, conn: Any, app_name: str) -> "dict[str, Any] | None":
+        """Read app-scoped state within an active connection transaction."""
+        return self._select_state(conn, f"SELECT state FROM {self._app_state_table} WHERE app_name = ?", (app_name,))
+
+    def _select_user_state(self, conn: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        """Read user-scoped state within an active connection transaction."""
+        return self._select_state(
+            conn, f"SELECT state FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?", (app_name, user_id)
+        )
+
+    def _select_state(self, conn: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
+        cursor = conn.execute(sql, params)
+        try:
+            raw_row = cursor.fetchone()
+        finally:
+            _close_cursor(cursor)
+        row = _row_values(raw_row) if raw_row is not None else None
+        return from_json(row[0]) if row is not None and row[0] else None
+
+    def _apply_app_state_delta(
+        self, conn: Any, app_name: str, delta: "dict[str, Any]", now_julian: float
+    ) -> "dict[str, Any]":
+        """Merge an app-scoped state delta under the active IMMEDIATE transaction."""
+        return self._apply_state_delta(
+            conn,
+            table=self._app_state_table,
+            key_columns=("app_name",),
+            key_values=(app_name,),
+            delta=delta,
+            now_julian=now_julian,
+        )
+
+    def _apply_user_state_delta(
+        self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]", now_julian: float
+    ) -> "dict[str, Any]":
+        """Merge a user-scoped state delta under the active IMMEDIATE transaction."""
+        return self._apply_state_delta(
+            conn,
+            table=self._user_state_table,
+            key_columns=("app_name", "user_id"),
+            key_values=(app_name, user_id),
+            delta=delta,
+            now_julian=now_julian,
+        )
+
+    def _apply_state_delta(
+        self,
+        conn: Any,
+        *,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+        now_julian: float,
+    ) -> "dict[str, Any]":
+        where_clause = " AND ".join(f"{col} = ?" for col in key_columns)
+        existing = self._select_state(conn, f"SELECT state FROM {table} WHERE {where_clause}", key_values)
+        merged = dict(existing) if existing else {}
+        merged.update(delta)
+        cols = ", ".join((*key_columns, "state", "update_time"))
+        placeholders = ", ".join("?" for _ in range(len(key_columns) + 2))
+        conflict_cols = ", ".join(key_columns)
+        upsert_sql = (
+            f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) "
+            f"ON CONFLICT({conflict_cols}) DO UPDATE SET state = excluded.state, update_time = excluded.update_time"
+        )
+        _close_cursor(conn.execute(upsert_sql, (*key_values, to_json(merged), now_julian)))
+        return merged
+
     def _ensure_pragmas(self, connection: Any) -> None:
-        """Apply PRAGMA optimization profile once per connection."""
-        if id(connection) not in self._configured_connection_ids:
-            self._apply_pragmas(connection)
+        """Apply PRAGMA optimization profile once per live pooled connection."""
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config, self._read_config)
+        if token is not None and token in self._configured_connections:
+            return
+        self._apply_pragmas(connection)
 
     def _apply_pragmas(self, connection: Any) -> None:
         """Apply PRAGMA optimization profile for this connection.
@@ -711,12 +852,9 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         _close_cursor(connection.execute("PRAGMA journal_size_limit = 67108864"))
         for pragma_name, pragma_value in self._pragma_overrides:
             _close_cursor(connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
-        self._configured_connection_ids.add(id(connection))
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing SQLite session and event companion indexes without committing."""
-        for statement in self._companion_index_statements():
-            driver.execute(statement)
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config, self._read_config)
+        if token is not None:
+            self._configured_connections.add(token)
 
     def _session_index_statements(self) -> list[str]:
         """Return canonical CREATE INDEX statements for the sessions table."""
@@ -843,25 +981,26 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
     - Simple LIKE search (simple strategy)
     - Optional FTS5 full-text search (sqlite_fts5 strategy)
     - Julian Day timestamps (REAL) for efficient date operations
-    - Deduplication via event_id unique constraint
+    - Deduplication via (app_name, user_id, event_id) unique constraint
     - Efficient upserts using INSERT OR IGNORE
 
     Args:
         config: SqliteConfig with extension_config["adk"] settings.
     """
 
-    __slots__ = ("_configured_connection_ids", "_fts_options", "_pragma_overrides")
+    __slots__ = ("_configured_connections", "_fts_options", "_pragma_overrides")
 
-    def __init__(self, config: "SqliteConfig") -> None:
+    def __init__(self, config: "SqliteConfig", *, read_config: "SqliteConfig | None" = None) -> None:
         """Initialize SQLite ADK memory store.
 
         Args:
             config: SqliteConfig instance.
+            read_config: Optional compatible configuration for pure reads.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._fts_options = _fts_options(config)
         self._pragma_overrides = _pragma_overrides(config)
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
@@ -901,8 +1040,8 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
 
-        Uses INSERT OR IGNORE to skip duplicates based on event_id
-        unique constraint.
+        Uses INSERT OR IGNORE to skip duplicates based on the
+        (app_name, user_id, event_id) unique constraint.
 
         Args:
             entries: List of memory records to insert.
@@ -1051,18 +1190,24 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         return records
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
+        clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+        clauses.append("app_name = ?")
+        params.append(app_name)
+        clauses.append("user_id = ?")
+        params.append(user_id)
+        sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
 
         try:
             with self._config.provide_connection() as conn:
                 self._ensure_foreign_keys(conn)
-                cursor = conn.execute(sql, (session_id,))
+                cursor = conn.execute(sql, tuple(params))
                 try:
                     deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 finally:
@@ -1195,14 +1340,15 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             f"            app_name TEXT NOT NULL,\n"
             f"            user_id TEXT NOT NULL,\n"
             f"            scope TEXT NOT NULL DEFAULT 'user',\n"
-            f"            event_id TEXT NOT NULL UNIQUE,\n"
+            f"            event_id TEXT NOT NULL,\n"
             f"            author TEXT{owner_id_line},\n"
             f"            timestamp REAL NOT NULL,\n"
             f"            content_json TEXT NOT NULL,\n"
             f"            content_text TEXT NOT NULL,\n"
             f"            metadata_json TEXT,\n"
             f"            inserted_at REAL NOT NULL,\n"
-            f"            embedding BLOB\n"
+            f"            embedding BLOB,\n"
+            f"            UNIQUE (app_name, user_id, event_id)\n"
             f"        );\n\n"
             f"{index_lines}{fts_section}\n"
             f"        "
@@ -1225,8 +1371,10 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         return statements
 
     def _ensure_foreign_keys(self, connection: Any) -> None:
-        if id(connection) not in self._configured_connection_ids:
-            self._enable_foreign_keys(connection)
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config, self._read_config)
+        if token is not None and token in self._configured_connections:
+            return
+        self._enable_foreign_keys(connection)
 
     def _enable_foreign_keys(self, connection: Any) -> None:
         """Enable foreign key constraints and apply PRAGMA overrides for this connection.
@@ -1237,7 +1385,9 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         _close_cursor(connection.execute("PRAGMA foreign_keys = ON"))
         for pragma_name, pragma_value in self._pragma_overrides:
             _close_cursor(connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
-        self._configured_connection_ids.add(id(connection))
+        token = SqliteConnectionPool.resolve_connection_identity(connection, self._config, self._read_config)
+        if token is not None:
+            self._configured_connections.add(token)
 
     def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -1287,7 +1437,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         return self._fetch_records(sql, params)
 
     def _fetch_records(self, sql: str, params: "tuple[Any, ...]") -> "list[StoredMemory]":
-        with self._config.provide_connection() as conn:
+        with self._provide_replica_connection() as conn:
             self._ensure_foreign_keys(conn)
             cursor = conn.execute(sql, params)
             try:
@@ -1370,7 +1520,7 @@ def _fts_options(config: "SqliteConfig") -> "tuple[str, ...]":
 
     fts_tokenize = adk_config.get("fts_tokenize")
     if fts_tokenize is not None:
-        if not isinstance(fts_tokenize, str) or _FTS_TOKENIZE_PATTERN.match(fts_tokenize) is None:
+        if not isinstance(fts_tokenize, str) or _FTS_TOKENIZE_PATTERN.fullmatch(fts_tokenize) is None:
             msg = "extension_config['adk']['fts_tokenize'] must contain only safe FTS5 tokenizer characters"
             raise ImproperConfigurationError(msg)
         options.append(f"tokenize = '{fts_tokenize}'")

@@ -26,11 +26,17 @@ from sqlspec.storage._arrow_payload import (
     validate_arrow_write_options,
 )
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
-from sqlspec.storage._paths import ensure_path_within_root, parse_file_uri_path, reject_parent_traversal
+from sqlspec.storage._paths import (
+    FILE_SCHEME_PREFIX,
+    check_local_delete_target,
+    ensure_path_within_root,
+    parse_file_uri_path,
+    reject_parent_traversal,
+)
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, log_storage_event
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, exit_async_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -76,13 +82,13 @@ class LocalStore:
                 - file:///home/user/storage + base_path="subdir" -> /home/user/storage/subdir
                 - file:///home/user/storage + base_path="/other" -> /other (absolute takes precedence)
         """
-        if uri.startswith("file://"):
+        if uri.startswith(FILE_SCHEME_PREFIX):
             path = parse_file_uri_path(uri)
-            self.base_path = Path(path).resolve()
+            self.base_path = Path(path).resolve() if path else Path.cwd().resolve()
         elif uri:
             self.base_path = Path(uri).resolve()
         else:
-            self.base_path = Path.cwd()
+            self.base_path = Path.cwd().resolve()
 
         if "base_path" in kwargs:
             self.base_path = (self.base_path / kwargs["base_path"]).resolve()
@@ -90,7 +96,7 @@ class LocalStore:
         if not self.base_path.exists():
             self.base_path.mkdir(parents=True, exist_ok=True)
         elif self.base_path.is_file():
-            self.base_path = self.base_path.parent
+            self.base_path = self.base_path.parent.resolve()
 
         self.protocol = "file"
 
@@ -259,7 +265,7 @@ class LocalStore:
                     resolved_file = path.resolve()
                     resolved_file.relative_to(self.base_path)
                     relative = path.relative_to(self.base_path)
-                except ValueError:
+                except (ValueError, OSError):
                     continue
                 relative_str = str(relative)
                 if not rel_prefix or relative_str.startswith(rel_prefix):
@@ -271,9 +277,19 @@ class LocalStore:
         """Check if file exists synchronously."""
         return self._resolve_path(path).exists()
 
-    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
-        """Delete file or directory synchronously."""
+    def delete_sync(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
+        """Delete a file, or a directory when ``recursive`` is True, synchronously.
+
+        Args:
+            path: Path relative to ``base_path``.
+            recursive: Allow deleting directories and their contents.
+            **kwargs: Unused backend options.
+
+        Raises:
+            StorageOperationFailedError: If ``path`` is the store root, or a directory and ``recursive`` is False.
+        """
         resolved = self._resolve_path(path)
+        check_local_delete_target(resolved, self.base_path, recursive=recursive)
 
         execute_sync_storage_operation(
             partial(_delete_local_path, resolved), backend=self.backend_type, operation="delete", path=str(resolved)
@@ -306,7 +322,8 @@ class LocalStore:
         if not pattern:
             return []
         reject_parent_traversal(pattern)
-        pattern_path = Path(pattern)
+        normalized_pattern = parse_file_uri_path(pattern) if pattern.startswith(FILE_SCHEME_PREFIX) else pattern
+        pattern_path = Path(normalized_pattern)
         if pattern_path.is_absolute():
             try:
                 rel_pattern_path = pattern_path.relative_to(self.base_path)
@@ -315,7 +332,7 @@ class LocalStore:
                 raise StoragePathTraversalError(msg) from exc
             rel_pattern = str(rel_pattern_path)
         else:
-            rel_pattern = pattern
+            rel_pattern = normalized_pattern
 
         matches = (
             self.base_path.rglob(rel_pattern)
@@ -329,7 +346,7 @@ class LocalStore:
                 try:
                     match.resolve().relative_to(self.base_path)
                     relative = match.relative_to(self.base_path)
-                except ValueError:
+                except (ValueError, OSError):
                     continue
                 results.append(str(relative))
 
@@ -488,9 +505,9 @@ class LocalStore:
         """Check if file exists asynchronously."""
         return await async_(self.exists_sync)(path, **kwargs)
 
-    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
-        """Delete file asynchronously."""
-        await async_(self.delete_sync)(path, **kwargs)
+    async def delete_async(self, path: "str | Path", *, recursive: bool = False, **kwargs: Any) -> None:
+        """Delete a file, or a directory when ``recursive`` is True, asynchronously."""
+        await async_(self.delete_sync)(path, recursive=recursive, **kwargs)
 
     async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy file asynchronously."""
@@ -519,12 +536,18 @@ class LocalStore:
         resolved = self._resolve_path(path)
 
         async def _do_write_async() -> None:
-            async with _AsyncLocalWriteStream(
+            stream_context = _AsyncLocalWriteStream(
                 resolved, overwrite=overwrite, backend_type=self.backend_type, log_fields=None
-            ) as sink:
+            )
+            sink = await stream_context.__aenter__()
+            stream_error: BaseException | None = None
+            try:
                 await encode_arrow_to_async_sink(
                     table, sink, format_hint=format_hint, compression=compression, write_options=merged_write_options
                 )
+            except BaseException as caught:
+                stream_error = caught
+            await exit_async_context(stream_context, stream_error)
 
         await execute_async_storage_operation(
             _do_write_async, backend=self.backend_type, operation="write_arrow", path=str(resolved)
@@ -578,7 +601,11 @@ class LocalStore:
         Raises:
             StoragePathTraversalError: If the path resolves outside ``base_path``.
         """
-        relative = ensure_path_within_root(path, self.base_path)
+        target: str | Path = path
+        target_str = str(path)
+        if target_str.startswith(FILE_SCHEME_PREFIX):
+            target = parse_file_uri_path(target_str)
+        relative = ensure_path_within_root(target, self.base_path)
         return self.base_path if not relative else self.base_path / relative
 
     def _collect_metadata(self, resolved: "Path") -> "dict[str, object]":
@@ -741,6 +768,7 @@ async def _abort_local_stage_async(stage: "Path", file_obj: "BinaryIO") -> None:
         return
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _LocalFileSink:
     """Synchronous byte sink backed by a staged local file."""
 
@@ -774,6 +802,7 @@ class _LocalFileSink:
         self.closed = True
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncLocalFileSink:
     """Asynchronous byte sink backed by a staged local file via ``async_``."""
 
@@ -808,6 +837,7 @@ class _AsyncLocalFileSink:
         self.closed = True
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _LocalWriteStream:
     """Synchronous staged local write stream context manager."""
 
@@ -861,6 +891,7 @@ class _LocalWriteStream:
             _abort_local_stage(stage, file_obj)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncLocalWriteStream:
     """Asynchronous staged local write stream context manager with shielded completion."""
 

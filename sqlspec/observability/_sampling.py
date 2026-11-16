@@ -7,10 +7,13 @@ visibility into errors and slow queries.
 """
 
 import random
+import secrets
 import zlib
-from typing import ClassVar
+from typing import ClassVar, Final
 
 __all__ = ("SamplingConfig",)
+
+_PROCESS_SALT: Final[bytes] = secrets.token_bytes(16)
 
 
 class SamplingConfig:
@@ -24,7 +27,9 @@ class SamplingConfig:
         sample_rate: Probability of sampling (0.0 to 1.0). 1.0 means always sample.
         force_sample_on_error: If True, always sample when an error occurs.
         force_sample_slow_queries_ms: If set, always sample queries slower than this threshold.
-        deterministic: If True, use hash-based sampling for consistency across distributed systems.
+        deterministic: If True, use per-process hash-based sampling salted with the
+            process salt so identical correlation IDs yield repeatable decisions
+            within the same process without cross-process correlation.
     """
 
     __slots__ = (
@@ -62,9 +67,10 @@ class SamplingConfig:
             force_sample_slow_queries_ms: If set, always sample queries that take
                 longer than this threshold in milliseconds. Defaults to 100.0ms.
                 Set to None to disable.
-            deterministic: If True, use hash-based sampling that produces consistent
-                results for the same correlation ID across distributed systems.
-                If False, use random sampling. Defaults to True.
+            deterministic: If True, use per-process hash-based sampling salted with the
+                process salt so the same correlation ID is sampled consistently within
+                the current process (not shared across separate processes). If False, use
+                random sampling. Defaults to True.
         """
         self.sample_rate = max(0.0, min(1.0, sample_rate))
         self.force_sample_on_error = force_sample_on_error
@@ -141,7 +147,7 @@ class SamplingConfig:
             return False
 
         if self.deterministic and correlation_id:
-            hash_value = zlib.crc32(correlation_id.encode("utf-8")) % self.HASH_MODULUS
+            hash_value = zlib.crc32(_PROCESS_SALT + correlation_id.encode("utf-8")) % self.HASH_MODULUS
             threshold = int(self.sample_rate * self.HASH_MODULUS)
             return hash_value < threshold
 

@@ -3,6 +3,7 @@
 import pytest
 from mssql_python import Error as MssqlPythonError
 
+import sqlspec.adapters.mssql_python.core as mssql_core
 from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE
 from sqlspec.adapters.mssql_python.core import (
     build_connection_config,
@@ -10,12 +11,14 @@ from sqlspec.adapters.mssql_python.core import (
     create_mapped_exception,
     extract_error_number,
     format_identifier,
+    validate_bulk_identifier,
 )
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
     DataError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     NotNullViolationError,
     PermissionDeniedError,
     QueryTimeoutError,
@@ -360,3 +363,95 @@ def test_create_mapped_exception_maps_odbc_sqlstate() -> None:
     err_timeout = MssqlPythonError("Query timeout expired", "HYT00")
     mapped_timeout = create_mapped_exception(err_timeout)
     assert isinstance(mapped_timeout, QueryTimeoutError)
+
+
+@pytest.mark.parametrize("code", [3906, 3908, 978, 976])
+def test_ag_error_mapping_retains_native_cause(code: int) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError, ReplicaUnavailableError
+
+    native = Exception(code, "Availability group replica rejected request")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReplicaUnavailableError if code == 976 else ReadOnlyTransactionError)
+    assert mapped.__cause__ is native
+
+
+def test_ag_read_only_sqlstate_maps_without_numeric_code() -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    native = Exception("request rejected", "25006")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is native
+
+
+@pytest.mark.parametrize(
+    ("raw_pwd", "expected_pwd_token"),
+    [
+        ("p;w=d", "PWD={p;w=d};"),
+        ("p}a;ss}word", "PWD={p}}a;ss}}word};"),
+        ("  padded  ", "PWD={  padded  };"),
+        ("plain_secret", "PWD=plain_secret;"),
+    ],
+)
+def test_build_connection_config_escapes_ms_odbcstr_values_and_roundtrips(
+    raw_pwd: str, expected_pwd_token: str
+) -> None:
+    """Delimiter-bearing ODBC parameter values use MS-ODBCSTR brace escaping."""
+    connection_string, _ = build_connection_config({
+        "server": "localhost",
+        "uid": "sa",
+        "pwd": raw_pwd,
+        "extra": {"packet size": 8192},
+    })
+    assert expected_pwd_token in connection_string
+    assert "PacketSize=8192;" in connection_string
+    parsed = dict(parse_odbc_connection_string(connection_string))
+    raw_parsed_pwd = parsed["PWD"]
+    if raw_parsed_pwd.startswith("{") and raw_parsed_pwd.endswith("}"):
+        raw_parsed_pwd = raw_parsed_pwd[1:-1].replace("}}", "}")
+    assert raw_parsed_pwd == raw_pwd
+
+
+@pytest.mark.parametrize(
+    "bad_params",
+    [
+        {"server": "localhost", "pwd": "bad\x00pwd"},
+        {"server": "localhost", "pwd": "bad\npwd"},
+        {"server": "localhost", "pwd": "bad\rpwd"},
+        {"server": "localhost", "extra": {"PWD=x;Trusted_Connection": "yes"}},
+        {"server": "localhost", "extra": {"123bad": "val"}},
+        {"server": "localhost", "extra": {"Server\n": "localhost"}},
+        {"connection_string": "Server=localhost;\nUID=sa;"},
+    ],
+)
+def test_build_connection_config_rejects_invalid_keys_and_control_chars(bad_params: dict[str, object]) -> None:
+    """Invalid ODBC keywords and NUL/CR/LF control characters raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(bad_params)
+
+
+@pytest.mark.parametrize(
+    ("pattern_name", "value"), [("_ODBC_KEY_PATTERN", "Server\n"), ("_UNQUOTED_TSQL_IDENTIFIER_PATTERN", "users\n")]
+)
+def test_mssql_identifier_patterns_reject_trailing_newline(pattern_name: str, value: str) -> None:
+    """Identifier regexes use full-string anchors so trailing newlines never match."""
+    pattern = getattr(mssql_core, pattern_name)
+    assert pattern.match(value) is None
+    assert pattern.fullmatch(value) is None
+
+
+@pytest.mark.parametrize(
+    "valid_identifier", ["users", "dbo.users", "[dbo].[users]", "[my]]table]", '"dbo.schema"."orders.table"']
+)
+def test_validate_bulk_identifier_accepts_valid_identifiers(valid_identifier: str) -> None:
+    """Valid 1- and 2-part T-SQL identifiers pass bulk identifier validation."""
+    assert validate_bulk_identifier(valid_identifier, allow_schema=True) == valid_identifier
+
+
+@pytest.mark.parametrize(
+    "invalid_identifier", ["", "   ", "dbo.", ".users", "a.b.c", "users\x00", "[unclosed", "[bad]mid]", "bad;table"]
+)
+def test_validate_bulk_identifier_rejects_malformed_identifiers(invalid_identifier: str) -> None:
+    """Malformed or multi-catalog bulk identifiers raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        validate_bulk_identifier(invalid_identifier, allow_schema=True)

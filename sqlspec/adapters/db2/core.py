@@ -1,12 +1,15 @@
 """IBM Db2 adapter compiled helpers and exception translation."""
 
+import contextlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import parse_qsl, unquote, urlsplit
 
+from sqlspec.adapters.db2._typing import Db2Error
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -17,18 +20,22 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
 
 if TYPE_CHECKING:
     from logging import Logger
+
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "INDEX_EXISTS_SQL",
@@ -43,16 +50,21 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_cache_hit",
+    "execute_cache_hit_async",
     "extract_sqlstate",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "resolve_column_names",
+    "resolve_connection_overrides",
     "resolve_many_rowcount",
     "resolve_rowcount",
     "split_db2_table_name",
     "to_db_timestamp",
     "utc_now",
 )
+
+logger = get_logger("sqlspec.adapters.db2")
 
 TABLE_EXISTS_SQL: Final[str] = (
     "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
@@ -75,9 +87,17 @@ _CLI_KEYWORDS: Final[tuple[tuple[str, str], ...]] = (
     ("connect_timeout", "CONNECTTIMEOUT"),
 )
 _CLI_KEYWORD_TO_KEY: Final[dict[str, str]] = {keyword: key for key, keyword in _CLI_KEYWORDS}
+_DEDICATED_EXTRA_KEYWORDS: Final[dict[str, str]] = {
+    **_CLI_KEYWORD_TO_KEY,
+    "AUTOCOMMIT": "autocommit",
+    "READONLY": "read_only",
+    "READ_ONLY": "read_only",
+}
 _SUPPORTED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
     *(key for key, _ in _CLI_KEYWORDS),
     "autocommit",
+    "read_only",
+    "conn_options",
     "dsn",
     "extra",
     "health_check_interval",
@@ -88,13 +108,15 @@ _INTEGER_KEYS: Final[tuple[str, ...]] = ("port", "connect_timeout")
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 _CLI_KEYWORD_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
+_ODBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({";", "{", "}", "="})
 _BRACED_MIN_LENGTH: Final[int] = 2
 _DEFAULT_PORT: Final[int] = 50000
 _MIN_PORT: Final[int] = 1
 _MAX_PORT: Final[int] = 65535
 _DEFAULT_PROTOCOL: Final[str] = "TCPIP"
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
-IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
+IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?!\d)(?:[A-Z0-9_]+)\Z")
 _SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:SQLSTATE[=:\s]+|state[:=\s]+)([0-9A-Z]{5})\b", re.IGNORECASE
 )
@@ -194,6 +216,12 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
     sqlstate = extract_sqlstate(error)
     sqlcode = _extract_sqlcode(error)
 
+    if sqlstate == "25006" or sqlcode in {817, 1773, 1776}:
+        mapped = _build_mapped_exception(
+            ReadOnlyTransactionError, "read-only standby transaction", sqlstate, sqlcode, error
+        )
+        mapped.__cause__ = error
+        return mapped
     if sqlstate in _ROLLBACK_SQLSTATES or sqlcode in _ROLLBACK_SQLCODES:
         if _extract_reason_code(str(error)) == _LOCK_TIMEOUT_REASON_CODE:
             return _build_mapped_exception(QueryTimeoutError, "lock timeout", sqlstate, sqlcode, error)
@@ -348,6 +376,135 @@ def resolve_rowcount(cursor: Any) -> int:
     return -1
 
 
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[int, tuple[Any, list[str]]], bool]",
+) -> "SQLResult":
+    """Execute a cached statement on an ``ibm_db_dbi`` connection and build its result.
+
+    Args:
+        connection: ``ibm_db_dbi.Connection`` to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Session-local column name cache and whether uppercase column names are lowercased.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any ``ibm_db_dbi`` error the statement raises.
+    """
+    parameters = normalize_execute_parameters(params) or ()
+    compiled_sql = cached.compiled_sql
+    try:
+        cursor = connection.cursor()
+        try:
+            if parameters:
+                cursor.execute(compiled_sql, parameters)
+            else:
+                cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            column_names = resolve_column_names(cursor.description or None, state[0], lowercase=state[1])
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                fetched_data,
+                column_names,
+                len(fetched_data),
+                resolve_row_format(fetched_data),
+            )
+        finally:
+            _close_cursor(cursor)
+    except Db2Error as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+async def execute_cache_hit_async(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[int, tuple[Any, list[str]]], bool]",
+) -> "SQLResult":
+    """Execute a cached statement on an ``ibm_db_dbi`` async connection and build its result.
+
+    Args:
+        connection: ``ibm_db_dbi.AsyncConnection`` to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Session-local column name cache and whether uppercase column names are lowercased.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any ``ibm_db_dbi`` error the statement raises.
+    """
+    parameters = normalize_execute_parameters(params) or ()
+    compiled_sql = cached.compiled_sql
+    try:
+        cursor = await connection.cursor()
+        error: BaseException | None = None
+        result: SQLResult | None = None
+        try:
+            if parameters:
+                await cursor.execute(compiled_sql, parameters)
+            else:
+                await cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                result = DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            else:
+                fetched_data = await cursor.fetchall()
+                column_names = resolve_column_names(cursor.description or None, state[0], lowercase=state[1])
+                result = SQLResult.create_cached_select(
+                    sql,
+                    statement_config,
+                    cached.processed_state,
+                    compiled_sql,
+                    parameters,
+                    fetched_data,
+                    column_names,
+                    len(fetched_data),
+                    resolve_row_format(fetched_data),
+                )
+        except BaseException as cleanup_trigger:
+            error = cleanup_trigger
+        with contextlib.suppress(Exception):
+            await cursor.close()
+        if error is not None:
+            raise error
+    except Db2Error as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    else:
+        return cast("SQLResult", result)
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
+
+
 def resolve_many_rowcount(cursor: Any, parameters: Any) -> int:
     """Resolve a batch rowcount without assuming one affected row per parameter set.
 
@@ -496,6 +653,25 @@ def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, A
         config["extra"] = extra
     build_dsn_string(config)
     return config
+
+
+def resolve_connection_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve a replacement DSN or endpoint without retaining inherited aliases."""
+    result = dict(base_config)
+    if "dsn" in overrides:
+        for key, _ in _CLI_KEYWORDS:
+            if key not in overrides:
+                result.pop(key, None)
+        if "extra" not in overrides:
+            result.pop("extra", None)
+        parsed = _parse_db2_dsn(str(overrides["dsn"]))
+        for key in ("read_only", "autocommit"):
+            if key in parsed and key not in overrides:
+                result.pop(key, None)
+    elif any(key in overrides for key in ("hostname", "database", "port")):
+        result.pop("dsn", None)
+    result.update(overrides)
+    return result
 
 
 def build_dsn_string(config: Mapping[str, Any]) -> str:
@@ -667,6 +843,9 @@ def _assign_dsn_value(params: dict[str, Any], extra: dict[str, Any], keyword: st
         value: Unquoted keyword value.
     """
     upper = keyword.upper()
+    if upper in {"READONLY", "READ_ONLY"}:
+        params["read_only"] = _parse_bool("read_only", value)
+        return
     if upper == "AUTOCOMMIT":
         params["autocommit"] = _parse_bool("autocommit", value)
         return
@@ -701,6 +880,9 @@ def _parse_db2_dsn(dsn: str) -> dict[str, Any]:
     """
     params: dict[str, Any] = {}
     extra: dict[str, Any] = {}
+    if "\x00" in dsn or "\r" in dsn or "\n" in dsn:
+        msg = "Db2 connection parameter 'dsn' contains disallowed control characters"
+        raise ImproperConfigurationError(msg)
     if "://" in dsn:
         parsed = urlsplit(dsn)
         if parsed.username is not None:
@@ -744,43 +926,42 @@ def _merge_extra(dsn_extra: Mapping[str, Any], explicit_extra: Mapping[str, Any]
     for source in (dsn_extra, explicit_extra):
         for keyword, value in source.items():
             upper = str(keyword).upper()
-            if upper in _CLI_KEYWORD_TO_KEY or upper == "AUTOCOMMIT":
-                canonical = _CLI_KEYWORD_TO_KEY.get(upper, "autocommit")
+            canonical = _DEDICATED_EXTRA_KEYWORDS.get(upper)
+            if canonical is not None:
                 msg = f"Db2 connection keyword {keyword!r} must be configured with the {canonical!r} parameter"
                 raise ImproperConfigurationError(msg)
             merged[upper] = (str(keyword), value)
     return dict(merged.values())
 
 
+def _format_connection_value(key: str, value: Any) -> str:
+    """Validate a Db2 CLI keyword and format its value using MS-ODBCSTR brace escaping."""
+    if "\x00" in key or "\r" in key or "\n" in key or _ODBC_KEY_PATTERN.fullmatch(key) is None:
+        msg = f"Invalid Db2 connection keyword: {key!r}"
+        raise ImproperConfigurationError(msg)
+    text = ("yes" if value else "no") if isinstance(value, bool) else str(value)
+    if "\x00" in text or "\r" in text or "\n" in text:
+        msg = f"Db2 connection value for {key!r} contains disallowed control characters"
+        raise ImproperConfigurationError(msg)
+    if not text:
+        return ""
+    if any(ch in _ODBC_SPECIAL_CHARS for ch in text) or text != text.strip():
+        return "{" + text.replace("}", "}}") + "}"
+    return text
+
+
 def _format_cli_value(keyword: str, value: Any) -> str:
     """Render one ``KEYWORD=value`` pair for a Db2 CLI connection string.
 
-    Values containing ``;`` or ``{`` or leading/trailing whitespace are wrapped in braces; booleans
-    render as ``1``/``0``.
-
-    Args:
-        keyword: CLI keyword.
-        value: Value to render.
-
-    Returns:
-        str: The rendered pair without a trailing ``;``.
-
-    Raises:
-        ImproperConfigurationError: When the keyword is not a plain CLI keyword or the value
-            contains ``}``, which CLI connection strings cannot represent.
+    Values containing CLI delimiters or edge whitespace are wrapped in braces with ``}`` escaped
+    as ``}}``; booleans render as ``1``/``0``.
     """
-    if _CLI_KEYWORD_PATTERN.fullmatch(keyword) is None:
+    if "\x00" in keyword or "\r" in keyword or "\n" in keyword or _ODBC_KEY_PATTERN.fullmatch(keyword) is None:
         msg = f"Invalid Db2 connection keyword: {keyword!r}"
         raise ImproperConfigurationError(msg)
     if isinstance(value, bool):
         return f"{keyword}={'1' if value else '0'}"
-    text = str(value)
-    if "}" in text:
-        msg = f"Db2 connection value for {keyword} cannot contain '}}'"
-        raise ImproperConfigurationError(msg)
-    if ";" in text or "{" in text or text != text.strip():
-        return f"{keyword}={{{text}}}"
-    return f"{keyword}={text}"
+    return f"{keyword}={_format_connection_value(keyword, value)}"
 
 
 def _split_db2_raw_parts(name: str) -> list[str]:

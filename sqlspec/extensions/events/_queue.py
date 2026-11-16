@@ -1,6 +1,7 @@
 """Table-backed queue implementation for EventChannel."""
 
 import asyncio
+import math
 import threading
 import time
 from contextlib import suppress
@@ -9,6 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast, final
 
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
@@ -16,6 +18,7 @@ from sqlspec.extensions.events._payload import coerce_dict, coerce_optional_dict
 from sqlspec.extensions.events.primitives import claim_verified, lock_clause, row_limit_clause, select_limit_prefix
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -34,8 +37,10 @@ logger = get_logger("sqlspec.events.queue")
 _PENDING_STATUS = "pending"
 _LEASED_STATUS = "leased"
 _ACKED_STATUS = "acked"
+_FAILED_STATUS = "failed"
 _DEFAULT_TABLE = "sqlspec_event_queue"
 _MAX_EMPTY_POLL_CHANNELS = 1_024
+_MAX_TRACKED_LEASES = 10_000
 
 
 class _BaseTableEventQueue:
@@ -51,13 +56,19 @@ class _BaseTableEventQueue:
         "_dialect",
         "_empty_poll_delays",
         "_empty_poll_lock",
+        "_fail_statement",
         "_insert_statement",
+        "_lease_lock",
         "_lease_seconds",
+        "_leases",
+        "_max_attempts",
         "_max_claim_attempts",
         "_nack_statement",
         "_retention_seconds",
+        "_retry_backoff_seconds",
         "_runtime",
         "_select_by_id_statement",
+        "_select_claimable_by_id_statement",
         "_select_for_update",
         "_select_statement",
         "_statement_config",
@@ -76,16 +87,32 @@ class _BaseTableEventQueue:
         skip_locked: bool | None = None,
         cleanup_on_ack: bool = True,
         use_run_in_transaction: bool = False,
+        max_attempts: int = 5,
+        retry_backoff_seconds: float = 1.0,
     ) -> None:
+        if isinstance(max_attempts, bool) or max_attempts < 1:
+            msg = "max_attempts must be at least 1"
+            raise ImproperConfigurationError(msg)
+        if (
+            isinstance(retry_backoff_seconds, bool)
+            or not math.isfinite(retry_backoff_seconds)
+            or retry_backoff_seconds < 0
+        ):
+            msg = "retry_backoff_seconds must be a finite non-negative number"
+            raise ImproperConfigurationError(msg)
         self._config = config
         self._statement_config = config.statement_config
         self._runtime = config.get_observability_runtime()
         self._dialect = str(self._statement_config.dialect or "").lower() if self._statement_config else ""
         self._empty_poll_delays: dict[str, float] = {}
         self._empty_poll_lock = threading.Lock()
+        self._lease_lock = threading.Lock()
+        self._leases: dict[str, tuple[str, datetime]] = {}
         self._table_name = normalize_queue_table_name(queue_table or _DEFAULT_TABLE)
         self._lease_seconds = 30 if lease_seconds is None else lease_seconds
         self._retention_seconds = 86_400 if retention_seconds is None else retention_seconds
+        self._max_attempts = int(max_attempts)
+        self._retry_backoff_seconds = float(retry_backoff_seconds)
         self._max_claim_attempts = 5
         self._select_for_update = bool(select_for_update)
         self._cleanup_on_ack = bool(cleanup_on_ack)
@@ -93,9 +120,11 @@ class _BaseTableEventQueue:
         self._insert_statement = self._insert_sql()
         self._select_statement = self._select_sql(self._select_for_update, bool(skip_locked))
         self._select_by_id_statement = self._select_by_id_sql()
+        self._select_claimable_by_id_statement = self._select_claimable_by_id_sql()
         self._claim_statement = self._claim_sql()
         self._ack_statement = self._ack_sql()
         self._nack_statement = self._nack_sql()
+        self._fail_statement = self._fail_sql()
         self._acked_cleanup_statement = self._cleanup_sql()
         self._delete_by_id_statement = self._delete_by_id_sql()
 
@@ -119,7 +148,14 @@ class _BaseTableEventQueue:
     def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
         top_clause = select_limit_prefix(self._dialect, 1)
         limit_clause = "" if self._uses_oracle_locking_select(select_for_update) else self._row_limit_clause()
-        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC, event_id ASC"
+        base = (
+            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, "
+            f"lease_expires_at, created_at FROM {self._table_name} "
+            "WHERE channel = :channel AND available_at <= :available_cutoff "
+            "AND (status = :pending_status OR (status = :leased_status "
+            "AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) "
+            "AND attempts < :max_attempts ORDER BY created_at ASC, event_id ASC"
+        )
         locking_clause = lock_clause(
             select_for_update=select_for_update, skip_locked=skip_locked, dialect=self._dialect
         )
@@ -129,6 +165,19 @@ class _BaseTableEventQueue:
         top_clause = select_limit_prefix(self._dialect, 1)
         limit_clause = self._row_limit_clause()
         base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE event_id = :event_id"
+        return base + limit_clause
+
+    def _select_claimable_by_id_sql(self) -> str:
+        top_clause = select_limit_prefix(self._dialect, 1)
+        limit_clause = self._row_limit_clause()
+        base = (
+            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, "
+            f"lease_expires_at, created_at FROM {self._table_name} "
+            "WHERE event_id = :event_id AND channel = :channel AND available_at <= :available_cutoff "
+            "AND (status = :pending_status OR (status = :leased_status "
+            "AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) "
+            "AND attempts < :max_attempts"
+        )
         return base + limit_clause
 
     def _row_limit_clause(self) -> str:
@@ -155,32 +204,113 @@ class _BaseTableEventQueue:
             self._empty_poll_delays.pop(channel, None)
 
     def _claim_sql(self) -> str:
-        return f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 WHERE event_id = :event_id AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff)))"
+        return (
+            f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, "
+            "attempts = attempts + 1 WHERE event_id = :event_id "
+            "AND (status = :pending_status OR (status = :leased_status "
+            "AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff))) "
+            "AND channel = :channel AND available_at <= :available_cutoff AND attempts < :max_attempts"
+        )
 
     def _ack_sql(self) -> str:
-        return f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at WHERE event_id = :event_id"
+        return (
+            f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at "
+            f"WHERE {self._owned_lease_predicate()}"
+        )
 
     def _nack_sql(self) -> str:
-        return f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL WHERE event_id = :event_id"
+        return (
+            f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL, "
+            f"available_at = :available_at WHERE {self._owned_lease_predicate()}"
+        )
+
+    def _fail_sql(self) -> str:
+        return (
+            f"UPDATE {self._table_name} SET status = :failed_status, lease_expires_at = NULL "
+            f"WHERE {self._owned_lease_predicate()}"
+        )
 
     def _cleanup_sql(self) -> str:
         return f"DELETE FROM {self._table_name} WHERE status = :acked AND acknowledged_at IS NOT NULL AND acknowledged_at <= :cutoff"
 
     def _delete_by_id_sql(self) -> str:
-        return f"DELETE FROM {self._table_name} WHERE event_id = :event_id"
+        return f"DELETE FROM {self._table_name} WHERE {self._owned_lease_predicate()}"
 
     @staticmethod
-    def _candidate_parameters(channel: str, current_time: "datetime") -> "dict[str, Any]":
+    def _owned_lease_predicate() -> str:
+        return (
+            "event_id = :event_id AND channel = :channel AND status = :leased_status "
+            "AND lease_expires_at = :lease_expires_at"
+        )
+
+    def _record_lease(self, event_id: str, channel: str, leased_until: "datetime") -> None:
+        """Remember the lease this queue instance holds for a claimed event."""
+        with self._lease_lock:
+            self._leases.pop(event_id, None)
+            if len(self._leases) >= _MAX_TRACKED_LEASES:
+                self._leases.pop(next(iter(self._leases)))
+            self._leases[event_id] = (channel, leased_until)
+
+    def _claimed_event(self, row: "dict[str, Any]", leased_until: "datetime") -> EventMessage:
+        event = self._hydrate_event(row, leased_until, increment_attempts=True)
+        self._record_lease(event.event_id, event.channel, leased_until)
+        return event
+
+    def _take_lease(self, event_id: str) -> "tuple[str, datetime] | None":
+        with self._lease_lock:
+            return self._leases.pop(event_id, None)
+
+    def _owned_row(self, row: "dict[str, Any] | None", lease: "tuple[str, datetime]") -> "dict[str, Any] | None":
+        """Return the row when it still carries the unexpired lease this instance claimed."""
+        channel, leased_until = lease
+        if (
+            row is None
+            or row.get("channel") != channel
+            or leased_until <= self._utcnow()
+            or not self._claim_verified(row, leased_until)
+        ):
+            return None
+        return row
+
+    @staticmethod
+    def _owned_write_applied(row: "dict[str, Any] | None", leased_until: "datetime") -> bool:
+        """Return whether a lease-guarded write that reported no affected rows took effect.
+
+        Drivers that report zero or an unknown count for successful writes fall back to the
+        stored row: the write counts as lost when the row now carries another claimer's lease.
+
+        Args:
+            row: The event row read after the write, or ``None`` when it no longer exists.
+            leased_until: The lease this instance held.
+
+        Returns:
+            ``True`` when the write took effect.
+        """
+        if row is None:
+            return True
+        lease_value = row.get("lease_expires_at")
+        return lease_value is None or parse_event_timestamp(lease_value) == leased_until
+
+    @staticmethod
+    def _owned_parameters(row: "dict[str, Any]") -> "dict[str, Any]":
+        return {
+            "event_id": row["event_id"],
+            "channel": row["channel"],
+            "leased_status": _LEASED_STATUS,
+            "lease_expires_at": row["lease_expires_at"],
+        }
+
+    def _candidate_parameters(self, channel: str, current_time: "datetime") -> "dict[str, Any]":
         return {
             "channel": channel,
             "available_cutoff": current_time,
             "pending_status": _PENDING_STATUS,
             "leased_status": _LEASED_STATUS,
             "lease_cutoff": current_time,
+            "max_attempts": self._max_attempts,
         }
 
-    @staticmethod
-    def _claim_parameters(row: "dict[str, Any]", now: "datetime", leased_until: "datetime") -> "dict[str, Any]":
+    def _claim_parameters(self, row: "dict[str, Any]", now: "datetime", leased_until: "datetime") -> "dict[str, Any]":
         return {
             "claimed_status": _LEASED_STATUS,
             "lease_expires_at": leased_until,
@@ -188,11 +318,26 @@ class _BaseTableEventQueue:
             "pending_status": _PENDING_STATUS,
             "leased_status": _LEASED_STATUS,
             "lease_reentry_cutoff": now,
+            "channel": row["channel"],
+            "available_cutoff": now,
+            "max_attempts": self._max_attempts,
         }
 
     @staticmethod
     def _utcnow() -> "datetime":
         return datetime.now(UTC)
+
+    def _lease_deadline(self, now: "datetime") -> "datetime":
+        """Return the lease expiry for a claim made at ``now``, rounded up to a whole second.
+
+        The stored lease doubles as the claimer's ownership token, so it must read back exactly as
+        written. Whole seconds survive every backend's timestamp binding, including drivers that bind
+        datetimes with millisecond or second precision.
+        """
+        deadline = now + timedelta(seconds=self._lease_seconds)
+        if deadline.microsecond:
+            deadline = deadline.replace(microsecond=0) + timedelta(seconds=1)
+        return deadline
 
     @classmethod
     def _batch_insert_parameters(
@@ -356,44 +501,78 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                         stop_event.wait(delay)
                 return None
             now = self._utcnow()
-            leased_until = now + timedelta(seconds=self._lease_seconds)
+            leased_until = self._lease_deadline(now)
             claimed = self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
             if not claimed:
                 claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 self._reset_empty_poll_delay(channel)
-                return self._hydrate_event(row, leased_until, increment_attempts=True)
+                return self._claimed_event(row, leased_until)
         return None
 
-    def dequeue_by_event_id(self, event_id: str) -> "EventMessage | None":
-        row = self._fetch_by_event_id(event_id)
+    def dequeue_by_event_id(self, event_id: str, channel: str) -> "EventMessage | None":
+        now = self._utcnow()
+        row = self._fetch_claimable_by_event_id(event_id, channel, now)
         if row is None:
             return None
         now = self._utcnow()
-        leased_until = now + timedelta(seconds=self._lease_seconds)
+        leased_until = self._lease_deadline(now)
         claimed = self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
         if not claimed:
             claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            event = self._hydrate_event(row, leased_until, increment_attempts=True)
+            event = self._claimed_event(row, leased_until)
             self._reset_empty_poll_delay(event.channel)
             return event
         return None
 
-    def ack(self, event_id: str) -> None:
-        if self._cleanup_on_ack and self._retention_seconds <= 0:
-            self._execute(self._delete_by_id_statement, {"event_id": event_id})
-            self._runtime.increment_metric("events.ack")
-            return
+    def ack(self, event_id: str) -> bool:
+        lease = self._take_lease(event_id)
+        row = self._owned_row(self._fetch_by_event_id(event_id), lease) if lease is not None else None
+        if row is None or lease is None:
+            self._runtime.increment_metric("events.ack.unowned")
+            return False
+        owned = self._owned_parameters(row)
         now = self._utcnow()
-        self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
-        if self._cleanup_on_ack:
+        if self._cleanup_on_ack and self._retention_seconds <= 0:
+            rows_affected = self._execute(self._delete_by_id_statement, owned)
+        else:
+            rows_affected = self._execute(self._ack_statement, {**owned, "acked": _ACKED_STATUS, "acked_at": now})
+        if not self._owned_write_confirmed(event_id, rows_affected, lease[1]):
+            self._runtime.increment_metric("events.ack.unowned")
+            return False
+        if self._cleanup_on_ack and self._retention_seconds > 0:
             self._cleanup(now)
         self._runtime.increment_metric("events.ack")
+        return True
 
-    def nack(self, event_id: str) -> None:
-        self._execute(self._nack_statement, {"pending": _PENDING_STATUS, "event_id": event_id})
+    def nack(self, event_id: str) -> bool:
+        lease = self._take_lease(event_id)
+        row = self._owned_row(self._fetch_by_event_id(event_id), lease) if lease is not None else None
+        if row is None or lease is None:
+            self._runtime.increment_metric("events.nack.unowned")
+            return False
+        owned = self._owned_parameters(row)
+        attempts = int(row["attempts"])
+        if attempts >= self._max_attempts:
+            rows_affected = self._execute(self._fail_statement, {**owned, "failed_status": _FAILED_STATUS})
+        else:
+            now = self._utcnow()
+            delay = self._retry_backoff_seconds * (2 ** max(0, attempts - 1))
+            rows_affected = self._execute(
+                self._nack_statement,
+                {**owned, "pending": _PENDING_STATUS, "available_at": now + timedelta(seconds=delay)},
+            )
+        if not self._owned_write_confirmed(event_id, rows_affected, lease[1]):
+            self._runtime.increment_metric("events.nack.unowned")
+            return False
         self._runtime.increment_metric("events.nack")
+        return True
+
+    def _owned_write_confirmed(self, event_id: str, rows_affected: int, leased_until: "datetime") -> bool:
+        if rows_affected > 0:
+            return True
+        return self._owned_write_applied(self._fetch_by_event_id(event_id), leased_until)
 
     def shutdown(self) -> None:
         """Shutdown the backend (no-op for table queue)."""
@@ -428,6 +607,17 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             )
             return self._normalize_queue_row(row)
 
+    def _fetch_claimable_by_event_id(self, event_id: str, channel: str, now: "datetime") -> "dict[str, Any] | None":
+        parameters = self._candidate_parameters(channel, now)
+        parameters["event_id"] = event_id
+        with cast(
+            "AbstractContextManager[SyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
+        ) as driver:
+            row = driver.select_one_or_none(
+                SQL(self._select_claimable_by_id_statement, parameters, statement_config=self._statement_config)
+            )
+            return self._normalize_queue_row(row)
+
     def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
         session_ctx = (
             _provide_session(self._config, read_only=True)
@@ -454,7 +644,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                     driver.rollback()
                     return None
                 now = self._utcnow()
-                leased_until = now + timedelta(seconds=self._lease_seconds)
+                leased_until = self._lease_deadline(now)
                 claimed = self._execute_with_driver(
                     driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
                 )
@@ -472,7 +662,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                     driver.rollback()
                     return None
                 driver.commit()
-                return self._hydrate_event(row, leased_until, increment_attempts=True)
+                return self._claimed_event(row, leased_until)
             except Exception:
                 with suppress(Exception):
                     driver.rollback()
@@ -562,7 +752,10 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             if self._use_run_in_transaction
             else self._config.provide_session(transaction=True)
         )
-        async with cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx) as driver:
+        session = cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx)
+        driver = await session.__aenter__()
+        publish_error: BaseException | None = None
+        try:
             if self._use_run_in_transaction:
                 run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
                 if callable(run_in_tx):
@@ -573,6 +766,9 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             else:
                 await self._execute_many_with_driver(driver, records)
                 await driver.commit()
+        except BaseException as exc:
+            publish_error = exc
+        await exit_async_context(session, publish_error)
         self._runtime.increment_metric("events.publisher.session")
         self._runtime.increment_metric("events.publisher.statement")
         self._runtime.increment_metric("events.publish", len(records))
@@ -600,44 +796,78 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                     await asyncio.sleep(delay)
                 return None
             now = self._utcnow()
-            leased_until = now + timedelta(seconds=self._lease_seconds)
+            leased_until = self._lease_deadline(now)
             claimed = await self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
             if not claimed:
                 claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 self._reset_empty_poll_delay(channel)
-                return self._hydrate_event(row, leased_until, increment_attempts=True)
+                return self._claimed_event(row, leased_until)
         return None
 
-    async def dequeue_by_event_id(self, event_id: str) -> "EventMessage | None":
-        row = await self._fetch_by_event_id(event_id)
+    async def dequeue_by_event_id(self, event_id: str, channel: str) -> "EventMessage | None":
+        now = self._utcnow()
+        row = await self._fetch_claimable_by_event_id(event_id, channel, now)
         if row is None:
             return None
         now = self._utcnow()
-        leased_until = now + timedelta(seconds=self._lease_seconds)
+        leased_until = self._lease_deadline(now)
         claimed = await self._execute(self._claim_statement, self._claim_parameters(row, now, leased_until))
         if not claimed:
             claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            event = self._hydrate_event(row, leased_until, increment_attempts=True)
+            event = self._claimed_event(row, leased_until)
             self._reset_empty_poll_delay(event.channel)
             return event
         return None
 
-    async def ack(self, event_id: str) -> None:
-        if self._cleanup_on_ack and self._retention_seconds <= 0:
-            await self._execute(self._delete_by_id_statement, {"event_id": event_id})
-            self._runtime.increment_metric("events.ack")
-            return
+    async def ack(self, event_id: str) -> bool:
+        lease = self._take_lease(event_id)
+        row = self._owned_row(await self._fetch_by_event_id(event_id), lease) if lease is not None else None
+        if row is None or lease is None:
+            self._runtime.increment_metric("events.ack.unowned")
+            return False
+        owned = self._owned_parameters(row)
         now = self._utcnow()
-        await self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
-        if self._cleanup_on_ack:
+        if self._cleanup_on_ack and self._retention_seconds <= 0:
+            rows_affected = await self._execute(self._delete_by_id_statement, owned)
+        else:
+            rows_affected = await self._execute(self._ack_statement, {**owned, "acked": _ACKED_STATUS, "acked_at": now})
+        if not await self._owned_write_confirmed(event_id, rows_affected, lease[1]):
+            self._runtime.increment_metric("events.ack.unowned")
+            return False
+        if self._cleanup_on_ack and self._retention_seconds > 0:
             await self._cleanup(now)
         self._runtime.increment_metric("events.ack")
+        return True
 
-    async def nack(self, event_id: str) -> None:
-        await self._execute(self._nack_statement, {"pending": _PENDING_STATUS, "event_id": event_id})
+    async def nack(self, event_id: str) -> bool:
+        lease = self._take_lease(event_id)
+        row = self._owned_row(await self._fetch_by_event_id(event_id), lease) if lease is not None else None
+        if row is None or lease is None:
+            self._runtime.increment_metric("events.nack.unowned")
+            return False
+        owned = self._owned_parameters(row)
+        attempts = int(row["attempts"])
+        if attempts >= self._max_attempts:
+            rows_affected = await self._execute(self._fail_statement, {**owned, "failed_status": _FAILED_STATUS})
+        else:
+            now = self._utcnow()
+            delay = self._retry_backoff_seconds * (2 ** max(0, attempts - 1))
+            rows_affected = await self._execute(
+                self._nack_statement,
+                {**owned, "pending": _PENDING_STATUS, "available_at": now + timedelta(seconds=delay)},
+            )
+        if not await self._owned_write_confirmed(event_id, rows_affected, lease[1]):
+            self._runtime.increment_metric("events.nack.unowned")
+            return False
         self._runtime.increment_metric("events.nack")
+        return True
+
+    async def _owned_write_confirmed(self, event_id: str, rows_affected: int, leased_until: "datetime") -> bool:
+        if rows_affected > 0:
+            return True
+        return self._owned_write_applied(await self._fetch_by_event_id(event_id), leased_until)
 
     async def shutdown(self) -> None:
         """Shutdown the backend (no-op for table queue)."""
@@ -650,27 +880,45 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         """Fetch the next candidate event row, using a read-only session when unlocked."""
         current_time = self._utcnow()
         self._runtime.increment_metric("events.poll.query")
-        async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]",
-            _provide_session(self._config, read_only=not self._select_for_update),
-        ) as driver:
-            row = await driver.select_one_or_none(
-                SQL(
-                    self._select_statement,
-                    self._candidate_parameters(channel, current_time),
-                    statement_config=self._statement_config,
-                )
-            )
-            return self._normalize_queue_row(row)
+        return await self._select_queue_row(
+            SQL(
+                self._select_statement,
+                self._candidate_parameters(channel, current_time),
+                statement_config=self._statement_config,
+            ),
+            read_only=not self._select_for_update,
+        )
+
+    async def _select_queue_row(self, statement: SQL, *, read_only: bool) -> "dict[str, Any] | None":
+        """Run one row lookup in its own session and return the normalized row."""
+        session = cast(
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=read_only)
+        )
+        driver = await session.__aenter__()
+        select_error: BaseException | None = None
+        row: Any = None
+        try:
+            row = await driver.select_one_or_none(statement)
+        except BaseException as exc:
+            select_error = exc
+        await exit_async_context(session, select_error)
+        return self._normalize_queue_row(row)
 
     async def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
-        async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
-        ) as driver:
-            row = await driver.select_one_or_none(
-                SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
-            )
-            return self._normalize_queue_row(row)
+        return await self._select_queue_row(
+            SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config),
+            read_only=True,
+        )
+
+    async def _fetch_claimable_by_event_id(
+        self, event_id: str, channel: str, now: "datetime"
+    ) -> "dict[str, Any] | None":
+        parameters = self._candidate_parameters(channel, now)
+        parameters["event_id"] = event_id
+        return await self._select_queue_row(
+            SQL(self._select_claimable_by_id_statement, parameters, statement_config=self._statement_config),
+            read_only=True,
+        )
 
     async def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
         session_ctx = (
@@ -678,54 +926,71 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             if self._use_run_in_transaction
             else self._config.provide_session(transaction=True)
         )
-        async with cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx) as driver:
-            if self._use_run_in_transaction:
-                run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
-                if callable(run_in_tx):
-                    return cast(
-                        "int",
-                        await cast("Any", run_in_tx)(
-                            partial(self._execute_with_driver, sql=sql, parameters=parameters)
-                        ),
-                    )
-            rows_affected = await self._execute_with_driver(driver, sql, parameters)
-            await driver.commit()
-            return rows_affected
+        session = cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx)
+        driver = await session.__aenter__()
+        execute_error: BaseException | None = None
+        rows_affected = 0
+        try:
+            run_in_tx = (
+                cast("Any", getattr(driver, "run_in_transaction", None)) if self._use_run_in_transaction else None
+            )
+            if callable(run_in_tx):
+                rows_affected = cast(
+                    "int",
+                    await cast("Any", run_in_tx)(partial(self._execute_with_driver, sql=sql, parameters=parameters)),
+                )
+            else:
+                rows_affected = await self._execute_with_driver(driver, sql, parameters)
+                await driver.commit()
+        except BaseException as exc:
+            execute_error = exc
+        await exit_async_context(session, execute_error)
+        return rows_affected
 
     async def _claim_locked_candidate(self, channel: str) -> "EventMessage | None":
         current_time = self._utcnow()
-        async with cast(
+        session = cast(
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
-        ) as driver:
-            try:
-                row = await self._fetch_candidate_with_driver(driver, channel, current_time)
-                if row is None:
-                    await driver.rollback()
-                    return None
-                now = self._utcnow()
-                leased_until = now + timedelta(seconds=self._lease_seconds)
-                claimed = await self._execute_with_driver(
-                    driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
+        )
+        driver = await session.__aenter__()
+        claim_error: BaseException | None = None
+        event: EventMessage | None = None
+        try:
+            event = await self._claim_candidate_with_driver(driver, channel, current_time)
+        except BaseException as exc:
+            claim_error = exc
+        if isinstance(claim_error, Exception):
+            with suppress(Exception):
+                await driver.rollback()
+        await exit_async_context(session, claim_error)
+        return event
+
+    async def _claim_candidate_with_driver(
+        self, driver: "AsyncDriverAdapterBase", channel: str, current_time: "datetime"
+    ) -> "EventMessage | None":
+        """Select, claim and commit one candidate on the given session, or roll back when none is claimed."""
+        row = await self._fetch_candidate_with_driver(driver, channel, current_time)
+        if row is None:
+            await driver.rollback()
+            return None
+        now = self._utcnow()
+        leased_until = self._lease_deadline(now)
+        claimed = await self._execute_with_driver(
+            driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
+        )
+        if not claimed:
+            verify_row = await driver.select_one_or_none(
+                SQL(
+                    self._select_by_id_statement, {"event_id": row["event_id"]}, statement_config=self._statement_config
                 )
-                if not claimed:
-                    verify_row = await driver.select_one_or_none(
-                        SQL(
-                            self._select_by_id_statement,
-                            {"event_id": row["event_id"]},
-                            statement_config=self._statement_config,
-                        )
-                    )
-                    verify_row = self._normalize_queue_row(verify_row)
-                    claimed = self._claim_verified(verify_row, leased_until)
-                if not claimed:
-                    await driver.rollback()
-                    return None
-                await driver.commit()
-                return self._hydrate_event(row, leased_until, increment_attempts=True)
-            except Exception:
-                with suppress(Exception):
-                    await driver.rollback()
-                raise
+            )
+            verify_row = self._normalize_queue_row(verify_row)
+            claimed = self._claim_verified(verify_row, leased_until)
+        if not claimed:
+            await driver.rollback()
+            return None
+        await driver.commit()
+        return self._claimed_event(row, leased_until)
 
     async def _fetch_candidate_with_driver(
         self, driver: "AsyncDriverAdapterBase", channel: str, current_time: "datetime"
@@ -746,19 +1011,26 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
         oracle_driver = cast("Any", driver)
         sql, prepared_parameters = oracle_driver._compiled_sql(statement, self._statement_config)
-        async with oracle_driver.with_cursor(oracle_driver.connection) as cursor:
+        cursor_context = oracle_driver.with_cursor(oracle_driver.connection)
+        cursor = await cursor_context.__aenter__()
+        fetch_error: BaseException | None = None
+        rows: list[Any] = []
+        column_names: list[str] = []
+        try:
             await cursor.execute(sql, prepared_parameters or {})
             row = await cursor.fetchone()
-            if row is None:
-                return None
-            column_names, requires_lob_coercion = oracle_driver._resolve_row_metadata(cursor.description)
-            rows, column_names = await collect_async_rows(
-                [row],
-                cursor.description,
-                oracle_driver.driver_features,
-                column_names=column_names,
-                requires_lob_coercion=requires_lob_coercion,
-            )
+            if row is not None:
+                column_names, requires_lob_coercion = oracle_driver._resolve_row_metadata(cursor.description)
+                rows, column_names = await collect_async_rows(
+                    [row],
+                    cursor.description,
+                    oracle_driver.driver_features,
+                    column_names=column_names,
+                    requires_lob_coercion=requires_lob_coercion,
+                )
+        except BaseException as exc:
+            fetch_error = exc
+        await exit_async_context(cursor_context, fetch_error)
         if not rows:
             return None
         return dict(zip(column_names, rows[0], strict=False))
@@ -796,6 +1068,8 @@ def build_queue_backend(
         "use_run_in_transaction": _resolve_bool_setting(
             settings, "use_run_in_transaction", runtime_hints.use_run_in_transaction
         ),
+        "max_attempts": _resolve_int_setting(settings, "max_attempts", 5),
+        "retry_backoff_seconds": _resolve_float_setting(settings, "retry_backoff_seconds", 1.0),
     }
     if config.is_async:
         return AsyncTableEventQueue(config, **kwargs)
@@ -825,3 +1099,12 @@ def _resolve_int_setting(settings: "dict[str, Any]", key: str, default: int) -> 
     if value is None:
         return int(default)
     return int(value)
+
+
+def _resolve_float_setting(settings: "dict[str, Any]", key: str, default: float) -> float:
+    if key not in settings:
+        return float(default)
+    value = settings.get(key)
+    if value is None:
+        return float(default)
+    return float(value)

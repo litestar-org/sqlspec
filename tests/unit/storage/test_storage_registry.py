@@ -2,6 +2,7 @@
 """Unit tests for StorageRegistry."""
 
 import inspect
+import logging
 from pathlib import Path
 
 import pytest
@@ -274,3 +275,43 @@ def test_alias_does_not_match_partial_path_segment(tmp_path: Path, monkeypatch: 
     assert via_alias.base_path == alias_target.resolve()
     assert not_alias.base_path.name == "db_backup"
     assert alias_target.resolve() != not_alias.base_path
+
+
+def test_storage_registry_sanitizes_uri_credentials_in_logs_and_errors(caplog: pytest.LogCaptureFixture) -> None:
+    """StorageRegistry strips userinfo and query parameters from logged and raised URIs."""
+    registry = StorageRegistry()
+    secret_uri = (
+        "https://alice:top-secret-password@storage.example.com:8443/bucket/path?X-Amz-Signature=deadbeef&token=tok123"
+    )
+    expected_sanitized = "https://storage.example.com:8443/bucket/path"
+
+    with caplog.at_level(logging.DEBUG, logger="sqlspec"):
+        registry.register_alias("sanitized_store", secret_uri, backend="local")
+        backend_first = registry.get(secret_uri, backend="local")
+        backend_cached = registry.get(secret_uri, backend="local")
+
+    assert backend_first is backend_cached
+    resolve_uris = [
+        getattr(record, "extra_fields", {}).get("uri_or_alias")
+        for record in caplog.records
+        if record.getMessage() == "storage.resolve"
+    ]
+    register_uris = [
+        getattr(record, "extra_fields", {}).get("uri")
+        for record in caplog.records
+        if record.getMessage() == "storage.alias.register"
+    ]
+    assert resolve_uris == [expected_sanitized, expected_sanitized]
+    assert register_uris == [expected_sanitized]
+    combined_logs = "\n".join(
+        f"{record.getMessage()} {getattr(record, 'extra_fields', {})}" for record in caplog.records
+    )
+    assert "alice" not in combined_logs
+    assert "top-secret-password" not in combined_logs
+    assert "deadbeef" not in combined_logs
+    assert "tok123" not in combined_logs
+
+    with pytest.raises(ImproperConfigurationError) as exc_info:
+        registry.get("nonexistent_alias?token=should-not-leak")
+    assert "should-not-leak" not in str(exc_info.value)
+    assert "nonexistent_alias" in str(exc_info.value)

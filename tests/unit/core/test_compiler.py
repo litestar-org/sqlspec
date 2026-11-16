@@ -18,7 +18,7 @@ import logging
 import threading
 from collections import OrderedDict
 from datetime import datetime
-from typing import Any, get_args
+from typing import Any, cast, get_args
 from unittest.mock import Mock, patch
 
 import pytest
@@ -42,7 +42,9 @@ from sqlspec.core import (
 from sqlspec.core._pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
-from sqlspec.core.statement import get_default_config
+from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.core.statement import SQL, get_default_config
+from sqlspec.exceptions import SQLBuilderError, SQLParsingError
 from tests.conftest import requires_interpreted, requires_patchable_internals
 
 
@@ -1297,3 +1299,178 @@ def test_shared_expression_skips_ast_copy_on_compiler_and_parse_cache_hits(
             res = parse_only_processor.compile(sql, [1, i])
             assert res.expression is not None
         assert copy_calls == 0
+
+
+@requires_interpreted
+def test_cold_compile_walks_ast_once_and_copies_once_without_transformers(
+    postgres_statement_config: "StatementConfig",
+) -> None:
+    """Cold compile without AST transformers walks and copies the AST at most once."""
+    processor = SQLProcessor(postgres_statement_config)
+    walk_calls = 0
+    copy_calls = 0
+    original_walk = exp.Expression.walk
+    original_copy = exp.Expression.copy
+
+    def counting_walk(self: "exp.Expression", *args: Any, **kwargs: Any) -> Any:
+        nonlocal walk_calls
+        walk_calls += 1
+        return original_walk(self, *args, **kwargs)
+
+    def counting_copy(self: "exp.Expression") -> "exp.Expression":
+        nonlocal copy_calls
+        copy_calls += 1
+        return original_copy(self)
+
+    with patch.object(exp.Expression, "walk", counting_walk), patch.object(exp.Expression, "copy", counting_copy):
+        res = processor.compile("SELECT id, CAST($1 AS TEXT) FROM users WHERE org_id = $2", [1, 2])
+
+    assert res.parameter_casts == {1: "TEXT"}
+    assert res.operation_profile.is_read_only is True
+    assert walk_calls == 1
+    assert copy_calls == 1
+
+
+@requires_interpreted
+def test_dynamic_sqlcommenter_skips_expression_copy_on_hits() -> None:
+    """Dynamic SQLCommenter appends comments without copying the cached AST."""
+    config = StatementConfig(
+        dialect="sqlite", enable_caching=True, enable_sqlcommenter=True, sqlcommenter_enable_context=True
+    )
+    processor = SQLProcessor(config)
+    with SQLCommenterContext.scope({"route": "/items"}):
+        processor.compile("SELECT id FROM users WHERE id = ?", [1])
+
+    copy_calls = 0
+    original_copy = exp.Expression.copy
+
+    def counting_copy(self: "exp.Expression") -> "exp.Expression":
+        nonlocal copy_calls
+        copy_calls += 1
+        return original_copy(self)
+
+    with SQLCommenterContext.scope({"route": "/orders"}), patch.object(exp.Expression, "copy", counting_copy):
+        res = processor.compile("SELECT id FROM users WHERE id = ?", [2])
+
+    assert "route" in res.compiled_sql
+    assert copy_calls == 0
+
+
+def test_parameter_casts_assigns_distinct_positions_for_multiple_qmark() -> None:
+    """Multiple anonymous '?' placeholders advance positions instead of collapsing onto index 1."""
+    expression = sqlglot.parse_one("SELECT ?, CAST(? AS INT)")
+    assert SQLProcessor._parameter_casts(expression) == {2: "INT"}
+
+
+@requires_interpreted
+def test_expression_override_skips_reparse_on_placeholder_conversion(
+    basic_statement_config: "StatementConfig", postgres_statement_config: "StatementConfig"
+) -> None:
+    """Pre-parsed SQL(expr) avoids calling sqlglot.parse_one again during placeholder conversion."""
+    sqlite_expr = sqlglot.parse_one("SELECT id FROM users WHERE org_id = :org_id", dialect="sqlite")
+    pg_expr = sqlglot.parse_one("SELECT id FROM users WHERE org_id = :org_id", dialect="postgres")
+
+    with patch("sqlspec.core.compiler.sqlglot.parse_one", side_effect=AssertionError("unexpected reparse")):
+        sqlite_stmt = SQL(sqlite_expr, {"org_id": 1}, statement_config=basic_statement_config)
+        sqlite_sql, sqlite_params = sqlite_stmt.compile()
+        assert sqlite_sql == "SELECT id FROM users WHERE org_id = ?"
+        assert sqlite_params == (1,)
+
+        pg_stmt = SQL(pg_expr, {"org_id": 2}, statement_config=postgres_statement_config)
+        pg_sql, pg_params = pg_stmt.compile()
+        assert pg_sql == "SELECT id FROM users WHERE org_id = $1"
+        assert pg_params == (2,)
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect"),
+    [
+        ("SELECT (@ -5) AS d0, $1::text AS c0", "postgres"),
+        ("-- leading comment\nSELECT (@ -5) AS d0", "postgres"),
+        ("/* outer /* inner */ outer */\n((SELECT (@ -5) AS d0))", "postgres"),
+        ("WITH cte AS (SELECT (@ -5) AS d0) SELECT * FROM cte", "postgres"),
+        ("VALUES (1, (@ -5))", "postgres"),
+    ],
+)
+def test_unparsable_row_returning_statements_stay_non_read_only(sql: str, dialect: str) -> None:
+    """Unparsable row-returning SQL returns rows while failing closed on read-only checks."""
+    config = StatementConfig(dialect=dialect)
+    statement = SQL(sql, statement_config=config)
+
+    assert statement.returns_rows() is True
+    assert statement.is_read_only() is False
+    assert statement.operation_type == "COMMAND"
+
+
+def test_unparsable_keyword_without_operand_does_not_return_rows() -> None:
+    assert SQLProcessor._statement_text_returns_rows("SELECT") is False
+    assert SQLProcessor._statement_text_returns_rows("-- only a comment") is False
+    assert SQLProcessor._statement_text_returns_rows("/* unclosed") is False
+
+
+def test_compiler_rejects_placeholder_with_sql_text() -> None:
+    """Expression inputs carrying a Placeholder whose name is SQL text fail compilation."""
+    expression = (
+        exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this="x OR 1=1")))
+    )
+
+    with pytest.raises(SQLBuilderError, match="Invalid placeholder name"):
+        SQL(expression, statement_config=get_default_config()).compile()
+
+
+def test_compiler_accepts_identifier_and_anonymous_placeholders() -> None:
+    named = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this="x_1")))
+    anonymous = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder()))
+
+    named_sql, named_params = SQL(named, x_1=1, statement_config=get_default_config()).compile()
+    anonymous_sql, _ = SQL(anonymous, 1, statement_config=get_default_config()).compile()
+
+    assert named_sql == "SELECT * FROM t WHERE a = ?"
+    assert list(named_params) == [1]
+    assert anonymous_sql == "SELECT * FROM t WHERE a = ?"
+
+
+@pytest.mark.parametrize("name", ["naïve", "名前", "_x1", "7"])
+def test_compiler_accepts_unicode_placeholder_names(name: str) -> None:
+    expression = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this=name)))
+
+    compiled_sql, _ = SQL(
+        expression, statement_config=get_default_config(), **cast("dict[str, Any]", {name: 1})
+    ).compile()
+
+    assert compiled_sql.startswith("SELECT * FROM t WHERE a = ")
+
+
+@pytest.mark.parametrize("modifier", ["where_eq", "paginate"])
+def test_unicode_scanner_placeholder_survives_modifiers(modifier: str) -> None:
+    statement = SQL("SELECT * FROM t WHERE a = :naïve", naïve=1)
+    statement = statement.where_eq("b", 2) if modifier == "where_eq" else statement.paginate(1, 10)
+
+    compiled_sql, params = statement.compile()
+
+    assert "naïve" in compiled_sql or "?" in compiled_sql
+    assert 1 in list(params.values() if isinstance(params, dict) else params)
+
+
+@pytest.mark.parametrize("name", ["x OR 1=1", "a b", "x'y", "1abc;"])
+def test_compiler_rejects_non_identifier_placeholder_names(name: str) -> None:
+    expression = exp.select("*").from_("t").where(exp.EQ(this=exp.column("a"), expression=exp.Placeholder(this=name)))
+
+    with pytest.raises(SQLBuilderError, match="Invalid placeholder name"):
+        SQL(expression, statement_config=get_default_config()).compile()
+
+
+def test_statement_nesting_overflow_raises_parsing_error(basic_statement_config: "StatementConfig") -> None:
+    """A tree too deep to walk raises ``SQLParsingError`` instead of a raw ``RecursionError``.
+
+    Whether a given chain overflows depends on the interpreter and on whether sqlglot's generator is
+    compiled, so a statement transformer raises the overflow directly inside compilation.
+    """
+
+    def overflow(expression: exp.Expr, parameters: Any) -> "tuple[exp.Expr, Any]":
+        raise RecursionError("maximum recursion depth exceeded")
+
+    processor = SQLProcessor(basic_statement_config.replace(statement_transformers=(overflow,)))
+
+    with pytest.raises(SQLParsingError, match="nesting exceeds"):
+        processor.compile("SELECT * FROM t WHERE a = ?", [1])

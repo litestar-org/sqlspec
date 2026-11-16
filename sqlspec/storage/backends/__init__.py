@@ -3,6 +3,8 @@
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
+from sqlspec import _COMPILED
+
 if TYPE_CHECKING:
     from sqlspec.storage.backends.base import ObjectStoreBase
     from sqlspec.storage.backends.fsspec import FSSpecBackend
@@ -17,8 +19,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ObStoreBackend": ("sqlspec.storage.backends.obstore", "ObStoreBackend"),
     "ObjectStoreBase": ("sqlspec.storage.backends.base", "ObjectStoreBase"),
 }
-
-_COMPILED = getattr(__spec__, "origin", "").endswith((".so", ".pyd"))
 
 
 def __getattr__(name: str) -> Any:

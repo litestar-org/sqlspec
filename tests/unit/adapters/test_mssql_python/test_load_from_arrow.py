@@ -7,6 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
+from sqlspec.exceptions import ImproperConfigurationError
 
 _CAPS: dict[str, Any] = {
     "arrow_export_enabled": True,
@@ -141,3 +142,21 @@ def test_sync_load_from_storage_multipart(tmp_path: Any) -> None:
     job = driver.load_from_storage("orders", [str(file1), str(file2)], file_format="parquet")
     assert job.telemetry["rows_processed"] == 4
     assert len(conn._cursor.arrow_calls) == 2
+
+
+@pytest.mark.parametrize("bad_table", ["", "dbo.", "[unclosed", "orders\x00", "orders;DROP TABLE x"])
+def test_load_from_arrow_rejects_invalid_table_before_delete(bad_table: str) -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    with pytest.raises(ImproperConfigurationError):
+        driver.load_from_arrow(bad_table, pa.table({"id": [1]}), overwrite=True)
+    assert conn._cursor.execute_calls == []
+
+
+@pytest.mark.parametrize("bad_col", ["", "col\x00", "[unclosed", "bad;col"])
+def test_load_from_arrow_rejects_invalid_column_mapping(bad_col: str) -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    with pytest.raises(ImproperConfigurationError):
+        driver.load_from_arrow("dbo.orders", pa.table({"id": [1]}), column_mappings=[bad_col], overwrite=True)
+    assert conn._cursor.execute_calls == []

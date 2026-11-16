@@ -1,10 +1,12 @@
 """SAP SQL Anywhere adapter compiled helpers."""
 
+import re
 from collections.abc import Callable, Mapping, Sized
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.dialects.sybase import SQLAnywhere as _SQLAnywhereDialect
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -12,24 +14,29 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from logging import Logger
+
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "DEFAULT_SQLANYWHERE_PORT",
@@ -43,8 +50,10 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "escape_sql_literal",
+    "execute_cache_hit",
     "extract_sqlstate_and_sqlcode",
     "format_identifier",
+    "merge_sqlanywhere_derive_overrides",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "quote_double_identifier",
@@ -55,9 +64,18 @@ __all__ = (
 )
 
 DEFAULT_SQLANYWHERE_PORT: Final[int] = 2638
+logger = get_logger("sqlspec.adapters.sqlanywhere")
+
+_MAX_SQLANYWHERE_PORT: Final[int] = 65535
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _SQLANYDB_FULL_ARGS_LEN: Final[int] = 3
 _SQLANYDB_PAIR_ARGS_LEN: Final[int] = 2
+_SQLANY_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
+_SQLANY_LINKS_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\A[A-Za-z0-9_]+(?:\([^()'\";{}]+=(?:[^()'\";{}]+)(?:;[^()'\";{}]+=[^()'\";{}]+)*\))?"
+    r"(?:,[A-Za-z0-9_]+(?:\([^()'\";{}]+=(?:[^()'\";{}]+)(?:;[^()'\";{}]+=[^()'\";{}]+)*\))?)*\Z"
+)
+_SQLANY_QUOTE_CHARS: Final[frozenset[str]] = frozenset({";", "'", '"', "{", "}", "="})
 _POOL_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "pool_min_size",
     "pool_max_size",
@@ -220,6 +238,41 @@ def apply_driver_features(
     return statement_config, features
 
 
+def merge_sqlanywhere_derive_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge reader overrides without allowing inherited native aliases to shadow them."""
+    config = {**base_config, **overrides}
+    for canonical, aliases in (
+        ("uid", ("user", "username")),
+        ("pwd", ("password",)),
+        ("dbn", ("database", "db")),
+        ("eng", ("server", "engine", "server_name")),
+    ):
+        if canonical not in overrides and any(key in overrides for key in aliases):
+            config.pop(canonical, None)
+    if "links" in overrides:
+        config.pop("host", None)
+        config.pop("port", None)
+    elif "host" in overrides or "port" in overrides:
+        inherited_host = str(base_config.get("host", "localhost"))
+        inherited_parts = inherited_host.rsplit(":", 1)
+        host = str(overrides.get("host", inherited_parts[0]))
+        host_parts = host.rsplit(":", 1)
+        if host_parts[1:] and host_parts[1].isdigit():
+            host = host_parts[0]
+            inherited_port = int(host_parts[1])
+        else:
+            inherited_port = (
+                int(inherited_parts[1])
+                if inherited_parts[1:] and inherited_parts[1].isdigit()
+                else DEFAULT_SQLANYWHERE_PORT
+            )
+        port = overrides.get("port", inherited_port)
+        config.pop("host", None)
+        config.pop("port", None)
+        config["links"] = f"tcpip(host={host};port={port})"
+    return config
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Normalize connection config into ``sqlanydb.connect(**kwargs)`` parameters.
 
@@ -231,47 +284,10 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     - ``database_file`` -> ``dbf``
     - ``host`` + ``port`` -> ``host="host:port"`` (default port ``2638``)
     """
-    normalized: dict[str, Any] = dict(connection_config)
-
-    extra = normalized.pop("extra", None)
-    if isinstance(extra, Mapping):
-        for key, value in extra.items():
-            if value is not None:
-                normalized.setdefault(key, value)
-
-    for pool_key in _POOL_CONFIG_KEYS:
-        normalized.pop(pool_key, None)
-
-    for alias_key in ("user", "username"):
-        alias_val = normalized.pop(alias_key, None)
-        if alias_val is not None and "uid" not in normalized:
-            normalized["uid"] = alias_val
-
-    password_val = normalized.pop("password", None)
-    if password_val is not None and "pwd" not in normalized:
-        normalized["pwd"] = password_val
-
-    for db_key in ("database", "db"):
-        db_val = normalized.pop(db_key, None)
-        if db_val is not None and "dbn" not in normalized:
-            normalized["dbn"] = db_val
-
-    for eng_key in ("server", "engine", "server_name"):
-        eng_val = normalized.pop(eng_key, None)
-        if eng_val is not None and "eng" not in normalized:
-            normalized["eng"] = eng_val
-
-    dbf_val = normalized.pop("database_file", None)
-    if dbf_val is not None and "dbf" not in normalized:
-        normalized["dbf"] = dbf_val
-
-    port_val = normalized.pop("port", None)
-    host_val = normalized.get("host")
-    if isinstance(host_val, str) and host_val and ":" not in host_val:
-        resolved_port = int(port_val) if port_val is not None else DEFAULT_SQLANYWHERE_PORT
-        normalized["host"] = f"{host_val}:{resolved_port}"
-
-    return {key: value for key, value in normalized.items() if value is not None}
+    normalized = _normalize_raw_connection_config(connection_config)
+    return {
+        str(key): _format_connection_value(str(key), value) for key, value in normalized.items() if value is not None
+    }
 
 
 def resolve_column_names(
@@ -317,6 +333,74 @@ def resolve_rowcount(cursor: Any) -> int:
     return 0
 
 
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    column_name_cache: "dict[int, tuple[Sequence[Any], list[str]]]",
+) -> "SQLResult":
+    """Execute a cached statement on a sqlanydb connection and build its result.
+
+    Args:
+        connection: sqlanydb connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        column_name_cache: Session-local cache of resolved column names.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any other exception the statement raises.
+    """
+    parameters = tuple(params) if isinstance(params, list) else params
+    compiled_sql = cached.compiled_sql
+    try:
+        cursor = connection.cursor()
+        try:
+            if parameters:
+                cursor.execute(compiled_sql, parameters)
+            else:
+                cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            rows, column_names, _row_format = collect_rows(fetched_data, cursor.description or None, column_name_cache)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                rows,
+                column_names,
+                len(rows),
+                resolve_row_format(rows),
+            )
+        finally:
+            _close_cursor(cursor)
+    except SQLSpecError:
+        raise
+    except Exception as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor that exposes ``close``, ignoring one that can no longer be closed."""
+    if not hasattr(cursor, "close"):
+        return
+    try:
+        cursor.close()
+    except Exception:
+        return
+
+
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: int | None = None) -> int:
     """Resolve affected row count for SQL Anywhere executemany."""
     rowcount = resolve_rowcount(cursor)
@@ -358,6 +442,8 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
     """Map a sqlanydb exception into the SQLSpec exception hierarchy."""
     _ = logger
     sqlstate, sqlcode = extract_sqlstate_and_sqlcode(error)
+    if sqlcode in {-757, 757} or sqlstate == "25006":
+        return _create_error(error, sqlcode, sqlstate, ReadOnlyTransactionError, "read-only transaction")
 
     if sqlcode is not None and sqlcode in _SQLCODE_MAPPING:
         exc_cls, label = _SQLCODE_MAPPING[sqlcode]
@@ -375,7 +461,95 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
         if upper_state.startswith("23"):
             return _create_error(error, sqlcode, sqlstate, IntegrityError, "integrity constraint violation")
 
+    exc_name = type(error).__name__
+    if exc_name == "InterfaceError":
+        return _create_error(error, sqlcode, sqlstate, DatabaseConnectionError, "interface error")
+    if exc_name == "OperationalError":
+        return _create_error(error, sqlcode, sqlstate, OperationalError, "operational error")
+
     return _create_error(error, sqlcode, sqlstate, SQLSpecError, "database error")
+
+
+def _normalize_raw_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Resolve SQL Anywhere aliases, extra params, and host:port defaults before quoting values."""
+    normalized: dict[str, Any] = dict(connection_config)
+
+    extra = normalized.pop("extra", None)
+    if isinstance(extra, Mapping):
+        for key, value in extra.items():
+            if value is not None:
+                normalized.setdefault(key, value)
+
+    for pool_key in _POOL_CONFIG_KEYS:
+        normalized.pop(pool_key, None)
+
+    for alias_key in ("user", "username"):
+        alias_val = normalized.pop(alias_key, None)
+        if alias_val is not None and "uid" not in normalized:
+            normalized["uid"] = alias_val
+
+    password_val = normalized.pop("password", None)
+    if password_val is not None and "pwd" not in normalized:
+        normalized["pwd"] = password_val
+
+    for db_key in ("database", "db"):
+        db_val = normalized.pop(db_key, None)
+        if db_val is not None and "dbn" not in normalized:
+            normalized["dbn"] = db_val
+
+    for eng_key in ("server", "engine", "server_name"):
+        eng_val = normalized.pop(eng_key, None)
+        if eng_val is not None and "eng" not in normalized:
+            normalized["eng"] = eng_val
+
+    dbf_val = normalized.pop("database_file", None)
+    if dbf_val is not None and "dbf" not in normalized:
+        normalized["dbf"] = dbf_val
+
+    port_val = normalized.pop("port", None)
+    if port_val is not None:
+        if isinstance(port_val, bool):
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg)
+        try:
+            parsed_port = int(port_val)
+        except (TypeError, ValueError) as exc:
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg) from exc
+        if not 1 <= parsed_port <= _MAX_SQLANYWHERE_PORT:
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg)
+    else:
+        parsed_port = DEFAULT_SQLANYWHERE_PORT
+
+    host_val = normalized.get("host")
+    if isinstance(host_val, str) and host_val and ":" not in host_val:
+        normalized["host"] = f"{host_val}:{parsed_port}"
+
+    return normalized
+
+
+def _format_connection_value(key: str, value: Any) -> Any:
+    """Validate a SQL Anywhere connection key and single-quote delimiter-bearing strings."""
+    if "\x00" in key or "\r" in key or "\n" in key or _SQLANY_KEY_PATTERN.fullmatch(key) is None:
+        msg = f"Invalid SQL Anywhere connection parameter key: {key!r}."
+        raise ImproperConfigurationError(msg)
+    if isinstance(value, str):
+        if "\x00" in value or "\r" in value or "\n" in value:
+            msg = f"SQL Anywhere connection parameter {key!r} contains disallowed control characters."
+            raise ImproperConfigurationError(msg)
+        if not value:
+            return ""
+        if key.lower() in {"links", "commlinks"} and _SQLANY_LINKS_PATTERN.fullmatch(value) is not None:
+            return value
+        if any(ch in _SQLANY_QUOTE_CHARS for ch in value) or value != value.strip():
+            return "'" + value.replace("'", "''") + "'"
+        return value
+    text = str(value)
+    if "\x00" in text or "\r" in text or "\n" in text:
+        msg = f"SQL Anywhere connection parameter {key!r} contains disallowed control characters."
+        raise ImproperConfigurationError(msg)
+    return value
 
 
 def _bool_to_int(value: bool) -> int:

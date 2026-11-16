@@ -34,6 +34,7 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.data_dictionary._index_ddl import AsyncWithoutIndexesContext
 from sqlspec.driver._common import (
+    _CLOSED_CONNECTION,
     AsyncExceptionHandler,
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -45,14 +46,17 @@ from sqlspec.driver._common import (
     _sqlglot_dialect,
     describe_stack_statement,
     handle_single_row_error,
+    operation_requires_transaction,
+    run_cached_execution,
     validate_savepoint_name,
 )
 from sqlspec.driver._exception_handler import _run_with_async_exception_handler
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._stream import AsyncRowStream, _LazyEagerAsyncRowSource
+from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, AsyncRowStream, _LazyEagerAsyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
+from sqlspec.observability._common import redact_sql_literals
 from sqlspec.storage._ingest import execute_load_from_storage_async, execute_staged_load_async
 from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
@@ -66,6 +70,7 @@ from sqlspec.storage.pipeline import (
 from sqlspec.utils.arrow_helpers import arrow_batches_from_async_rows, convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -264,8 +269,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             The result of the SQL execution
         """
         try:
+            if connection is _CLOSED_CONNECTION:
+                raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
             runtime = self._observability
-            compiled_sql, execution_parameters = statement.compile()
+            if statement.is_script and (statement.positional_parameters or statement.named_parameters):
+                compiled_sql, execution_parameters = statement.raw_sql, None
+            else:
+                compiled_sql, execution_parameters = statement.compile()
+            if self._auto_begin_on_write:
+                await self._ensure_transaction_for_statement(statement)
             result: SQLResult | None = None
 
             if runtime is None or runtime.is_idle:
@@ -342,6 +354,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             ExecutionResult with script execution data including statement counts
         """
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return await self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
@@ -364,6 +380,42 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 self._emit_script_statement_event(
                     sql=stmt,
                     parameters=prepared_parameters,
+                    operation=single_stmt.operation_type,
+                    rows_affected=sub_result.rowcount_override,
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=stmt_profile,
+                    script_ordinal=idx,
+                    script_statement_count=statement_count,
+                )
+            successful_count += 1
+
+        self._pending_statement_profile = None
+        return self.create_execution_result(
+            cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
+        )
+
+    async def _dispatch_bound_script(self, cursor: Any, statements: "list[SQL]") -> ExecutionResult:
+        """Execute pre-bound script statements one at a time on the same cursor."""
+        statement_count: int = len(statements)
+        successful_count: int = 0
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
+
+        for idx, single_stmt in enumerate(statements):
+            stmt_started = perf_counter() if has_observers else 0.0
+            self._pending_statement_profile = None
+            try:
+                sub_result = await self.dispatch_execute(cursor, single_stmt)
+            finally:
+                self._release_pooled_statement(single_stmt)
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                stmt_profile = self._consume_statement_profile()
+                compiled_sql, execution_parameters = single_stmt.compile()
+                self._emit_script_statement_event(
+                    sql=compiled_sql,
+                    parameters=execution_parameters,
                     operation=single_stmt.operation_type,
                     rows_affected=sub_result.rowcount_override,
                     duration_s=stmt_duration,
@@ -533,11 +585,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        """Execute a multi-statement script.
-
-        By default, validates each statement and logs warnings for dangerous
-        operations. Use suppress_warnings=True for migrations and admin scripts.
-        """
+        """Execute a multi-statement SQL script."""
         return await self._execute_script(statement, parameters, statement_config, kwargs)
 
     @overload
@@ -1242,7 +1290,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         stream = self.dispatch_select_stream(sql_statement, chunk_size)
         if stream is not None:
-            return stream._with_schema_type(schema_type)
+            return self._register_open_stream(stream._with_schema_type(schema_type))
         if native_only:
             msg = (
                 f"Adapter '{type(self).__name__}' does not support native row streaming. "
@@ -1250,7 +1298,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 "or switch to an adapter with native row streaming support."
             )
             raise ImproperConfigurationError(msg)
-        return AsyncRowStream(_LazyEagerAsyncRowSource(self, sql_statement, chunk_size), schema_type=schema_type)
+        return self._register_open_stream(
+            AsyncRowStream(_LazyEagerAsyncRowSource(self, sql_statement, chunk_size), schema_type=schema_type)
+        )
 
     @overload
     def fetch_stream(
@@ -1305,6 +1355,26 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             **kwargs,
         )
 
+    async def _close_open_streams(self, *, error: bool = False) -> None:
+        """Close every registered row stream before the session releases its connection.
+
+        Every stream is closed even when an earlier close raises; the first such error is then re-raised.
+
+        Args:
+            error: Whether the session is ending because of an error.
+        """
+        open_streams = self._open_streams
+        self._open_streams = []
+        first_error: BaseException | None = None
+        for open_stream in open_streams:
+            try:
+                await open_stream._aclose_for_session_exit(error=error)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
         """Adapter hook returning a native row stream, or None when unsupported."""
         _ = (statement, chunk_size)
@@ -1331,19 +1401,24 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             except NotImplementedError:
                 caller_in_transaction = False
 
+            stack_failure: Exception | None = None
             try:
                 if single_transaction and not caller_in_transaction:
                     await self.begin()
                     started_transaction = True
 
                 for index, operation in enumerate(stack.operations):
+                    operation_error: Exception | None = None
+                    result: SQLResult | ArrowResult | None = None
                     try:
                         result = await self._execute_stack_operation(operation)
                     except Exception as exc:  # pragma: no cover
+                        operation_error = exc
+                    if operation_error is not None:
                         stack_error = StackExecutionError(
                             index,
                             describe_stack_statement(operation.statement),
-                            exc,
+                            operation_error,
                             adapter=type(self).__name__,
                             mode="continue-on-error" if continue_on_error else "fail-fast",
                         )
@@ -1362,22 +1437,26 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                             results.append(StackResult.from_error(stack_error))
                             continue
 
-                        raise stack_error from exc
+                        stack_error.__cause__ = operation_error
+                        stack_failure = stack_error
+                        break
 
                     results.append(StackResult(result=result))
 
                     if continue_on_error and not caller_in_transaction:
                         await self._commit_stack_success()
 
-                if started_transaction:
-                    await self.commit()
-            except Exception:
+                if stack_failure is None and started_transaction:
+                    await self._commit_stack_success()
+            except Exception as exc:
+                stack_failure = exc
+            if stack_failure is not None:
                 if started_transaction:
                     try:
                         await self.rollback()
                     except Exception as rollback_error:  # pragma: no cover
                         logger.debug("Rollback after stack failure failed: %s", rollback_error)
-                raise
+                raise stack_failure
 
         return tuple(results)
 
@@ -1656,8 +1735,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             return await runner(**runner_kwargs)
         driver_name = type(self).__name__
         db_system = self.observability_db_system
+        observed_sql = (
+            redact_sql_literals(compiled_sql, dialect=db_system)
+            if is_script and runtime._redaction is not None and runtime._redaction.mask_parameters
+            else compiled_sql
+        )
         query_context = {
-            "sql": compiled_sql,
+            "sql": observed_sql,
             "parameters": execution_parameters,
             "driver": driver_name,
             "operation": operation,
@@ -1671,23 +1755,45 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         if runtime.span_manager.is_enabled or (
             runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
         ):
-            sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
-        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
+            sql_hash = observability_runtime.compute_sql_hash(observed_sql)
+        span = runtime.start_query_span(observed_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
         started = perf_counter()
         self._pending_statement_profile = None
+        run_error: Exception | None = None
+        result: SQLResult | None = None
         try:
             result = await runner(**runner_kwargs)
         except Exception as exc:
+            run_error = exc
+        if run_error is not None:
             self._pending_statement_profile = None
-            runtime.span_manager.end_span(span, error=exc)
-            await runtime.emit_error_async(exc, **query_context)
-            raise
+            runtime.span_manager.end_span(span, error=run_error)
+            await runtime.emit_error_async(run_error, **query_context)
+            runtime.emit_statement_event(
+                sql=observed_sql,
+                parameters=execution_parameters,
+                driver=driver_name,
+                operation=operation,
+                execution_mode=self.statement_config.execution_mode,
+                is_many=is_many,
+                is_script=is_script,
+                rows_affected=None,
+                duration_s=perf_counter() - started,
+                storage_backend=None,
+                started_at=started,
+                precomputed_sql_hash=sql_hash,
+                is_error=True,
+                profile=None,
+                db_system=db_system,
+            )
+            raise run_error
+        assert result is not None
         profile = self._consume_statement_profile()
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
         await runtime.emit_query_complete_async(**{**query_context, "rows_affected": result.rows_affected})
         runtime.emit_statement_event(
-            sql=compiled_sql,
+            sql=observed_sql,
             parameters=execution_parameters,
             driver=driver_name,
             operation=operation,
@@ -1749,6 +1855,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             SQLResult or DMLResult.
         """
+        if self._auto_begin_on_write:
+            await self._ensure_transaction_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         if sys.exc_info()[1] is None:
@@ -1779,32 +1887,17 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             cached=cached,
         )
 
-    async def _cached_execution(
-        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
-    ) -> "SQLResult | None":
-        """Attempt fast-path execution for cached query (async).
-
-        Args:
-            statement: Raw SQL string.
-            params: Query parameters.
-
-        Returns:
-            SQLResult if cache hit and execution succeeds, None otherwise.
-        """
-        result = super()._cached_execution(statement, params)
-        if result is None:
-            return None
-        return await cast("Awaitable[SQLResult | None]", result)
-
     async def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path (async).
 
-        The statement is already compiled by _cached_execution, so dispatch_execute
+        The statement is already compiled by run_cached_execution, so dispatch_execute
         will hit the fast path in _compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
+            if self._auto_begin_on_write:
+                await self._ensure_transaction_for_statement(statement)
             if sys.exc_info()[1] is None:
                 async with exc_handler:
                     result = await self._execute_cached_statement_with_cursor(statement)
@@ -1848,9 +1941,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             and isinstance(statement, str)
             and fast_params is not None
         ):
-            fast_result = await self._cached_execution(statement, fast_params)
-            if fast_result is not None:
-                return fast_result
+            if self._auto_begin_on_write:
+                await self._ensure_transaction_for_cached_sql(statement, fast_params)
+            pending_result = run_cached_execution(self, statement, fast_params)
+            if pending_result is not None:
+                fast_result = await cast("Awaitable[SQLResult | None]", pending_result)
+                if fast_result is not None:
+                    return fast_result
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
@@ -1899,6 +1996,42 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
 
+    async def _connection_in_transaction_async(self) -> bool:
+        """Return whether an awaited probe of the connection reports an open transaction.
+
+        Adapters whose transaction state is only readable through an awaited call override this
+        method. Callers combine it with :meth:`_connection_in_transaction`.
+
+        Returns:
+            False for adapters without an awaited transaction probe.
+        """
+        return False
+
+    async def _ensure_transaction_for_cached_sql(
+        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
+    ) -> None:
+        """Open a transaction before a cached positional statement when lazy write begin is armed."""
+        cached = self._stmt_cache.get(statement)
+        if cached is None or cached.param_count != len(params) or cached.input_named_parameters:
+            return
+        if self.statement_config.parameter_config.ast_transformer is not None:
+            return
+        await self._ensure_transaction_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
+
+    async def _ensure_transaction_for_operation(self, operation_type: "OperationType", modifies_rows: bool) -> None:
+        """Open a transaction before a mutating statement when lazy write begin is armed."""
+        if operation_requires_transaction(operation_type, modifies_rows) and not self._connection_in_transaction():
+            await self.begin()
+
+    async def _ensure_transaction_for_statement(self, statement: "SQL") -> None:
+        """Open a transaction before a mutating prepared statement when lazy write begin is armed."""
+        if statement.is_script or statement.is_many:
+            if not self._connection_in_transaction():
+                await self.begin()
+            return
+        profile = statement.get_processed_state().operation_profile
+        await self._ensure_transaction_for_operation(statement.operation_type, profile.modifies_rows)
+
     async def _dispatch_statement_with_cursor(
         self, connection: Any, statement: "SQL", *, has_execution_parameters: bool
     ) -> "SQLResult":
@@ -1907,6 +2040,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         cursor_entered = False
         exit_suppressed = False
         error: Exception | None = None
+        interruption: BaseException | None = None
         execution_result: ExecutionResult | None = None
         result: SQLResult | None = None
         try:
@@ -1929,12 +2063,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 result = self.build_statement_result(statement, execution_result)
         except Exception as exc:
             error = exc
-        finally:
-            if cursor_entered:
-                if error is None:
-                    await cursor_manager.__aexit__(None, None, None)
-                else:
-                    exit_suppressed = bool(await cursor_manager.__aexit__(type(error), error, error.__traceback__))
+        except BaseException as exc:
+            interruption = exc
+        if cursor_entered:
+            if error is None:
+                await cursor_manager.__aexit__(None, None, None)
+            else:
+                exit_suppressed = bool(await cursor_manager.__aexit__(type(error), error, error.__traceback__))
+        if interruption is not None:
+            raise interruption
         if error is not None and not exit_suppressed:
             raise error
         assert result is not None
@@ -1947,7 +2084,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         direct_statement: SQL | None = None
         result: SQLResult | None = None
         try:
-            async with self.with_cursor(self.connection) as cursor:
+            cursor_context = self.with_cursor(self.connection)
+            cursor = await cursor_context.__aenter__()
+            cursor_error: BaseException | None = None
+            try:
                 wire_sql = self._format_wire_sql(cached.compiled_sql)
                 returns_rows = cached.operation_profile.returns_rows
                 execute = getattr(cursor, "execute", None) if cursor is not self.connection else None
@@ -1994,6 +2134,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                             else 0
                         )
                         result = DMLResult(cached.operation_type, affected_rows)
+            except BaseException as caught:
+                cursor_error = caught
+            await exit_async_context(cursor_context, cursor_error)
             assert result is not None
             return result
         finally:
@@ -2002,9 +2145,18 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
     async def _execute_cached_statement_with_cursor(self, statement: "SQL") -> "SQLResult":
         """Execute a prepared statement while owning only the cursor context."""
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        result: SQLResult | None = None
+        try:
             execution_result = await self.dispatch_execute(cursor, statement)
-            return self.build_statement_result(statement, execution_result)
+            result = self.build_statement_result(statement, execution_result)
+        except BaseException as caught:
+            cursor_error = caught
+        await exit_async_context(cursor_context, cursor_error)
+        assert result is not None
+        return result
 
     async def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
@@ -2037,11 +2189,11 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             logger.debug("Rollback after stack error failed: %s", rollback_error)
 
     async def _commit_stack_success(self) -> None:
-        """Attempt to commit after a successful stack operation when not batching (async)."""
-        try:
+        """Commit after a successful stack operation when not batching (async)."""
+        exc_handler = self.handle_database_exceptions()
+        async with exc_handler:
             await self.commit()
-        except Exception as commit_error:  # pragma: no cover
-            logger.debug("Commit after stack operation failed: %s", commit_error)
+        self._check_pending_exception(exc_handler)
 
     def _storage_pipeline(self) -> "AsyncStoragePipeline":
         """Get or create an async storage pipeline.
@@ -3052,14 +3204,17 @@ class _AsyncDriverTransaction(Generic[_AsyncDriverT]):
             if exc_type is not None:
                 await driver.rollback()
                 return False
+            commit_error: BaseException | None = None
             try:
                 await driver.commit()
-            except BaseException:
+            except BaseException as error:
+                commit_error = error
+            if commit_error is not None:
                 try:
                     await driver.rollback()
                 except Exception:
                     logger.debug("Rollback after a failed commit also failed", exc_info=True)
-                raise
+                raise commit_error
             return False
         finally:
             if entered and driver._transaction_depth > 0:

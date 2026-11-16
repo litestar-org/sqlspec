@@ -315,3 +315,53 @@ async def test_mysql_get_privileges_binds_optional_object_name(
     if isawaitable(result):
         result = await result
     assert result.items == ({"table_name": "orders"},)
+
+
+@pytest.mark.parametrize("dictionary_type", [PyMysqlDataDictionary, AiomysqlDataDictionary])
+@pytest.mark.parametrize("table_name", [None, "orders"])
+async def test_mysql_get_indexes_binds_optional_table_name(dictionary_type: type[Any], table_name: str | None) -> None:
+    """get_indexes binds table_name across schema-wide and table-scoped MySQL queries."""
+    from sqlspec.adapters.pymysql.core import default_statement_config
+
+    def select_rows(statement: str, **parameters: Any) -> list[dict[str, Any]]:
+        compiled_sql, bound = SQL(str(statement), statement_config=default_statement_config, **parameters).compile()
+        assert "information_schema.statistics" in compiled_sql
+        assert bound["schema_name"] == "shop"
+        assert bound["table_name"] == table_name
+        return []
+
+    is_async = dictionary_type is AiomysqlDataDictionary
+    driver = Mock(
+        dialect="mysql",
+        select=AsyncMock(side_effect=select_rows) if is_async else Mock(side_effect=select_rows),
+        select_value_or_none=AsyncMock(return_value="8.4.0") if is_async else Mock(return_value="8.4.0"),
+    )
+    result = dictionary_type().get_indexes(driver, table=table_name, schema="shop")
+    if isawaitable(result):
+        result = await result
+    assert result == []
+
+
+@pytest.mark.parametrize("dictionary_type", [PyMysqlDataDictionary, AiomysqlDataDictionary])
+@pytest.mark.parametrize("table_name", [None, "orders"])
+async def test_mysql_get_constraints_binds_optional_table_name(
+    dictionary_type: type[Any], table_name: str | None
+) -> None:
+    """get_constraints binds table_name cleanly when inspecting whole schemas or single tables."""
+    from sqlspec.adapters.pymysql.core import default_statement_config
+
+    def select_rows(statement: str, **parameters: Any) -> list[dict[str, str]]:
+        compiled_sql, bound = SQL(str(statement), statement_config=default_statement_config, **parameters).compile()
+        assert "information_schema.table_constraints" in compiled_sql
+        assert bound == {"schema_name": "shop", "table_name": table_name}
+        return [{"table_name": "orders", "constraint_name": "pk_orders"}]
+
+    is_async = dictionary_type is AiomysqlDataDictionary
+    driver = Mock(
+        select=AsyncMock(side_effect=select_rows) if is_async else Mock(side_effect=select_rows),
+        select_value_or_none=AsyncMock(return_value="8.4.0") if is_async else Mock(return_value="8.4.0"),
+    )
+    result = dictionary_type().get_constraints(driver, table=table_name, schema="shop")
+    if isawaitable(result):
+        result = await result
+    assert result.items == ({"table_name": "orders", "constraint_name": "pk_orders"},)

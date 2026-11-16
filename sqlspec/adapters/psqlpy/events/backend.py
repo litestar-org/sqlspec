@@ -252,7 +252,7 @@ class PsqlpyHybridEventsBackend:
                 continue
             event_id = _extract_event_id(parsed_payload)
             if event_id is not None:
-                event = await self._queue.dequeue_by_event_id(event_id)
+                event = await self._queue.dequeue_by_event_id(event_id, channel)
                 if event is not None:
                     self._runtime.increment_metric("events.marker.drain")
                     _record_dequeue_result(self._runtime, event)
@@ -260,12 +260,16 @@ class PsqlpyHybridEventsBackend:
             return await self._dequeue_hinted(channel)
 
     async def ack(self, event_id: str) -> None:
-        await self._queue.ack(event_id)
-        self._runtime.increment_metric("events.ack")
+        if await self._queue.ack(event_id):
+            self._runtime.increment_metric("events.ack")
+        else:
+            self._runtime.increment_metric("events.ack.unowned")
 
     async def nack(self, event_id: str) -> None:
-        await self._queue.nack(event_id)
-        self._runtime.increment_metric("events.nack")
+        if await self._queue.nack(event_id):
+            self._runtime.increment_metric("events.nack")
+        else:
+            self._runtime.increment_metric("events.nack.unowned")
 
     async def shutdown(self) -> None:
         hub = self._hub

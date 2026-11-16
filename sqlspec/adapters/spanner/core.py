@@ -3,6 +3,7 @@
 import contextlib
 import re
 from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime, timedelta
 from functools import partial
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
@@ -28,6 +29,7 @@ from sqlspec.driver._exception_handler import _run_with_async_exception_handler,
 from sqlspec.exceptions import (
     DataError,
     DeadlockError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     OperationalError,
@@ -40,7 +42,9 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import exit_async_context
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Generator, Sequence
@@ -81,6 +85,7 @@ __all__ = (
     "renew_transaction",
     "resolve_column_names",
     "resolve_row_plan",
+    "resolve_snapshot_kwargs",
     "resolve_transaction_completion",
     "run_in_transaction_async",
     "run_in_transaction_sync",
@@ -918,13 +923,6 @@ class SpannerSyncStreamSource(_SpannerStreamSourceBase):
         _run_with_sync_exception_handler(handler, self._start_query)
         self._driver._check_pending_exception(handler)
 
-    def _start_query(self) -> None:
-        result_set = self._driver.connection.execute_sql(
-            self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-        )
-        self._result_set = result_set
-        self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
-
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         row_iterator = self._row_iterator
         if self._result_set is None or row_iterator is None:
@@ -942,6 +940,13 @@ class SpannerSyncStreamSource(_SpannerStreamSourceBase):
         if row_iterator is not None:
             row_iterator.close()
         self._reset()
+
+    def _start_query(self) -> None:
+        result_set = self._driver.connection.execute_sql(
+            self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+        )
+        self._result_set = result_set
+        self._row_iterator = cast("Generator[Any, None, None]", iter(result_set))
 
 
 class SpannerAsyncStreamSource(_SpannerStreamSourceBase):
@@ -966,13 +971,6 @@ class SpannerAsyncStreamSource(_SpannerStreamSourceBase):
         await _run_with_async_exception_handler(handler, self._start_query)
         self._driver._check_pending_exception(handler)
 
-    async def _start_query(self) -> None:
-        result_set = await self._driver.connection.execute_sql(
-            self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-        )
-        self._result_set = result_set
-        self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
-
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         row_iterator = self._row_iterator
         if self._result_set is None or row_iterator is None:
@@ -984,6 +982,20 @@ class SpannerAsyncStreamSource(_SpannerStreamSourceBase):
             return []
         return self._rows_to_chunk(rows)
 
+    async def close(self, error: bool = False) -> None:
+        row_iterator = self._row_iterator
+        self._row_iterator = None
+        if row_iterator is not None:
+            await row_iterator.aclose()
+        self._reset()
+
+    async def _start_query(self) -> None:
+        result_set = await self._driver.connection.execute_sql(
+            self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+        )
+        self._result_set = result_set
+        self._row_iterator = cast("AsyncGenerator[Any, None]", result_set.__aiter__())
+
     async def _fetch_rows(self, row_iterator: "AsyncGenerator[Any, None]") -> "list[Any]":
         rows: list[Any] = []
         with contextlib.suppress(StopAsyncIteration):
@@ -991,12 +1003,90 @@ class SpannerAsyncStreamSource(_SpannerStreamSourceBase):
                 rows.append(await row_iterator.__anext__())
         return rows
 
-    async def close(self, error: bool = False) -> None:
-        row_iterator = self._row_iterator
-        self._row_iterator = None
-        if row_iterator is not None:
-            await row_iterator.aclose()
-        self._reset()
+
+def resolve_snapshot_kwargs(
+    *,
+    exact_staleness: timedelta | None = None,
+    max_staleness: timedelta | None = None,
+    read_timestamp: datetime | None = None,
+    min_read_timestamp: datetime | None = None,
+    multi_use: bool | None = None,
+    default_staleness: Mapping[str, Any] | None = None,
+    transaction: bool = False,
+    apply_default_staleness: bool = True,
+    bind_key: str | None = None,
+) -> dict[str, Any]:
+    """Resolve native snapshot bounds with request primary pins taking precedence."""
+    supplied: dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("exact_staleness", exact_staleness),
+            ("max_staleness", max_staleness),
+            ("read_timestamp", read_timestamp),
+            ("min_read_timestamp", min_read_timestamp),
+        )
+        if value is not None
+    }
+    if len(supplied) > 1:
+        msg = "Spanner snapshot timestamp bounds are mutually exclusive"
+        raise ImproperConfigurationError(msg)
+    if multi_use is not None and not isinstance(multi_use, bool):
+        msg = "Spanner multi_use must be a boolean"
+        raise ImproperConfigurationError(msg)
+    if transaction:
+        if supplied or multi_use is not None:
+            msg = "Snapshot timestamp bounds cannot be combined with transaction=True"
+            raise ImproperConfigurationError(msg)
+        return {}
+    entry = RoutingContext.get_entry(bind_key)
+    if entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+        return {"multi_use": True}
+    if not supplied and entry is not None and entry.max_staleness_seconds is not None:
+        supplied = {"max_staleness": timedelta(seconds=entry.max_staleness_seconds)}
+    if not supplied and default_staleness is not None and apply_default_staleness:
+        supplied = dict(default_staleness)
+        if multi_use is None:
+            multi_use = supplied.pop("multi_use", None)
+        else:
+            supplied.pop("multi_use", None)
+        if len(supplied) > 1:
+            msg = "Spanner default snapshot timestamp bounds are mutually exclusive"
+            raise ImproperConfigurationError(msg)
+    if multi_use is not None and not isinstance(multi_use, bool):
+        msg = "Spanner multi_use must be a boolean"
+        raise ImproperConfigurationError(msg)
+    result: dict[str, Any] = {}
+    for key, value in supplied.items():
+        if key in {"exact_staleness", "max_staleness"}:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                try:
+                    value = timedelta(seconds=value)
+                except (ValueError, OverflowError) as exc:
+                    msg = "Spanner staleness must be finite and within the supported duration range"
+                    raise ImproperConfigurationError(msg) from exc
+            if not isinstance(value, timedelta) or value.total_seconds() < 0:
+                msg = "Spanner staleness must be a nonnegative duration or numeric seconds"
+                raise ImproperConfigurationError(msg)
+        elif key in {"read_timestamp", "min_read_timestamp"}:
+            if isinstance(value, str):
+                try:
+                    value = datetime.fromisoformat(value)
+                except ValueError as exc:
+                    msg = "Spanner snapshot timestamps must be valid ISO-8601 values"
+                    raise ImproperConfigurationError(msg) from exc
+            if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+                msg = "Spanner snapshot timestamps must include a timezone"
+                raise ImproperConfigurationError(msg)
+        else:
+            msg = f"Unknown Spanner snapshot bound {key!r}"
+            raise ImproperConfigurationError(msg)
+        result[key] = value
+    single_use = bool({"max_staleness", "min_read_timestamp"} & result.keys())
+    if single_use and multi_use is True:
+        msg = "Spanner max_staleness and min_read_timestamp require multi_use=False"
+        raise ImproperConfigurationError(msg)
+    result["multi_use"] = not single_use if multi_use is None else multi_use
+    return result
 
 
 def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], Any]") -> Any:
@@ -1087,12 +1177,20 @@ class _SpannerWriteTransactionProtocol(Protocol):
 async def _run_read_async(
     database: Any, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
 ) -> "list[Any]":
+    rows: list[Any] = []
     try:
-        async with cast("Any", database).snapshot() as snapshot:
+        snapshot_context = cast("Any", database).snapshot()
+        snapshot = await snapshot_context.__aenter__()
+        read_error: BaseException | None = None
+        try:
             result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
-            return [row async for row in result_set]
+            rows = [row async for row in result_set]
+        except BaseException as caught:
+            read_error = caught
+        await exit_async_context(snapshot_context, read_error)
     except api_exceptions.GoogleAPICallError as exc:
         raise create_mapped_exception(exc) from exc
+    return rows
 
 
 def _adk_config(config: Any) -> "dict[str, Any]":

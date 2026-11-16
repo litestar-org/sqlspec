@@ -26,6 +26,7 @@ class _SyncSessionConfig:
 
     def __init__(self, driver: Any) -> None:
         self.driver = driver
+        self.bind_key = driver.observability.bind_key
         self.sessions = 0
 
     @contextlib.contextmanager
@@ -41,6 +42,7 @@ class _AsyncSessionConfig:
 
     def __init__(self, driver: Any) -> None:
         self.driver = driver
+        self.bind_key = driver.observability.bind_key
         self.sessions = 0
 
     @contextlib.asynccontextmanager

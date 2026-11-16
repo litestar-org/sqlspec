@@ -101,23 +101,33 @@ class _AsyncCursorHandle:
 class _AsyncCursor:
     """Asynchronous cursor fake recording statements and yielding dummy rows."""
 
-    __slots__ = ("_cursor_rowcount", "_log", "_session_row", "description", "rowcount")
+    __slots__ = ("_cursor_rowcount", "_last_sql", "_log", "_rows", "_session_row", "description", "rowcount")
 
     def __init__(
-        self, log: _RecordingLog, session_row: tuple[Any, ...] | None, *, cursor_rowcount: int | None = None
+        self,
+        log: _RecordingLog,
+        session_row: tuple[Any, ...] | None,
+        *,
+        cursor_rowcount: int | None = None,
+        rows: list[Any] | None = None,
+        description: list[Any] | None = None,
     ) -> None:
         self._log = log
         self._session_row = session_row
         self._cursor_rowcount = cursor_rowcount
+        self._last_sql = ""
+        self._rows = list(rows or [])
         self.rowcount = 1 if cursor_rowcount is None else cursor_rowcount
-        self.description = None
+        self.description = description
 
     async def execute(self, sql: str, params: Any = None) -> None:
+        self._last_sql = sql
         self._log.record(sql)
         if self._cursor_rowcount is not None:
             self.rowcount = self._cursor_rowcount
 
     async def executemany(self, sql: str, params_list: Any) -> None:
+        self._last_sql = sql
         self._log.record(sql)
         if self._cursor_rowcount is not None:
             self.rowcount = self._cursor_rowcount
@@ -125,10 +135,12 @@ class _AsyncCursor:
             self.rowcount = len(params_list) if hasattr(params_list, "__len__") else 1
 
     async def fetchone(self) -> tuple[Any, ...] | None:
+        if "SELECT state FROM " in " ".join(self._last_sql.split()):
+            return ('{"existing": 1}',)
         return self._session_row
 
     async def fetchall(self) -> list[Any]:
-        return []
+        return list(self._rows)
 
     async def close(self) -> None:
         return None
@@ -180,6 +192,10 @@ class _AsyncDriver:
     async def execute_script(self, sql: str, *args: Any, **kwargs: Any) -> None:
         self._log.record(sql)
 
+    async def select(self, sql: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        self._log.record(sql)
+        return []
+
     async def commit(self) -> None:
         return None
 
@@ -193,23 +209,33 @@ class _AsyncDriver:
 class _SyncCursor:
     """Synchronous cursor fake recording statements and yielding dummy rows."""
 
-    __slots__ = ("_cursor_rowcount", "_log", "_session_row", "description", "rowcount")
+    __slots__ = ("_cursor_rowcount", "_last_sql", "_log", "_rows", "_session_row", "description", "rowcount")
 
     def __init__(
-        self, log: _RecordingLog, session_row: tuple[Any, ...] | None, *, cursor_rowcount: int | None = None
+        self,
+        log: _RecordingLog,
+        session_row: tuple[Any, ...] | None,
+        *,
+        cursor_rowcount: int | None = None,
+        rows: list[Any] | None = None,
+        description: list[Any] | None = None,
     ) -> None:
         self._log = log
         self._session_row = session_row
         self._cursor_rowcount = cursor_rowcount
+        self._last_sql = ""
+        self._rows = list(rows or [])
         self.rowcount = 1 if cursor_rowcount is None else cursor_rowcount
-        self.description = None
+        self.description = description
 
     def execute(self, sql: str, params: Any = None) -> None:
+        self._last_sql = sql
         self._log.record(sql)
         if self._cursor_rowcount is not None:
             self.rowcount = self._cursor_rowcount
 
     def executemany(self, sql: str, params_list: Any) -> None:
+        self._last_sql = sql
         self._log.record(sql)
         if self._cursor_rowcount is not None:
             self.rowcount = self._cursor_rowcount
@@ -217,10 +243,12 @@ class _SyncCursor:
             self.rowcount = len(params_list) if hasattr(params_list, "__len__") else 1
 
     def fetchone(self) -> tuple[Any, ...] | None:
+        if "SELECT state FROM " in " ".join(self._last_sql.split()):
+            return ('{"existing": 1}',)
         return self._session_row
 
     def fetchall(self) -> list[Any]:
-        return []
+        return list(self._rows)
 
     def close(self) -> None:
         return None
@@ -270,6 +298,10 @@ class _SyncDriver:
     def execute_script(self, sql: str, *args: Any, **kwargs: Any) -> None:
         self._log.record(sql)
 
+    def select(self, sql: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        self._log.record(sql)
+        return []
+
     def commit(self) -> None:
         return None
 
@@ -292,6 +324,8 @@ def _store(
     session_row: tuple[Any, ...] | None = None,
     is_memory: bool = False,
     cursor_rowcount: int | None = None,
+    rows: list[Any] | None = None,
+    description: list[Any] | None = None,
 ) -> tuple[Any, list[str]]:
     adapter_pkg, session_cls_name, memory_cls_name, is_async = adapter_info
     store_cls_name = memory_cls_name if is_memory else session_cls_name
@@ -308,11 +342,11 @@ def _store(
     conn: _AsyncConnection | _SyncConnection
     driver: _AsyncDriver | _SyncDriver
     if is_async:
-        cursor = _AsyncCursor(log, session_row, cursor_rowcount=cursor_rowcount)
+        cursor = _AsyncCursor(log, session_row, cursor_rowcount=cursor_rowcount, rows=rows, description=description)
         conn = _AsyncConnection(cursor)
         driver = _AsyncDriver(log)
     else:
-        sync_cursor = _SyncCursor(log, session_row, cursor_rowcount=cursor_rowcount)
+        sync_cursor = _SyncCursor(log, session_row, cursor_rowcount=cursor_rowcount, rows=rows, description=description)
         conn = _SyncConnection(sync_cursor)
         driver = _SyncDriver(log)
 
@@ -346,6 +380,16 @@ class _DMLCase:
 _DML_CASES: list[_DMLCase] = [
     _DMLCase("create_session", False, "create_session", lambda: ("s", "a", "u", {}), dict, None, True, ("`app`.`t`",)),
     _DMLCase(
+        "create_session_scoped_deltas",
+        False,
+        "create_session",
+        lambda: ("s", "a", "u", {}),
+        lambda: {"app_state_delta": {"theme": "dark"}, "user_state_delta": {"lang": "en"}},
+        None,
+        True,
+        ("`app`.`t`", "`app`.`a`", "`app`.`u`"),
+    ),
+    _DMLCase(
         "create_session_owner",
         False,
         "create_session",
@@ -378,7 +422,9 @@ _DML_CASES: list[_DMLCase] = [
     ),
     _DMLCase("list_sessions", False, "list_sessions", lambda: ("a",), dict, None, False, ("`app`.`t`",)),
     _DMLCase("delete_session", False, "delete_session", lambda: ("a", "u", "s"), dict, None, False, ("`app`.`t`",)),
-    _DMLCase("append_event", False, "append_event", lambda: (_SAMPLE_EVENT,), dict, None, False, ("`app`.`e`",)),
+    _DMLCase(
+        "append_event", False, "append_event", lambda: (_SAMPLE_EVENT,), dict, None, False, ("`app`.`e`", "`app`.`t`")
+    ),
     _DMLCase(
         "append_event_and_update_state",
         False,
@@ -389,7 +435,17 @@ _DML_CASES: list[_DMLCase] = [
         True,
         ("`app`.`e`", "`app`.`t`"),
     ),
-    _DMLCase("get_events", False, "get_events", lambda: ("a", "u", "s"), dict, None, False, ("`app`.`e`",)),
+    _DMLCase(
+        "append_event_and_update_state_scoped_deltas",
+        False,
+        "append_event_and_update_state",
+        lambda: (_SAMPLE_EVENT, "a", "u", "s", {}),
+        lambda: {"app_state_delta": {"theme": "dark"}, "user_state_delta": {"lang": "en"}},
+        None,
+        True,
+        ("`app`.`e`", "`app`.`t`", "`app`.`a`", "`app`.`u`"),
+    ),
+    _DMLCase("get_events", False, "get_events", lambda: ("a", "u", "s"), dict, None, False, ("`app`.`e`", "`app`.`t`")),
     _DMLCase(
         "delete_expired_events", False, "delete_expired_events", lambda: (_NOW, "a"), dict, None, False, ("`app`.`e`",)
     ),
@@ -450,7 +506,7 @@ _DML_CASES: list[_DMLCase] = [
         "delete_entries_by_session",
         True,
         "delete_entries_by_session",
-        lambda: ("s",),
+        lambda: ("s", "app", "user"),
         dict,
         None,
         False,
@@ -620,3 +676,136 @@ async def test_mysql_adk_insert_memory_entries_returns_zero_on_duplicates(
     store, _ = _store(adapter_info, _QUALIFIED_MEMORY_SETTINGS, is_memory=True, cursor_rowcount=0)
     inserted = await _call(adapter_info[3], store, "insert_memory_entries", [_SAMPLE_MEMORY])
     assert inserted == 0
+
+
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
+@pytest.mark.parametrize(
+    ("memory_table", "expected_key", "expected_schema", "expected_bare"),
+    [
+        pytest.param("adk_memory", "idx_adk_memory_app_user_event", None, "adk_memory", id="bare"),
+        pytest.param("app.m", "idx_m_app_user_event", "app", "m", id="qualified"),
+    ],
+)
+async def test_mysql_adk_memory_unique_key_derives_from_bare_table(
+    adapter_info: tuple[str, str, str, bool],
+    memory_table: str,
+    expected_key: str,
+    expected_schema: str | None,
+    expected_bare: str,
+) -> None:
+    """Memory DDL emits a bare-table composite UNIQUE KEY (app_name, user_id, event_id) for bare and qualified tables."""
+    store, _ = _store(adapter_info, {"memory_table": memory_table}, is_memory=True)
+    ddl = await _call(adapter_info[3], store, "_memory_table_ddl")
+
+    assert f"UNIQUE KEY {expected_key} (app_name, user_id, event_id)" in ddl
+    assert "event_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL," in ddl
+    assert "NOT NULL UNIQUE" not in ddl
+    assert "idx_app" not in ddl
+    target = SchemaTarget.from_ddl(memory_table, ddl, dialect="mysql")
+    assert target.schema == expected_schema
+    assert target.table_name == expected_bare
+
+
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
+async def test_mysql_adk_identity_columns_declare_utf8mb4_bin(adapter_info: tuple[str, str, str, bool]) -> None:
+    """All ADK identity columns declare COLLATE utf8mb4_bin and remain parseable via SchemaTarget."""
+    is_async = adapter_info[3]
+    session_store, _ = _store(adapter_info, {}, is_memory=False)
+    memory_store, _ = _store(adapter_info, {}, is_memory=True)
+
+    sessions_ddl = await _call(is_async, session_store, "_sessions_table_ddl")
+    events_ddl = await _call(is_async, session_store, "_events_table_ddl")
+    app_state_ddl = await _call(is_async, session_store, "_app_states_table_ddl")
+    user_state_ddl = await _call(is_async, session_store, "_user_states_table_ddl")
+    memory_ddl = await _call(is_async, memory_store, "_memory_table_ddl")
+
+    for ddl in (sessions_ddl, events_ddl, memory_ddl):
+        assert "id VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY" in ddl
+        assert "app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL" in ddl
+        assert "user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL" in ddl
+    assert "session_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL" in events_ddl
+    assert "session_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL" in memory_ddl
+    assert "app_name VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY" in app_state_ddl
+    assert "app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL" in user_state_ddl
+    assert "user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL" in user_state_ddl
+
+    for table_name, ddl in (
+        ("adk_session", sessions_ddl),
+        ("adk_event", events_ddl),
+        ("adk_app_state", app_state_ddl),
+        ("adk_user_state", user_state_ddl),
+        ("adk_memory", memory_ddl),
+    ):
+        SchemaTarget.from_ddl(table_name, ddl, dialect="mysql")
+
+
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
+@pytest.mark.parametrize(
+    ("row_app", "row_user", "expected_state"),
+    [
+        pytest.param("app", "u1", {"k": 1}, id="exact"),
+        pytest.param("App", "u1", None, id="app-case-mismatch"),
+        pytest.param("app", "U1", None, id="user-case-mismatch"),
+        pytest.param("app", "u1 ", None, id="user-trailing-space"),
+    ],
+)
+async def test_mysql_adk_get_user_state_enforces_exact_tenancy(
+    adapter_info: tuple[str, str, str, bool], row_app: str, row_user: str, expected_state: dict[str, Any] | None
+) -> None:
+    """get_user_state rejects case-folded or padded tenancy rows returned by non-binary collations."""
+    store, _ = _store(adapter_info, {}, session_row=(row_app, row_user, '{"k": 1}'), is_memory=False)
+    result = await _call(adapter_info[3], store, "get_user_state", "app", "u1")
+    assert result == expected_state
+
+
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
+async def test_mysql_adk_list_sessions_enforces_exact_tenancy(adapter_info: tuple[str, str, str, bool]) -> None:
+    """list_sessions filters out case-folded or trailing-space app_name/user_id rows in Python."""
+    rows = [
+        ("s-exact", "app", "u1", "{}", _NOW, _NOW),
+        ("s-app-case", "App", "u1", "{}", _NOW, _NOW),
+        ("s-user-case", "app", "U1", "{}", _NOW, _NOW),
+        ("s-user-space", "app", "u1 ", "{}", _NOW, _NOW),
+    ]
+    store, _ = _store(adapter_info, {}, rows=rows, is_memory=False)
+    sessions = await _call(adapter_info[3], store, "list_sessions", "app", "u1")
+    assert [s["id"] for s in sessions] == ["s-exact"]
+
+
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
+@pytest.mark.parametrize(
+    ("scope_filter", "expected_ids"),
+    [
+        pytest.param("all", ["m-user", "m-app"], id="all"),
+        pytest.param("user", ["m-user"], id="user"),
+        pytest.param("app", ["m-app"], id="app"),
+    ],
+)
+async def test_mysql_adk_memory_search_enforces_exact_tenancy(
+    adapter_info: tuple[str, str, str, bool], scope_filter: str, expected_ids: list[str]
+) -> None:
+    """search_entries enforces exact app_name and user_id equality across user and app memory scopes."""
+    description = [
+        ("id",),
+        ("session_id",),
+        ("app_name",),
+        ("user_id",),
+        ("scope",),
+        ("event_id",),
+        ("author",),
+        ("timestamp",),
+        ("content_json",),
+        ("content_text",),
+        ("metadata_json",),
+        ("inserted_at",),
+    ]
+    rows = [
+        ("m-user", "s1", "app", "u1", "user", "e1", None, _NOW, '{"t": 1}', "hello", None, _NOW),
+        ("m-app", "s2", "app", "other", "app", "e2", None, _NOW, '{"t": 2}', "hello", None, _NOW),
+        ("m-app-case", "s3", "App", "u1", "user", "e3", None, _NOW, '{"t": 3}', "hello", None, _NOW),
+        ("m-user-case", "s4", "app", "U1", "user", "e4", None, _NOW, '{"t": 4}', "hello", None, _NOW),
+        ("m-user-space", "s5", "app", "u1 ", "user", "e5", None, _NOW, '{"t": 5}', "hello", None, _NOW),
+    ]
+    store, _ = _store(adapter_info, {}, rows=rows, description=description, is_memory=True)
+    results = await _call(adapter_info[3], store, "search_entries", "hello", "app", "u1", scope_filter=scope_filter)
+    assert [r["id"] for r in results] == expected_ids

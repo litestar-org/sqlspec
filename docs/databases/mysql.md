@@ -8,7 +8,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
 | --- | --- | --- | --- | --- |
 | `AsyncmyConfig` | `sqlspec[asyncmy]` | Async (`asyncio`) | `asyncmy.Pool` (`minsize`, `maxsize`, `pool_recycle`) | High-throughput compiled `asyncio` services targeting MySQL 8.0+ or MariaDB 10.5+. |
 | `AiomysqlConfig` | `sqlspec[aiomysql]` | Async (`asyncio`) | `aiomysql.Pool` (`minsize`, `maxsize`, `pool_recycle`) | Pure-Python `asyncio` services built over PyMySQL for PyPy or pure-Python runtimes. |
-| `PyMysqlConfig` | `sqlspec[pymysql]` | Sync | `PyMysqlConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`) | Synchronous applications and Google Cloud SQL for MySQL (`enable_cloud_sql=True`). |
+| `PyMysqlConfig` | `sqlspec[pymysql]` | Sync | `PyMysqlConnectionPool` (thread-local manager with `pool_recycle_seconds`, `health_check_interval`; inside an event loop each asyncio task holds its own connection) | Synchronous applications and Google Cloud SQL for MySQL (`enable_cloud_sql=True`). |
 | `MysqlConnectorSyncConfig` / `MysqlConnectorAsyncConfig` | `sqlspec[mysql-connector]` | Sync & Async | `MySQLConnectionPool` (`pool_name`, `pool_size`, `pool_reset_session`) / native async sessions | Official Oracle MySQL Connector/Python supporting both sync pools and native async connections. |
 
 ## Installation & Quickstart
@@ -181,6 +181,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to bound JSON parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer applied to JSON result columns (defaults to `from_json`). |
     | `on_connection_create` | `Callable[[AsyncmyConnection], Awaitable[None]]` | - | Async callback invoked once per physical `asyncmy` connection acquired from the pool. |
+    | `reset_session_on_release` | `bool` | `False` | Send `COM_RESET_CONNECTION` and re-initialize each connection when it is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable table-backed SQLSpec event queue support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` is the sole MySQL/MariaDB backend). |
     <!-- GENERATED:END config-table:sqlspec.adapters.asyncmy.config.AsyncmyDriverFeatures -->
@@ -237,6 +238,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to bound JSON parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer applied to JSON result columns (defaults to `from_json`). |
     | `on_connection_create` | `Callable[[AiomysqlConnection], Awaitable[None]]` | - | Async callback invoked once per physical `aiomysql` connection acquired from the pool. |
+    | `reset_session_on_release` | `bool` | `False` | Send `COM_RESET_CONNECTION` and re-initialize each connection when it is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable table-backed SQLSpec event queue support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` is the sole MySQL/MariaDB backend). |
     | `enable_local_infile_bulk_load` | `bool` | - | Use `LOAD DATA LOCAL INFILE` for `load_from_arrow` when local infile is enabled. |
@@ -307,6 +309,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to bound JSON parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer applied to JSON result columns (defaults to `from_json`). |
     | `on_connection_create` | `Callable[[PyMysqlConnection], None]` | - | Synchronous hook invoked with each raw `pymysql.Connection` upon creation. |
+    | `reset_session_on_release` | `bool` | `False` | Send `COM_RESET_CONNECTION` and re-initialize each connection when it is released (defaults to `False`). |
     | `enable_events` | `bool` | - | Enable durable table-backed SQLSpec event queue support. |
     | `events_backend` | `Literal['poll_queue']` | - | Event channel backend (`poll_queue` is the sole MySQL/MariaDB backend). |
     | `enable_local_infile_bulk_load` | `bool` | - | Route `load_from_arrow` through `LOAD DATA LOCAL INFILE` when local infile is enabled. |
@@ -404,6 +407,10 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `enable_local_infile_bulk_load` | `bool` | - | Route `load_from_arrow` through `LOAD DATA LOCAL INFILE` when local infile is enabled. |
     <!-- GENERATED:END config-table:sqlspec.adapters.mysqlconnector.config.MysqlConnectorDriverFeatures -->
 
+## Session Reset on Release
+
+Set `driver_features["reset_session_on_release"] = True` on `PyMysqlConfig`, `AiomysqlConfig`, or `AsyncmyConfig` to send `COM_RESET_CONNECTION` when a connection is released, which clears temporary tables, user variables, and session settings. `MysqlConnectorConfig` uses the driver's native `pool_reset_session`, which is already on by default. See [Session Reset on Release](../learn/configuration.md#session-reset-on-release).
+
 ## Type Mappings & Dialect Notes
 
 | Database Type | Python Type | Notes / Feature Flag |
@@ -419,6 +426,16 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
 - **LAST_INSERT_ID() vs MariaDB RETURNING**: MariaDB 10.5+ supports `INSERT ... RETURNING` and `DELETE ... RETURNING` directly via `session.select(...)`. Standard MySQL does not support `RETURNING`, and SQLSpec captures `LAST_INSERT_ID()` into `result.last_inserted_id` and `result.rows_affected` on the returned `SQLResult`.
 - **Placeholder Compilation and utf8mb4**: Write `:named` or `?` parameters in SQLSpec; all MySQL adapters compile placeholders to `%s` automatically while preserving literal `%` signs in `LIKE '100%'` expressions. Always use `utf8mb4` so 4-byte UTF-8 characters never truncate.
 - **Implicit DDL Commits**: MySQL and MariaDB issue an implicit `COMMIT` before and after `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`, and `TRUNCATE TABLE`. Keep schema migrations separate from transactional application tests that rely on rollback isolation.
+
+## Read Replicas and GTID Waits
+
+All four MySQL/MariaDB adapters accept reader endpoints through `replicas=`. Point them at MySQL Router, ProxySQL, an Aurora/RDS reader endpoint, or a server you already replicate. `True` is rejected because it cannot identify that endpoint.
+
+Derived reader configs run `SET SESSION TRANSACTION READ ONLY` after establishing each physical connection without modifying `init_command`. Pass `read_only=False` explicitly to opt out. Alias overrides replace inherited values, and connection hooks remain attached. `mysql-connector` readers get a distinct pool name and default `pool_reset_session=False` (re-applying session setup on checkout if `pool_reset_session=True`), so reset does not erase their read-only state.
+
+`wait_for_gtid_set(gtid_set, timeout=2.0, mariadb=False)` returns whether the requested position is applied. It binds the GTID and timeout to `WAIT_FOR_EXECUTED_GTID_SET`; `mariadb=True` selects `MASTER_GTID_WAIT`. Await it on async drivers. Empty GTIDs, negative or nonfinite timeouts, and boolean timeout values fail before a query. Keep a positive timeout for a bounded MySQL wait: MySQL treats `0` as unlimited, while MariaDB treats `0` as a nonblocking check.
+
+Errnos `1792`, `1836`, and SQLSTATE `25006` map to `ReadOnlyTransactionError`. Errno `1290` does so only if its message names read-only mode; another option error keeps its existing category. See [Replica Operations](../learn/recipes/read-replicas-operations.md).
 
 ## See Also
 

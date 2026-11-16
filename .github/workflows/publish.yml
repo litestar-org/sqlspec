@@ -27,10 +27,10 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra performance --group build
+        run: uv sync --frozen --extra performance --group build
 
       - name: Build source distribution
-        run: uv build --sdist
+        run: uv build --sdist --no-build-isolation
 
       - name: Upload source artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -56,10 +56,10 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra performance --group build
+        run: uv sync --frozen --extra performance --group build
 
       - name: Build standard wheel
-        run: uv build --wheel
+        run: uv build --wheel --no-build-isolation
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -92,8 +92,8 @@ jobs:
         with:
           enable-cache: false
 
-      - name: Export build constraints from uv.lock
-        run: uv export --frozen --no-emit-project --no-hashes --format requirements.txt --output-file build-constraints.txt
+      - name: Export hashed requirements from uv.lock
+        run: python tools/scripts/export_hashed_requirements.py --all --output-dir .build-requirements
 
       - name: Pre-warm Windows Defender exclusions
         if: matrix.os == 'windows-latest'
@@ -112,13 +112,14 @@ jobs:
           Add-MpPreference -ExclusionProcess "python.exe" -ErrorAction SilentlyContinue
 
       - name: Install cibuildwheel
-        run: python -m pip install cibuildwheel
+        run: python -m pip install --require-hashes -r .build-requirements/cli.txt
 
       - name: Build wheels with cibuildwheel
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_BUILD: "cp${{ matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' || matrix.python-version == '3.14' && '314' || matrix.python-version == '3.15' && '315' }}-*"
           CIBW_BUILD_VERBOSITY: 1
+          CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
 
           # Native host arch only — Linux aarch64 builds on ubuntu-24.04-arm,
           # macOS arm64 on macos-latest (Apple Silicon). No QEMU emulation.
@@ -126,23 +127,19 @@ jobs:
           CIBW_ARCHS_MACOS: "arm64"
           CIBW_ARCHS_WINDOWS: "AMD64"
 
-          CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
+          CIBW_SKIP: "*-musllinux*"
 
-          # Base build deps; PGO blocks below override on Linux + macOS.
-          # build-constraints.txt is produced from uv.lock so hatch-mypyc / mypy /
-          # hatchling versions track the locked dev environment.
-          CIBW_BEFORE_BUILD: "pip install -c {project}/build-constraints.txt hatch-mypyc hatchling"
+          CIBW_BEFORE_BUILD: 'pip install --require-hashes -r "{project}/.build-requirements/build.txt"'
 
-          CIBW_TEST_REQUIRES: "aiosqlite pymssql cloud-sql-python-connector google-cloud-alloydb-connector"
-          CIBW_TEST_COMMAND: >-
-            python {project}/tools/scripts/mypyc_smoke.py --require-compiled
+          CIBW_BEFORE_TEST: 'pip install --require-hashes -r "{project}/.build-requirements/runtime.txt" -r "{project}/.build-requirements/test.txt"'
+          CIBW_TEST_COMMAND: 'python "{project}/tools/scripts/mypyc_smoke.py" --require-compiled'
 
           # ── Linux (GCC): PGO three-stage build ──
           # Stage 1 (instrumented build) + Stage 2 (training) run in BEFORE_BUILD.
           # Stage 3 (optimized build) is the main cibuildwheel build with -fprofile-use.
           # HATCH_MYPYC_BUILD_DIR pins the build directory so profile data paths match.
           CIBW_BEFORE_BUILD_LINUX: >-
-            pip install -c {project}/build-constraints.txt hatch-mypyc hatchling &&
+            pip install --require-hashes -r "{project}/.build-requirements/build.txt" &&
             PGO_DIR=/tmp/sqlspec-pgo &&
             BUILD_DIR=/tmp/sqlspec-mypyc-build &&
             mkdir -p "$PGO_DIR" "$BUILD_DIR" &&
@@ -150,9 +147,9 @@ jobs:
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
-            pip install {package} --no-build-isolation &&
-            pip install anyio pyarrow aiosqlite duckdb adbc-driver-sqlite adbc-driver-manager &&
-            python {project}/tools/scripts/pgo_training.py &&
+            pip install --no-build-isolation --no-deps "{package}" &&
+            pip install --require-hashes -r "{project}/.build-requirements/pgo.txt" &&
+            python "{project}/tools/scripts/pgo_training.py" &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 
@@ -163,12 +160,6 @@ jobs:
             CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
 
           # ── macOS (Clang): plain mypyc, no PGO ──
-          # PGO was attempted but pgo_training.py needs optional filter deps
-          # that are absent in the cibuildwheel BEFORE_BUILD env (every workload
-          # logs "skipped (filters not installed)" → no .profraw files emitted
-          # → llvm-profdata merge fails). Falls back to the base CIBW_BEFORE_BUILD,
-          # which just installs hatch-mypyc + hatchling and lets cibuildwheel
-          # run the normal frontend build with the mypyc env below.
           CIBW_ENVIRONMENT_MACOS: >-
             HATCH_BUILD_HOOKS_ENABLE=1
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
@@ -223,7 +214,16 @@ jobs:
           enable-cache: false
 
       - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+        shell: bash
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: uv python install "$PYTHON_VERSION"
+
+      - name: Export hashed requirements from uv.lock
+        shell: bash
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: uv run --no-project --python "$PYTHON_VERSION" python tools/scripts/export_hashed_requirements.py --profile runtime --profile smoke --output-dir .build-requirements
 
       - name: Download standard wheel artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -240,30 +240,40 @@ jobs:
 
       # Install sqlspec from local wheels only (--no-index + --no-deps) so any
       # missing host wheel fails loudly instead of silently grabbing a stale
-      # PyPI release. Transitive deps resolve from PyPI in a separate step.
+      # PyPI release. Core and smoke dependencies use hash-pinned requirements.
       # The version assert catches drift between pyproject.toml and the wheel.
       - name: Test standard wheel installation
         shell: bash
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          uv venv test-standard --python ${{ matrix.python-version }}
-          uv pip install --python test-standard --no-index --no-deps --find-links dist-standard/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
-          uv pip install --python test-standard "sqlspec==${SQLSPEC_EXPECTED_VERSION}" --find-links dist-standard/
+          uv venv test-standard --python "$PYTHON_VERSION"
+          uv pip install --no-config --python test-standard --no-index --no-deps --find-links dist-standard/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
+          uv pip install --no-config --python test-standard --require-hashes -r .build-requirements/runtime.txt
           uv run --no-project --python test-standard python -I -c "import sqlspec, os, sys; v=sqlspec.__version__; e=os.environ['SQLSPEC_EXPECTED_VERSION']; sys.exit(0 if v == e else (sys.stderr.write(f'version mismatch: got {v}, expected {e}\n') or 1))"
           uv run --no-project --python test-standard python -I -c "import sqlspec; print('Standard wheel OK')"
 
       - name: Test mypyc wheel installation
         shell: bash
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          uv venv test-mypyc --python ${{ matrix.python-version }}
-          uv pip install --python test-mypyc --no-index --no-deps --find-links dist-mypyc/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
-          uv pip install --python test-mypyc "sqlspec==${SQLSPEC_EXPECTED_VERSION}" --find-links dist-mypyc/
+          uv venv test-mypyc --python "$PYTHON_VERSION"
+          uv pip install --no-config --python test-mypyc --no-index --no-deps --find-links dist-mypyc/ "sqlspec==${SQLSPEC_EXPECTED_VERSION}"
+          uv pip install --no-config --python test-mypyc --require-hashes -r .build-requirements/runtime.txt
           uv run --no-project --python test-mypyc python -I -c "import sqlspec, os, sys; v=sqlspec.__version__; e=os.environ['SQLSPEC_EXPECTED_VERSION']; sys.exit(0 if v == e else (sys.stderr.write(f'version mismatch: got {v}, expected {e}\n') or 1))"
-          uv pip install --python test-mypyc obstore pyarrow || echo "::warning::obstore or pyarrow unavailable; the obstore smoke check will be skipped"
+          grep -v '^[[:space:]]*--hash=' .build-requirements/smoke.txt | sed -e 's/[[:space:]]*\\$//' > .build-requirements/smoke-specs.txt
+          if uv pip install --no-config --python test-mypyc --dry-run --only-binary :all: -r .build-requirements/smoke-specs.txt; then
+            uv pip install --no-config --python test-mypyc --require-hashes --only-binary :all: -r .build-requirements/smoke.txt
+          else
+            echo "::warning::obstore or pyarrow binary wheel unavailable for Python ${PYTHON_VERSION}; the obstore smoke check will be skipped"
+          fi
           uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py --require-compiled
 
   publish-release:
     name: Publish to PyPI
     needs: [build-source, build-wheels-standard, build-wheels-mypyc, test-wheels]
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -272,11 +282,6 @@ jobs:
       url: https://pypi.org/project/sqlspec/
 
     steps:
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          enable-cache: false
-
       - name: Download all artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

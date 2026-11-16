@@ -35,6 +35,8 @@ Configure the `events` extension on your database config (`EventsConfig`). When 
 | `queue_table` | `str` | - | Name of the fallback queue table. Defaults to 'sqlspec_event_queue'. |
 | `lease_seconds` | `int` | `30` | Lease duration for claimed events before they can be retried. Defaults to 30 seconds. |
 | `retention_seconds` | `int` | `86400` | Retention window for acknowledged events before cleanup. Defaults to 86400 (24 hours). |
+| `max_attempts` | `int` | `5` | Maximum claims per event before `nack` marks it failed. Defaults to 5. |
+| `retry_backoff_seconds` | `float` | `1.0` | Base delay for exponential redelivery backoff after `nack`. Defaults to 1.0. |
 | `poll_interval` | `float` | `1.0` | Compatibility alias for event_poll_interval. Defaults to 1.0. |
 | `event_poll_interval` | `float` | - | Durable event reconciliation interval in seconds. Takes precedence over poll_interval. |
 | `select_for_update` | `bool` | `False` | Use SELECT FOR UPDATE locking when claiming events. Defaults to False. |
@@ -42,6 +44,8 @@ Configure the `events` extension on your database config (`EventsConfig`). When 
 | `shard_count` | `int` | `1` | Number of hash shards for queue table and index prefixing (e.g. Cloud Spanner). Defaults to 1. |
 | `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
 <!-- GENERATED:END config-table:sqlspec.config.EventsConfig -->
+
+`ack` and `nack` on the table-backed queues apply only to events the same channel instance received and still leases. An `ack` or `nack` for any other event is ignored and returns `False`; the event is redelivered after its lease expires.
 
 ```python
 import asyncio

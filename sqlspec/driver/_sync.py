@@ -33,6 +33,7 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.data_dictionary._index_ddl import SyncWithoutIndexesContext
 from sqlspec.driver._common import (
+    _CLOSED_CONNECTION,
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
     DataDictionaryMixin,
@@ -44,14 +45,17 @@ from sqlspec.driver._common import (
     _sqlglot_dialect,
     describe_stack_statement,
     handle_single_row_error,
+    operation_requires_transaction,
+    run_cached_execution,
     validate_savepoint_name,
 )
 from sqlspec.driver._exception_handler import _run_with_sync_exception_handler
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._stream import SyncRowStream, _LazyEagerSyncRowSource
+from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, SyncRowStream, _LazyEagerSyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
+from sqlspec.observability._common import redact_sql_literals
 from sqlspec.storage._ingest import execute_load_from_storage_sync, execute_staged_load_sync
 from sqlspec.storage.pipeline import (
     StorageBridgeJob,
@@ -235,8 +239,15 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             The result of the SQL execution
         """
         try:
+            if connection is _CLOSED_CONNECTION:
+                raise ImproperConfigurationError(_CLOSED_CONNECTION_MESSAGE)
             runtime = self._observability
-            compiled_sql, execution_parameters = statement.compile()
+            if statement.is_script and (statement.positional_parameters or statement.named_parameters):
+                compiled_sql, execution_parameters = statement.raw_sql, None
+            else:
+                compiled_sql, execution_parameters = statement.compile()
+            if self._auto_begin_on_write:
+                self._ensure_transaction_for_statement(statement)
             result: SQLResult | None = None
 
             if runtime is None or runtime.is_idle:
@@ -313,6 +324,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             ExecutionResult with script execution data including statement counts
         """
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
@@ -335,6 +350,42 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 self._emit_script_statement_event(
                     sql=stmt,
                     parameters=prepared_parameters,
+                    operation=single_stmt.operation_type,
+                    rows_affected=sub_result.rowcount_override,
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=stmt_profile,
+                    script_ordinal=idx,
+                    script_statement_count=statement_count,
+                )
+            successful_count += 1
+
+        self._pending_statement_profile = None
+        return self.create_execution_result(
+            cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
+        )
+
+    def _dispatch_bound_script(self, cursor: Any, statements: "list[SQL]") -> ExecutionResult:
+        """Execute pre-bound script statements one at a time on the same cursor."""
+        statement_count: int = len(statements)
+        successful_count: int = 0
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
+
+        for idx, single_stmt in enumerate(statements):
+            stmt_started = perf_counter() if has_observers else 0.0
+            self._pending_statement_profile = None
+            try:
+                sub_result = self.dispatch_execute(cursor, single_stmt)
+            finally:
+                self._release_pooled_statement(single_stmt)
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                stmt_profile = self._consume_statement_profile()
+                compiled_sql, execution_parameters = single_stmt.compile()
+                self._emit_script_statement_event(
+                    sql=compiled_sql,
+                    parameters=execution_parameters,
                     operation=single_stmt.operation_type,
                     rows_affected=sub_result.rowcount_override,
                     duration_s=stmt_duration,
@@ -486,7 +537,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             and isinstance(statement, str)
             and fast_params is not None
         ):
-            fast_result = self._cached_execution(statement, fast_params)
+            if self._auto_begin_on_write:
+                self._ensure_transaction_for_cached_sql(statement, fast_params)
+            fast_result = run_cached_execution(self, statement, fast_params)
             if fast_result is not None:
                 return cast("SQLResult", fast_result)
         sql_statement = self.prepare_statement(
@@ -529,11 +582,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        """Execute a multi-statement script.
-
-        By default, validates each statement and logs warnings for dangerous
-        operations. Use suppress_warnings=True for migrations and admin scripts.
-        """
+        """Execute a multi-statement SQL script."""
         config = statement_config or self.statement_config
         sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         return self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
@@ -1239,7 +1288,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         stream = self.dispatch_select_stream(sql_statement, chunk_size)
         if stream is not None:
-            return stream._with_schema_type(schema_type)
+            return self._register_open_stream(stream._with_schema_type(schema_type))
         if native_only:
             msg = (
                 f"Adapter '{type(self).__name__}' does not support native row streaming. "
@@ -1247,7 +1296,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 "or switch to an adapter with native row streaming support."
             )
             raise ImproperConfigurationError(msg)
-        return SyncRowStream(_LazyEagerSyncRowSource(self, sql_statement, chunk_size), schema_type=schema_type)
+        return self._register_open_stream(
+            SyncRowStream(_LazyEagerSyncRowSource(self, sql_statement, chunk_size), schema_type=schema_type)
+        )
 
     @overload
     def fetch_stream(
@@ -1301,6 +1352,26 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             native_only=native_only,
             **kwargs,
         )
+
+    def _close_open_streams(self, *, error: bool = False) -> None:
+        """Close every registered row stream before the session releases its connection.
+
+        Every stream is closed even when an earlier close raises; the first such error is then re-raised.
+
+        Args:
+            error: Whether the session is ending because of an error.
+        """
+        open_streams = self._open_streams
+        self._open_streams = []
+        first_error: BaseException | None = None
+        for open_stream in open_streams:
+            try:
+                open_stream._close_for_session_exit(error=error)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         """Adapter hook returning a native row stream, or None when unsupported."""
@@ -1365,7 +1436,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                         self._commit_stack_success()
 
                 if started_transaction:
-                    self.commit()
+                    self._commit_stack_success()
             except Exception:
                 if started_transaction:
                     try:
@@ -1644,8 +1715,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             return runner(**runner_kwargs)
         driver_name = type(self).__name__
         db_system = self.observability_db_system
+        observed_sql = (
+            redact_sql_literals(compiled_sql, dialect=db_system)
+            if is_script and runtime._redaction is not None and runtime._redaction.mask_parameters
+            else compiled_sql
+        )
         query_context = {
-            "sql": compiled_sql,
+            "sql": observed_sql,
             "parameters": execution_parameters,
             "driver": driver_name,
             "operation": operation,
@@ -1659,8 +1735,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         if runtime.span_manager.is_enabled or (
             runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
         ):
-            sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
-        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
+            sql_hash = observability_runtime.compute_sql_hash(observed_sql)
+        span = runtime.start_query_span(observed_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
         started = perf_counter()
         self._pending_statement_profile = None
         try:
@@ -1669,13 +1745,30 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             self._pending_statement_profile = None
             runtime.span_manager.end_span(span, error=exc)
             runtime.emit_error_sync(exc, **query_context)
+            runtime.emit_statement_event(
+                sql=observed_sql,
+                parameters=execution_parameters,
+                driver=driver_name,
+                operation=operation,
+                execution_mode=self.statement_config.execution_mode,
+                is_many=is_many,
+                is_script=is_script,
+                rows_affected=None,
+                duration_s=perf_counter() - started,
+                storage_backend=None,
+                started_at=started,
+                precomputed_sql_hash=sql_hash,
+                is_error=True,
+                profile=None,
+                db_system=db_system,
+            )
             raise
         profile = self._consume_statement_profile()
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
         runtime.emit_query_complete_sync(**{**query_context, "rows_affected": result.rows_affected})
         runtime.emit_statement_event(
-            sql=compiled_sql,
+            sql=observed_sql,
             parameters=execution_parameters,
             driver=driver_name,
             operation=operation,
@@ -1736,6 +1829,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         Returns:
             SQLResult or DMLResult.
         """
+        if self._auto_begin_on_write:
+            self._ensure_transaction_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         if sys.exc_info()[1] is None:
@@ -1769,12 +1864,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path.
 
-        The statement is already compiled by _cached_execution, so dispatch_execute
+        The statement is already compiled by run_cached_execution, so dispatch_execute
         will hit the fast path in _compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
+            if self._auto_begin_on_write:
+                self._ensure_transaction_for_statement(statement)
             if sys.exc_info()[1] is None:
                 with exc_handler:
                     result = self._execute_cached_statement_with_cursor(statement)
@@ -1921,6 +2018,41 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
 
+    def _has_implicit_transaction(self) -> bool:
+        """Return whether the connection holds an uncommitted implicit transaction.
+
+        Adapters whose DBAPI connections open transactions implicitly override this method.
+
+        Returns:
+            False for adapters without implicit transaction tracking.
+        """
+        return False
+
+    def _ensure_transaction_for_cached_sql(
+        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
+    ) -> None:
+        """Open a transaction before a cached positional statement when lazy write begin is armed."""
+        cached = self._stmt_cache.get(statement)
+        if cached is None or cached.param_count != len(params) or cached.input_named_parameters:
+            return
+        if self.statement_config.parameter_config.ast_transformer is not None:
+            return
+        self._ensure_transaction_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
+
+    def _ensure_transaction_for_operation(self, operation_type: "OperationType", modifies_rows: bool) -> None:
+        """Open a transaction before a mutating statement when lazy write begin is armed."""
+        if operation_requires_transaction(operation_type, modifies_rows) and not self._connection_in_transaction():
+            self.begin()
+
+    def _ensure_transaction_for_statement(self, statement: "SQL") -> None:
+        """Open a transaction before a mutating prepared statement when lazy write begin is armed."""
+        if statement.is_script or statement.is_many:
+            if not self._connection_in_transaction():
+                self.begin()
+            return
+        profile = statement.get_processed_state().operation_profile
+        self._ensure_transaction_for_operation(statement.operation_type, profile.modifies_rows)
+
     def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
 
@@ -1952,11 +2084,11 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             logger.debug("Rollback after stack error failed: %s", rollback_error)
 
     def _commit_stack_success(self) -> None:
-        """Attempt to commit after a successful stack operation when not batching."""
-        try:
+        """Commit after a successful stack operation when not batching."""
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler:
             self.commit()
-        except Exception as commit_error:  # pragma: no cover
-            logger.debug("Commit after stack operation failed: %s", commit_error)
+        self._check_pending_exception(exc_handler)
 
     def _storage_pipeline(self) -> "SyncStoragePipeline":
         """Get or create a sync storage pipeline.

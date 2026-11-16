@@ -282,3 +282,32 @@ def test_session_index_ddl_qualifies_schema() -> None:
         == 'CREATE INDEX "MYSCHEMA"."IX_SESSIONS_EXP" ON MYSCHEMA.SESSIONS(expires_at)'
     )
     assert session_index_ddl("sessions") == "CREATE INDEX IX_SESSIONS_EXP ON sessions(expires_at)"
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_get_renews_only_for_positive_duration(
+    db2_mode: DriverMode, renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """Sync and async Db2 stores execute renewal UPDATE only when renew_for is positive."""
+    stored_expiry = _utc_naive_now() + timedelta(minutes=5)
+    store, config = _store(db2_mode, _session_row(b"payload", stored_expiry))
+
+    assert await store.get("session-1", renew_for=renew_for) == b"payload"
+
+    if expect_renew:
+        assert len(config.executed) == 2
+        assert config.executed[1][0].lstrip().upper().startswith("UPDATE")
+        assert config.connection.commits == 1
+    else:
+        assert len(config.executed) == 1
+        assert config.connection.commits == 0

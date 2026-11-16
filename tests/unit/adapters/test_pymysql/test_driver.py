@@ -2,13 +2,15 @@
 
 from typing import Any, cast
 
+import pymysql
 import pytest
 from pymysql.constants import SERVER_STATUS
 
 from sqlspec import SQL, StatementStack
 from sqlspec.adapters.pymysql import PyMysqlDriver
 from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
-from sqlspec.exceptions import DeadlockError
+from sqlspec.adapters.pymysql.core import create_mapped_exception
+from sqlspec.exceptions import DatabaseConnectionError, DeadlockError, OperationalError
 
 
 class _FakeCursor:
@@ -255,3 +257,21 @@ def test_pymysql_stream_source_exposes_column_types_to_arrow_batches() -> None:
     assert len(batches) == 1
     assert batches[0].schema.field("id").type == pa.int64()
     assert batches[0].column("id").to_pylist() == [None, None]
+
+
+def test_pymysql_maps_1040_and_bare_connection_error_classes() -> None:
+    """Errno 1040 and uncoded InterfaceError/OperationalError map to failover-safe SQLSpec exceptions."""
+    too_many = PyMysqlMySQLError(1040, "Too many connections")
+    iface_err = pymysql.err.InterfaceError("Socket disconnected")
+    op_err = pymysql.err.OperationalError("Server lost")
+
+    mapped_too_many = create_mapped_exception(too_many)
+    mapped_iface = create_mapped_exception(iface_err)
+    mapped_op = create_mapped_exception(op_err)
+
+    assert type(mapped_too_many) is DatabaseConnectionError
+    assert mapped_too_many.__cause__ is too_many
+    assert type(mapped_iface) is DatabaseConnectionError
+    assert mapped_iface.__cause__ is iface_err
+    assert type(mapped_op) is OperationalError
+    assert mapped_op.__cause__ is op_err

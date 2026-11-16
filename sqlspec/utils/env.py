@@ -195,7 +195,7 @@ def get_config_val(key: str, default: ParseType, type_hint: object = _UNSET) -> 
     """
     if key not in os.environ:
         return default
-    return _parse_value(key, os.path.expandvars(os.environ[key]), default, type_hint)
+    return _parse_value(key, os.environ[key], default, type_hint)
 
 
 @overload
@@ -291,7 +291,7 @@ def _coerce_bool(key: str, value: Any) -> bool:
         return True
     if normalized in FALSE_VALUES:
         return False
-    msg = f"Cannot convert value for key '{key}' to bool: {value!r}"
+    msg = f"Cannot convert value for key '{key}' to bool"
     raise ValueError(msg)
 
 
@@ -303,23 +303,23 @@ def _coerce_item(key: str, value: Any, item_type: object) -> Any:
     if item_type is int:
         try:
             return int(value)
-        except (TypeError, ValueError) as e:
-            msg = f"Cannot convert list item for key '{key}' to int: {value!r}"
-            raise ValueError(msg) from e
+        except (TypeError, ValueError):
+            msg = f"Cannot convert list item for key '{key}' to int"
+            raise ValueError(msg) from None
     if item_type is float:
         try:
             return float(value)
-        except (TypeError, ValueError) as e:
-            msg = f"Cannot convert list item for key '{key}' to float: {value!r}"
-            raise ValueError(msg) from e
+        except (TypeError, ValueError):
+            msg = f"Cannot convert list item for key '{key}' to float"
+            raise ValueError(msg) from None
     if item_type is str or item_type is _UNSET:
         return str(value)
     if isinstance(item_type, type):
         try:
             return item_type(value)
-        except (TypeError, ValueError) as e:
-            msg = f"Cannot convert list item for key '{key}': {value!r}"
-            raise ValueError(msg) from e
+        except (TypeError, ValueError):
+            msg = f"Cannot convert list item for key '{key}'"
+            raise ValueError(msg) from None
     return value
 
 
@@ -329,15 +329,15 @@ def _parse_basic_type(key: str, value: str, target_type: object) -> Any:
     if target_type is int:
         try:
             return int(value)
-        except ValueError as e:
-            msg = f"Cannot convert value for key '{key}' to int: {value!r}"
-            raise ValueError(msg) from e
+        except ValueError:
+            msg = f"Cannot convert value for key '{key}' to int"
+            raise ValueError(msg) from None
     if target_type is float:
         try:
             return float(value)
-        except ValueError as e:
-            msg = f"Cannot convert value for key '{key}' to float: {value!r}"
-            raise ValueError(msg) from e
+        except ValueError:
+            msg = f"Cannot convert value for key '{key}' to float"
+            raise ValueError(msg) from None
     if target_type is Path:
         return Path(value)
     return value
@@ -348,9 +348,9 @@ def _parse_dict(key: str, value: str) -> dict[str, Any]:
     if stripped.startswith("{"):
         try:
             parsed = json.loads(stripped)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             msg = f"'{key}' is not valid JSON"
-            raise ValueError(msg) from e
+            raise ValueError(msg) from None
         if not isinstance(parsed, dict):
             msg = f"'{key}' is not a valid dict representation"
             raise ValueError(msg)
@@ -362,7 +362,7 @@ def _parse_dict(key: str, value: str) -> dict[str, Any]:
         if not stripped_item:
             continue
         if "=" not in stripped_item:
-            msg = f"'{key}' invalid dict format: missing '=' in {stripped_item!r}"
+            msg = f"'{key}' invalid dict format: missing '='"
             raise ValueError(msg)
         item_key, item_value = stripped_item.split("=", 1)
         result[item_key.strip()] = item_value.strip()
@@ -374,9 +374,9 @@ def _parse_list(key: str, value: str, item_type: object) -> list[Any]:
     if stripped.startswith("["):
         try:
             parsed = json.loads(stripped)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             msg = f"'{key}' is not valid JSON"
-            raise ValueError(msg) from e
+            raise ValueError(msg) from None
         if not isinstance(parsed, list):
             msg = f"'{key}' is not a valid list representation"
             raise ValueError(msg)

@@ -130,21 +130,24 @@ def test_config_state_rejects_conflicting_extra_statuses() -> None:
 
 
 def test_should_rollback_manual_mode() -> None:
-    """Test should_rollback in manual mode never rolls back."""
+    """Test should_rollback in manual mode always rolls back uncommitted work."""
     state = FlaskConfigState(
         config=None,  # type: ignore[arg-type]
         connection_key="conn",
         session_key="db",
         commit_mode="manual",
-        extra_commit_statuses=None,
+        extra_commit_statuses={200, 404},
         extra_rollback_statuses=None,
         is_async=False,
         disable_di=False,
     )
 
-    assert not state.should_rollback(200)
-    assert not state.should_rollback(400)
-    assert not state.should_rollback(500)
+    assert state.should_rollback(200)
+    assert state.should_rollback(400)
+    assert state.should_rollback(404)
+    assert state.should_rollback(500)
+    assert not state.should_commit(200)
+    assert not state.should_commit(404)
 
 
 def test_should_rollback_autocommit_mode() -> None:

@@ -74,9 +74,9 @@ All `TenantContext` methods are class methods:
 | Method | Return and behavior |
 | --- | --- |
 | `get()` | Current `TenantContextPayload`, or `None` when unset; inside a framework request it resolves the request tenant on first use. |
-| `aget()` | Awaitable form of `get()` that also awaits an asynchronous request extractor. |
+| `get_async()` | Awaitable form of `get()` that also awaits an asynchronous request extractor. |
 | `require(key=None)` | Current payload, or the framework's 401/403 inside a request and `TenantContextError` outside one; `key` selects a database configuration. |
-| `arequire(key=None)` | Awaitable form of `require()`. |
+| `require_async(key=None)` | Awaitable form of `require()`. |
 | `get_tenant_id()` | Current identity string, or `None` when unset or bypassed. |
 | `is_bypassed()` | Whether explicit bypass state is active. |
 | `set(payload)` | Restoration token; accepts `TenantContextPayload` or `None`. |
@@ -127,7 +127,7 @@ Extractors return an app-authorized `TenantContextPayload`, string, UUID, or `No
 ::: sqlspec.utils.tenant.TenantRequestBinding
     options:
       heading_level: 3
-      members: [__init__, resolve, aresolve, require, arequire, freeze, afreeze, frozen]
+      members: [__init__, resolve, resolve_async, require, require_async, freeze, freeze_async, frozen]
 
 ::: sqlspec.utils.tenant.tenant_bypass
     options:
@@ -154,7 +154,7 @@ A strategy returns `TenantLeaseState` or a baseline `Mapping[str, str | None]` f
 
 ## Litestar Tenant Resolution
 
-Configure `extension_config["litestar"]` on `SQLSpecPlugin(config)` or attach `require_tenant()`, which inherits the registered plugin's `TenantResolutionSettings` automatically unless overridden per route. `resolve_litestar_tenant` also integrates `litestar-security` `Principal`, `SecurityContext`, `AuthorizationSnapshot` (`tenant_ids` and `tenant_roles`), `CredentialRestrictions`, `SessionHandle`, `requires_tenant`, and `requires_tenant_role`. `set_connection_tenant(..., key=...)` scopes a receipt to one database configuration. Other frameworks expose `set_request_tenant(...)` from `sqlspec.extensions.{fastapi,starlette,flask,sanic}` with the same `key=` argument. See [Litestar Multi-Tenancy](../learn/recipes/multi-tenancy-litestar.md) and the other [framework guides](../learn/recipes/multi-tenancy-frameworks.md#framework-guides) for complete examples.
+Configure `extension_config["litestar"]` on `SQLSpecPlugin(config)` or attach `require_tenant()`, which inherits the registered plugin's `TenantResolutionSettings` automatically unless overridden per route. `resolve_litestar_tenant` also integrates `litestar-security` `Principal`, `SecurityContext`, `AuthorizationSnapshot` (`tenant_ids` and `tenant_roles`), `CredentialRestrictions`, `SessionHandle`, `requires_tenant`, and `requires_tenant_role`. `set_request_tenant(..., key=...)` scopes a receipt to one database configuration. Other frameworks expose `set_request_tenant(...)` from `sqlspec.extensions.{fastapi,starlette,flask,sanic}` with the same `key=` argument. See [Litestar Multi-Tenancy](../learn/recipes/multi-tenancy-litestar.md) and the other [framework guides](../learn/recipes/multi-tenancy-frameworks.md#framework-guides) for complete examples.
 
 ::: sqlspec.extensions.litestar.tenant.TenantResolutionSettings
     options:
@@ -169,7 +169,7 @@ Configure `extension_config["litestar"]` on `SQLSpecPlugin(config)` or attach `r
     options:
       heading_level: 4
 
-::: sqlspec.extensions.litestar.tenant.set_connection_tenant
+::: sqlspec.extensions.litestar.tenant.set_request_tenant
     options:
       heading_level: 4
 

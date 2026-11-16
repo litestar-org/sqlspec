@@ -7,10 +7,13 @@ Tests cover:
 """
 
 import ast
+import inspect
 from pathlib import Path
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
+import asyncpg.connect_utils
 import pytest
 
 from sqlspec.adapters.cockroach_asyncpg import (
@@ -26,6 +29,7 @@ from sqlspec.adapters.cockroach_asyncpg.adk.store import CockroachAsyncpgADKMemo
 from sqlspec.adapters.cockroach_asyncpg.litestar.store import CockroachAsyncpgStore
 from sqlspec.adapters.cockroach_asyncpg.tenant import CockroachAsyncpgRLSStrategy, CockroachAsyncpgTenantLease
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -673,11 +677,105 @@ async def test_cockroach_asyncpg_cache_hit_with_cursor() -> None:
     assert conn.execute.call_count == 2
 
 
-def test_cockroach_asyncpg_connection_config_timeout_annotations() -> None:
-    """CockroachAsyncpgConnectionConfig exposes statement_timeout and idle_in_transaction_session_timeout."""
+def test_cockroach_asyncpg_connection_config_forwards_timeouts_to_server_settings() -> None:
+    """Timeout and buffer options validate as non-negative int milliseconds and move into server_settings."""
     annotations = CockroachAsyncpgConnectionConfig.__annotations__
-    assert "statement_timeout" in annotations
-    assert "idle_in_transaction_session_timeout" in annotations
+    assert annotations["statement_timeout"] == NotRequired[int]
+    assert annotations["idle_in_transaction_session_timeout"] == NotRequired[int]
+    assert annotations["results_buffer_size"] == NotRequired[int]
+
+    built = build_connection_config({
+        "dsn": "postgresql://localhost:26257/defaultdb",
+        "results_buffer_size": 4096,
+        "statement_timeout": 2500,
+        "idle_in_transaction_session_timeout": 0,
+    })
+    assert "results_buffer_size" not in built
+    assert "statement_timeout" not in built
+    assert "idle_in_transaction_session_timeout" not in built
+    assert built["server_settings"] == {
+        "results_buffer_size": "4096",
+        "statement_timeout": "2500",
+        "idle_in_transaction_session_timeout": "0",
+    }
+
+    for key in ("results_buffer_size", "statement_timeout", "idle_in_transaction_session_timeout"):
+        for invalid in (-1, True, False, 1.5, "2500", None):
+            with pytest.raises(ImproperConfigurationError, match=key):
+                build_connection_config({key: invalid})
+
+
+@pytest.mark.anyio
+async def test_cockroach_asyncpg_create_pool_does_not_leak_server_setting_timeouts() -> None:
+    """Pool creation passes timeout settings inside server_settings rather than top-level asyncpg kwargs."""
+    pool = object()
+    config = CockroachAsyncpgConfig(
+        connection_config={
+            "host": "localhost",
+            "statement_timeout": 2500,
+            "idle_in_transaction_session_timeout": 5000,
+            "results_buffer_size": 8192,
+        }
+    )
+    with patch(
+        "sqlspec.adapters.cockroach_asyncpg.config.asyncpg_create_pool", new=AsyncMock(return_value=pool)
+    ) as mock:
+        await config._create_pool()
+
+    assert mock.await_args is not None
+    kwargs = mock.await_args.kwargs
+    assert "statement_timeout" not in kwargs
+    assert "idle_in_transaction_session_timeout" not in kwargs
+    assert "results_buffer_size" not in kwargs
+    assert kwargs["server_settings"] == {
+        "results_buffer_size": "8192",
+        "statement_timeout": "2500",
+        "idle_in_transaction_session_timeout": "5000",
+    }
+
+
+def test_cockroach_asyncpg_localizes_core_helpers() -> None:
+    """CockroachAsyncpgConfig and driver use localized cockroach_asyncpg.core helpers rather than asyncpg.core."""
+    from sqlspec.adapters.asyncpg import core as asyncpg_core
+    from sqlspec.adapters.cockroach_asyncpg import config as cockroach_config
+    from sqlspec.adapters.cockroach_asyncpg import core as cockroach_core
+    from sqlspec.adapters.cockroach_asyncpg import driver as cockroach_driver
+
+    assert cockroach_config.default_statement_config is cockroach_core.default_statement_config
+    assert cockroach_config.default_statement_config is not asyncpg_core.default_statement_config
+    assert cockroach_config.register_json_codecs is cockroach_core.register_json_codecs
+    assert cockroach_config.register_pgvector_support is cockroach_core.register_pgvector_support
+    assert cockroach_driver.driver_profile is cockroach_core.driver_profile
+    assert cockroach_driver.driver_profile is not asyncpg_core.driver_profile
+
+
+@pytest.mark.anyio
+async def test_cockroach_asyncpg_litestar_store_uses_fetch_without_fetchrow() -> None:
+    """CockroachAsyncpgStore queries via _fetch_one / conn.fetch without requiring fetchrow."""
+    from datetime import UTC, datetime, timedelta
+
+    expires = datetime.now(UTC) + timedelta(minutes=5)
+    conn = MagicMock(spec=["fetch", "execute"])
+    conn.fetch = AsyncMock(
+        side_effect=[[{"data": b"payload", "expires_at": expires}], [{"?column?": 1}], [{"expires_at": expires}]]
+    )
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    class _Ctx:
+        async def __aenter__(self) -> Any:
+            return conn
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    config = CockroachAsyncpgConfig(connection_config={"dsn": "postgresql://localhost:26257/db"})
+    with patch.object(config, "provide_connection", return_value=_Ctx()):
+        store = CockroachAsyncpgStore(config)
+        assert await store.get("sess-1", renew_for=60) == b"payload"
+        assert await store.exists("sess-1") is True
+        remaining = await store.expires_in("sess-1")
+        assert remaining is not None and remaining > 0
+    assert conn.fetch.await_count == 3
 
 
 async def test_cockroach_asyncpg_execute_native_storage_under_active_exception() -> None:
@@ -889,3 +987,144 @@ def test_cockroach_asyncpg_tenant_on_connection_create_defaults_baseline_and_has
                 if len(parts) >= 4 and parts[2] != adapter_name and parts[3] == "tenant":
                     violations.append(f"{path}:{node.module}")
     assert violations == []
+
+
+@pytest.mark.parametrize("config_type", [CockroachAsyncpgConfig])
+def test_replicas_true_selects_single_pool_follower_reads(config_type: Any) -> None:
+    config = config_type(replicas=True)
+    assert not config.has_replicas
+    assert config.supports_read_routing
+    assert config.driver_features["enable_follower_reads"] is True
+    assert config.driver_features["default_staleness"] == "follower_read_timestamp()"
+
+
+async def test_provide_session_detaches_driver_on_exit() -> None:
+    connection = AsyncMock()
+    connection.is_in_transaction = lambda: False
+    pool = AsyncMock()
+    pool.acquire.return_value = connection
+    config = CockroachAsyncpgConfig(connection_instance=cast("Any", pool))
+    async with config.provide_session() as session:
+        assert session.connection is connection
+    assert session.connection is _CLOSED_CONNECTION
+
+
+def test_cockroach_asyncpg_derive_pool_overrides_dsn_and_aliases() -> None:
+    """Derived replica configs replace primary DSN, database, and user aliases cleanly."""
+    primary = CockroachAsyncpgConfig(
+        connection_config={"dsn": "postgresql://primary:26257/rw", "database": "rw_db", "user": "rw_user"}
+    )
+    derived = primary.derive_pool(url="postgresql://replica:26257/ro", dbname="ro_db", username="ro_user")
+    assert derived.connection_config["dsn"] == "postgresql://replica:26257/ro"
+    assert "url" not in derived.connection_config
+    assert derived.connection_config["database"] == "ro_db"
+    assert derived.connection_config["user"] == "ro_user"
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_cockroach_asyncpg_replica_connection_rollback_error_handling(body_raises: bool) -> None:
+    """Caller exceptions are preserved if cleanup rollback fails; clean exits propagate rollback failure."""
+    connection = object()
+    session = AsyncMock()
+    session.connection = connection
+    session.begin = AsyncMock()
+    session.rollback = AsyncMock(side_effect=RuntimeError("rollback boom"))
+
+    class _FakeSessionCtx:
+        async def __aenter__(self) -> Any:
+            return session
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+    config = CockroachAsyncpgConfig(connection_config={"dsn": "postgresql://localhost:26257/db"})
+    expected_exc = ValueError if body_raises else RuntimeError
+    with pytest.raises(expected_exc, match="body boom" if body_raises else "rollback boom"):
+        async with config._replica_connection(_FakeSessionCtx()) as conn:  # pyright: ignore[reportPrivateUsage]
+            assert conn is connection
+            if body_raises:
+                raise ValueError("body boom")
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+async def test_cockroach_asyncpg_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CockroachAsyncpg pool creation and acquire errors map to DatabaseConnectionError for replica failover."""
+
+    class _FakeTx:
+        def __init__(self, conn: "_GoodConn") -> None:
+            self._conn = conn
+
+        async def start(self) -> None:
+            self._conn._in_tx = True
+
+        async def commit(self) -> None:
+            self._conn._in_tx = False
+
+        async def rollback(self) -> None:
+            self._conn._in_tx = False
+
+    class _GoodConn:
+        def __init__(self) -> None:
+            self._in_tx = False
+
+        def is_in_transaction(self) -> bool:
+            return self._in_tx
+
+        def transaction(self) -> _FakeTx:
+            return _FakeTx(self)
+
+        async def execute(self, query: str, *args: Any) -> str:
+            _ = query, args
+            return "OK"
+
+    good_conn = _GoodConn()
+    good_pool = AsyncMock()
+    good_pool.acquire = AsyncMock(return_value=good_conn)
+    good_pool.release = AsyncMock()
+    bad_pool = AsyncMock()
+    bad_pool.acquire = AsyncMock(side_effect=asyncpg.InterfaceError("closed"))
+
+    async def fake_create_pool(**kwargs: Any) -> Any:
+        if "bad" in str(kwargs.get("dsn", "")):
+            if failure_stage == "pool":
+                raise asyncpg.CannotConnectNowError("replica unavailable")
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr("sqlspec.adapters.cockroach_asyncpg.config.asyncpg_create_pool", fake_create_pool)
+    config = CockroachAsyncpgConfig(
+        connection_config={"dsn": "postgresql://primary:26257/db"},
+        replicas=["postgresql://bad:26257/db", "postgresql://good:26257/db"],
+    )
+    async with config.provide_replica_connection() as conn:
+        assert conn is good_conn
+    async with config.provide_replica_session() as reader:
+        assert reader.connection is good_conn
+
+
+def test_cockroach_asyncpg_replica_and_dsn_override_clear_inherited_endpoints() -> None:
+    """String replicas and dsn overrides drop inherited field-based primary endpoints."""
+    primary = CockroachAsyncpgConfig(
+        connection_config={"host": "primary", "port": 26257, "database": "rw", "user": "u", "password": "pw"},
+        replicas=["postgresql://ro:ropw@replica:26258/ro_db"],
+    )
+    derived = primary.derive_pool(dsn="postgresql://ro:ropw@replica:26258/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+
+    parse_args = asyncpg.connect_utils._parse_connect_arguments  # type: ignore[attr-defined]
+    parse_defaults: dict[str, Any] = dict.fromkeys(inspect.signature(parse_args).parameters)
+    parse_defaults.update({
+        "statement_cache_size": 100,
+        "max_cached_statement_lifetime": 300,
+        "max_cacheable_statement_size": 307200,
+    })
+    for cfg in (derived, replica):
+        assert cfg.connection_config["dsn"] == "postgresql://ro:ropw@replica:26258/ro_db"
+        for stale_key in ("host", "port", "database", "user", "password"):
+            assert stale_key not in cfg.connection_config
+        addrs, params, _ = parse_args(**{**parse_defaults, **build_connection_config(cfg.connection_config)})
+        assert addrs == [("replica", 26258)]
+        assert params.database == "ro_db"
+        assert params.user == "ro"

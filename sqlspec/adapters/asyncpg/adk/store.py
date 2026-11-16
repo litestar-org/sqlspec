@@ -1,5 +1,6 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
+from collections.abc import Mapping
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, cast
 
@@ -10,7 +11,9 @@ from sqlspec.core.config_runtime import is_postgres_extension_active, resolve_po
 from sqlspec.core.statement import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError, SQLSpecError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -83,8 +86,8 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
 
     __slots__ = ()
 
-    def __init__(self, config: AsyncConfigT) -> None:
-        super().__init__(config)
+    def __init__(self, config: AsyncConfigT, *, read_config: "AsyncConfigT | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -108,9 +111,18 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             await driver.execute_script(statement)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        async with self._config.provide_connection() as conn:
+        """Create a new session and atomically apply optional scoped state deltas."""
+        async with self._config.provide_connection() as conn, _optional_transaction(conn):
             if self._owner_id_column_name:
                 sql = f"""
                 INSERT INTO {self._session_table}
@@ -127,14 +139,28 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                 """
                 row = await conn.fetchrow(sql, session_id, app_name, user_id, state)
 
-        if row is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
+            if row is None:
+                msg = "Failed to fetch created session"
+                raise RuntimeError(msg)
+
+            resolved_app = (
+                await self._apply_app_state_delta(conn, app_name, app_state_delta)
+                if app_state_delta
+                else await self._select_app_state(conn, app_name)
+            )
+            resolved_user = (
+                await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
+                if user_state_delta
+                else await self._select_user_state(conn, app_name, user_id)
+            )
+
+        persisted_state = _decode_json_state(row["state"])
+        merged_state = merge_scoped_state(persisted_state, resolved_app, resolved_user)
         return StoredSession(
             id=row["id"],
             app_name=row["app_name"],
             user_id=row["user_id"],
-            state=row["state"],
+            state=merged_state,
             create_time=row["create_time"],
             update_time=row["update_time"],
         )
@@ -142,7 +168,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._is_renewal_requested(renew_for):
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP
@@ -159,7 +185,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             params = [app_name, user_id, session_id]
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 row = await conn.fetchrow(sql, *params)
 
                 if row is None:
@@ -227,7 +253,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
 
                 return [
@@ -245,23 +271,34 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             return []
 
     async def append_event(self, event_record: StoredEvent) -> None:
+        session_id = event_record["session_id"]
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        )
+        SELECT $1, $2::varchar(128), $3::varchar(128), $4::varchar(128), $5, $6, $7
+        WHERE EXISTS (
+            SELECT 1 FROM {self._session_table}
+            WHERE id = $4 AND app_name = $2 AND user_id = $3
+        )
         """
 
         async with self._config.provide_connection() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 sql,
                 event_record["id"],
-                event_record["app_name"],
-                event_record["user_id"],
-                event_record["session_id"],
+                app_name,
+                user_id,
+                session_id,
                 event_record["invocation_id"],
                 event_record["timestamp"],
                 event_record["event_data"],
             )
+            if parse_status(result) == 0:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
 
     async def append_event_and_update_state(
         self,
@@ -271,9 +308,17 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = "event_record scope does not match target session arguments."
+            raise ValueError(msg)
+
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -285,22 +330,12 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         WHERE app_name = $2 AND user_id = $3 AND id = $4
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
-        app_upsert_sql = f"""
-        INSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES ($1, $2, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """
-        user_upsert_sql = f"""
-        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name, user_id) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """
 
-        async with self._config.provide_connection() as conn, conn.transaction():
+        async with self._config.provide_connection() as conn, _optional_transaction(conn):
+            row = await conn.fetchrow(update_sql, state, app_name, user_id, session_id)
+            if row is None:
+                msg = f"Session {session_id} not found during append_event_and_update_state."
+                raise ValueError(msg)
             await conn.execute(
                 insert_sql,
                 event_record["id"],
@@ -311,20 +346,20 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                 event_record["timestamp"],
                 event_record["event_data"],
             )
-            row = await conn.fetchrow(update_sql, state, app_name, user_id, session_id)
-            if row is None:
-                msg = f"Session {session_id} not found during append_event_and_update_state."
-                raise ValueError(msg)
-            if app_state is not None:
-                await conn.execute(app_upsert_sql, app_name, app_state)
-            if user_state is not None:
-                await conn.execute(user_upsert_sql, app_name, user_id, user_state)
+            merged_app = await self._apply_app_state_delta(conn, app_name, app_state_delta) if app_state_delta else None
+            merged_user = (
+                await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
+                if user_state_delta
+                else None
+            )
 
+        persisted_state = _decode_json_state(row["state"])
+        merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
         return StoredSession(
             id=row["id"],
             app_name=row["app_name"],
             user_id=row["user_id"],
-            state=row["state"],
+            state=merged_state,
             create_time=row["create_time"],
             update_time=row["update_time"],
         )
@@ -340,7 +375,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = $1", "s.user_id = $2", "e.session_id = $3"]
+        where_clauses = ["s.app_name = $1", "s.user_id = $2", "s.id = $3"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -348,21 +383,26 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT ${len(params) + 1}" if limit is not None else ""
         if limit is not None:
+            order_clause = f"ORDER BY e.timestamp DESC, e.id DESC LIMIT ${len(params) + 1}"
             params.append(limit)
+        else:
+            order_clause = "ORDER BY e.timestamp ASC, e.id ASC"
 
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_clause}
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
+
+                if limit is not None:
+                    rows = list(reversed(rows))
 
                 return [
                     StoredEvent(
@@ -485,6 +525,70 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         async with self._config.provide_connection() as conn:
             await conn.execute(sql, key, value)
 
+    async def _select_app_state(self, conn: Any, app_name: str) -> "dict[str, Any] | None":
+        return await self._select_state(
+            conn, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
+        )
+
+    async def _select_user_state(self, conn: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return await self._select_state(
+            conn, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
+        )
+
+    async def _select_state(
+        self, conn: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
+    ) -> "dict[str, Any] | None":
+        where_clause = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))
+        row = await conn.fetchrow(f"SELECT state FROM {table} WHERE {where_clause}", *key_values)
+        if row is None:
+            return None
+        return _decode_json_state(row["state"])
+
+    async def _apply_app_state_delta(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return await self._apply_state_delta(
+            conn, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
+        )
+
+    async def _apply_user_state_delta(
+        self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return await self._apply_state_delta(
+            conn,
+            table=self._user_state_table,
+            key_columns=("app_name", "user_id"),
+            key_values=(app_name, user_id),
+            delta=delta,
+        )
+
+    async def _apply_state_delta(
+        self,
+        conn: Any,
+        *,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        cols = ", ".join((*key_columns, "state", "update_time"))
+        insert_placeholders = ", ".join(f"${idx}" for idx in range(1, len(key_columns) + 2))
+        conflict_cols = ", ".join(key_columns)
+        ensure_sql = (
+            f"INSERT INTO {table} ({cols}) VALUES ({insert_placeholders}, CURRENT_TIMESTAMP) "
+            f"ON CONFLICT ({conflict_cols}) DO NOTHING"
+        )
+        await conn.execute(ensure_sql, *key_values, {})
+
+        select_where = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))
+        row = await conn.fetchrow(f"SELECT state FROM {table} WHERE {select_where} FOR UPDATE", *key_values)
+        existing = _decode_json_state(row["state"]) if row is not None else {}
+        merged = dict(existing)
+        merged.update(delta)
+
+        update_where = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=2))
+        update_sql = f"UPDATE {table} SET state = $1, update_time = CURRENT_TIMESTAMP WHERE {update_where}"
+        await conn.execute(update_sql, merged, *key_values)
+        return merged
+
     async def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -596,7 +700,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
     - Full-text search using to_tsvector/to_tsquery (postgres_fts strategy)
     - Simple ILIKE search fallback (simple strategy)
     - TIMESTAMPTZ for precise timestamp storage
-    - Deduplication via event_id unique constraint
+    - Deduplication via (app_name, user_id, event_id) unique constraint
     - Efficient upserts using ON CONFLICT DO NOTHING
 
     Args:
@@ -605,8 +709,8 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "AsyncpgConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "AsyncpgConfig", *, read_config: "AsyncpgConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -679,7 +783,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                      {self._owner_id_column_name}, timestamp, embedding, content_json,
                      content_text, metadata_json, inserted_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::float8[]::vector, $11, $12, $13, $14)
-                    ON CONFLICT (event_id) DO NOTHING
+                    ON CONFLICT DO NOTHING
                     """
                     result = await conn.execute(
                         sql,
@@ -704,7 +808,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                     (id, session_id, app_name, user_id, scope, event_id, author,
                      timestamp, embedding, content_json, content_text, metadata_json, inserted_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::float8[]::vector, $10, $11, $12, $13)
-                    ON CONFLICT (event_id) DO NOTHING
+                    ON CONFLICT DO NOTHING
                     """
                     result = await conn.execute(
                         sql,
@@ -815,20 +919,27 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             """
             params = (*scope_params, f"%{query}%", limit_value)
 
-        async with self._config.provide_connection() as conn:
+        async with self._provide_replica_connection(primary=False) as conn:
             if embedding is not None and self._enable_bm25 and query:
                 self._config._ensure_pg_textsearch_available()
             rows = await conn.fetch(sql, *params)
         return [cast("StoredMemory", dict(row)) for row in rows]
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = $1"
+        clauses = ["session_id = $1"]
+        params: list[Any] = [session_id]
+        params.append(app_name)
+        clauses.append(f"app_name = ${len(params)}")
+        params.append(user_id)
+        clauses.append(f"user_id = ${len(params)}")
+
+        sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
         async with self._config.provide_connection() as conn:
-            result = await conn.execute(sql, session_id)
+            result = await conn.execute(sql, *params)
         return parse_status(result)
 
     async def delete_entries_older_than(
@@ -879,14 +990,15 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMPTZ NOT NULL,
             embedding VECTOR({self._vector_dimensions}),
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         );
 
         {indexes_sql}
@@ -1021,3 +1133,13 @@ def _adk_config(config: Any) -> AsyncpgADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("AsyncpgADKConfig", adk_config)
+
+
+def _decode_json_state(raw: Any) -> "dict[str, Any]":
+    """Normalize a JSONB state value from asyncpg into a dictionary."""
+    if isinstance(raw, str):
+        decoded = from_json(raw)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {}

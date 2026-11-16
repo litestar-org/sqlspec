@@ -1,11 +1,13 @@
 """FastAPI extension for SQLSpec database session and dependency management."""
 
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from fastapi import Request
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.fastapi.providers import DEPENDENCY_DEFAULTS
 from sqlspec.extensions.fastapi.providers import provide_filters as _provide_filters
+from sqlspec.extensions.starlette.extension import DEFAULT_COMMIT_MODE
 from sqlspec.extensions.starlette.extension import SQLSpecPlugin as _StarlettePlugin
 
 if TYPE_CHECKING:
@@ -197,11 +199,38 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         return dependency
 
-    @staticmethod
+    def provide_replica_session(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a mode-aware replica session dependency for a registered configuration."""
+        return self._read_routing_dependency(key, "session")
+
+    def provide_async_replica_session(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a replica session dependency requiring an asynchronous configuration."""
+        return self._read_routing_dependency(key, "session", require_async=True)
+
+    def provide_sync_replica_session(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a replica session dependency requiring a synchronous configuration."""
+        return self._read_routing_dependency(key, "session", require_async=False)
+
+    def provide_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a mode-aware raw replica connection dependency."""
+        return self._read_routing_dependency(key, "connection")
+
+    def provide_async_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a raw replica connection dependency requiring an async configuration."""
+        return self._read_routing_dependency(key, "connection", require_async=True)
+
+    def provide_sync_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a raw replica connection dependency requiring a sync configuration."""
+        return self._read_routing_dependency(key, "connection", require_async=False)
+
+    def provide_routing_session(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a lazy routing facade dependency without driver response schemas."""
+        return self._read_routing_dependency(key, "routing")
+
     def provide_filters(
-        config: "FilterConfig", dep_defaults: "DependencyDefaults | None" = None
+        self, config: "FilterConfig", dep_defaults: "DependencyDefaults | None" = None
     ) -> "Callable[..., list[FilterTypes]]":
-        """Create filter dependency for FastAPI routes.
+        """Create filter dependency for FastAPI routes inheriting plugin cursor settings.
 
         Dynamically generates a FastAPI dependency function that parses query
         parameters into SQLSpec filter objects. The returned callable can be used
@@ -214,11 +243,48 @@ class SQLSpecPlugin(_StarlettePlugin):
         Returns:
             Callable for use with Depends() that returns list of filters.
         """
-
         if dep_defaults is None:
             dep_defaults = DEPENDENCY_DEFAULTS
 
-        return _provide_filters(config, dep_defaults=dep_defaults)
+        merged = dict(config)
+        if merged.get("pagination_cursor_secret") is None and self._pagination_cursor_secret is not None:
+            merged["pagination_cursor_secret"] = self._pagination_cursor_secret
+        if merged.get("pagination_cursor_ttl") is None and self._pagination_cursor_ttl is not None:
+            merged["pagination_cursor_ttl"] = self._pagination_cursor_ttl
+        if merged.get("pagination_cursor_encrypted") is None and self._pagination_cursor_encrypted is not None:
+            merged["pagination_cursor_encrypted"] = self._pagination_cursor_encrypted
+        return _provide_filters(cast("FilterConfig", merged), dep_defaults=dep_defaults)
+
+    def _read_routing_dependency(
+        self, key: Any, kind: str, *, require_async: bool | None = None
+    ) -> "Callable[..., Any]":
+        try:
+            state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        except (KeyError, ValueError, IndexError) as error:
+            msg = f"Cannot resolve database configuration {key!r}"
+            raise ImproperConfigurationError(msg) from error
+        if require_async is not None and state.config.is_async is not require_async:
+            msg = "Dependency sync/async mode does not match the selected database configuration"
+            raise ImproperConfigurationError(msg)
+        if state.config.is_async:
+
+            async def async_dependency(request: Request) -> Any:
+                if kind == "session":
+                    return await self.get_db_replica_session_async(request, state.config)
+                if kind == "connection":
+                    return await self.get_replica_connection_async(request, state.config)
+                return await self.get_db_routing_session_async(request, state.config)
+
+            return async_dependency
+
+        def sync_dependency(request: Request) -> Any:
+            if kind == "session":
+                return self.get_db_replica_session(request, state.config)
+            if kind == "connection":
+                return self.get_replica_connection(request, state.config)
+            return self.get_db_routing_session(request, state.config)
+
+        return sync_dependency
 
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract FastAPI settings from config.extension_config.
@@ -229,7 +295,24 @@ class SQLSpecPlugin(_StarlettePlugin):
         Returns:
             Dictionary of FastAPI-specific settings.
         """
-        framework_config = config.extension_config.get("fastapi", {})
+        has_fastapi = "fastapi" in config.extension_config
+        has_starlette = "starlette" in config.extension_config
+        if has_fastapi and has_starlette:
+            fastapi_cfg = config.extension_config["fastapi"]
+            starlette_cfg = config.extension_config["starlette"]
+            if fastapi_cfg != starlette_cfg:
+                msg = (
+                    "Conflicting 'fastapi' and 'starlette' extension_config settings; "
+                    "configure only one or ensure they match."
+                )
+                raise ImproperConfigurationError(msg)
+            framework_config = fastapi_cfg
+        elif has_fastapi:
+            framework_config = config.extension_config["fastapi"]
+        elif has_starlette:
+            framework_config = config.extension_config["starlette"]
+        else:
+            framework_config = {}
         pool_key = framework_config.get("pool_key", "db_pool")
         if not config.supports_connection_pooling and pool_key == "db_pool":
             pool_key = f"_db_pool_{id(config)}"
@@ -238,7 +321,28 @@ class SQLSpecPlugin(_StarlettePlugin):
             "connection_key": framework_config.get("connection_key", "db_connection"),
             "pool_key": pool_key,
             "session_key": framework_config.get("session_key", "db_session"),
-            "commit_mode": framework_config.get("commit_mode", "manual"),
+            "replica_session_key": framework_config.get(
+                "replica_session_key",
+                "db_replica_session"
+                if framework_config.get("session_key", "db_session") == "db_session"
+                else f"{framework_config['session_key']}_replica",
+            ),
+            "replica_connection_key": framework_config.get(
+                "replica_connection_key",
+                "db_replica_connection"
+                if framework_config.get("connection_key", "db_connection") == "db_connection"
+                else f"{framework_config['connection_key']}_replica",
+            ),
+            "replica_pool_key": framework_config.get(
+                "replica_pool_key", "db_replica_pool" if pool_key == "db_pool" else f"{pool_key}_replica"
+            ),
+            "routing_session_key": framework_config.get("routing_session_key"),
+            "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
+            "enable_routing_middleware": framework_config.get("enable_routing_middleware", True),
+            "routing_header": framework_config.get("routing_header"),
+            "primary_pin_cookie": framework_config.get("primary_pin_cookie"),
+            "primary_pin_secret": framework_config.get("primary_pin_secret"),
+            "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
             "disable_di": framework_config.get("disable_di", False),
@@ -249,4 +353,7 @@ class SQLSpecPlugin(_StarlettePlugin):
             "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
             "tenant_extractor": framework_config.get("tenant_extractor"),
             "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "fastapi"),
+            "pagination_cursor_secret": framework_config.get("pagination_cursor_secret"),
+            "pagination_cursor_ttl": framework_config.get("pagination_cursor_ttl"),
+            "pagination_cursor_encrypted": framework_config.get("pagination_cursor_encrypted"),
         }

@@ -11,7 +11,7 @@ Choose `DuckDBConfig` for embedded OLAP analytics, local lakehouse queries over 
 | **Adapter Config** | `DuckDBConfig` (`sqlspec.adapters.duckdb`) |
 | **Driver Extra** | `sqlspec[duckdb]` (`duckdb`, `pyarrow`) |
 | **Execution Mode** | Synchronous |
-| **Pool Architecture** | `DuckDBConnectionPool` (thread-local cursor/connection manager with `pool_recycle_seconds`, `health_check_interval`, `:memory:shared_db` normalization) |
+| **Pool Architecture** | `DuckDBConnectionPool` (thread-local cursor/connection manager with `pool_recycle_seconds`, `health_check_interval`, per-config `:memory:sqlspec_<uuid>` isolation and private spill cleanup) |
 | **Extensions & Storage** | Declarative `DuckDBExtensionConfig`, `DuckDBSecretConfig`, zero-copy Arrow `select_to_arrow()` / `load_from_arrow()`, ADK FTS + cosine similarity |
 
 ## Installation & Quickstart
@@ -70,14 +70,14 @@ For persistent analytical databases, set `"database": "var/analytics.duckdb"` (a
 ### Connection and Pool Parameters
 
 > [!NOTE]
-> `DuckDBConnectionPool` is a thread-local connection manager configured via `pool_recycle_seconds` and `health_check_interval` on `DuckDBPoolParams`. When `database` is omitted or set to `":memory:"`, `DuckDBConfig` normalizes it to `":memory:shared_db"` so all pooled checkouts share the same in-memory catalog. In Linux containers, `DuckDBConfig` also clamps default memory limits to cgroup v1/v2 container quotas automatically.
+> `DuckDBConnectionPool` is a thread-local connection manager configured via `pool_recycle_seconds` and `health_check_interval` on `DuckDBPoolParams`. When `database` is omitted, empty, or set to `":memory:"`, `DuckDBConfig` assigns an isolated `:memory:sqlspec_<uuid>` identifier per config instance so pooled checkouts share one catalog within that config without leaking state across separate configs; explicit `:memory:<name>` identifiers remain shared across configs using the same name. When an in-memory `DuckDBConfig` omits `temp_directory`, `DuckDBConfig` allocates a private temporary spill directory and removes it in `close_pool()`. In Linux containers, `DuckDBConfig` also clamps default memory limits to cgroup v1/v2 container quotas automatically.
 
 Pass `DuckDBConnectionParams` and `DuckDBPoolParams` keys inside `connection_config={...}` on `DuckDBConfig`:
 
 <!-- GENERATED:START config-table:sqlspec.adapters.duckdb.config.DuckDBConnectionParams,sqlspec.adapters.duckdb.config.DuckDBPoolParams -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `database` | `str` | - | Database file path, `':memory:shared_db'` shared memory identifier, or MotherDuck URI. |
+| `database` | `str` | - | Database file path, `':memory:'` / `':memory:<name>'` memory identifier, or MotherDuck URI. |
 | `read_only` | `bool` | - | Open the database file in read-only mode without taking a write lock. |
 | `config` | `dict[str, Any]` | - | Raw DuckDB engine configuration dictionary merged with modeled settings. |
 | `memory_limit` | `str` | - | Maximum buffer-manager memory ceiling (for example `'4GB'`). |
@@ -127,6 +127,7 @@ Pass `DuckDBDriverFeatures` keys inside `driver_features={...}` on `DuckDBConfig
 | `extensions` | `Sequence[DuckDBExtensionConfig]` | - | Extensions installed and loaded automatically when each pooled connection opens. |
 | `secrets` | `Sequence[DuckDBSecretConfig]` | - | Secrets provisioned on new connections for object stores and external catalogs. |
 | `on_connection_create` | `Callable[[DuckDBConnection], DuckDBConnection or None]` | - | Callback invoked when a new `DuckDBPyConnection` is opened. |
+| `reset_session_on_release` | `bool` | `False` | Drop temporary objects and detach added databases when a connection is released (defaults to `False`). |
 | `json_serializer` | `Callable[[Any], str]` | `sqlspec.utils.serializers.to_json` | Serializer converting dict/list parameters to JSON text (defaults to `sqlspec.utils.serializers.to_json`). |
 | `enable_uuid_conversion` | `bool` | `True` | Convert `UUID` parameters to strings on bind while returning `UUID` objects from `UUID` columns (defaults to `True`). |
 | `extension_flags` | `dict[str, Any]` | - | Startup-only extension security flags merged into `connection_config` before `duckdb.connect`. |
@@ -134,6 +135,10 @@ Pass `DuckDBDriverFeatures` keys inside `driver_features={...}` on `DuckDBConfig
 | `events_backend` | `Literal['poll_queue']` | - | Event queue backend name (`'poll_queue'`). |
 | `enable_statement_profiling` | `bool` | `False` | Capture per-statement DuckDB JSON operator profiles on `StatementEvent.profile` (defaults to `False`). |
 <!-- GENERATED:END config-table:sqlspec.adapters.duckdb.config.DuckDBDriverFeatures -->
+
+## Connection Exit
+
+Uncommitted work rolls back when a pooled connection is returned, whether the context exits cleanly or with an exception, so call `commit()` before leaving the session. Statements outside an explicit transaction run in autocommit mode and are unaffected. Set `driver_features["reset_session_on_release"] = True` to also drop temporary objects and detach added databases on release. See [Session Reset on Release](../learn/configuration.md#session-reset-on-release).
 
 ## Type Mappings & Dialect Notes
 

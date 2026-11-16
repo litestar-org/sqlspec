@@ -165,31 +165,27 @@ def test_no_unintended_cross_adapter_imports() -> None:
         for py_file in sorted(adapter_dir.rglob("*.py")):
             tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
             pkg_parts = list(py_file.parent.parts)
-            for node in ast.walk(tree):
-                imported_modules: list[str] = []
-                if isinstance(node, ast.ImportFrom):
-                    if node.level > 0:
-                        base_parts = pkg_parts[: -(node.level - 1)] if node.level > 1 else pkg_parts
-                        target_parts = [*base_parts, *node.module.split(".")] if node.module else base_parts
-                        if target_parts[:2] == ["sqlspec", "adapters"]:
-                            if len(target_parts) >= 3:
-                                imported_modules.append(target_parts[2])
-                            else:
-                                imported_modules.extend(alias.name.split(".")[0] for alias in node.names)
-                    elif node.module == "sqlspec.adapters":
-                        imported_modules.extend(alias.name.split(".")[0] for alias in node.names)
-                    elif node.module and node.module.startswith("sqlspec.adapters."):
-                        imported_modules.append(node.module.split(".")[2])
-                elif isinstance(node, ast.Import):
-                    imported_modules.extend(
-                        alias.name.split(".")[2] for alias in node.names if alias.name.startswith("sqlspec.adapters.")
-                    )
+            rel_path = py_file.relative_to(adapter_dir)
+            is_core_module = rel_path == Path("core.py")
+            is_cockroach_boundary = adapter_name in {"cockroach_asyncpg", "cockroach_psycopg"} and rel_path in {
+                Path("config.py"),
+                Path("driver.py"),
+            }
 
-                violations.extend(
-                    f"{py_file}:{getattr(node, 'lineno', '?')}: {adapter_name} imports sqlspec.adapters.{imported_module}"
-                    for imported_module in imported_modules
-                    if imported_module != adapter_name and imported_module not in allowed
-                )
+            for lineno, imported_module, full_module, in_type_checking in _iter_adapter_imports(tree, pkg_parts):
+                if imported_module == adapter_name:
+                    continue
+                if is_core_module:
+                    violations.append(f"{py_file}:{lineno}: {adapter_name} core.py imports {full_module}")
+                    continue
+                if imported_module not in allowed:
+                    violations.append(f"{py_file}:{lineno}: {adapter_name} imports sqlspec.adapters.{imported_module}")
+                    continue
+                if is_cockroach_boundary:
+                    forbidden_core = f"sqlspec.adapters.{imported_module}.core"
+                    if full_module == forbidden_core or full_module.startswith(f"{forbidden_core}."):
+                        if adapter_name == "cockroach_asyncpg" or not in_type_checking:
+                            violations.append(f"{py_file}:{lineno}: {adapter_name} imports parent core {full_module}")
 
     assert not violations, "Found cross-adapter imports:\n" + "\n".join(violations)
 
@@ -374,3 +370,65 @@ def test_adapter_import_does_not_load_secondary_optional_modules(adapter: str) -
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
     leaked = [name for name in result.stdout.strip().split(",") if name]
     assert not leaked, f"import sqlspec.adapters.{adapter} eagerly imported: {leaked}"
+
+
+def _is_type_checking_guard(test: ast.expr) -> bool:
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
+def _iter_adapter_imports(
+    node: ast.AST, pkg_parts: list[str], *, in_type_checking: bool = False
+) -> list[tuple[int, str, str, bool]]:
+    """Collect ``(lineno, adapter_name, full_module_path, in_type_checking)`` cross-adapter imports."""
+    results: list[tuple[int, str, str, bool]] = []
+    if isinstance(node, ast.If):
+        if _is_type_checking_guard(node.test):
+            for child in node.body:
+                results.extend(_iter_adapter_imports(child, pkg_parts, in_type_checking=True))
+            for child in node.orelse:
+                results.extend(_iter_adapter_imports(child, pkg_parts, in_type_checking=in_type_checking))
+            return results
+        for child in ast.iter_child_nodes(node):
+            results.extend(_iter_adapter_imports(child, pkg_parts, in_type_checking=in_type_checking))
+        return results
+
+    if isinstance(node, ast.ImportFrom):
+        lineno = getattr(node, "lineno", 0)
+        if node.level > 0:
+            base_parts = pkg_parts[: -(node.level - 1)] if node.level > 1 else pkg_parts
+            target_parts = [*base_parts, *node.module.split(".")] if node.module else base_parts
+            if target_parts[:2] == ["sqlspec", "adapters"]:
+                if len(target_parts) >= 3:
+                    results.append((lineno, target_parts[2], ".".join(target_parts), in_type_checking))
+                else:
+                    for alias in node.names:
+                        child_parts = [*target_parts, *alias.name.split(".")]
+                        results.append((lineno, child_parts[2], ".".join(child_parts), in_type_checking))
+        elif node.module == "sqlspec.adapters":
+            results.extend(
+                (lineno, alias.name.split(".")[0], f"sqlspec.adapters.{alias.name}", in_type_checking)
+                for alias in node.names
+            )
+        elif node.module and node.module.startswith("sqlspec.adapters."):
+            results.append((lineno, node.module.split(".")[2], node.module, in_type_checking))
+            results.extend(
+                (lineno, node.module.split(".")[2], f"{node.module}.core", in_type_checking)
+                for alias in node.names
+                if alias.name == "core" and len(node.module.split(".")) == 3
+            )
+        return results
+
+    if isinstance(node, ast.Import):
+        lineno = getattr(node, "lineno", 0)
+        results.extend(
+            (lineno, alias.name.split(".")[2], alias.name, in_type_checking)
+            for alias in node.names
+            if alias.name.startswith("sqlspec.adapters.")
+        )
+        return results
+
+    for child in ast.iter_child_nodes(node):
+        results.extend(_iter_adapter_imports(child, pkg_parts, in_type_checking=in_type_checking))
+    return results

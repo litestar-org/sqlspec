@@ -3,14 +3,21 @@
 import gzip
 import sqlite3
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any, Literal, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.core import SQLResult
+from sqlspec.data_dictionary import MetadataResult
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.runner import SyncMigrationRunner
+from sqlspec.migrations.squash import MigrationSquasher
 from sqlspec.utils.serializers import to_json
 
 USERS_UP = (
@@ -208,6 +215,7 @@ def test_sync_verify_detects_checksum_drift_and_orphaned_records(tmp_path: Path)
         "orphaned_records": [],
         "pending_versions": [],
         "partial_squash_errors": [],
+        "unrecorded_replaces": [],
     }
 
     mig1.write_text(
@@ -592,3 +600,148 @@ def test_squash_and_fix_use_rich_confirm_ask(tmp_path: Path) -> None:
         commands.fix(yes=False, update_database=False)
         mock_confirm.assert_called_once()
         assert mig_file.exists()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_postgres_rls_guard_blocks_schema_dump_revision_and_squash(tmp_path: Path, is_async: bool) -> None:
+    """PostgreSQL tables with RLS or policies fail closed on dump_schema, from_schema, and strategy='schema'."""
+    migrations_dir = tmp_path / "migrations"
+    _write_three_migrations(migrations_dir)
+    rls_rows = [{"schema_name": "public", "table_name": "tenants"}]
+
+    class _MockPgSyncConfig:
+        supports_transactional_ddl = True
+        supports_migration_schemas = True
+        driver_features: dict[str, Any] = {}
+        extension_config: dict[str, Any] = {}
+        bind_key = None
+        is_replica = False
+        migration_tracker_type = MagicMock()
+
+        def __init__(self, driver: Any) -> None:
+            self.migration_config = {"script_location": str(migrations_dir), "include_extensions": []}
+            self._driver = driver
+
+        def get_observability_runtime(self) -> None:
+            return None
+
+        def provide_session(self) -> Any:
+            driver = self._driver
+
+            class _CM:
+                def __enter__(self) -> Any:
+                    return driver
+
+                def __exit__(self, *_args: Any) -> Literal[False]:
+                    return False
+
+            return _CM()
+
+    class _MockPgAsyncConfig:
+        supports_transactional_ddl = True
+        supports_migration_schemas = True
+        driver_features: dict[str, Any] = {}
+        extension_config: dict[str, Any] = {}
+        bind_key = None
+        is_replica = False
+        migration_tracker_type = MagicMock()
+
+        def __init__(self, driver: Any) -> None:
+            self.migration_config = {"script_location": str(migrations_dir), "include_extensions": []}
+            self._driver = driver
+
+        def get_observability_runtime(self) -> None:
+            return None
+
+        def provide_session(self) -> Any:
+            driver = self._driver
+
+            class _ACM:
+                async def __aenter__(self) -> Any:
+                    return driver
+
+                async def __aexit__(self, *_args: Any) -> Literal[False]:
+                    return False
+
+            return _ACM()
+
+    if is_async:
+        driver_async = MagicMock()
+        driver_async.dialect = "postgres"
+        driver_async.data_dictionary.get_tables = AsyncMock(return_value=[{"table_name": "ddl_migrations"}])
+        driver_async.data_dictionary.get_schema_ddl = AsyncMock(return_value=MetadataResult("ddl"))
+
+        async def _exec_async(stmt: Any, _params: Any = None) -> SQLResult:
+            if "pg_catalog.pg_policy" in str(stmt):
+                return SQLResult(data=rls_rows)
+            return SQLResult()
+
+        driver_async.execute = AsyncMock(side_effect=_exec_async)
+        cmds_async = AsyncMigrationCommands(cast("Any", _MockPgAsyncConfig(driver_async)))
+        cmds_async.tracker.version_table_name = "ddl_migrations"
+        cmds_async.tracker.version_table_schema = None
+        cmds_async.tracker.catalog_schema_name = MagicMock(return_value=None)
+        cmds_async.tracker.get_applied_migrations = AsyncMock(
+            return_value=[{"version_num": "0001"}, {"version_num": "0002"}, {"version_num": "0003"}]
+        )
+        cmds_async.tracker._resolve_lock_backend = MagicMock(return_value="")  # pyright: ignore[reportPrivateUsage]
+        cmds_async.tracker.acquire_lock = MagicMock(
+            return_value=AsyncMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False))
+        )
+
+        with pytest.raises(MigrationError, match="--strategy ddl"):
+            await cmds_async.dump_schema(echo=False)
+        with pytest.raises(MigrationError, match="--strategy ddl"):
+            await cmds_async.revision("baseline", from_schema=True)
+        with pytest.raises(MigrationError, match="--strategy ddl"):
+            await cmds_async.squash("0001", "0003", "release", strategy="schema", yes=True, update_database=False)
+        return
+
+    driver_sync = MagicMock()
+    driver_sync.dialect = "postgres"
+    driver_sync.data_dictionary.get_tables = MagicMock(return_value=[{"table_name": "ddl_migrations"}])
+    driver_sync.data_dictionary.get_schema_ddl = MagicMock(return_value=MetadataResult("ddl"))
+
+    def _exec_sync(stmt: Any, _params: Any = None) -> SQLResult:
+        if "pg_catalog.pg_policy" in str(stmt):
+            return SQLResult(data=rls_rows)
+        return SQLResult()
+
+    driver_sync.execute = MagicMock(side_effect=_exec_sync)
+    cmds_sync = SyncMigrationCommands(cast("Any", _MockPgSyncConfig(driver_sync)))
+    cmds_sync.tracker.version_table_name = "ddl_migrations"
+    cmds_sync.tracker.version_table_schema = None
+    cmds_sync.tracker.catalog_schema_name = MagicMock(return_value=None)
+    cmds_sync.tracker.get_applied_migrations = MagicMock(
+        return_value=[{"version_num": "0001"}, {"version_num": "0002"}, {"version_num": "0003"}]
+    )
+
+    with pytest.raises(MigrationError, match="--strategy ddl"):
+        cmds_sync.dump_schema(echo=False)
+    with pytest.raises(MigrationError, match="--strategy ddl"):
+        cmds_sync.revision("baseline", from_schema=True)
+    with pytest.raises(MigrationError, match="--strategy ddl"):
+        cmds_sync.squash("0001", "0003", "release", strategy="schema", yes=True, update_database=False)
+
+    excluded_only_rows = [{"schema_name": "public", "table_name": "ddl_migrations"}]
+    driver_excluded = MagicMock()
+    driver_excluded.dialect = "postgres"
+    driver_excluded.data_dictionary.dialect = "postgres"
+    driver_excluded.data_dictionary.get_schema_ddl = MagicMock(return_value=MetadataResult("ddl"))
+    driver_excluded.execute = MagicMock(return_value=SQLResult(data=excluded_only_rows))
+    cmds_ok = SyncMigrationCommands(cast("Any", _MockPgSyncConfig(driver_excluded)))
+    cmds_ok.tracker.version_table_name = "ddl_migrations"
+    dump_output = cmds_ok.dump_schema(echo=False)
+    assert "-- SQLSpec Schema Dump" in dump_output
+    driver_excluded.data_dictionary.get_schema_ddl.assert_called_once()
+
+    driver_squash = MagicMock(spec=SyncDriverAdapterBase)
+    driver_squash.dialect = "postgres"
+    driver_squash.execute = MagicMock(side_effect=_exec_sync)
+    sync_runner = SyncMigrationRunner(
+        migrations_dir, context=MigrationContext(dialect="postgres", driver=driver_squash)
+    )
+    squasher = MigrationSquasher(migrations_dir, sync_runner, strategy="schema")
+    with pytest.raises(MigrationError, match="--strategy ddl"):
+        squasher._extract_schema_ddl_from_context()  # pyright: ignore[reportPrivateUsage]

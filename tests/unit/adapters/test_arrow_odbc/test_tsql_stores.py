@@ -15,7 +15,7 @@ from sqlspec.adapters.arrow_odbc.core import atomic_store_write
 from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from sqlspec.adapters.arrow_odbc.litestar.store import _TsqlSessionSql
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, UniqueViolationError
 from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
 from sqlspec.migrations.context import MigrationContext
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
@@ -280,6 +280,8 @@ _TSQL_ADK_SESSION_CALLS = [
         ),
         ["app", "u", "s1"],
     ),
+    ("SELECT TOP 1 state FROM [dbo].[adk_app_state] WHERE app_name = ?", ["app"]),
+    ("SELECT TOP 1 state FROM [dbo].[adk_user_state] WHERE app_name = ? AND user_id = ?", ["app", "u"]),
     ("COMMIT TRANSACTION", None),
     (
         "UPDATE [dbo].[adk_session] SET update_time = SYSUTCDATETIME() WHERE app_name = ? AND user_id = ? AND id = ?",
@@ -315,10 +317,18 @@ _TSQL_ADK_SESSION_CALLS = [
     ("BEGIN TRANSACTION", None),
     (
         (
-            "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, "
-            "invocation_id, timestamp, event_data ) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM "
+            "[dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?"
         ),
-        ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}'],
+        ["app", "u", "s1"],
+    ),
+    (
+        (
+            "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, "
+            "invocation_id, timestamp, event_data ) SELECT ?, ?, ?, ?, ?, ?, ? FROM "
+            "[dbo].[adk_session] WHERE id = ? AND app_name = ? AND user_id = ?"
+        ),
+        ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}', "s1", "app", "u"],
     ),
     ("COMMIT TRANSACTION", None),
     ("BEGIN TRANSACTION", None),
@@ -343,43 +353,39 @@ _TSQL_ADK_SESSION_CALLS = [
         ),
         ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}'],
     ),
+    (("SELECT TOP 1 state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ?"), ["app"]),
     (
-        (
-            "MERGE INTO [dbo].[adk_app_state] WITH (HOLDLOCK) AS target USING (SELECT ? "
-            "AS [app_name], ? AS state) AS source ON (target.[app_name] = "
-            "source.[app_name]) WHEN MATCHED THEN UPDATE SET state = source.state, "
-            "update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], "
-            "[state], [update_time]) VALUES (source.[app_name], source.[state], "
-            "SYSUTCDATETIME());"
-        ),
-        ["app", '{"g":1}'],
+        ("UPDATE [dbo].[adk_app_state] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ?"),
+        ['{"b":2,"g":1}', "app"],
+    ),
+    (
+        ("SELECT TOP 1 state FROM [dbo].[adk_user_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND user_id = ?"),
+        ["app", "u"],
     ),
     (
         (
-            "MERGE INTO [dbo].[adk_user_state] WITH (HOLDLOCK) AS target USING (SELECT ? "
-            "AS [app_name], ? AS [user_id], ? AS state) AS source ON (target.[app_name] "
-            "= source.[app_name] AND target.[user_id] = source.[user_id]) WHEN MATCHED "
-            "THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN "
-            "NOT MATCHED THEN INSERT ([app_name], [user_id], [state], [update_time]) "
-            "VALUES (source.[app_name], source.[user_id], source.[state], "
-            "SYSUTCDATETIME());"
+            "UPDATE [dbo].[adk_user_state] SET state = ?, update_time = SYSUTCDATETIME() "
+            "WHERE app_name = ? AND user_id = ?"
         ),
-        ["app", "u", '{"h":2}'],
+        ['{"b":2,"h":2}', "app", "u"],
     ),
     ("COMMIT TRANSACTION", None),
     (
         (
-            "SELECT TOP 4 id, app_name, user_id, session_id, invocation_id, timestamp, "
-            "event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND "
-            "session_id = ? AND timestamp > ? ORDER BY timestamp ASC"
+            "SELECT TOP 4 e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, "
+            "e.timestamp, e.event_data FROM [dbo].[adk_event] e JOIN [dbo].[adk_session] s "
+            "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
+            "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? AND e.timestamp > ? "
+            "ORDER BY e.timestamp DESC, e.id DESC"
         ),
         ["app", "u", "s1", "2026-01-02T03:04:05.678901"],
     ),
     (
         (
-            "SELECT id, app_name, user_id, session_id, invocation_id, timestamp, "
-            "event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND "
-            "session_id = ? ORDER BY timestamp ASC"
+            "SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, "
+            "e.timestamp, e.event_data FROM [dbo].[adk_event] e JOIN [dbo].[adk_session] s "
+            "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
+            "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? ORDER BY e.timestamp ASC, e.id ASC"
         ),
         ["app", "u", "s1"],
     ),
@@ -480,7 +486,9 @@ def test_tsql_adk_session_store_statements() -> None:
     store.list_sessions("app", "u", limit=5, offset=10)
     store.delete_session("app", "u", "s1")
     store.append_event(_ADK_EVENT)
-    store.append_event_and_update_state(_ADK_EVENT, "app", "u", "s1", {"a": 3}, app_state={"g": 1}, user_state={"h": 2})
+    store.append_event_and_update_state(
+        _ADK_EVENT, "app", "u", "s1", {"a": 3}, app_state_delta={"g": 1}, user_state_delta={"h": 2}
+    )
     store.get_events("app", "u", "s1", after_timestamp=_ADK_TIME, limit=4)
     store.get_events("app", "u", "s1")
     store.delete_expired_events(_ADK_TIME, app_name="app")
@@ -494,6 +502,37 @@ def test_tsql_adk_session_store_statements() -> None:
     store.set_metadata("k", "v")
 
     assert normalized_calls(connection) == _TSQL_ADK_SESSION_CALLS
+
+
+def test_tsql_adk_retries_unique_race_on_scoped_state_and_merges_falsy_values() -> None:
+    attempts = 0
+    seen_app_reads = 0
+
+    def responder(sql: str, _parameters: "list[str | None] | None") -> "pa.Table | None":
+        nonlocal attempts, seen_app_reads
+        if "SELECT TOP 1 id," in sql:
+            return _ADK_SESSION_ROW
+        if "WITH (UPDLOCK, HOLDLOCK)" in sql and "adk_app_state" in sql:
+            seen_app_reads += 1
+            if seen_app_reads == 1:
+                return EMPTY_RESULT
+            return pa.table({"state": ['{"app:peer":true}']})
+        if sql.startswith("INSERT INTO [dbo].[adk_app_state]") and attempts == 0:
+            attempts += 1
+            raise UniqueViolationError("duplicate key")
+        return None
+
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=responder)
+    store = ArrowOdbcADKStore(_tsql_adk_config(connection))
+
+    updated = store.append_event_and_update_state(
+        _ADK_EVENT, "app", "u", "s1", {"a": 3}, app_state_delta={"app:flag": False, "app:cleared": None}
+    )
+
+    assert attempts == 1
+    assert seen_app_reads == 2
+    assert ("ROLLBACK TRANSACTION", None) in normalized_calls(connection)
+    assert updated["state"] == {"a": 1, "app:peer": True, "app:flag": False, "app:cleared": None}
 
 
 def test_tsql_adk_session_store_ddl() -> None:
@@ -524,7 +563,7 @@ def test_tsql_adk_missing_table_reads_empty(monkeypatch: pytest.MonkeyPatch) -> 
 
 _TSQL_ADK_MEMORY_CALLS = [
     ("BEGIN TRANSACTION", None),
-    ("SELECT TOP 1 id FROM [dbo].[adk_memory] WHERE event_id = ?", ["e1"]),
+    ("SELECT TOP 1 id FROM [dbo].[adk_memory] WHERE app_name = ? AND user_id = ? AND event_id = ?", ["app", "u", "e1"]),
     (
         (
             "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, "
@@ -568,8 +607,11 @@ _TSQL_ADK_MEMORY_CALLS = [
         ["app", "%hello%"],
     ),
     ("BEGIN TRANSACTION", None),
-    ("SELECT COUNT(*) AS row_count FROM [dbo].[adk_memory] WHERE session_id = ?", ["s1"]),
-    ("DELETE FROM [dbo].[adk_memory] WHERE session_id = ?", ["s1"]),
+    (
+        "SELECT COUNT(*) AS row_count FROM [dbo].[adk_memory] WHERE session_id = ? AND app_name = ? AND user_id = ?",
+        ["s1", "app", "user"],
+    ),
+    ("DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND app_name = ? AND user_id = ?", ["s1", "app", "user"]),
     ("COMMIT TRANSACTION", None),
     ("BEGIN TRANSACTION", None),
     (
@@ -582,7 +624,7 @@ _TSQL_ADK_MEMORY_CALLS = [
     ),
     ("COMMIT TRANSACTION", None),
 ]
-_TSQL_ADK_MEMORY_DDL = "CREATE TABLE [dbo].[adk_memory] ( id NVARCHAR(128) NOT NULL, session_id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, scope NVARCHAR(16) NOT NULL DEFAULT 'user', event_id NVARCHAR(128) NOT NULL, author NVARCHAR(256) NULL, timestamp DATETIME2(6) NOT NULL, content_json NVARCHAR(MAX) NOT NULL, content_text NVARCHAR(MAX) NOT NULL, metadata_json NVARCHAR(MAX) NULL, inserted_at DATETIME2(6) NOT NULL, tenant_id INTEGER, CONSTRAINT [pk_adk_memory_id] PRIMARY KEY (id), CONSTRAINT [uq_adk_memory_event_id] UNIQUE (event_id) )"
+_TSQL_ADK_MEMORY_DDL = "CREATE TABLE [dbo].[adk_memory] ( id NVARCHAR(128) NOT NULL, session_id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, scope NVARCHAR(16) NOT NULL DEFAULT 'user', event_id NVARCHAR(128) NOT NULL, author NVARCHAR(256) NULL, timestamp DATETIME2(6) NOT NULL, content_json NVARCHAR(MAX) NOT NULL, content_text NVARCHAR(MAX) NOT NULL, metadata_json NVARCHAR(MAX) NULL, inserted_at DATETIME2(6) NOT NULL, tenant_id INTEGER, CONSTRAINT [pk_adk_memory_id] PRIMARY KEY (id), CONSTRAINT [uq_adk_memory_event_id] UNIQUE (app_name, user_id, event_id) )"
 _TSQL_ADK_MEMORY_DROPS = ["DROP TABLE IF EXISTS [dbo].[adk_memory]"]
 
 _ADK_MEMORY_ENTRY: "Any" = {
@@ -609,7 +651,7 @@ def test_tsql_adk_memory_store_statements() -> None:
     store.insert_memory_entries([_ADK_MEMORY_ENTRY], owner_id=7)
     store.search_entries("hello", "app", "u", limit=3)
     store.search_entries("hello", "app", "u", scope_filter="app")
-    store.delete_entries_by_session("s1")
+    store.delete_entries_by_session("s1", "app", "user")
     store.delete_entries_older_than(30, app_name="app", scope="user")
 
     assert normalized_calls(connection) == _TSQL_ADK_MEMORY_CALLS
@@ -698,7 +740,7 @@ def test_tsql_adk_memory_delete_missing_table_returns_zero_and_search_escapes_wi
     monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)
     missing_error = FakeOdbcError("State: 42S02, Native error: 208, Message: Invalid object name 'dbo.adk_memory'.")
     missing_store = ArrowOdbcADKMemoryStore(_tsql_adk_config(FakeArrowOdbcConnection(error=missing_error)))
-    assert missing_store.delete_entries_by_session("s1") == 0
+    assert missing_store.delete_entries_by_session("s1", "app", "user") == 0
     assert missing_store.delete_entries_older_than(7) == 0
 
     connection = FakeArrowOdbcConnection(result=EMPTY_RESULT)

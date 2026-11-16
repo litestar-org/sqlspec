@@ -1222,3 +1222,41 @@ def test_merge_binds_plain_string_values(apply: Any, suffix: str, value: str) ->
 
     assert _normalized_sql(statement) == MERGE_PREFIXES["tsql"] + suffix
     assert statement.parameters == {"a": value}
+
+
+def test_merge_sparse_dict_rows_union_keys_and_promote_oracle_clob_across_rows() -> None:
+    """Merge dict sources compute the union of keys across rows and promote Oracle CLOB on any row."""
+    rows = [{"id": 1, "note": "short"}, {"id": 2, "note": "x" * 4001, "extra": "tail"}]
+    stmt = (
+        sql
+        .merge(dialect="oracle")
+        .into("items", alias="t")
+        .using(rows, alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(note=sql.raw("src.note"))
+        .build()
+    )
+    assert "note CLOB PATH '$.note'" in stmt.sql
+    assert "extra VARCHAR2(4000) PATH '$.extra'" in stmt.sql
+
+
+def test_merge_oracle_json_table_quotes_non_identifier_column_paths() -> None:
+    """Oracle JSON_TABLE source quotes non-identifier keys in JSON paths."""
+    stmt = (
+        sql
+        .merge(dialect="oracle")
+        .into("items", alias="t")
+        .using([{"id": 1, "first-name": "Alice"}], alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update(name=sql.raw('src."first-name"'))
+        .build()
+    )
+    assert "PATH '$.\"first-name\"'" in stmt.sql
+
+
+def test_merge_rejects_multi_statement_conditions_and_invalid_aliases() -> None:
+    """Merge builder rejects semicolons in ON conditions and invalid table aliases."""
+    with pytest.raises(SQLBuilderError):
+        sql.merge(dialect="postgres").into("t", alias="t; DROP TABLE x")
+    with pytest.raises(SQLBuilderError):
+        sql.merge(dialect="postgres").into("t").using("s", alias="s").on("t.id = s.id; DROP TABLE t")

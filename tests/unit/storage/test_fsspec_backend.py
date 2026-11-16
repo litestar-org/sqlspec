@@ -6,7 +6,7 @@ from typing import Any, Self
 
 import pytest
 
-from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError
+from sqlspec.exceptions import FileExistsInStorageError, MissingDependencyError, StorageOperationFailedError
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 
 if FSSPEC_INSTALLED:
@@ -39,7 +39,7 @@ def test_from_config() -> None:
     config = {"protocol": "file", "base_path": "/tmp/test", "fs_config": {}}
     store = FSSpecBackend.from_config(config)
     assert store.protocol == "file"
-    assert store.base_path == "/tmp/test"
+    assert store.base_path == str(Path("/tmp/test").resolve())
 
 
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
@@ -492,8 +492,7 @@ def test_file_uri_auto_derives_base_path(tmp_path: Path) -> None:
 
     store = FSSpecBackend(f"file://{tmp_path}")
 
-    # base_path should be derived from URI (absolute path preserved)
-    assert store.base_path == str(tmp_path)
+    assert store.base_path == str(tmp_path.resolve())
 
 
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
@@ -503,8 +502,7 @@ def test_file_uri_with_explicit_base_path_combination(tmp_path: Path) -> None:
 
     store = FSSpecBackend(f"file://{tmp_path}", base_path="subdir")
 
-    # base_path should combine URI path with explicit base_path (absolute path preserved)
-    expected_base_path = f"{tmp_path}/subdir"
+    expected_base_path = str((tmp_path / "subdir").resolve())
     assert store.base_path == expected_base_path
 
 
@@ -1176,3 +1174,50 @@ async def test_fsspec_write_arrow_parity_formats_overwrite_and_failure_preservat
         await store.write_arrow_async("seeded.parquet", bad_table, format_hint="parquet")
     assert store.read_bytes_sync("seeded.parquet") == b"original-bytes"
     assert _fsspec_stage_entries(store) == []
+
+
+def _delete_layout(root: Path) -> None:
+    (root / "a").mkdir()
+    (root / "a" / "f.txt").write_text("x")
+    (root / "keep.txt").write_text("k")
+
+
+def test_fsspec_file_root_refused_even_recursive(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    _delete_layout(tmp_path)
+    backend = FSSpecBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync(".", recursive=True)
+
+    assert (tmp_path / "keep.txt").exists()
+
+
+def test_fsspec_local_protocol_root_refused_even_recursive(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    _delete_layout(tmp_path)
+    backend = FSSpecBackend(f"local://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync(".", recursive=True)
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync("a")
+
+    assert (tmp_path / "keep.txt").exists()
+    assert (tmp_path / "a" / "f.txt").exists()
+
+
+def test_fsspec_file_directory_requires_recursive(tmp_path: Path) -> None:
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    _delete_layout(tmp_path)
+    backend = FSSpecBackend(f"file://{tmp_path}")
+
+    with pytest.raises(StorageOperationFailedError):
+        backend.delete_sync("a")
+    assert (tmp_path / "a" / "f.txt").exists()
+
+    backend.delete_sync("a", recursive=True)
+    assert not (tmp_path / "a").exists()

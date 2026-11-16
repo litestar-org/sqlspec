@@ -140,11 +140,15 @@ def test_connection_context_rolls_back_on_block_exception() -> None:
 
     from sqlspec.adapters.oracledb.config import OracleSyncConnectionContext
 
-    conn = MagicMock()
+    conn = MagicMock(autocommit=False)
     config = MagicMock()
     config._create_tenant_lease.return_value = None
     config.driver_features = {}
+    config.connection_config = {}
     config.connection_instance.acquire.return_value = conn
+    config.provide_pool.return_value = config.connection_instance
+    config._build_pool_acquire_kwargs.return_value = {}
+    conn.supports_opentelemetry_tracing = False
     ctx = OracleSyncConnectionContext(config)
 
     with pytest.raises(RuntimeError):
@@ -161,13 +165,15 @@ async def test_async_connection_context_rolls_back_on_block_exception() -> None:
 
     from sqlspec.adapters.oracledb.config import OracleAsyncConnectionContext
 
-    conn = AsyncMock()
+    conn = AsyncMock(autocommit=False)
+    conn.supports_opentelemetry_tracing = False
     pool = MagicMock()
     pool.acquire = AsyncMock(return_value=conn)
     pool.release = AsyncMock()
     config = MagicMock()
     config._create_tenant_lease.return_value = None
     config.driver_features = {}
+    config.connection_config = {}
     config.provide_pool = AsyncMock(return_value=pool)
     ctx = OracleAsyncConnectionContext(config)
 
@@ -176,3 +182,124 @@ async def test_async_connection_context_rolls_back_on_block_exception() -> None:
             raise RuntimeError("boom")
 
     conn.rollback.assert_called_once()
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_sessionless_transaction_scope_begin_suspend_and_resume(mode: str) -> None:
+    from inspect import isawaitable
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    native = AsyncMock if mode == "async" else Mock
+    connection = SimpleNamespace(
+        transaction_in_progress=False,
+        begin_sessionless_transaction=native(return_value=b"transaction"),
+        resume_sessionless_transaction=native(return_value=b"transaction"),
+        suspend_sessionless_transaction=native(),
+        commit=native(),
+        rollback=native(),
+    )
+    driver = (OracleAsyncDriver if mode == "async" else OracleSyncDriver)(cast("Any", connection))
+    context = driver.sessionless_transaction("transaction")
+    if mode == "async":
+        async with cast("Any", context) as txid:
+            assert txid == b"transaction"
+            assert driver.sessionless_transaction_id == txid
+    else:
+        with cast("Any", context) as txid:
+            assert txid == b"transaction"
+            assert driver.sessionless_transaction_id == txid
+    assert driver.sessionless_transaction_id is None
+    connection.begin_sessionless_transaction.assert_called_once_with(b"transaction", timeout=60, defer_round_trip=True)
+    connection.suspend_sessionless_transaction.assert_called_once_with()
+    result = driver.resume_sessionless_transaction(b"transaction", timeout=0)
+    resumed = await result if isawaitable(result) else result
+    assert resumed == b"transaction"
+    result = driver.commit()
+    if isawaitable(result):
+        await result
+    assert driver.sessionless_transaction_id is None
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_sessionless_transaction_error_preserves_body_error(mode: str) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    native = AsyncMock if mode == "async" else Mock
+    connection = SimpleNamespace(
+        transaction_in_progress=False,
+        begin_sessionless_transaction=native(return_value=b"transaction"),
+        suspend_sessionless_transaction=native(),
+        rollback=native(side_effect=RuntimeError("network cleanup")),
+    )
+    driver = (OracleAsyncDriver if mode == "async" else OracleSyncDriver)(cast("Any", connection))
+    with pytest.raises(ValueError, match="body"):
+        if mode == "async":
+            async with cast("Any", driver.sessionless_transaction()):
+                raise ValueError("body")
+        else:
+            with cast("Any", driver.sessionless_transaction()):
+                raise ValueError("body")
+    connection.rollback.assert_called_once_with()
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(("transaction_id", "resume"), [(b"", False), ("界" * 22, False), (None, True)])
+async def test_sessionless_transaction_validates_before_native_call(
+    mode: str, transaction_id: str | bytes | None, resume: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    driver = (OracleAsyncDriver if mode == "async" else OracleSyncDriver)(cast("Any", SimpleNamespace()))
+    with pytest.raises(ImproperConfigurationError):
+        driver.sessionless_transaction(transaction_id, resume=resume)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("operation", ["begin", "resume", "suspend"])
+@pytest.mark.parametrize("failure", ["absent", "non_callable", "native_error"])
+async def test_sessionless_native_api_failure_preserves_attached_transaction(
+    mode: str, operation: str, failure: str
+) -> None:
+    from inspect import isawaitable
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    import oracledb
+
+    from sqlspec.exceptions import DeadlockError
+
+    native = AsyncMock if mode == "async" else Mock
+    connection = SimpleNamespace(
+        transaction_in_progress=False,
+        begin_sessionless_transaction=native(return_value=b"attached"),
+        resume_sessionless_transaction=native(return_value=b"attached"),
+        suspend_sessionless_transaction=native(),
+    )
+    driver = (OracleAsyncDriver if mode == "async" else OracleSyncDriver)(cast("Any", connection))
+    attached = driver.begin_sessionless_transaction()
+    if isawaitable(attached):
+        attached = await attached
+    assert attached == b"attached"
+    method_name = f"{operation}_sessionless_transaction"
+    native_error = oracledb.DatabaseError("ORA-00060: deadlock detected while waiting for resource")
+    if failure == "absent":
+        delattr(connection, method_name)
+    elif failure == "non_callable":
+        setattr(connection, method_name, None)
+    else:
+        setattr(connection, method_name, native(side_effect=native_error))
+    expected_error = DeadlockError if failure == "native_error" else oracledb.NotSupportedError
+    with pytest.raises(expected_error) as caught:
+        method = getattr(driver, method_name)
+        result = method() if operation == "suspend" else method(b"replacement")
+        if isawaitable(result):
+            await result
+    assert driver.sessionless_transaction_id == b"attached"
+    if failure == "native_error":
+        assert caught.value.__cause__ is native_error
+    else:
+        assert "26.1" in str(caught.value)

@@ -1295,7 +1295,7 @@ def sqlspec_spanner_strings() -> None:
         }
     )
     try:
-        with config.provide_read_session() as session:
+        with config.provide_replica_session() as session:
             rows = session.fetch(SPANNER_STRINGS_SELECT)
     finally:
         config.close_pool()

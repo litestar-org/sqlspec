@@ -19,8 +19,14 @@ from sqlspec.adapters.arrow_odbc import (
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcError
+from sqlspec.adapters.arrow_odbc.core import _ODBC_KEY_PATTERN, _format_connection_value
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
-from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcStreamSource, _reader_to_table
+from sqlspec.adapters.arrow_odbc.driver import (
+    _DB2_PLAIN_IDENTIFIER,
+    ArrowOdbcStreamSource,
+    _db2_table_reference,
+    _reader_to_table,
+)
 from sqlspec.core import SQL, ArrowResult, LimitOffsetFilter, OrderByFilter
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import (
@@ -544,10 +550,16 @@ def test_arrow_odbc_build_connection_config_formats_security_fields_and_kwargs()
     })
 
     assert connection_string == (
-        "Driver=ODBC Driver 18 for SQL Server;Server=localhost;Database=app;UID=sa;PWD=secret;"
+        "Driver=ODBC Driver 18 for SQL Server;Server=localhost;Database=app;"
         "Trusted_Connection=yes;TrustServerCertificate=yes;Encrypt=mandatory;"
     )
-    assert kwargs == {"login_timeout_sec": 7, "packet_size": 8192, "autocommit": True}
+    assert kwargs == {
+        "user": "sa",
+        "password": "secret",
+        "login_timeout_sec": 7,
+        "packet_size": 8192,
+        "autocommit": True,
+    }
 
 
 def test_arrow_odbc_session_release_allows_connections_without_close(monkeypatch: Any) -> None:
@@ -1309,3 +1321,12 @@ def test_transaction_lifecycle_maps_generic_exception() -> None:
 
     with pytest.raises(SQLSpecError, match="Failed to rollback transaction"):
         driver.rollback()
+
+
+def test_arrow_odbc_identifier_patterns_reject_trailing_newlines() -> None:
+    """Arrow-ODBC identifier and keyword patterns reject trailing newlines."""
+    assert _ODBC_KEY_PATTERN.match("DSN\n") is None
+    assert _DB2_PLAIN_IDENTIFIER.match("orders\n") is None
+    assert _db2_table_reference('"orders\n"') == '"orders\n"'
+    with pytest.raises(ImproperConfigurationError, match="Invalid ODBC connection parameter key"):
+        _format_connection_value("DSN\n", "sample")

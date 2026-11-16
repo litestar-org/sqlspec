@@ -3,14 +3,28 @@
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
-from sqlspec.adapters.sybase._typing import SybaseConnection, SybaseCursor, SybaseRawCursor, SybaseSessionContext
-from sqlspec.adapters.sybase.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.sybase._typing import (
+    SybaseConnection,
+    SybaseCursor,
+    SybaseError,
+    SybaseRawCursor,
+    SybaseSessionContext,
+)
+from sqlspec.adapters.sybase.core import (
+    apply_driver_features,
+    build_connection_config,
+    create_mapped_exception,
+    default_statement_config,
+    merge_sybase_derive_overrides,
+    parse_sybase_replica_endpoint,
+)
 from sqlspec.adapters.sybase.driver import SybaseDriver, SybaseExceptionHandler
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.adapters.sybase.pool import SybaseConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import DatabaseConnectionError, OperationalError, ReadOnlyTransactionError, SQLSpecError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -111,9 +125,23 @@ class SybaseConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> "SybaseConnection":
+        try:
+            return cast("SybaseConnection", super().__enter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
+
 
 class _SybaseSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> "SybaseConnection":
+        try:
+            return cast("SybaseConnection", super().acquire_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
 
 class SybaseConfig(SyncDatabaseConfig[SybaseConnection, SybaseConnectionPool, SybaseDriver]):
@@ -176,7 +204,11 @@ class SybaseConfig(SyncDatabaseConfig[SybaseConnection, SybaseConnectionPool, Sy
 
     def create_connection(self) -> "SybaseConnection":
         """Open a standalone Sybase ASE connection owned by the caller."""
-        return self.provide_pool().new_connection()
+        try:
+            return self.provide_pool().new_connection()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
@@ -200,18 +232,45 @@ class SybaseConfig(SyncDatabaseConfig[SybaseConnection, SybaseConnectionPool, Sy
         """Return runtime hints for Sybase ASE event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return merge_sybase_derive_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": parse_sybase_replica_endpoint(spec_input)}
+        return super()._build_replica_spec_overrides(spec_input)
+
     def _create_pool(self) -> "SybaseConnectionPool":
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
-        return SybaseConnectionPool(
-            config,
-            recycle_seconds=pool_recycle,
-            health_check_interval=health_check,
-            on_connection_create=self._user_connection_hook,
-        )
+        try:
+            return SybaseConnectionPool(
+                config,
+                recycle_seconds=pool_recycle,
+                health_check_interval=health_check,
+                on_connection_create=self._user_connection_hook,
+            )
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _close_pool(self) -> None:
         if self.connection_instance:
             self.connection_instance.close()
             self.connection_instance = None
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, SybaseError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

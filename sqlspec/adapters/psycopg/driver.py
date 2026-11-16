@@ -1,10 +1,10 @@
 """PostgreSQL psycopg driver implementation."""
 
-from collections.abc import Sized
+from collections.abc import Mapping, Sized
 from contextlib import AsyncExitStack, ExitStack, suppress
 from itertools import chain
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, Literal, LiteralString, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, LiteralString, cast
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
@@ -33,11 +33,14 @@ from sqlspec.adapters.psycopg.core import (
     default_statement_config,
     driver_profile,
     escape_literal_percent,
+    execute_cache_hit,
+    execute_cache_hit_async,
     execute_with_optional_parameters,
     execute_with_optional_parameters_async,
     pipeline_supported,
     resolve_many_rowcount,
     resolve_rowcount,
+    source_uses_pyformat,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
 from sqlspec.core import (
@@ -62,7 +65,8 @@ from sqlspec.driver import (
     SyncRowStream,
     describe_stack_statement,
 )
-from sqlspec.exceptions import SQLSpecError, StackExecutionError
+from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier
 from sqlspec.utils.type_guards import is_readable, resolve_row_format
@@ -163,7 +167,12 @@ class PsycopgPipelineMixin:
             sql_text, prepared_parameters = driver._compiled_sql(  # pyright: ignore[reportPrivateUsage]
                 sql_statement, config
             )
-            sql_text = escape_literal_percent(sql_text, prepared_parameters, config.parameter_validator)
+            sql_text = escape_literal_percent(
+                sql_text,
+                prepared_parameters,
+                config.parameter_validator,
+                preserve_percent_escapes=source_uses_pyformat(sql_statement.raw_sql, config.parameter_validator),
+            )
             prepared.append(
                 PreparedStackOperation(
                     operation_index=index,
@@ -206,6 +215,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
     __slots__ = ("_data_dictionary", "_restore_autocommit", "_transaction_active")
     dialect = "postgres"
+    cache_hit_function: "ClassVar[Any]" = staticmethod(execute_cache_hit)
 
     def __init__(
         self,
@@ -222,6 +232,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         self._data_dictionary: PsycopgSyncDataDictionary | None = None
         self._restore_autocommit = False
         self._transaction_active = False
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), PsycopgSyncDriver) else None
+        )
 
     @property
     def data_dictionary(self) -> "PsycopgSyncDataDictionary":
@@ -245,7 +258,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
 
         execute_with_optional_parameters(cursor, sql, prepared_parameters)
 
@@ -280,7 +298,12 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -301,6 +324,10 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -311,7 +338,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         has_observers = runtime is not None and runtime.has_statement_observers
 
         for idx, stmt in enumerate(statements):
-            stmt_sql = escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
+            stmt_sql = escape_literal_percent(
+                stmt,
+                prepared_parameters,
+                self.statement_config.parameter_validator,
+                preserve_percent_escapes=source_uses_pyformat(
+                    statement.raw_sql, self.statement_config.parameter_validator
+                ),
+            )
             stmt_started = perf_counter() if has_observers else 0.0
             self._pending_statement_profile = None
             execute_with_optional_parameters(cursor, stmt_sql, prepared_parameters)
@@ -488,12 +522,45 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
         return SyncRowStream(
             PsycopgSyncStreamSource(
                 self, sql, prepared_parameters, chunk_size, column_types_resolver=_resolve_column_types
             )
         )
+
+    def current_wal_lsn(self) -> str:
+        """Return the primary server's current write-ahead-log location."""
+        row = None
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT pg_current_wal_lsn()::text")
+            row = cursor.fetchone()
+        self._check_pending_exception(handler)
+        value = next(iter(row.values())) if isinstance(row, Mapping) else row[0] if row else None
+        if value is None:
+            msg = "PostgreSQL returned no current WAL location"
+            raise SQLSpecError(msg)
+        return str(value)
+
+    def has_replayed_wal_lsn(self, lsn: str) -> bool:
+        """Check whether this server has replayed a bound WAL location."""
+        if not isinstance(lsn, str) or not lsn.strip():
+            msg = "WAL location must be a nonempty string"
+            raise ImproperConfigurationError(msg)
+        row = None
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT COALESCE(pg_last_wal_replay_lsn() >= %s::pg_lsn, NOT pg_is_in_recovery())", (lsn,))
+            row = cursor.fetchone()
+        self._check_pending_exception(handler)
+        value = next(iter(row.values())) if isinstance(row, Mapping) else row[0] if row else None
+        return bool(value)
 
     def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -786,6 +853,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
     __slots__ = ("_data_dictionary", "_restore_autocommit", "_transaction_active")
     dialect = "postgres"
+    cache_hit_function: "ClassVar[Any]" = staticmethod(execute_cache_hit_async)
 
     def __init__(
         self,
@@ -802,6 +870,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         self._data_dictionary: PsycopgAsyncDataDictionary | None = None
         self._restore_autocommit = False
         self._transaction_active = False
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), PsycopgAsyncDriver) else None
+        )
 
     @property
     def data_dictionary(self) -> "PsycopgAsyncDataDictionary":
@@ -825,7 +896,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
 
         await execute_with_optional_parameters_async(cursor, sql, prepared_parameters)
 
@@ -860,7 +936,12 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -881,6 +962,10 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution details
         """
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return await self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -891,7 +976,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         has_observers = runtime is not None and runtime.has_statement_observers
 
         for idx, stmt in enumerate(statements):
-            stmt_sql = escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
+            stmt_sql = escape_literal_percent(
+                stmt,
+                prepared_parameters,
+                self.statement_config.parameter_validator,
+                preserve_percent_escapes=source_uses_pyformat(
+                    statement.raw_sql, self.statement_config.parameter_validator
+                ),
+            )
             stmt_started = perf_counter() if has_observers else 0.0
             self._pending_statement_profile = None
             await execute_with_optional_parameters_async(cursor, stmt_sql, prepared_parameters)
@@ -1072,12 +1164,47 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
+        sql = escape_literal_percent(
+            sql,
+            prepared_parameters,
+            self.statement_config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(statement.raw_sql, self.statement_config.parameter_validator),
+        )
         return AsyncRowStream(
             PsycopgAsyncStreamSource(
                 self, sql, prepared_parameters, chunk_size, column_types_resolver=_resolve_column_types
             )
         )
+
+    async def current_wal_lsn(self) -> str:
+        """Return the primary server's current write-ahead-log location."""
+        row = None
+        handler = self.handle_database_exceptions()
+        async with handler, self.with_cursor(self.connection) as cursor:
+            await cursor.execute("SELECT pg_current_wal_lsn()::text")
+            row = await cursor.fetchone()
+        self._check_pending_exception(handler)
+        value = next(iter(row.values())) if isinstance(row, Mapping) else row[0] if row else None
+        if value is None:
+            msg = "PostgreSQL returned no current WAL location"
+            raise SQLSpecError(msg)
+        return str(value)
+
+    async def has_replayed_wal_lsn(self, lsn: str) -> bool:
+        """Check whether this server has replayed a bound WAL location."""
+        if not isinstance(lsn, str) or not lsn.strip():
+            msg = "WAL location must be a nonempty string"
+            raise ImproperConfigurationError(msg)
+        row = None
+        handler = self.handle_database_exceptions()
+        async with handler, self.with_cursor(self.connection) as cursor:
+            await cursor.execute(
+                "SELECT COALESCE(pg_last_wal_replay_lsn() >= %s::pg_lsn, NOT pg_is_in_recovery())", (lsn,)
+            )
+            row = await cursor.fetchone()
+        self._check_pending_exception(handler)
+        value = next(iter(row.values())) if isinstance(row, Mapping) else row[0] if row else None
+        return bool(value)
 
     def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""

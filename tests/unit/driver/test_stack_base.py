@@ -1,11 +1,12 @@
 """Unit tests for the driver execute_stack implementations."""
 
+import sqlite3
 import types
 
 import pytest
 
 from sqlspec import StatementStack
-from sqlspec.exceptions import StackExecutionError, TransactionError
+from sqlspec.exceptions import SQLSpecError, StackExecutionError, TransactionError
 from tests.conftest import requires_interpreted
 
 
@@ -226,3 +227,39 @@ async def test_async_execute_stack_preserves_caller_transaction(aiosqlite_async_
 
     rows = await aiosqlite_async_driver.execute("SELECT id FROM t_caller")
     assert rows.get_data() == []
+
+
+@pytest.mark.parametrize("continue_on_error", [True, False], ids=["continue-on-error", "fail-fast"])
+@requires_interpreted
+def test_sync_execute_stack_commit_error_raises_mapped_exception(
+    sqlite_sync_driver, monkeypatch: pytest.MonkeyPatch, continue_on_error: bool
+) -> None:
+    """Sync execute_stack propagates commit failures through handle_database_exceptions."""
+    sqlite_sync_driver.execute("CREATE TABLE t_commit_err (id INTEGER)")
+
+    def failing_commit() -> None:
+        raise sqlite3.OperationalError("commit failed")
+
+    monkeypatch.setattr(sqlite_sync_driver, "commit", failing_commit)
+    stack = StatementStack().push_execute("INSERT INTO t_commit_err (id) VALUES (1)")
+
+    with pytest.raises(SQLSpecError, match="commit failed"):
+        sqlite_sync_driver.execute_stack(stack, continue_on_error=continue_on_error)
+
+
+@pytest.mark.parametrize("continue_on_error", [True, False], ids=["continue-on-error", "fail-fast"])
+@requires_interpreted
+async def test_async_execute_stack_commit_error_raises_mapped_exception(
+    aiosqlite_async_driver, monkeypatch: pytest.MonkeyPatch, continue_on_error: bool
+) -> None:
+    """Async execute_stack propagates commit failures through handle_database_exceptions."""
+    await aiosqlite_async_driver.execute("CREATE TABLE t_commit_err (id INTEGER)")
+
+    async def failing_commit() -> None:
+        raise sqlite3.OperationalError("async commit failed")
+
+    monkeypatch.setattr(aiosqlite_async_driver, "commit", failing_commit)
+    stack = StatementStack().push_execute("INSERT INTO t_commit_err (id) VALUES (1)")
+
+    with pytest.raises(SQLSpecError, match="async commit failed"):
+        await aiosqlite_async_driver.execute_stack(stack, continue_on_error=continue_on_error)

@@ -161,7 +161,7 @@ async def test_dispatch_execute_script_slices_parameters_per_statement(db2_mode:
 
     assert cursor.executed == [
         ("INSERT INTO t1 VALUES (?)", (10,)),
-        ("DELETE FROM t2", None),
+        ("DELETE FROM t2", ()),
         ("INSERT INTO t1 VALUES (?, ?)", (20, 30)),
     ]
 

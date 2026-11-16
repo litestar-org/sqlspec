@@ -15,6 +15,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     UniqueViolationError,
 )
 
@@ -96,21 +97,21 @@ def test_perm_error_name_maps_to_permission_denied() -> None:
     assert isinstance(result, PermissionDeniedError)
 
 
-def test_readonly_error_code_maps_to_permission_denied() -> None:
+def test_readonly_error_code_maps_to_read_only_transaction_error() -> None:
     err = _SqliteError("attempt to write a readonly database", 8, "SQLITE_READONLY")
     result = create_mapped_exception(err)
-    assert isinstance(result, PermissionDeniedError)
+    assert isinstance(result, ReadOnlyTransactionError)
     assert result.__cause__ is err
 
 
-def test_readonly_error_name_maps_to_permission_denied() -> None:
+def test_readonly_error_name_maps_to_read_only_transaction_error() -> None:
     result = create_mapped_exception(_SqliteError("readonly database", None, "SQLITE_READONLY"))
-    assert isinstance(result, PermissionDeniedError)
+    assert isinstance(result, ReadOnlyTransactionError)
 
 
-def test_readonly_text_heuristic_maps_to_permission_denied() -> None:
+def test_readonly_text_heuristic_maps_to_read_only_transaction_error() -> None:
     result = create_mapped_exception(sqlite3.OperationalError("attempt to write a readonly database"))
-    assert isinstance(result, PermissionDeniedError)
+    assert isinstance(result, ReadOnlyTransactionError)
 
 
 def test_permission_denied_text_heuristic_maps_to_permission_denied() -> None:

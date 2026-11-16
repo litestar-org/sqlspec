@@ -2,12 +2,16 @@
 
 import re
 from abc import abstractmethod
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, Final, Generic, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, NamedTuple, TypeVar, cast
 
 from litestar.stores.base import Store
 
+from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.litestar._utils import StoreLease, resolve_store_lease
 from sqlspec.migrations.schema import (
     DropStatement,
     SchemaTarget,
@@ -21,16 +25,20 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import has_extension_config
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable, Iterator
+
 __all__ = ("BaseSQLSpecStore", "CompanionIndex")
 
 
 ConfigT = TypeVar("ConfigT")
+ReturnT = TypeVar("ReturnT")
 
 
 logger = get_logger("sqlspec.extensions.litestar.store")
 
 
-VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+VALID_TABLE_NAME_PATTERN: Final = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 MAX_TABLE_NAME_LENGTH: Final = 63
 _SQLGLOT_PARSE_DIALECTS: Final[dict[str, str]] = {"mariadb": "mysql", "mssql": "tsql", "postgresql": "postgres"}
 _PROCEDURAL_DDL_PATTERN: Final = re.compile(
@@ -42,6 +50,7 @@ _STANDALONE_CREATE_INDEX_PATTERN: Final = re.compile(
 _INLINE_MYSQL_INDEX_PATTERN: Final = re.compile(
     r"\bINDEX\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*expires_at\s*\)", re.IGNORECASE
 )
+_PINNED_LEASE: "ContextVar[StoreLease | None]" = ContextVar("sqlspec_litestar_store_lease", default=None)
 
 
 class CompanionIndex(NamedTuple):
@@ -51,6 +60,20 @@ class CompanionIndex(NamedTuple):
     table: str
     schema: str | None
     ddl: str
+
+
+class _StoreConnection(NamedTuple):
+    """Connection a store operation runs on and whether the store owns its transaction."""
+
+    connection: Any
+    owned: bool
+
+
+class _StoreSession(NamedTuple):
+    """Database session a store operation runs on and whether the store owns its transaction."""
+
+    session: Any
+    owned: bool
 
 
 class BaseSQLSpecStore(Store, Generic[ConfigT]):
@@ -65,6 +88,15 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
     - Session expiration calculation
     - Table creation utilities
 
+    Inside a Litestar request that holds an open session for the store's config, store
+    operations started by the request task run on that session inside the request
+    transaction. In ``autocommit`` modes the request commits or rolls back the write. In
+    ``manual`` mode the write joins uncommitted handler work when a transaction is open;
+    otherwise the store begins its own transaction on the request session and commits it.
+    After a request fails and releases its session, later store writes from the request
+    task are rolled back. Outside a request, from other tasks, and after a successful
+    release the store opens its own short session and commits itself.
+
     Subclasses must implement dialect-specific SQL queries.
 
     Args:
@@ -75,26 +107,9 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
 
     adapter_name: ClassVar[str | None] = None
 
-    extension_config_options: ClassVar[frozenset[str]] = frozenset({
-        "auto_trace_headers",
-        "commit_mode",
-        "connection_key",
-        "correlation_header",
-        "correlation_headers",
-        "create_schema",
-        "disable_di",
-        "enable_correlation_middleware",
-        "enable_sqlcommenter_middleware",
-        "extra_commit_statuses",
-        "extra_rollback_statuses",
-        "manage_lifespan",
-        "manage_schema",
-        "migration_mode",
-        "migrations_path",
-        "pool_key",
-        "session_key",
-        "session_table",
-    })
+    extension_config_options: ClassVar[frozenset[str]] = frozenset(
+        LitestarConfig.__required_keys__ | LitestarConfig.__optional_keys__
+    )
 
     def __init__(self, config: ConfigT) -> None:
         """Initialize the session store.
@@ -106,6 +121,135 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         self._validate_extension_config()
         self._table_name = self._table_name_from_config()
         self._validate_table_name(self._table_name)
+
+    @asynccontextmanager
+    async def _store_connection(self) -> "AsyncIterator[_StoreConnection]":
+        """Yield the connection a store operation runs on for the current task.
+
+        Yields:
+            The connection to use and whether the store must commit it.
+        """
+        lease = _current_lease(self._config)
+        if lease.session is not None:
+            async with _borrowed_session_async(lease) as session:
+                yield _StoreConnection(session.connection, False)
+            return
+        if lease.discard:
+            async with self._discarding_session_async() as session:
+                yield _StoreConnection(session.connection, False)
+            return
+        async with cast("Any", self._config).provide_connection() as connection:
+            yield _StoreConnection(connection, True)
+
+    @contextmanager
+    def _store_connection_sync(self) -> "Iterator[_StoreConnection]":
+        """Yield the connection a store operation runs on for the current task.
+
+        Yields:
+            The connection to use and whether the store must commit it.
+        """
+        lease = _current_lease(self._config)
+        if lease.session is not None:
+            with _borrowed_session_sync(lease) as session:
+                yield _StoreConnection(session.connection, False)
+            return
+        if lease.discard:
+            with self._discarding_session_sync() as session:
+                yield _StoreConnection(session.connection, False)
+            return
+        with cast("Any", self._config).provide_connection() as connection:
+            yield _StoreConnection(connection, True)
+
+    @asynccontextmanager
+    async def _store_session(self) -> "AsyncIterator[_StoreSession]":
+        """Yield the database session a store operation runs on for the current task.
+
+        Yields:
+            The database session to use and whether the store must commit it.
+        """
+        lease = _current_lease(self._config)
+        if lease.session is not None:
+            async with _borrowed_session_async(lease) as session:
+                yield _StoreSession(session, False)
+            return
+        if lease.discard:
+            async with self._discarding_session_async() as session:
+                yield _StoreSession(session, False)
+            return
+        async with cast("Any", self._config).provide_session() as owned_session:
+            yield _StoreSession(owned_session, True)
+
+    @contextmanager
+    def _store_session_sync(self) -> "Iterator[_StoreSession]":
+        """Yield the database session a store operation runs on for the current task.
+
+        Yields:
+            The database session to use and whether the store must commit it.
+        """
+        lease = _current_lease(self._config)
+        if lease.session is not None:
+            with _borrowed_session_sync(lease) as session:
+                yield _StoreSession(session, False)
+            return
+        if lease.discard:
+            with self._discarding_session_sync() as session:
+                yield _StoreSession(session, False)
+            return
+        with cast("Any", self._config).provide_session() as owned_session:
+            yield _StoreSession(owned_session, True)
+
+    @asynccontextmanager
+    async def _discarding_session_async(self) -> "AsyncIterator[Any]":
+        """Yield an owned session inside a transaction that is always rolled back.
+
+        Yields:
+            The owned database session.
+        """
+        async with cast("Any", self._config).provide_session() as session:
+            await _begin_async(session)
+            try:
+                yield session
+            finally:
+                await session.rollback()
+
+    @contextmanager
+    def _discarding_session_sync(self) -> "Iterator[Any]":
+        """Yield an owned session inside a transaction that is always rolled back.
+
+        Yields:
+            The owned database session.
+        """
+        with cast("Any", self._config).provide_session() as session:
+            _begin_sync(session)
+            try:
+                yield session
+            finally:
+                session.rollback()
+
+    async def _run_sync(self, function: "Callable[..., ReturnT]", /, *args: Any, **kwargs: Any) -> ReturnT:
+        """Run a blocking store operation in a worker thread with the caller's store lease.
+
+        The lease is resolved in the calling task, so a worker thread borrows the request
+        session only when the request task itself started the operation.
+
+        Args:
+            function: Blocking store operation.
+            *args: Positional arguments for ``function``.
+            **kwargs: Keyword arguments for ``function``.
+
+        Returns:
+            The operation result.
+        """
+        lease = resolve_store_lease(self._config)
+
+        def run() -> ReturnT:
+            token = _PINNED_LEASE.set(lease)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                _PINNED_LEASE.reset(token)
+
+        return await async_(run)()
 
     @property
     def config(self) -> ConfigT:
@@ -204,17 +348,6 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             if not metadata_has_index(rows, index.table, index.name, schema_name=index.schema):
                 await driver.execute_script(index.ddl)
 
-    def _schema_target(self) -> SchemaTarget:
-        """Build the primary session table SchemaTarget from store DDL."""
-        statement_config = getattr(self._config, "statement_config", None)
-        raw_dialect = getattr(self, "_dialect", None) or getattr(statement_config, "dialect", None)
-        dialect = (
-            _SQLGLOT_PARSE_DIALECTS.get(raw_dialect.lower(), raw_dialect)
-            if isinstance(raw_dialect, str)
-            else raw_dialect
-        )
-        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
-
     async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive session-table changes from the canonical store DDL.
 
@@ -234,6 +367,21 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
                 )
             return
         await async_(_reconcile_schema_sync)(self, create_schema=create_schema, assume_existing=assume_existing)
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops for the session table and its indexes."""
+        return [DropStatement(statement) for statement in self._drop_table_sql()]
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the primary session table SchemaTarget from store DDL."""
+        statement_config = getattr(self._config, "statement_config", None)
+        raw_dialect = getattr(self, "_dialect", None) or getattr(statement_config, "dialect", None)
+        dialect = (
+            _SQLGLOT_PARSE_DIALECTS.get(raw_dialect.lower(), raw_dialect)
+            if isinstance(raw_dialect, str)
+            else raw_dialect
+        )
+        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
 
     def _table_name_from_config(self) -> str:
         """Extract the configured session table name."""
@@ -287,10 +435,6 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    def downgrade_drops(self) -> "list[DropStatement]":
-        """Return the extension-downgrade drops for the session table and its indexes."""
-        return [DropStatement(statement) for statement in self._drop_table_sql()]
-
     def _log_table_created(self) -> None:
         logger.debug(
             "Litestar session table ready",
@@ -314,23 +458,39 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         )
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
-        """Calculate expiration timestamp from expires_in.
+        """Calculate expiration timestamp from ``expires_in``.
+
+        Non-positive durations return an already-expired UTC timestamp rather than
+        ``None`` so sessions expire immediately instead of becoming persistent.
 
         Args:
-            expires_in: Seconds or timedelta until expiration.
+            expires_in: Seconds or timedelta until expiration, or ``None`` for no expiration.
 
         Returns:
-            UTC datetime of expiration, or None if no expiration.
+            UTC datetime of expiration, or ``None`` when ``expires_in`` is ``None``.
         """
         if expires_in is None:
             return None
 
-        expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else expires_in
+        expires_in_seconds = expires_in.total_seconds() if isinstance(expires_in, timedelta) else float(expires_in)
 
         if expires_in_seconds <= 0:
-            return None
+            return datetime.now(UTC) - timedelta(microseconds=1)
 
         return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
+
+    def _is_renewal_requested(self, renew_for: "int | timedelta | None") -> bool:
+        """Return whether ``renew_for`` requests session expiration renewal.
+
+        Args:
+            renew_for: Seconds or timedelta to extend expiration by, or ``None``.
+
+        Returns:
+            ``True`` only when ``renew_for`` represents a positive duration.
+        """
+        if renew_for is None:
+            return False
+        return (renew_for.total_seconds() if isinstance(renew_for, timedelta) else float(renew_for)) > 0
 
     def _value_to_bytes(self, value: "str | bytes") -> bytes:
         """Convert value to bytes if needed.
@@ -371,7 +531,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             msg = f"Table name too long: {len(table_name)} chars (max {MAX_TABLE_NAME_LENGTH})"
             raise ValueError(msg)
 
-        if not VALID_TABLE_NAME_PATTERN.match(table_name):
+        if not VALID_TABLE_NAME_PATTERN.fullmatch(table_name):
             msg = f"Invalid table name: {table_name!r}. Must start with letter/underscore and contain only alphanumeric characters and underscores"
             raise ValueError(msg)
 
@@ -384,3 +544,70 @@ def _reconcile_schema_sync(store: "BaseSQLSpecStore[Any]", *, create_schema: boo
         ensure_schema_sync(
             driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
         )
+
+
+async def _begin_async(session: Any) -> None:
+    if not session._connection_in_transaction():
+        await session.begin()
+
+
+def _begin_sync(session: Any) -> None:
+    if not session._connection_in_transaction():
+        session.begin()
+
+
+def _current_lease(config: Any) -> StoreLease:
+    pinned = _PINNED_LEASE.get()
+    return pinned if pinned is not None else resolve_store_lease(config)
+
+
+@asynccontextmanager
+async def _borrowed_session_async(lease: StoreLease) -> "AsyncIterator[Any]":
+    """Yield the borrowed request session inside a transaction.
+
+    The store joins an open request transaction. When none is open it begins one; in
+    ``manual`` commit mode the store owns that transaction and commits it, otherwise the
+    request commits or rolls it back.
+
+    Yields:
+        The borrowed database session.
+    """
+    session = lease.session
+    began = not session._connection_in_transaction()
+    if began:
+        await session.begin()
+    if not (began and lease.manual):
+        yield session
+        return
+    try:
+        yield session
+    except BaseException:
+        await session.rollback()
+        raise
+    await session.commit()
+
+
+@contextmanager
+def _borrowed_session_sync(lease: StoreLease) -> "Iterator[Any]":
+    """Yield the borrowed request session inside a transaction.
+
+    The store joins an open request transaction. When none is open it begins one; in
+    ``manual`` commit mode the store owns that transaction and commits it, otherwise the
+    request commits or rolls it back.
+
+    Yields:
+        The borrowed database session.
+    """
+    session = lease.session
+    began = not session._connection_in_transaction()
+    if began:
+        session.begin()
+    if not (began and lease.manual):
+        yield session
+        return
+    try:
+        yield session
+    except BaseException:
+        session.rollback()
+        raise
+    session.commit()

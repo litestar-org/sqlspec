@@ -20,6 +20,8 @@ import adbc_driver_manager.dbapi
 import adbc_driver_sqlite.dbapi
 import pytest
 from adbc_driver_bigquery import DatabaseOptions
+from adbc_driver_manager import AdbcStatusCode
+from adbc_driver_manager import OperationalError as AdbcOperationalError
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver, AdbcDriverFeatures
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
@@ -33,7 +35,7 @@ from sqlspec.adapters.adbc.core import (
 from sqlspec.adapters.adbc.pool import AdbcConnectionPool
 from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import SQL, ParameterStyle
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import reset_dependency_cache
 
 
@@ -508,6 +510,24 @@ def test_adbc_config_hook_failure_closes_owned_connection(
         assert caught.value.__cause__ is primary
     else:
         assert caught.value is primary
+    connection.close.assert_called_once_with()
+
+
+def test_adbc_config_native_hook_error_closes_connection_and_maps_directly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AdbcConfig.create_connection maps AdbcNativeError directly after closing an owned connection."""
+    connection = MagicMock()
+    monkeypatch.setattr(adbc_driver_sqlite.dbapi, "connect", lambda **_kwargs: connection)
+    native = AdbcOperationalError("State: 08001, connection lost", status_code=AdbcStatusCode.IO)
+
+    def fail_hook(_connection: Any) -> None:
+        raise native
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite"}, driver_features={"on_connection_create": fail_hook}
+    )
+    with pytest.raises(DatabaseConnectionError) as caught:
+        config.create_connection()
+    assert caught.value.__cause__ is native
     connection.close.assert_called_once_with()
 
 
@@ -1283,16 +1303,16 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
 
     script_update = driver.execute_script("UPDATE items SET name = ? WHERE id = ?", ("gamma", 1))
     assert script_update.rows_affected == 1
-    assert cursor.execute.call_count == 2
-    assert cursor.execute.call_args_list[1].args == ("UPDATE items SET name = 'gamma' WHERE id = 1",)
-    assert cursor.executemany.call_count == 2
+    assert cursor.execute.call_count == 1
+    assert cursor.executemany.call_count == 3
+    assert cursor.executemany.call_args_list[2].args == ("UPDATE items SET name = ? WHERE id = ?", [["gamma", 1]])
 
     direct_single_script = driver.dispatch_execute_script(
         cursor, SQL("UPDATE items SET name = ? WHERE id = ?", ("gamma", 1), statement_config=driver.statement_config)
     )
     assert direct_single_script.rowcount_override == 1
-    assert cursor.executemany.call_count == 3
-    assert cursor.executemany.call_args_list[2].args == ("UPDATE items SET name = ? WHERE id = ?", [["gamma", 1]])
+    assert cursor.executemany.call_count == 4
+    assert cursor.executemany.call_args_list[3].args == ("UPDATE items SET name = ? WHERE id = ?", [["gamma", 1]])
 
     direct_multi_script = driver.dispatch_execute_script(
         cursor,
@@ -1303,18 +1323,18 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
         ),
     )
     assert direct_multi_script.rowcount_override == 1
-    assert cursor.execute.call_count == 3
-    assert cursor.executemany.call_count == 4
-    assert cursor.executemany.call_args_list[3].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[3, "delta"]])
+    assert cursor.execute.call_count == 2
+    assert cursor.executemany.call_count == 5
+    assert cursor.executemany.call_args_list[4].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[3, "delta"]])
 
     named_delete = driver.execute("DELETE FROM items WHERE id = :item_id", {"item_id": 2})
     assert named_delete.rows_affected == 1
-    assert cursor.executemany.call_count == 5
-    assert cursor.executemany.call_args_list[4].args == ("DELETE FROM items WHERE id = ?", [[2]])
+    assert cursor.executemany.call_count == 6
+    assert cursor.executemany.call_args_list[5].args == ("DELETE FROM items WHERE id = ?", [[2]])
 
     driver.execute("SELECT id FROM items WHERE id = ?", (1,))
-    assert cursor.execute.call_count == 4
-    assert cursor.executemany.call_count == 5
+    assert cursor.execute.call_count == 3
+    assert cursor.executemany.call_count == 6
 
     class _ArrowStreamStub:
         def __arrow_c_stream__(self, requested_schema: object = None) -> object:
@@ -1322,8 +1342,8 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
 
     arrow_stream = _ArrowStreamStub()
     AdbcDriver._execute_db2_non_query(cursor, "INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
-    assert cursor.executemany.call_count == 6
-    assert cursor.executemany.call_args_list[5].args == ("INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
+    assert cursor.executemany.call_count == 7
+    assert cursor.executemany.call_args_list[6].args == ("INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
 
 
 def _postgres_pool_config(**overrides: Any) -> AdbcConfig:
@@ -1458,11 +1478,29 @@ def test_snowflake_duration_normalization(value: Any, expected: str) -> None:
     assert normalized["db_kwargs"]["adbc.snowflake.sql.client_option.login_timeout"] == expected
 
 
+@pytest.mark.parametrize(
+    ("field", "option_key"),
+    [
+        ("connection_timeout", "adbc.snowflake.sql.client_option.login_timeout"),
+        ("query_timeout", "adbc.snowflake.sql.client_option.request_timeout"),
+    ],
+)
+def test_snowflake_timeout_aliases_lift_and_respect_canonical_precedence(field: str, option_key: str) -> None:
+    """Generic ADBC timeout fields map to Snowflake Go durations and yield to canonical keys."""
+    aliased = build_connection_config({"driver": "snowflake", field: 12.5})
+    assert aliased == {"db_kwargs": {option_key: "12500ms"}}
+
+    canonical_field = "login_timeout" if field == "connection_timeout" else "request_timeout"
+    canonical_wins = build_connection_config({"driver": "snowflake", field: 12, canonical_field: 30})
+    assert canonical_wins == {"db_kwargs": {option_key: "30s"}}
+
+
+@pytest.mark.parametrize("field", ["login_timeout", "connection_timeout", "request_timeout", "query_timeout"])
 @pytest.mark.parametrize("value", [True, -1, float("inf"), float("nan"), "later", "-1s"])
-def test_snowflake_rejects_invalid_duration(value: Any) -> None:
+def test_snowflake_rejects_invalid_duration(field: str, value: Any) -> None:
     """Invalid durations fail before an external connection is attempted."""
     with pytest.raises(ImproperConfigurationError, match="duration"):
-        build_connection_config({"driver": "snowflake", "login_timeout": value})
+        build_connection_config({"driver": "snowflake", field: value})
 
 
 @pytest.mark.parametrize(
@@ -1697,3 +1735,134 @@ def test_snowflake_adbc_rejects_tenant_strategies(strategy: object) -> None:
         AdbcConfig(
             connection_config={"driver": "snowflake", "account": "acct"}, driver_features={"tenant_strategy": strategy}
         )
+
+
+@pytest.mark.parametrize("alias", ("uri", "dsn", "url", "connection_string"))
+def test_replica_derivation_uri_aliases_and_connection_hook(alias: str) -> None:
+    def hook(connection: Any) -> None:
+        return None
+
+    primary = AdbcConfig(
+        connection_config={"uri": "postgresql://writer/app"}, driver_features={"on_connection_create": hook}
+    )
+    replica = primary.derive_pool(connection_config_overrides={alias: "postgresql://reader/app"}, bind_key="reader")
+    assert replica.connection_config["uri"] == "postgresql://reader/app"
+    assert replica.bind_key == "reader"
+    assert replica._user_connection_hook is hook
+    assert replica.explicit_statement_dialect is None
+    assert primary.connection_config["uri"] == "postgresql://writer/app"
+
+
+@pytest.mark.parametrize(
+    ("connection", "overrides", "expected"),
+    (
+        (
+            {
+                "driver_name": "adbc_driver_snowflake.dbapi.connect",
+                "account": "acct",
+                "warehouse": "WRITER",
+                "role": "WRITER",
+                "query_tag": "etl",
+            },
+            {"warehouse": "READER", "role": "ANALYST", "query_tag": "bi"},
+            {"adbc.snowflake.sql.warehouse": "READER", "adbc.snowflake.sql.role": "ANALYST", "QUERY_TAG": "bi"},
+        ),
+        (
+            {
+                "driver_name": "adbc_driver_flightsql.dbapi.connect",
+                "uri": "grpc+tls://writer:31337",
+                "username": "writer",
+            },
+            {"uri": "grpc+tls://reader:31337", "username": "reader"},
+            {"uri": "grpc+tls://reader:31337", "username": "reader"},
+        ),
+        (
+            {"driver_name": "/opt/libadbc_pg.so", "uri": "postgresql://writer/app", "username": "writer"},
+            {"uri": "postgresql://reader/app", "username": "reader"},
+            {"uri": "postgresql://reader/app", "username": "reader"},
+        ),
+    ),
+)
+def test_replica_derivation_overrides_inherited_lifted_database_options(
+    connection: dict[str, Any], overrides: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    primary = AdbcConfig(
+        connection_config={**build_connection_config(connection), "driver_name": connection["driver_name"]}
+    )
+    original = dict(primary.connection_config["db_kwargs"])
+    replica = primary.derive_pool(**overrides)
+    normalized = build_connection_config(replica.connection_config)
+    effective = {**normalized, **normalized.get("db_kwargs", {})}
+    assert expected.items() <= effective.items()
+    assert primary.connection_config["db_kwargs"] == original
+
+
+def test_replica_derivation_preserves_new_explicit_database_option_precedence() -> None:
+    primary = AdbcConfig(
+        connection_config={
+            "driver_name": "adbc_driver_flightsql.dbapi.connect",
+            **build_connection_config({
+                "driver_name": "adbc_driver_flightsql.dbapi.connect",
+                "uri": "grpc://writer:31337",
+                "username": "writer",
+            }),
+        }
+    )
+    replica = primary.derive_pool(username="shortcut", db_kwargs={"username": "explicit", "custom": "preserved"})
+    assert replica.connection_config["db_kwargs"]["username"] == "explicit"
+    assert replica.connection_config["db_kwargs"]["custom"] == "preserved"
+    assert primary.connection_config["db_kwargs"]["username"] == "writer"
+
+
+def test_replica_uri_shorthand_derives_independent_adbc_configs() -> None:
+    primary = AdbcConfig(
+        connection_config={"uri": "postgresql://writer/app"},
+        replicas=["postgresql://reader-a/app", "postgresql://reader-b/app"],
+    )
+    readers = primary.replica_groups["default"].configs
+    assert [reader.connection_config["uri"] for reader in readers] == [
+        "postgresql://reader-a/app",
+        "postgresql://reader-b/app",
+    ]
+    assert all(reader.is_replica for reader in readers)
+    with pytest.raises(ImproperConfigurationError):
+        AdbcConfig(connection_config={"uri": "postgresql://writer/app"}, replicas=True)
+
+
+def test_replica_derivation_re_resolves_implicit_dialect() -> None:
+    primary = AdbcConfig(connection_config={"uri": "sqlite://:memory:"})
+    replica = primary.derive_pool(uri="postgresql://reader/app")
+    assert replica.explicit_statement_dialect is None
+    assert replica.statement_config.dialect == "postgres"
+    assert primary.statement_config.dialect == "sqlite"
+
+
+def test_db2_cli_dsn_supports_braced_passwords_and_encodes_database_path() -> None:
+    """Braced Db2 CLI passwords preserve semicolons, equals, and doubled braces while encoding database path."""
+    resolved = build_connection_config({
+        "dsn": "DATABASE=tenant/prod?x=1;HOSTNAME=db.internal;PORT=50000;UID=db2inst1;PWD={p;a=s}}s};"
+    })
+    assert resolved == {
+        "uri": "db2://db.internal:50000/tenant%2Fprod%3Fx%3D1",
+        "username": "db2inst1",
+        "password": "p;a=s}s",
+    }
+
+
+@pytest.mark.parametrize(
+    "bad_config",
+    [
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PWD={unclosed;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PORT=abc;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PORT=70000;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=evil.host/path?param=1;PORT=50000;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;\nUID=x;"},
+        {"driver_name": "flightsql", "headers": {"Bad Header": "1"}},
+        {"driver_name": "flightsql", "headers": {"X-Trace": "val\r\nInjected: 1"}},
+        {"driver_name": "flightsql", "authorization_header": "Bearer tok\r\nX-Evil: 1"},
+    ],
+)
+def test_adbc_db2_and_flightsql_reject_malformed_dsn_ports_hosts_and_headers(bad_config: dict[str, Any]) -> None:
+    """Malformed Db2 CLI DSN braces, ports, hosts, or FlightSQL RPC headers raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(bad_config)

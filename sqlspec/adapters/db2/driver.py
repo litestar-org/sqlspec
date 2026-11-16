@@ -5,6 +5,8 @@ import logging
 import sys
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.db2._typing import (
     Db2AsyncCursor,
     Db2AsyncSessionContext,
@@ -19,6 +21,8 @@ from sqlspec.adapters.db2.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
+    execute_cache_hit_async,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     resolve_column_names,
@@ -38,6 +42,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import MissingDependencyError, SQLSpecError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
@@ -65,6 +70,7 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.db2")
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2SyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager that maps ``ibm_db_dbi`` errors to SQLSpec exceptions.
 
@@ -82,6 +88,7 @@ class Db2SyncExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2SyncStreamSource:
     """Native Db2 chunk source backed by cursor.fetchmany()."""
 
@@ -145,6 +152,7 @@ class Db2SyncStreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2SyncDriver(SyncDriverAdapterBase):
     """IBM Db2 database driver."""
 
@@ -173,6 +181,8 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         self._data_dictionary: Db2SyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._lowercase_columns = bool(self.driver_features.get("enable_lowercase_column_names", True))
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), Db2SyncDriver) else None
+        self._cache_hit_state = (self._column_name_cache, self._lowercase_columns)
         self._transaction_active = False
         self._restore_autocommit = False
         self._migration_schema_restore: str | None = None
@@ -232,13 +242,17 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-        statement_params = _resolve_script_statement_params(statements, prepared_parameters)
+        script_params = normalize_execute_parameters(prepared_parameters)
 
         successful_count = 0
-        for stmt, params in zip(statements, statement_params, strict=False):
-            cursor.execute(stmt, params)
+        for stmt in statements:
+            cursor.execute(stmt, script_params)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -393,15 +407,16 @@ class Db2SyncDriver(SyncDriverAdapterBase):
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Normalize cached fast-path parameters to a tuple before calling ibm_db_dbi."""
-        return super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
+        """Execute a cached statement through the compiled Db2 cache-hit executor."""
+        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._cache_hit_state)
 
     def _release_open_work(self, *, autocommit_baseline: bool) -> None:
         """Roll back work left open before the connection is returned to its pool.
 
         A transaction started by this driver is always rolled back; on a connection whose
         autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
-        failure is logged and not raised, so it never masks an error from the session body.
+        failure is logged, closes the connection handle so the pool retires it, and is not raised
+        so it never masks an error from the session body.
 
         Args:
             autocommit_baseline: Autocommit mode the connection was opened in.
@@ -412,6 +427,8 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             self.rollback()
         except SQLSpecError as exc:
             log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
+            with contextlib.suppress(Exception):
+                self.connection.close()
 
     def _restore_connection_autocommit(self) -> None:
         """Switch autocommit back on when ``begin()`` turned it off.
@@ -440,6 +457,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager that maps ``ibm_db_dbi`` errors to SQLSpec exceptions.
 
@@ -457,6 +475,7 @@ class Db2AsyncExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncStreamSource:
     """Native async Db2 chunk source backed by ``AsyncCursor.fetchmany()``."""
 
@@ -511,6 +530,7 @@ class Db2AsyncStreamSource:
                 await cursor_manager.__aexit__(None, None, None)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncDriver(AsyncDriverAdapterBase):
     """IBM Db2 async database driver over ``ibm_db_dbi.AsyncConnection``."""
 
@@ -539,6 +559,10 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         self._data_dictionary: Db2AsyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._lowercase_columns = bool(self.driver_features.get("enable_lowercase_column_names", True))
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), Db2AsyncDriver) else None
+        )
+        self._cache_hit_state = (self._column_name_cache, self._lowercase_columns)
         self._transaction_active = False
         self._restore_autocommit = False
         self._migration_schema_restore: str | None = None
@@ -598,13 +622,17 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return await self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-        statement_params = _resolve_script_statement_params(statements, prepared_parameters)
+        script_params = normalize_execute_parameters(prepared_parameters)
 
         successful_count = 0
-        for stmt, params in zip(statements, statement_params, strict=False):
-            await cursor.execute(stmt, params)
+        for stmt in statements:
+            await cursor.execute(stmt, script_params)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -768,15 +796,18 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Normalize cached fast-path parameters to a tuple before calling ibm_db_dbi."""
-        return await super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
+        """Execute a cached statement through the compiled Db2 async cache-hit executor."""
+        return await execute_cache_hit_async(
+            self.connection, sql, params, cached, self.statement_config, self._cache_hit_state
+        )
 
     async def _release_open_work(self, *, autocommit_baseline: bool) -> None:
         """Roll back work left open before the connection is returned to its pool.
 
         A transaction started by this driver is always rolled back; on a connection whose
         autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
-        failure is logged and not raised, so it never masks an error from the session body.
+        failure is logged, closes the connection handle so the pool retires it, and is not raised
+        so it never masks an error from the session body.
 
         Args:
             autocommit_baseline: Autocommit mode the connection was opened in.
@@ -787,6 +818,8 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             await self.rollback()
         except SQLSpecError as exc:
             log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
+            with contextlib.suppress(Exception):
+                await self.connection.close()
 
     async def _restore_connection_autocommit(self) -> None:
         """Switch autocommit back on when ``begin()`` turned it off.
@@ -813,30 +846,6 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             return not connection_autocommit_enabled(self.connection)
         except (MissingDependencyError, Db2Error, AttributeError, KeyError, TypeError, ValueError):
             return False
-
-
-def _resolve_script_statement_params(
-    statements: "list[str]", prepared_parameters: Any
-) -> "list[tuple[Any, ...] | None]":
-    """Resolve positional parameter tuples for each statement in a split script."""
-    if len(statements) <= 1:
-        return [normalize_execute_parameters(prepared_parameters) for _ in statements]
-    if not prepared_parameters:
-        return [None for _ in statements]
-    if isinstance(prepared_parameters, (list, tuple)):
-        offset = 0
-        resolved: list[tuple[Any, ...] | None] = []
-        for stmt in statements:
-            count = stmt.count("?")
-            if count > 0:
-                slice_params = tuple(prepared_parameters[offset : offset + count])
-                offset += count
-                resolved.append(slice_params or None)
-            else:
-                resolved.append(None)
-        return resolved
-    normalized = normalize_execute_parameters(prepared_parameters)
-    return [normalized if index == 0 else None for index in range(len(statements))]
 
 
 register_driver_profile("db2", driver_profile)

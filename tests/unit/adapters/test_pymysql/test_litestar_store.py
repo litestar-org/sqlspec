@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for PyMySQL Litestar session store DDL configuration."""
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -72,3 +73,39 @@ def test_pymysql_litestar_store_set_uses_mariadb_compatible_upsert() -> None:
     assert "data = VALUES(data)" in sql
     assert "expires_at = VALUES(expires_at)" in sql
     assert "AS new" not in sql
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_pymysql_litestar_store_get_renews_only_for_positive_duration(
+    renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """get renews expires_at only when renew_for is strictly positive."""
+    future = datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=5)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = {"data": b"payload", "expires_at": future}
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.__enter__.return_value = conn
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+
+    data = await PyMysqlStore(config).get("session-1", renew_for=renew_for)
+
+    assert data == b"payload"
+    if expect_renew:
+        assert cursor.execute.call_count == 2
+        assert "UPDATE litestar_session" in cursor.execute.call_args_list[1].args[0]
+        conn.commit.assert_called_once()
+    else:
+        assert cursor.execute.call_count == 1
+        conn.commit.assert_not_called()

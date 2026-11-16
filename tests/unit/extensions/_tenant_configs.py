@@ -75,7 +75,7 @@ class _AiosqliteTenantLease(AsyncTenantLease):
         self._checkouts: list[str] = strategy.checkouts
 
     async def _acquire(self) -> Any:
-        self._checkouts.append(seen(await TenantContext.arequire(self.tenant_key)))
+        self._checkouts.append(seen(await TenantContext.require_async(self.tenant_key)))
         return await aiosqlite.connect(":memory:")
 
     async def _release(self, connection: Any) -> None:

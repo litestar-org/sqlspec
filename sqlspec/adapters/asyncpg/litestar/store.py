@@ -82,7 +82,7 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             Session data as bytes if found and not expired, None otherwise.
         """
         try:
-            if renew_for is not None:
+            if self._is_renewal_requested(renew_for):
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     update_sql = f"""
@@ -93,7 +93,8 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
                     AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
                     RETURNING data
                     """
-                    async with self._config.provide_connection() as conn:
+                    async with self._store_connection() as store_connection:
+                        conn = store_connection.connection
                         row = await conn.fetchrow(update_sql, new_expires_at, key)
                         if row is None:
                             return None
@@ -105,7 +106,8 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             """
 
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 row = await conn.fetchrow(sql, key)
 
                 if row is None:
@@ -136,7 +138,8 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             updated_at = CURRENT_TIMESTAMP
         """
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await conn.execute(sql, key, data, expires_at)
 
     async def delete(self, key: str) -> None:
@@ -148,7 +151,8 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 await conn.execute(sql, key)
         except asyncpg.exceptions.UndefinedTableError:
             return
@@ -158,7 +162,8 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 await conn.execute(sql)
         except asyncpg.exceptions.UndefinedTableError:
             return
@@ -180,7 +185,8 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 result = await conn.fetchval(sql, key)
                 return result is not None
         except asyncpg.exceptions.UndefinedTableError:
@@ -201,7 +207,8 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 expires_at = await conn.fetchval(sql, key)
 
                 if expires_at is None:
@@ -225,7 +232,8 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 result = await conn.execute(sql)
                 count = parse_status(result)
                 if count > 0:

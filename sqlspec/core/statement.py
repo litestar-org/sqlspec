@@ -1,13 +1,15 @@
 """SQL statement and configuration management."""
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
+from types import BuiltinFunctionType, FunctionType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 
 import sqlspec.core._operators  # noqa: F401 - register SQLGlot operator rendering before any SQL is generated
 import sqlspec.exceptions
@@ -52,10 +54,12 @@ from sqlspec.core.query_modifiers import (
     expr_neq,
     extract_column_name,
     safe_modify_with_cte,
+    sanitize_parameter_name,
     wrap_as_subquery,
 )
+from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer, format_wire_sqlcomment
-from sqlspec.observability import resolve_db_system
+from sqlspec.observability._common import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -85,6 +89,10 @@ RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA"})
 MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"})
 _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
+_STATEMENT_START_RE: Final = re.compile(
+    r"^\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COMMIT|ROLLBACK|EXEC|EXECUTE|CALL|COPY|MERGE)\b",
+    re.IGNORECASE,
+)
 
 
 SQL_CONFIG_SLOTS: Final = (
@@ -582,6 +590,18 @@ class SQL:
 
         return False
 
+    def is_read_only(self) -> bool:
+        """Return whether parsed SQL is provably safe for read replica routing."""
+        if self._is_many or self._is_script or not self._statement_config.enable_parsing:
+            return False
+        state = self._processed_state
+        if state is Empty:
+            self.compile()
+            state = self._processed_state
+            if state is Empty:
+                return False
+        return state.operation_profile.is_read_only
+
     def is_modifying_operation(self) -> bool:
         """Check if the SQL statement is a modifying operation.
 
@@ -590,7 +610,12 @@ class SQL:
         """
         state = self._processed_state
         if state is Empty:
-            return False
+            if not self._statement_config.enable_parsing:
+                return False
+            self.compile()
+            state = self._processed_state
+            if state is Empty:
+                return False
 
         profile = state.operation_profile
         if profile.modifies_rows:
@@ -660,6 +685,9 @@ class SQL:
             )
         except sqlspec.exceptions.SQLSpecError:
             raise
+        except RecursionError as e:
+            msg = "Statement nesting exceeds the supported depth"
+            raise sqlspec.exceptions.SQLParsingError(msg) from e
         except Exception as e:
             new_state = self._handle_compile_failure(e)
 
@@ -679,11 +707,7 @@ class SQL:
         """
         new_sql = self._copy_base(self._raw_expression or self._raw_sql)
         new_sql._is_script = True
-        param_config = self._statement_config.parameter_config
-        if not param_config.needs_static_script_compilation:
-            new_sql._statement_config = self._statement_config.replace(
-                parameter_config=param_config.replace(needs_static_script_compilation=True)
-            )
+        new_sql._statement_config = self._statement_config._with_script_mode()
         return new_sql
 
     def copy(self, statement: "str | exp.Expr | None" = None, parameters: Any | None = None, **kwargs: Any) -> "SQL":
@@ -742,20 +766,34 @@ class SQL:
 
         Returns:
             New SQL instance with the WHERE condition applied
+
+        Raises:
+            SQLParsingError: If the condition is empty, contains a NUL character,
+                contains a statement separator outside quoted text, or is a
+                statement rather than a condition.
         """
         current_expr = self._current_expression()
 
         condition_expr: exp.Expr
         if isinstance(condition, str):
+            if not condition.strip() or "\x00" in condition or contains_statement_terminator(condition, self._dialect):
+                msg = "WHERE condition must be a single expression without NUL characters or statement separators"
+                raise sqlspec.exceptions.SQLParsingError(msg)
             if not self._statement_config.enable_parsing:
-                condition_expr = exp.Paren(this=exp.Var(this=condition))
+                condition_expr = _raw_condition(condition, self._dialect)
             else:
                 try:
-                    condition_expr = sqlglot.parse_one(condition, dialect=self._dialect, into=exp.Condition)
-                except ParseError:
-                    condition_expr = exp.Paren(this=exp.Var(this=condition))
+                    condition_expr = sqlglot.parse_one(condition, dialect=self._dialect)
+                except (ParseError, TokenError):
+                    condition_expr = _raw_condition(condition, self._dialect)
         else:
             condition_expr = condition
+        if (
+            not isinstance(condition_expr, exp.Condition)
+            or condition_expr.find(exp.Command, exp.DDL, exp.DML, exp.Drop, exp.Alter, exp.TruncateTable) is not None
+        ):
+            msg = f"WHERE condition must be an expression, got {type(condition_expr).__name__}"
+            raise sqlspec.exceptions.SQLParsingError(msg)
 
         if isinstance(current_expr, (exp.Select, exp.Update, exp.Delete)) or (
             not isinstance(current_expr, (exp.Query, exp.Values)) and supports_where(current_expr)
@@ -1039,7 +1077,7 @@ class SQL:
         if should_prune:
             if self._statement_config.enable_caching:
                 expr_sql = new_expr.sql(dialect=self._dialect)
-                cache_key = f"prune:{hashlib.blake2b(expr_sql.encode(), digest_size=8).hexdigest()}"
+                cache_key = f"prune:{hashlib.blake2b(expr_sql.encode(), digest_size=16).hexdigest()}"
             else:
                 cache_key = None
             new_expr = apply_column_pruning(new_expr, dialect=self._dialect, cache_key=cache_key)
@@ -1069,7 +1107,14 @@ class SQL:
         options = ExplainOptions(analyze=analyze, verbose=verbose, format=fmt)
 
         explain_builder = Explain(self, dialect=self._dialect, options=options)
-        return explain_builder.build()
+        explained = explain_builder.build()
+        if self._positional_parameters:
+            explained._positional_parameters = self._positional_parameters.copy()
+            explained._original_parameters = self._original_parameters
+            explained._is_many = self._is_many
+            explained._declared_parameters = self._declared_parameters
+            explained._hash = None
+        return explained
 
     def builder(self, dialect: "DialectType | None" = None) -> "QueryBuilder":
         """Create a query builder seeded from this SQL statement.
@@ -1551,7 +1596,7 @@ class SQL:
         Returns:
             A unique parameter name that doesn't exist in current parameters
         """
-        prefixed_base = f"param_{base_name}"
+        prefixed_base = f"param_{sanitize_parameter_name(base_name)}"
         current_index = self._sql_param_counters.get(prefixed_base, 0)
 
         if prefixed_base not in self._named_parameters:
@@ -1570,8 +1615,8 @@ class SQL:
         self._sql_param_counters[prefixed_base] = next_index
         return candidate
 
-    def _peek_expression(self) -> "exp.Expr | None":
-        """Return the parsed or raw SQLGlot expression for read-only inspection without copying."""
+    def _get_shared_expression(self) -> "exp.Expr | None":
+        """Return the parsed or raw SQLGlot expression without copying; callers must not mutate it."""
         state = self._processed_state
         if state is not Empty:
             return state.parsed_expression
@@ -1611,9 +1656,6 @@ class SQL:
         parsed_expression = state.parsed_expression if state is not Empty else None
         if parsed_expression is not None:
             return parsed_expression.copy()
-        statement_expression = self.statement_expression
-        if statement_expression is not None:
-            return statement_expression.copy()
         raw_expression = self._raw_expression
         if raw_expression is not None:
             return raw_expression.copy()
@@ -1738,8 +1780,10 @@ class StatementConfig:
     __slots__ = (
         *SQL_CONFIG_SLOTS,
         "_dialect_variants",
-        "_has_transformers",
         "_has_output_transformer",
+        "_has_transformers",
+        "_has_uncacheable_transformers",
+        "_script_variant",
         "_user_statement_transformers",
     )
 
@@ -1843,8 +1887,12 @@ class StatementConfig:
         self._hash_cache: int | None = None
         self._is_frozen = False
         self._dialect_variants: dict[str, StatementConfig] | None = None
+        self._script_variant: StatementConfig | None = None
         self._has_transformers = bool(self._user_statement_transformers)
         self._has_output_transformer = self.output_transformer is not None
+        self._has_uncacheable_transformers = _config_has_uncacheable_transformers(
+            self.parameter_config, self.output_transformer, self.statement_transformers
+        )
 
     def __hash__(self) -> int:
         """Hash based on configuration settings."""
@@ -1944,31 +1992,6 @@ class StatementConfig:
         """Mark the configuration as immutable to enable caching."""
         self._is_frozen = True
 
-    def _with_dialect(self, dialect: str) -> "StatementConfig":
-        """Return this configuration with ``dialect`` set.
-
-        Frozen configurations reuse one derived configuration per dialect, so its cached fingerprint and
-        processing caches carry over between statements.
-
-        Args:
-            dialect: SQLGlot dialect name.
-
-        Returns:
-            Configuration whose ``dialect`` is ``dialect``.
-        """
-        if not self._is_frozen:
-            return self.replace(dialect=dialect)
-        variants = self._dialect_variants
-        if variants is None:
-            variants = {}
-            self._dialect_variants = variants
-        derived = variants.get(dialect)
-        if derived is None:
-            derived = self.replace(dialect=dialect)
-            derived.freeze()
-            variants[dialect] = derived
-        return derived
-
     def replace(self, **kwargs: Any) -> "StatementConfig":
         """Immutable update pattern.
 
@@ -2007,6 +2030,51 @@ class StatementConfig:
         }
         current_kwargs.update(kwargs)
         return type(self)(**current_kwargs)
+
+    def _with_dialect(self, dialect: str) -> "StatementConfig":
+        """Return this configuration with ``dialect`` set.
+
+        Frozen configurations reuse one derived configuration per dialect, so its cached fingerprint and
+        processing caches carry over between statements.
+
+        Args:
+            dialect: SQLGlot dialect name.
+
+        Returns:
+            Configuration whose ``dialect`` is ``dialect``.
+        """
+        if not self._is_frozen:
+            return self.replace(dialect=dialect)
+        variants = self._dialect_variants
+        if variants is None:
+            variants = {}
+            self._dialect_variants = variants
+        derived = variants.get(dialect)
+        if derived is None:
+            derived = self.replace(dialect=dialect)
+            derived.freeze()
+            variants[dialect] = derived
+        return derived
+
+    def _with_script_mode(self) -> "StatementConfig":
+        """Return this configuration with static script compilation enabled.
+
+        Frozen configurations reuse one derived configuration so its cached fingerprint and
+        processing caches carry over between script executions.
+
+        Returns:
+            Configuration whose ``parameter_config.needs_static_script_compilation`` is True.
+        """
+        if self.parameter_config.needs_static_script_compilation:
+            return self
+        if not self._is_frozen:
+            return self.replace(parameter_config=self.parameter_config.replace(needs_static_script_compilation=True))
+        derived = self._script_variant
+        if derived is None:
+            derived = self.replace(parameter_config=self.parameter_config.replace(needs_static_script_compilation=True))
+            derived.freeze()
+            self._script_variant = derived
+        return derived
 
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
         """Compare parameter configs."""
@@ -2105,21 +2173,57 @@ def _get_rebind_processor(config: "StatementConfig") -> ParameterProcessor:
 
 def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:
     """Parse a single ORDER BY item string into a SQLGlot expression."""
+    if "\x00" in order_item or contains_statement_terminator(order_item, dialect):
+        msg = "ORDER BY item must not contain NUL characters or statement separators"
+        raise sqlspec.exceptions.SQLParsingError(msg)
     normalized = order_item.strip()
     if not normalized:
-        return exp.column(order_item)
+        return exp.column(order_item, copy=False)
 
     if enable_parsing:
         try:
             parsed = sqlglot.parse_one(normalized, dialect=dialect, into=exp.Ordered)
-        except ParseError:
+        except (ParseError, TokenError):
             parsed = None
         if parsed is not None:
+            if parsed.find(exp.Command, exp.DDL, exp.DML, exp.Transaction) is not None:
+                msg = "ORDER BY item must be an ordering expression"
+                raise sqlspec.exceptions.SQLParsingError(msg)
             return default_nulls(parsed, normalized, dialect)
 
     parts = normalized.rsplit(None, 1)
     if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
-        base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
+        base_expr = exp.column(parts[0], copy=False) if parts[0] else exp.column(normalized, copy=False)
         return ordered(base_expr, desc=True if parts[1].lower() == "desc" else None)
 
-    return exp.column(normalized)
+    return exp.column(normalized, copy=False)
+
+
+def _raw_condition(condition: str, dialect: "str | None" = None) -> exp.Expr:
+    """Wrap an unparsed condition fragment, requiring it to be a single expression."""
+    if contains_statement_terminator(condition, dialect) or _STATEMENT_START_RE.match(condition) is not None:
+        msg = "WHERE condition must be a single expression without statement separators"
+        raise sqlspec.exceptions.SQLParsingError(msg)
+    return exp.Paren(this=exp.Var(this=condition))
+
+
+def _is_uncacheable_callable(func: Any) -> bool:
+    if func is None:
+        return False
+    if isinstance(func, (FunctionType, BuiltinFunctionType)):
+        qualname = getattr(func, "__qualname__", "") or ""
+        return "<locals>" in qualname or getattr(func, "__closure__", None) is not None
+    func_type = type(func)
+    return (
+        getattr(func_type, "__hash__", None) is object.__hash__ or getattr(func_type, "__eq__", None) is object.__eq__
+    )
+
+
+def _config_has_uncacheable_transformers(
+    param_config: "ParameterStyleConfig", output_transformer: Any, statement_transformers: "tuple[Any, ...]"
+) -> bool:
+    if param_config.ast_transformer is not None:
+        return True
+    if _is_uncacheable_callable(output_transformer) or _is_uncacheable_callable(param_config.output_transformer):
+        return True
+    return any(_is_uncacheable_callable(transformer) for transformer in statement_transformers)

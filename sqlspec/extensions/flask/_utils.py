@@ -1,11 +1,13 @@
 """Helper utilities for Flask extension."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
-from sqlspec.extensions._deferred_session import PortalSession
+from sqlspec.extensions.flask._portal import PortalSession, call_portal_with_context
 from sqlspec.extensions.flask._state import tenant_receipt_key
+from sqlspec.utils.adapters import resolve_adapter_name
+from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -15,6 +17,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "get_context_value",
+    "get_or_create_db_session",
     "get_or_create_session",
     "get_request_tenant",
     "has_context_value",
@@ -24,6 +27,18 @@ __all__ = (
 )
 
 _MISSING = object()
+_LAZY_BEGIN_ADAPTERS: Final[frozenset[str]] = frozenset({
+    "adbc",
+    "arrow_odbc",
+    "asyncpg",
+    "cockroach_asyncpg",
+    "db2",
+    "duckdb",
+    "psqlpy",
+    "snowflake",
+    "sybase",
+    "teradata",
+})
 
 
 def get_context_value(target: Any, key: str, default: Any = _MISSING) -> Any:
@@ -49,7 +64,7 @@ def has_context_value(target: Any, key: str) -> bool:
     return key in _context_dict(target)
 
 
-def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | None") -> Any:
+def get_or_create_db_session(config_state: "FlaskConfigState", portal: "Portal | None") -> Any:
     """Get or create database session for current request.
 
     Sessions are cached per request in Flask g object to ensure
@@ -76,12 +91,28 @@ def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | No
             return existing_view
     session = get_context_value(g, cache_key, None)
     if session is None:
-        session = config_state.config.driver_type(
-            connection=get_context_value(g, config_state.connection_key),
-            statement_config=config_state.config.statement_config,
-            driver_features=config_state.config.driver_features,
+        config = config_state.config
+        session = config._prepare_driver(
+            config.driver_type(
+                connection=get_context_value(g, config_state.connection_key),
+                statement_config=config.statement_config,
+                driver_features=config.driver_features,
+            )
         )
+        if (
+            config_state.commit_mode in {"manual", "autocommit", "autocommit_include_redirect"}
+            and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
+        ):
+            session._auto_begin_on_write = True
         set_context_value(g, cache_key, session)
+        runtime = session.observability
+        if not runtime.is_idle:
+            if portal is not None:
+                call_portal_with_context(
+                    portal, runtime.emit_session_start_async, session, routing_bind_key=config.bind_key
+                )
+            else:
+                runtime.emit_session_start_sync(session)
     if portal is None:
         return session
     view = PortalSession(session, portal)
@@ -129,3 +160,12 @@ def get_request_tenant(config_state: "FlaskConfigState") -> Any:
 def _context_dict(target: Any) -> dict[str, Any]:
     """Return the underlying context dictionary."""
     return cast("DictProtocol", target).__dict__
+
+
+@deprecated("0.72.0", removal_in="0.74.0", alternative="get_or_create_db_session")
+def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | None") -> Any:
+    """Return the request's database session.
+
+    Deprecated alias of :func:`get_or_create_db_session`.
+    """
+    return get_or_create_db_session(config_state, portal)

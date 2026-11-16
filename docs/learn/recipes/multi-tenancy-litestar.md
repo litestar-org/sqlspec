@@ -27,7 +27,7 @@ once the configuration uses a tenant-enabled adapter such as
 Litestar tries these sources in order for each tenant configuration:
 
 1. A route marked `opt={"tenant_bypass": True}` or decorated with `@tenant_bypass`.
-2. A receipt from `set_connection_tenant(connection, tenant_id)`.
+2. A receipt from `set_request_tenant(connection, tenant_id)`.
 3. The configured `tenant_extractor`.
 4. A verified path parameter, server session key, or configured header,
    checked against the user's memberships, falling back to the verified
@@ -36,7 +36,7 @@ Litestar tries these sources in order for each tenant configuration:
 
 A selector outside the caller's memberships always fails closed with `403`.
 In custom guards or dependencies, verify membership yourself and call
-`set_connection_tenant(connection, org_id)`; pass `key=` with a session,
+`set_request_tenant(connection, org_id)`; pass `key=` with a session,
 connection, or bind key to scope the receipt to one database configuration.
 
 ## Single-Database JWT Flow
@@ -166,7 +166,8 @@ When user accounts and sessions live in a dedicated authentication database,
 pass a list of configs to `SQLSpecPlugin([auth_config, tenant_config])`. The
 authentication store and login routes read `auth_config` without any bypass
 scope, and organization switching verifies membership before updating the
-server-side session:
+server-side session. Sizing the dedicated `auth_config` pool (`min_size` /
+`max_size`) isolates `SessionAuth` lookups from tenant query load:
 
 ```python
 import os
@@ -192,7 +193,11 @@ class Account(msgspec.Struct):
 
 auth_config = AsyncpgConfig(
     bind_key="auth",
-    connection_config={"dsn": os.environ["AUTH_DATABASE_URL"]},
+    connection_config={
+        "dsn": os.environ["AUTH_DATABASE_URL"],
+        "min_size": 2,
+        "max_size": 10,
+    },
     extension_config={
         "litestar": {
             "session_key": "auth_db",
@@ -504,10 +509,10 @@ worker and open `config.provide_session(tenant=tenant_id)` there; see
 Dependency injection provides `db_session` and `db_connection` for sync and
 async configurations alike, and checks out a tenant connection only when a
 route asks for one. In guards, middleware, and other code without dependency
-injection, use `await plugin.provide_request_session_async(key, state, scope)`
-for async configurations and `plugin.provide_request_session_sync(key, state,
+injection, use `await plugin.provide_db_session_async(key, state, scope)`
+for async configurations and `plugin.provide_db_session_sync(key, state,
 scope)` for sync ones; both acquire under the resolved request tenant. With an
-async configuration, `plugin.provide_request_session(key, state, scope)` and
-`provide_request_session_sync` return a session that acquires on its first
+async configuration, `plugin.provide_db_session(key, state, scope)` and
+`provide_db_session_sync` return a session that acquires on its first
 awaited call instead. See
 [On-Demand Session and Connection Acquisition](../../integrations/litestar.md#on-demand-session-and-connection-acquisition).

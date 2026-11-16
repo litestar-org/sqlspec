@@ -42,6 +42,7 @@ __all__ = (
     "await_",
     "enable_default_async_thread_pool",
     "ensure_async_",
+    "exit_async_context",
     "get_default_async_executor",
     "get_next",
     "run_",
@@ -301,6 +302,27 @@ def with_ensure_async_(
     if isinstance(obj, AbstractContextManager):
         return cast("AbstractAsyncContextManager[T]", _ContextManagerWrapper(obj))
     return obj
+
+
+async def exit_async_context(context: Any, error: "BaseException | None") -> None:
+    """Exit an async context manager that was entered by calling ``__aenter__`` directly.
+
+    The caller records any error raised by the managed block, leaves its exception
+    handler, and then awaits this function, so the exit never runs while an
+    exception is being handled.
+
+    Args:
+        context: The entered async context manager.
+        error: The error raised by the managed block, or ``None`` when it completed.
+
+    Raises:
+        BaseException: ``error``, unless the context manager suppresses it.
+    """
+    if error is None:
+        await context.__aexit__(None, None, None)
+        return
+    if not await context.__aexit__(type(error), error, error.__traceback__):
+        raise error
 
 
 async def get_next(iterable: Any, default: Any = NO_VALUE, *args: Any) -> Any:  # pragma: no cover

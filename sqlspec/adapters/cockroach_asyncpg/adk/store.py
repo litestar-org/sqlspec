@@ -1,18 +1,27 @@
 """CockroachDB ADK store for Google Agent Development Kit session/event storage (asyncpg)."""
 
+import asyncio
 import re
 from collections.abc import Mapping
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, cast
 
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_module as asyncpg
+from sqlspec.adapters.cockroach_asyncpg.core import (
+    CockroachAsyncpgRetryConfig,
+    calculate_backoff_seconds,
+    is_retryable_error,
+)
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.cockroach_asyncpg.config import CockroachAsyncpgConfig
@@ -23,7 +32,7 @@ __all__ = ("CockroachAsyncpgADKConfig", "CockroachAsyncpgADKMemoryStore", "Cockr
 
 logger = get_logger("sqlspec.adapters.cockroach_asyncpg.adk.store")
 _LOCALITY_CLAUSE_PATTERN = re.compile(
-    r"^LOCALITY\s+(?:GLOBAL|REGIONAL(?:\s+BY\s+(?:TABLE(?:\s+IN\s+(?:PRIMARY\s+REGION|[A-Za-z0-9_-]+|\"[A-Za-z0-9_-]+\"))?|ROW(?:\s+AS\s+(?:[A-Za-z_][A-Za-z0-9_]*|\"[A-Za-z_][A-Za-z0-9_]*\"))?))?)$",
+    r"\ALOCALITY\s+(?:GLOBAL|REGIONAL(?:\s+BY\s+(?:TABLE(?:\s+IN\s+(?:PRIMARY\s+REGION|[A-Za-z0-9_-]+|\"[A-Za-z0-9_-]+\"))?|ROW(?:\s+AS\s+(?:[A-Za-z_][A-Za-z0-9_]*|\"[A-Za-z_][A-Za-z0-9_]*\"))?))?)\Z",
     re.IGNORECASE,
 )
 
@@ -75,8 +84,10 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "CockroachAsyncpgConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "CockroachAsyncpgConfig", *, read_config: "CockroachAsyncpgConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -100,8 +111,17 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             await driver.execute_script(statement)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        """Create a new session and atomically apply optional scoped state deltas."""
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             sql = f"""
@@ -118,26 +138,41 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             """
             params = (session_id, app_name, user_id, state)
 
+        async def _attempt(conn: Any) -> StoredSession:
+            row = await _fetch_one(conn, sql, *params)
+            if row is None:
+                msg = "Session creation failed"
+                raise RuntimeError(msg)
+
+            resolved_app = (
+                await self._apply_app_state_delta(conn, app_name, app_state_delta)
+                if app_state_delta
+                else await self._select_app_state(conn, app_name)
+            )
+            resolved_user = (
+                await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
+                if user_state_delta
+                else await self._select_user_state(conn, app_name, user_id)
+            )
+
+            persisted_state = _decode_json_state(row["state"])
+            merged_state = merge_scoped_state(persisted_state, resolved_app, resolved_user)
+            return StoredSession(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=merged_state,
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
+
         async with self._config.provide_connection() as conn:
-            row = await conn.fetchrow(sql, *params)
-
-        if row is None:
-            msg = "Session creation failed"
-            raise RuntimeError(msg)
-
-        return StoredSession(
-            id=row["id"],
-            app_name=row["app_name"],
-            user_id=row["user_id"],
-            state=row["state"],
-            create_time=row["create_time"],
-            update_time=row["update_time"],
-        )
+            return await _run_transaction_with_retry(self._config, conn, lambda: _attempt(conn))
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._is_renewal_requested(renew_for):
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP
@@ -154,8 +189,8 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             params = (app_name, user_id, session_id)
 
         try:
-            async with self._config.provide_connection() as conn:
-                row = await conn.fetchrow(sql, *params)
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
+                row = await _fetch_one(conn, sql, *params)
                 if row is None:
                     return None
 
@@ -216,7 +251,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         params: tuple[Any, ...] = tuple(values)
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []
@@ -240,23 +275,35 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             await conn.execute(sql, app_name, user_id, session_id)
 
     async def append_event(self, event_record: StoredEvent) -> None:
+        session_id = event_record["session_id"]
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        )
+        SELECT $1, $2::varchar(128), $3::varchar(128), $4::varchar(128), $5, $6, $7
+        WHERE EXISTS (
+            SELECT 1 FROM {self._session_table}
+            WHERE id = $4 AND app_name = $2 AND user_id = $3
+        )
         """
 
         async with self._config.provide_connection() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 sql,
                 event_record["id"],
-                event_record["app_name"],
-                event_record["user_id"],
-                event_record["session_id"],
+                app_name,
+                user_id,
+                session_id,
                 event_record["invocation_id"],
                 event_record["timestamp"],
                 event_record["event_data"],
             )
+            inserted = _parse_status_rowcount(result)
+            if inserted == 0:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
 
     async def append_event_and_update_state(
         self,
@@ -266,9 +313,18 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        """Atomically append an event and update session plus optional scoped deltas."""
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = "event_record scope does not match target session arguments."
+            raise ValueError(msg)
+
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -278,22 +334,14 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         UPDATE {self._session_table}
         SET state = $1, update_time = CURRENT_TIMESTAMP
         WHERE app_name = $2 AND user_id = $3 AND id = $4
-        """
-        select_sql = f"""
-        SELECT id, app_name, user_id, state, create_time, update_time
-        FROM {self._session_table}
-        WHERE app_name = $1 AND user_id = $2 AND id = $3
-        """
-        app_upsert_sql = f"""
-        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES ($1, $2, CURRENT_TIMESTAMP)
-        """
-        user_upsert_sql = f"""
-        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        RETURNING id, app_name, user_id, state, create_time, update_time
         """
 
-        async with self._config.provide_connection() as conn, conn.transaction():
+        async def _attempt(conn: Any) -> StoredSession:
+            row = await _fetch_one(conn, update_sql, state, app_name, user_id, session_id)
+            if row is None:
+                msg = f"Session {session_id} not found during append_event_and_update_state."
+                raise ValueError(msg)
             await conn.execute(
                 insert_sql,
                 event_record["id"],
@@ -304,27 +352,25 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 event_record["timestamp"],
                 event_record["event_data"],
             )
-            result = await conn.execute(update_sql, state, app_name, user_id, session_id)
-            if result == "UPDATE 0":
-                msg = f"Session {session_id} not found during append_event_and_update_state."
-                raise ValueError(msg)
-            if app_state is not None:
-                await conn.execute(app_upsert_sql, app_name, app_state)
-            if user_state is not None:
-                await conn.execute(user_upsert_sql, app_name, user_id, user_state)
-            row = await conn.fetchrow(select_sql, app_name, user_id, session_id)
-            if row is None:
-                msg = f"Session {session_id} not found during append_event_and_update_state."
-                raise ValueError(msg)
+            merged_app = await self._apply_app_state_delta(conn, app_name, app_state_delta) if app_state_delta else None
+            merged_user = (
+                await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
+                if user_state_delta
+                else None
+            )
+            persisted_state = _decode_json_state(row["state"])
+            merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
+            return StoredSession(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=merged_state,
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
 
-        return StoredSession(
-            id=row["id"],
-            app_name=row["app_name"],
-            user_id=row["user_id"],
-            state=row["state"],
-            create_time=row["create_time"],
-            update_time=row["update_time"],
-        )
+        async with self._config.provide_connection() as conn:
+            return await _run_transaction_with_retry(self._config, conn, lambda: _attempt(conn))
 
     async def get_events(
         self,
@@ -337,7 +383,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = $1", "s.user_id = $2", "e.session_id = $3"]
+        where_clauses = ["s.app_name = $1", "s.user_id = $2", "s.id = $3"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -345,23 +391,28 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT ${len(params) + 1}" if limit is not None else ""
         if limit is not None:
+            order_clause = f"ORDER BY e.timestamp DESC, e.id DESC LIMIT ${len(params) + 1}"
             params.append(limit)
+        else:
+            order_clause = "ORDER BY e.timestamp ASC, e.id ASC"
 
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_clause}
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []
+
+        if limit is not None:
+            rows = list(reversed(rows))
 
         return [
             StoredEvent(
@@ -426,7 +477,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                row = await conn.fetchrow(sql, app_name)
+                row = await _fetch_one(conn, sql, app_name)
                 return row["state"] if row is not None else None
         except asyncpg.exceptions.UndefinedTableError:
             return None
@@ -436,7 +487,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                row = await conn.fetchrow(sql, app_name, user_id)
+                row = await _fetch_one(conn, sql, app_name, user_id)
                 return row["state"] if row is not None else None
         except asyncpg.exceptions.UndefinedTableError:
             return None
@@ -464,7 +515,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                row = await conn.fetchrow(sql, key)
+                row = await _fetch_one(conn, sql, key)
                 return row["value"] if row is not None else None
         except asyncpg.exceptions.UndefinedTableError:
             return None
@@ -477,6 +528,70 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
         async with self._config.provide_connection() as conn:
             await conn.execute(sql, key, value)
+
+    async def _select_app_state(self, conn: Any, app_name: str) -> "dict[str, Any] | None":
+        return await self._select_state(
+            conn, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
+        )
+
+    async def _select_user_state(self, conn: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return await self._select_state(
+            conn, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
+        )
+
+    async def _select_state(
+        self, conn: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
+    ) -> "dict[str, Any] | None":
+        where_clause = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))
+        row = await _fetch_one(conn, f"SELECT state FROM {table} WHERE {where_clause}", *key_values)
+        if row is None:
+            return None
+        return _decode_json_state(row["state"])
+
+    async def _apply_app_state_delta(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return await self._apply_state_delta(
+            conn, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
+        )
+
+    async def _apply_user_state_delta(
+        self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return await self._apply_state_delta(
+            conn,
+            table=self._user_state_table,
+            key_columns=("app_name", "user_id"),
+            key_values=(app_name, user_id),
+            delta=delta,
+        )
+
+    async def _apply_state_delta(
+        self,
+        conn: Any,
+        *,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        cols = ", ".join((*key_columns, "state", "update_time"))
+        insert_placeholders = ", ".join(f"${idx}" for idx in range(1, len(key_columns) + 2))
+        conflict_cols = ", ".join(key_columns)
+        ensure_sql = (
+            f"INSERT INTO {table} ({cols}) VALUES ({insert_placeholders}, CURRENT_TIMESTAMP) "
+            f"ON CONFLICT ({conflict_cols}) DO NOTHING"
+        )
+        await conn.execute(ensure_sql, *key_values, {})
+
+        select_where = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))
+        row = await _fetch_one(conn, f"SELECT state FROM {table} WHERE {select_where} FOR UPDATE", *key_values)
+        existing = _decode_json_state(row["state"]) if row is not None else {}
+        merged = dict(existing)
+        merged.update(delta)
+
+        update_where = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=2))
+        update_sql = f"UPDATE {table} SET state = $1, update_time = CURRENT_TIMESTAMP WHERE {update_where}"
+        await conn.execute(update_sql, merged, *key_values)
+        return merged
 
     async def _sessions_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -582,8 +697,10 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "CockroachAsyncpgConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "CockroachAsyncpgConfig", *, read_config: "CockroachAsyncpgConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -639,7 +756,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
                 $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[]
             ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at)
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             """
             params: tuple[Any, ...] = (
                 ids,
@@ -666,7 +783,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
                 $5::varchar[], $6::varchar[], $7::varchar[],
                 $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[]
             )
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             """
             params = (
                 ids,
@@ -685,8 +802,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
 
         async with self._config.provide_connection() as conn, conn.transaction():
             result = await conn.execute(sql, *params)
-            parts = result.split() if result else []
-            return int(parts[-1]) if parts and parts[-1].isdigit() else 0
+            return _parse_status_rowcount(result)
 
     async def search_entries(
         self,
@@ -741,7 +857,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             params = (*scope_params, f"%{query}%", effective_limit)
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []
@@ -753,15 +869,22 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             records.append(rec)
         return records
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = $1"
+        clauses = ["session_id = $1"]
+        params: list[Any] = [session_id]
+        params.append(app_name)
+        clauses.append(f"app_name = ${len(params)}")
+        params.append(user_id)
+        clauses.append(f"user_id = ${len(params)}")
+
+        sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
         async with self._config.provide_connection() as conn:
-            result = await conn.execute(sql, session_id)
-            return int(result.split()[-1]) if result else 0
+            result = await conn.execute(sql, *params)
+            return _parse_status_rowcount(result)
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
@@ -786,7 +909,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn:
             result = await conn.execute(sql, *params)
-            return int(result.split()[-1]) if result else 0
+            return _parse_status_rowcount(result)
 
     async def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -805,13 +928,14 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMPTZ NOT NULL,
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         ){memory_locality};
 
         {indexes_sql}
@@ -908,3 +1032,65 @@ def _cockroach_storing_clause(adk_config: Mapping[str, Any], columns: tuple[str,
     if not adk_config.get("enable_storing_indexes", False):
         return ""
     return f" STORING ({', '.join(columns)})"
+
+
+def _parse_status_rowcount(result: str | None) -> int:
+    parts = result.split() if result else []
+    return int(parts[-1]) if parts and parts[-1].isdigit() else 0
+
+
+def _optional_transaction(conn: Any) -> Any:
+    transaction_fn = getattr(conn, "transaction", None)
+    if callable(transaction_fn):
+        tx = transaction_fn()
+        if hasattr(tx, "__aenter__"):
+            return tx
+    return nullcontext()
+
+
+def _resolve_retry_config(config: Any) -> "tuple[CockroachAsyncpgRetryConfig, bool]":
+    driver_features = getattr(config, "driver_features", None)
+    if isinstance(driver_features, Mapping):
+        return (
+            CockroachAsyncpgRetryConfig.from_features(driver_features),
+            bool(driver_features.get("enable_auto_retry", True)),
+        )
+    return CockroachAsyncpgRetryConfig(), True
+
+
+async def _run_transaction_with_retry(
+    config: Any, conn: Any, operation: "Callable[[], Awaitable[StoredSession]]"
+) -> StoredSession:
+    retry_config, enable_retry = _resolve_retry_config(config)
+    if not enable_retry:
+        async with _optional_transaction(conn):
+            return await operation()
+
+    attempt = 0
+    while True:
+        try:
+            async with _optional_transaction(conn):
+                return await operation()
+        except Exception as exc:
+            if not is_retryable_error(exc) or attempt >= retry_config.max_retries:
+                raise
+            delay = calculate_backoff_seconds(attempt, retry_config)
+            if retry_config.enable_logging:
+                logger.debug("CockroachDB ADK retry %s/%s after %.3fs", attempt + 1, retry_config.max_retries, delay)
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
+def _decode_json_state(raw: Any) -> "dict[str, Any]":
+    """Normalize a JSONB state value from CockroachDB asyncpg into a dictionary."""
+    if isinstance(raw, str):
+        decoded = from_json(raw)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {}
+
+
+async def _fetch_one(conn: Any, sql: str, *params: Any) -> Any:
+    rows = await conn.fetch(sql, *params)
+    return rows[0] if rows else None

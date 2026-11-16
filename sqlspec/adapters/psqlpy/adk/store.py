@@ -2,6 +2,7 @@
 
 import re
 import struct
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionExecuteError, PsqlpyDatabaseError
@@ -11,13 +12,14 @@ from sqlspec.core.config_runtime import is_postgres_extension_active, resolve_po
 from sqlspec.core.statement import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError, SQLSpecError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
@@ -28,7 +30,7 @@ __all__ = ("PsqlpyADKConfig", "PsqlpyADKMemoryStore", "PsqlpyADKStore", "decode_
 
 logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
-PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"\A([A-Z]+)(?:\s+(\d+))?\s+(\d+)\Z", re.IGNORECASE)
 
 
 class PsqlpyADKConfig(ADKConfig):
@@ -93,8 +95,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     _config: "PsqlpyConfig"
 
-    def __init__(self, config: "PsqlpyConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "PsqlpyConfig", *, read_config: "PsqlpyConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -118,35 +120,62 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             await driver.execute_script(statement)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        async with self._config.provide_connection() as conn:
-            if self._owner_id_column_name:
-                sql = f"""
-                INSERT INTO {self._session_table}
-                (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
-                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                RETURNING id, app_name, user_id, state, create_time, update_time
-                """
-                result = await conn.fetch(sql, [session_id, app_name, user_id, owner_id, state])
-            else:
-                sql = f"""
-                INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                RETURNING id, app_name, user_id, state, create_time, update_time
-                """
-                result = await conn.fetch(sql, [session_id, app_name, user_id, state])
+        """Create a new session and atomically apply optional scoped state deltas."""
+        params: list[Any]
+        if self._owner_id_column_name:
+            sql = f"""
+            INSERT INTO {self._session_table}
+            (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+            VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
+            """
+            params = [session_id, app_name, user_id, owner_id, state]
+        else:
+            sql = f"""
+            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
+            """
+            params = [session_id, app_name, user_id, state]
 
-        rows: list[dict[str, Any]] = result.result() if result else []
-        if not rows:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        row = rows[0]
+        async with self._config.provide_connection() as conn:
+            try:
+                await conn.execute("BEGIN")
+                result = await conn.fetch(sql, params)
+                rows: list[dict[str, Any]] = result.result() if result else []
+                row = _require_created_session_row(rows[0] if rows else None)
+                resolved_app = (
+                    await self._apply_app_state_delta(conn, app_name, app_state_delta)
+                    if app_state_delta
+                    else await self._select_app_state(conn, app_name)
+                )
+                resolved_user = (
+                    await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
+                    if user_state_delta
+                    else await self._select_user_state(conn, app_name, user_id)
+                )
+            except Exception:
+                await conn.execute("ROLLBACK")
+                raise
+            await conn.execute("COMMIT")
+
+        persisted_state = _decode_json_state(row["state"])
+        merged_state = merge_scoped_state(persisted_state, resolved_app, resolved_user)
         return StoredSession(
             id=row["id"],
             app_name=row["app_name"],
             user_id=row["user_id"],
-            state=row["state"],
+            state=merged_state,
             create_time=row["create_time"],
             update_time=row["update_time"],
         )
@@ -154,7 +183,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._is_renewal_requested(renew_for):
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP
@@ -169,7 +198,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=renew_for is not None) as conn:
                 result = await conn.fetch(sql, [app_name, user_id, session_id])
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -235,7 +264,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -262,25 +291,38 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             await conn.execute(sql, [app_name, user_id, session_id])
 
     async def append_event(self, event_record: StoredEvent) -> None:
+        session_id = event_record["session_id"]
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        )
+        SELECT $1, $2::varchar(128), $3::varchar(128), $4::varchar(128), $5, $6, $7
+        WHERE EXISTS (
+            SELECT 1 FROM {self._session_table}
+            WHERE id = $4 AND app_name = $2 AND user_id = $3
+        )
+        RETURNING 1
         """
 
         async with self._config.provide_connection() as conn:
-            await conn.execute(
+            result = await conn.fetch(
                 sql,
                 [
                     event_record["id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
-                    event_record["session_id"],
+                    app_name,
+                    user_id,
+                    session_id,
                     event_record["invocation_id"],
                     event_record["timestamp"],
                     event_record["event_data"],
                 ],
             )
+            rows: list[dict[str, Any]] = result.result() if result else []
+            if not rows:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
 
     async def append_event_and_update_state(
         self,
@@ -290,9 +332,18 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        """Atomically append an event and update session plus optional scoped deltas."""
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = "event_record scope does not match target session arguments."
+            raise ValueError(msg)
+
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -304,24 +355,17 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         WHERE app_name = $2 AND user_id = $3 AND id = $4
         RETURNING id, app_name, user_id, state, create_time, update_time
         """
-        app_upsert_sql = f"""
-        INSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES ($1, $2, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """
-        user_upsert_sql = f"""
-        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name, user_id) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """
+
+        merged_app: dict[str, Any] | None = None
+        merged_user: dict[str, Any] | None = None
 
         async with self._config.provide_connection() as conn:
             try:
                 await conn.execute("BEGIN")
+                result = await conn.fetch(update_sql, [state, app_name, user_id, session_id])
+                rows: list[dict[str, Any]] = result.result() if result else []
+                if not rows:
+                    _raise_missing_session(session_id)
                 await conn.execute(
                     insert_sql,
                     [
@@ -334,25 +378,23 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                         event_record["event_data"],
                     ],
                 )
-                result = await conn.fetch(update_sql, [state, app_name, user_id, session_id])
-                rows: list[dict[str, Any]] = result.result() if result else []
-                if not rows:
-                    _raise_missing_session(session_id)
-                if app_state is not None:
-                    await conn.execute(app_upsert_sql, [app_name, app_state])
-                if user_state is not None:
-                    await conn.execute(user_upsert_sql, [app_name, user_id, user_state])
+                if app_state_delta:
+                    merged_app = await self._apply_app_state_delta(conn, app_name, app_state_delta)
+                if user_state_delta:
+                    merged_user = await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
             except Exception:
                 await conn.execute("ROLLBACK")
                 raise
             await conn.execute("COMMIT")
 
         row = rows[0]
+        persisted_state = _decode_json_state(row["state"])
+        merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
         return StoredSession(
             id=row["id"],
             app_name=row["app_name"],
             user_id=row["user_id"],
-            state=row["state"],
+            state=merged_state,
             create_time=row["create_time"],
             update_time=row["update_time"],
         )
@@ -368,7 +410,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = $1", "s.user_id = $2", "e.session_id = $3"]
+        where_clauses = ["s.app_name = $1", "s.user_id = $2", "s.id = $3"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -376,22 +418,27 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT ${len(params) + 1}" if limit is not None else ""
         if limit is not None:
+            order_clause = f"ORDER BY e.timestamp DESC, e.id DESC LIMIT ${len(params) + 1}"
             params.append(limit)
+        else:
+            order_clause = "ORDER BY e.timestamp ASC, e.id ASC"
 
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_clause}
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_replica_connection(primary=False) as conn:
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
+
+                if limit is not None:
+                    rows.reverse()
 
                 return [
                     StoredEvent(
@@ -561,6 +608,72 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         async with self._config.provide_connection() as conn:
             await conn.execute(sql, [key, value])
 
+    async def _select_app_state(self, conn: Any, app_name: str) -> "dict[str, Any] | None":
+        return await self._select_state(
+            conn, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
+        )
+
+    async def _select_user_state(self, conn: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return await self._select_state(
+            conn, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
+        )
+
+    async def _select_state(
+        self, conn: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
+    ) -> "dict[str, Any] | None":
+        where_clause = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))
+        result = await conn.fetch(f"SELECT state FROM {table} WHERE {where_clause}", list(key_values))
+        rows: list[dict[str, Any]] = result.result() if result else []
+        if not rows:
+            return None
+        return _decode_json_state(rows[0]["state"])
+
+    async def _apply_app_state_delta(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return await self._apply_state_delta(
+            conn, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
+        )
+
+    async def _apply_user_state_delta(
+        self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return await self._apply_state_delta(
+            conn,
+            table=self._user_state_table,
+            key_columns=("app_name", "user_id"),
+            key_values=(app_name, user_id),
+            delta=delta,
+        )
+
+    async def _apply_state_delta(
+        self,
+        conn: Any,
+        *,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        cols = ", ".join((*key_columns, "state", "update_time"))
+        insert_placeholders = ", ".join(f"${idx}" for idx in range(1, len(key_columns) + 2))
+        conflict_cols = ", ".join(key_columns)
+        ensure_sql = (
+            f"INSERT INTO {table} ({cols}) VALUES ({insert_placeholders}, CURRENT_TIMESTAMP) "
+            f"ON CONFLICT ({conflict_cols}) DO NOTHING"
+        )
+        await conn.execute(ensure_sql, [*key_values, {}])
+
+        select_where = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=1))
+        result = await conn.fetch(f"SELECT state FROM {table} WHERE {select_where} FOR UPDATE", list(key_values))
+        rows: list[dict[str, Any]] = result.result() if result else []
+        existing = _decode_json_state(rows[0]["state"]) if rows else {}
+        merged = dict(existing)
+        merged.update(delta)
+
+        update_where = " AND ".join(f"{col} = ${idx}" for idx, col in enumerate(key_columns, start=2))
+        update_sql = f"UPDATE {table} SET state = $1, update_time = CURRENT_TIMESTAMP WHERE {update_where}"
+        await conn.execute(update_sql, [merged, *key_values])
+        return merged
+
     async def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -666,9 +779,9 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
     _config: "PsqlpyConfig"
 
-    def __init__(self, config: "PsqlpyConfig") -> None:
+    def __init__(self, config: "PsqlpyConfig", *, read_config: "PsqlpyConfig | None" = None) -> None:
         """Initialize Psqlpy memory store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -726,7 +839,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         _refresh_psqlpy_extension_state(self._config, installed)
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
+        """Bulk insert memory entries deduplicated by (app_name, user_id, event_id)."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -768,7 +881,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[], $13::text[]
             ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             RETURNING 1
             """
             params = [
@@ -801,7 +914,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[], $13::text[]
             ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             RETURNING 1
             """
             params = [
@@ -848,42 +961,52 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         try:
             if embedding is not None and self._enable_bm25 and has_query:
                 return await self._search_entries_hybrid(
-                    query, app_name, user_id, effective_limit, scope_filter, embedding
+                    query, app_name, user_id, effective_limit, scope_filter, embedding, read=True
                 )
             if embedding is not None:
-                return await self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
+                return await self._search_entries_vector(
+                    app_name, user_id, effective_limit, scope_filter, embedding, read=True
+                )
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(
-                        query, app_name, user_id, effective_limit, scope_filter=scope_filter
+                        query, app_name, user_id, effective_limit, scope_filter=scope_filter, read=True
                     )
                 except Exception as exc:
                     if _is_table_missing_error(exc):
                         raise
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(
-                query, app_name, user_id, effective_limit, scope_filter=scope_filter
+                query, app_name, user_id, effective_limit, scope_filter=scope_filter, read=True
             )
         except Exception as e:
             if _is_table_missing_error(e):
                 return []
             raise
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        clauses = ["session_id = $1"]
+        params: list[Any] = [session_id]
+        params.append(app_name)
+        clauses.append(f"app_name = ${len(params)}")
+        params.append(user_id)
+        clauses.append(f"user_id = ${len(params)}")
+        where_clause = " AND ".join(clauses)
+
         sql = (
             f"WITH deleted AS (DELETE FROM {self._memory_table} "
-            f"WHERE session_id = $1 RETURNING 1) "
+            f"WHERE {where_clause} RETURNING 1) "
             "SELECT COUNT(*) AS count FROM deleted"
         )
 
         try:
             async with self._config.provide_connection() as conn:
-                result = await conn.fetch(sql, [session_id])
+                result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return int(rows[0]["count"]) if rows else 0
         except Exception as e:
@@ -949,14 +1072,15 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMPTZ NOT NULL,
             embedding VECTOR({self._vector_dimensions}),
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         );
         {indexes_sql}
         """
@@ -973,6 +1097,8 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         embedding_param = [float(v) for v in embedding]
         if scope_filter == "all":
@@ -1013,7 +1139,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY rrf_score DESC, m.timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             self._config._ensure_pg_textsearch_available()
             result = await conn.fetch(sql, [*scope_params, candidate_limit, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
@@ -1026,6 +1152,8 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         embedding_param = [float(v) for v in embedding]
         if scope_filter == "all":
@@ -1047,13 +1175,20 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY embedding <=> $1::float8[]::vector ASC, timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
 
     async def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         if scope_filter == "all":
             where_scope = "app_name = $2 AND ((scope = 'user' AND user_id = $3) OR scope = 'app')"
@@ -1078,13 +1213,20 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY rank DESC, timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
 
     async def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         pattern = f"%{query}%"
         if scope_filter == "all":
@@ -1112,7 +1254,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:
+        async with self._provide_replica_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
@@ -1141,7 +1283,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         if not tag:
             return -1
 
-        match = PSQLPY_STATUS_REGEX.match(tag.strip())
+        match = PSQLPY_STATUS_REGEX.fullmatch(tag.strip())
         if match:
             command = match.group(1).upper()
             if command == "INSERT" and match.group(3):
@@ -1353,3 +1495,20 @@ def _postgres_event_ddl_options(adk_config: PsqlpyADKConfig) -> "tuple[str, str]
 def _raise_missing_session(session_id: str) -> NoReturn:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
+
+
+def _require_created_session_row(row: Any) -> Any:
+    if row is None:
+        msg = "Failed to fetch created session"
+        raise RuntimeError(msg)
+    return row
+
+
+def _decode_json_state(raw: Any) -> "dict[str, Any]":
+    """Normalize a JSONB state value from psqlpy into a dictionary."""
+    if isinstance(raw, str):
+        decoded = from_json(raw)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {}

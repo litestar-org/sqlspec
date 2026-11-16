@@ -8,7 +8,6 @@ from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
@@ -65,7 +64,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, (key,))
@@ -76,7 +76,7 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                     data_value: Any = row[0]
                     expires_at: Any = row[1]
 
-                    if renew_for is not None and expires_at is not None:
+                    if self._is_renewal_requested(renew_for) and expires_at is not None:
                         new_expires_at = self._calculate_expires_at(renew_for)
                         if new_expires_at is not None:
                             naive_expires_at = new_expires_at.replace(tzinfo=None)
@@ -86,7 +86,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                                 WHERE session_id = %s
                                 """
                             await cursor.execute(update_sql, (naive_expires_at, key))
-                            await conn.commit()
+                            if store_connection.owned:
+                                await conn.commit()
 
                     return bytes(cast("bytes", data_value))
                 finally:
@@ -110,37 +111,43 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             updated_at = UTC_TIMESTAMP(6)
         """
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             cursor = await conn.cursor()
             try:
                 await cursor.execute(sql, (key, data, naive_expires_at))
             finally:
                 await cursor.close()
-            await conn.commit()
+            if store_connection.owned:
+                await conn.commit()
 
     async def delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        async with self._config.provide_connection() as conn:
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             cursor = await conn.cursor()
             try:
                 await cursor.execute(sql, (key,))
             finally:
                 await cursor.close()
-            await conn.commit()
+            if store_connection.owned:
+                await conn.commit()
 
     async def delete_all(self) -> None:
 
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql)
                 finally:
                     await cursor.close()
-                await conn.commit()
+                if store_connection.owned:
+                    await conn.commit()
             self._log_delete_all()
         except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
@@ -157,7 +164,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, (key,))
@@ -177,7 +185,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, (key,))
@@ -206,11 +215,13 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql)
-                    await conn.commit()
+                    if store_connection.owned:
+                        await conn.commit()
                     raw_count = cursor.rowcount
                     count: int = raw_count if raw_count and raw_count > 0 else 0
                 finally:
@@ -256,29 +267,29 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
-        return await async_(self._delete_expired)()
+        return await self._run_sync(self._delete_expired)
 
     def _table_ddl(self) -> str:
         safe_index_table = self._table_name.replace(".", "_")
@@ -311,7 +322,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, (key,))
@@ -322,7 +334,7 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                     data_value: Any = row[0]
                     expires_at: Any = row[1]
 
-                    if renew_for is not None and expires_at is not None:
+                    if self._is_renewal_requested(renew_for) and expires_at is not None:
                         new_expires_at = self._calculate_expires_at(renew_for)
                         if new_expires_at is not None:
                             naive_expires_at = new_expires_at.replace(tzinfo=None)
@@ -332,7 +344,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                                 WHERE session_id = %s
                                 """
                             cursor.execute(update_sql, (naive_expires_at, key))
-                            conn.commit()
+                            if store_connection.owned:
+                                conn.commit()
 
                     return bytes(cast("bytes", data_value))
                 finally:
@@ -356,37 +369,43 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             updated_at = UTC_TIMESTAMP(6)
         """
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, (key, data, naive_expires_at))
             finally:
                 cursor.close()
-            conn.commit()
+            if store_connection.owned:
+                conn.commit()
 
     def _delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        with self._config.provide_connection() as conn:
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, (key,))
             finally:
                 cursor.close()
-            conn.commit()
+            if store_connection.owned:
+                conn.commit()
 
     def _delete_all(self) -> None:
 
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql)
                 finally:
                     cursor.close()
-                conn.commit()
+                if store_connection.owned:
+                    conn.commit()
             self._log_delete_all()
         except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
@@ -403,7 +422,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, (key,))
@@ -423,7 +443,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, (key,))
@@ -452,11 +473,13 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql)
-                    conn.commit()
+                    if store_connection.owned:
+                        conn.commit()
                     raw_count = cursor.rowcount
                     count: int = raw_count if raw_count and raw_count > 0 else 0
                 finally:

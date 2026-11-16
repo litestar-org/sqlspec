@@ -45,8 +45,10 @@ def _filter_samples() -> "list[StatementFilter]":
     return [
         LimitOffsetFilter(10, 5),
         CursorFilter([CursorKey("id")], 10),
+        CursorFilter([CursorKey("id")], 10, secret=b"secret-key", ttl=300.0, encrypted=True),
         OrderByFilter("id", "desc"),
         SearchFilter("name", "foo", ignore_case=True),
+        SearchFilter("name", "100%_test/path", ignore_case=True, escape_wildcards=True),
         SearchFilter({"name", "email"}, "bar"),
         BeforeAfterFilter("created_at", before=datetime(2025, 1, 1)),
         OnBeforeAfterFilter("updated_at", on_or_after=datetime(2025, 1, 1)),
@@ -57,6 +59,7 @@ def _filter_samples() -> "list[StatementFilter]":
         NullFilter("deleted_at"),
         NotNullFilter("created_at"),
         NotInSearchFilter("name", "spam"),
+        NotInSearchFilter("name", "100%_test", escape_wildcards=True),
         BooleanFilter("is_active", True),
         ChoicesFilter("status", ["active", "pending"]),
     ]

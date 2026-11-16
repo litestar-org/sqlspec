@@ -1,4 +1,8 @@
-"""Spanner session store for Litestar integration."""
+"""Spanner session store for Litestar integration.
+
+Spanner writes use their own database transaction API on a snapshot or batch handle, so this store
+always opens its own Spanner transaction instead of the request session.
+"""
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NotRequired, Protocol, cast
@@ -82,6 +86,14 @@ class _SpannerLitestarStoreCommonMixin:
     _table_options: "str | None"
     _index_options: "str | None"
     _enable_row_deletion_policy: bool
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the session expiry index."""
+        return [
+            CompanionIndex(
+                name=f"idx_{self._table_name}_expires_at", table=self._table_name, schema=None, ddl=self._index_ddl()
+            )
+        ]
 
     def _datetime_to_timestamp(self, dt: "datetime | None") -> "datetime | None":
         if dt is None:
@@ -229,14 +241,6 @@ CREATE TABLE IF NOT EXISTS {self._table_name} (
             opts = f" OPTIONS ({self._index_options})"
         return f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at ON {self._table_name}({leading}){opts}"
 
-    def get_companion_indexes(self) -> list[CompanionIndex]:
-        """Return the session expiry index."""
-        return [
-            CompanionIndex(
-                name=f"idx_{self._table_name}_expires_at", table=self._table_name, schema=None, ddl=self._index_ddl()
-            )
-        ]
-
     def _drop_table_sql(self) -> "list[str]":
         return [f"DROP INDEX idx_{self._table_name}_expires_at", f"DROP TABLE {self._table_name}"]
 
@@ -301,7 +305,7 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = self._build_select_session_sql()
-        with self._config.provide_read_session() as driver:
+        with self._config.provide_replica_session() as driver:
             result = driver.select_one_or_none(sql, {"session_id": key})
 
         if result is None:
@@ -310,7 +314,7 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
         data = result.get("data")
         expires_at = self._timestamp_to_datetime(result.get("expires_at"))
 
-        if renew_for is not None and expires_at is not None:
+        if self._is_renewal_requested(renew_for) and expires_at is not None:
             new_expires = self._calculate_expires_at(renew_for)
             update_sql = self._build_renew_session_sql()
             params = self._build_params(key, new_expires)
@@ -339,13 +343,13 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
 
     def _exists(self, key: str) -> bool:
         sql = self._build_exists_sql()
-        with self._config.provide_read_session() as driver:
+        with self._config.provide_replica_session() as driver:
             row = driver.select_one_or_none(sql, {"session_id": key})
             return row is not None
 
     def _expires_in(self, key: str) -> "int | None":
         sql = self._build_expires_in_sql()
-        with self._config.provide_read_session() as driver:
+        with self._config.provide_replica_session() as driver:
             row = driver.select_one_or_none(sql, {"session_id": key})
             if row is None:
                 return None
@@ -388,7 +392,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = self._build_select_session_sql()
-        async with self._config.provide_read_session() as driver:
+        async with self._config.provide_replica_session() as driver:
             result = await driver.select_one_or_none(sql, {"session_id": key})
 
         if result is None:
@@ -397,7 +401,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
         data = result.get("data")
         expires_at = self._timestamp_to_datetime(result.get("expires_at"))
 
-        if renew_for is not None and expires_at is not None:
+        if self._is_renewal_requested(renew_for) and expires_at is not None:
             new_expires = self._calculate_expires_at(renew_for)
             update_sql = self._build_renew_session_sql()
             params = self._build_params(key, new_expires)
@@ -426,13 +430,13 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
 
     async def exists(self, key: str) -> bool:
         sql = self._build_exists_sql()
-        async with self._config.provide_read_session() as driver:
+        async with self._config.provide_replica_session() as driver:
             row = await driver.select_one_or_none(sql, {"session_id": key})
             return row is not None
 
     async def expires_in(self, key: str) -> "int | None":
         sql = self._build_expires_in_sql()
-        async with self._config.provide_read_session() as driver:
+        async with self._config.provide_replica_session() as driver:
             row = await driver.select_one_or_none(sql, {"session_id": key})
             if row is None:
                 return None

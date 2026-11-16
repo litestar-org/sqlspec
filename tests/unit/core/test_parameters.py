@@ -34,6 +34,7 @@ from sqlspec.core import (
     ParameterStyle,
     ParameterStyleConfig,
     ParameterValidator,
+    StatementConfig,
     TypedParameter,
     build_statement_config_from_profile,
     get_driver_profile,
@@ -43,10 +44,11 @@ from sqlspec.core import (
     replace_placeholders_with_literals,
     wrap_with_type,
 )
+from sqlspec.core.cache import get_default_cache
 from sqlspec.core.parameters import _alignment as _alignment_module
 from sqlspec.core.parameters import _converter as _converter_module
 from sqlspec.core.parameters import _processor as _processor_module
-from sqlspec.core.parameters import _types
+from sqlspec.core.parameters import _types, unescape_qmark_operator
 from sqlspec.core.parameters import _validator as _validator_module
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
@@ -2851,15 +2853,28 @@ def test_jsonb_exists_operator_distinguishes_operands(sql: str, expected: list[s
     assert [info.placeholder_text for info in validator.extract_parameters(sql)] == expected
 
 
-@pytest.mark.parametrize("dialect", ["mysql", "postgres", "sqlite", "oracle", "tsql", "duckdb", "bigquery", "spanner"])
+@pytest.mark.parametrize(
+    "dialect", ["mysql", "postgres", "redshift", "sqlite", "oracle", "tsql", "duckdb", "bigquery", "spanner"]
+)
 def test_static_literal_escapes_per_dialect(dialect: str) -> None:
     value = "x\\' OR 1=1 -- "
     literal = ParameterConverter._format_literal(value, dialect)
-    assert literal == sqlglot.exp.Literal.string(value).sql(dialect=dialect)
+    if dialect in {"postgres", "redshift"}:
+        assert literal == "E'x\\\\'' OR 1=1 -- '"
+    elif dialect == "mysql":
+        assert literal == "_utf8mb4 X'785C27204F5220313D31202D2D20'"
+        return
+    elif dialect in {"bigquery", "spanner"}:
+        assert literal == "'x\\\\\\' OR 1=1 -- '"
+    else:
+        assert literal == sqlglot.exp.Literal.string(value).sql(dialect=dialect)
     statement = sqlglot.parse_one(f"SELECT * FROM t WHERE name = {literal}", dialect=dialect)
     equality = statement.args["where"].this
     assert isinstance(equality, sqlglot.exp.EQ)
-    assert isinstance(equality.expression, sqlglot.exp.Literal)
+    if dialect in {"postgres", "redshift"}:
+        assert isinstance(equality.expression, sqlglot.exp.ByteString)
+    else:
+        assert isinstance(equality.expression, sqlglot.exp.Literal)
     assert equality.expression.this == value
 
 
@@ -2927,11 +2942,12 @@ def test_static_cache_is_dialect_specific() -> None:
     from sqlspec import StatementConfig
 
     value = "back\\slash"
+    expected_by_dialect = {"mysql": "select _utf8mb4 X'6261636B5C736C617368'", "postgres": "select E'back\\\\slash'"}
     for dialect in ("mysql", "postgres", "mysql"):
         sql, parameters = (
             SQL("select :x", {"x": value}, statement_config=StatementConfig(dialect=dialect)).as_script().compile()
         )
-        assert sql == "select " + sqlglot.exp.Literal.string(value).sql(dialect=dialect)
+        assert sql == expected_by_dialect[dialect]
         assert parameters is None
 
 
@@ -3349,11 +3365,582 @@ def test_snowflake_concatenation_between_qmarks_extracts_both_parameters() -> No
 
 
 def test_non_snowflake_dialects_share_parameter_cache_entries() -> None:
-    """Dialects without distinct lexing reuse one cached extraction."""
+    """Dialects sharing a lexical grammar reuse one cached extraction."""
     validator = ParameterValidator()
 
-    validator.extract_parameters("SELECT ?", dialect="postgres")
-    validator.extract_parameters("SELECT ?", dialect="sqlite")
-    validator.extract_parameters("SELECT ?")
+    validator.extract_parameters("SELECT ?", dialect="oracle")
+    validator.extract_parameters("SELECT ?", dialect="db2")
+    validator.extract_parameters("SELECT ?", dialect="teradata")
 
     assert validator.cache_stats()["size"] == 1
+
+    validator.extract_parameters("SELECT ?")
+    validator.extract_parameters("SELECT ?", dialect="redshift")
+
+    assert validator.cache_stats()["size"] == 2
+
+    validator.extract_parameters("SELECT ?", dialect="postgres")
+    validator.extract_parameters("SELECT ?", dialect="cockroach")
+    validator.extract_parameters("SELECT ?", dialect="sqlite")
+    validator.extract_parameters("SELECT ?", dialect="tsql")
+
+    assert validator.cache_stats()["size"] == 4
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect", "expected"),
+    [
+        ("SELECT 'C:\\', :x, 'y'", "postgres", [":x"]),
+        ("SELECT 'C:\\', :x, 'y'", "sqlite", [":x"]),
+        ("SELECT 'C:\\', :x, 'y'", "tsql", [":x"]),
+        ("SELECT 'a\\' :skipped', :x", "mysql", [":x"]),
+        ("SELECT 'a\\' :skipped', :x", None, [":x"]),
+        ("SELECT E'it\\'s :skipped', :x", "postgres", [":x"]),
+        ("SELECT q'[it's :skipped]', nq'{:skipped}', Q'!a'b :skipped!', :x FROM dual", "oracle", [":x"]),
+        ("SELECT 1 # :skipped\n, :x", "mysql", [":x"]),
+        ("SELECT 1 # :skipped\n, :x", "mariadb", [":x"]),
+        ("SELECT data #> '{a}', :x", "postgres", [":x"]),
+        ("SELECT `a :skipped`, :x", "bigquery", [":x"]),
+        ("SELECT ARRAY[:a, :b]", "postgres", [":a", ":b"]),
+        ("SELECT $$ :skipped $$, $fn$ :skipped $fn$, :x", "postgres", [":x"]),
+        ("SELECT $1 + $2", "postgres", ["$1", "$2"]),
+        ("SELECT v$$session, :x", "oracle", [":x"]),
+        ("SELECT :x /* :skipped", "postgres", [":x"]),
+        ("SELECT :x, $body$ :skipped", "postgres", [":x"]),
+    ],
+)
+def test_extract_parameters_honors_dialect_lexical_rules(
+    sql: str, dialect: "str | None", expected: "list[str]"
+) -> None:
+    """Strings, comments, and quoted identifiers follow each dialect's lexical grammar."""
+    parameters = ParameterValidator(cache_max_size=0).extract_parameters(sql, dialect=dialect)
+
+    assert [parameter.placeholder_text for parameter in parameters] == expected
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres", "mysql", "snowflake"])
+def test_unescape_qmark_operator_shifts_positions_past_each_escape(dialect: "str | None") -> None:
+    """Parameter positions shift by the number of escapes that precede them."""
+    sql = "SELECT a ?? 'k', :p1, b ?? 'k', :p2 FROM t WHERE c ?? 'k' AND d = :p3"
+    infos = ParameterValidator(cache_max_size=0).extract_parameters(sql, dialect=dialect)
+    names = [info.placeholder_text for info in infos]
+
+    rewritten, shifted = unescape_qmark_operator(sql, infos, dialect=dialect)
+
+    assert "??" not in rewritten
+    assert [rewritten[info.position : info.position + len(info.placeholder_text)] for info in shifted] == names
+
+
+@pytest.mark.parametrize(
+    ("sql_template", "value", "expected"),
+    [
+        ("SELECT 0-:t", -1, "SELECT 0- -1"),
+        ("SELECT 0-:t", -1.5, "SELECT 0- -1.5"),
+        ("SELECT 0-:t", Decimal(-2), "SELECT 0- -2"),
+        ("SELECT 0-:t", -0.0, "SELECT 0- -0.0"),
+        ("SELECT 0-:t", 3, "SELECT 0-3"),
+        ("SELECT 0-:t", True, "SELECT 0-TRUE"),
+        ("PRAGMA cache_size = :t", -2000, "PRAGMA cache_size = -2000"),
+        ("ALTER SEQUENCE s INCREMENT BY :t", -1, "ALTER SEQUENCE s INCREMENT BY -1"),
+    ],
+)
+def test_static_literal_separates_negative_numbers_after_minus(sql_template: str, value: object, expected: str) -> None:
+    """A negative literal after a minus operator gets a separating space without parenthesizing standalone values."""
+    sql, _ = ParameterConverter().convert_placeholder_style(sql_template, {"t": value}, ParameterStyle.STATIC)
+
+    assert sql == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("mysql", "_utf8mb4 X'615C2762'"),
+        ("mariadb", "_utf8mb4 X'615C2762'"),
+        ("postgres", "E'a\\\\''b'"),
+        ("postgresql", "E'a\\\\''b'"),
+        ("cockroach", "E'a\\\\''b'"),
+        ("cockroachdb", "E'a\\\\''b'"),
+        ("redshift", "E'a\\\\''b'"),
+        ("mssql", "'a\\''b'"),
+        ("sybase", "'a\\''b'"),
+        ("db2", "'a\\''b'"),
+        ("vantage", "'a\\''b'"),
+        ("sqlite", "'a\\''b'"),
+    ],
+)
+def test_static_literal_string_escaping_by_dialect(dialect: str, expected: str) -> None:
+    """String literals double backslashes or emit E-strings where the engine supports backslash escapes."""
+    assert ParameterConverter._format_literal("a\\'b", dialect) == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("mariadb", "X'0102'"),
+        ("postgresql", "decode('0102', 'hex')"),
+        ("cockroachdb", "decode('0102', 'hex')"),
+        ("mssql", "0x0102"),
+        ("sqlanywhere", "0x0102"),
+        ("db2", "BX'0102'"),
+        ("teradata", "'0102'XB"),
+        ("vantage", "'0102'XB"),
+    ],
+)
+def test_static_literal_binary_dialect_aliases(dialect: str, expected: str) -> None:
+    """Dialect aliases resolve to their engine's binary literal form."""
+    assert ParameterConverter._format_literal(b"\x01\x02", dialect) == expected
+
+
+def test_static_literal_rejects_nul_characters() -> None:
+    with pytest.raises(SQLSpecError, match="NUL"):
+        ParameterConverter._format_literal("a\x00b", "postgres")
+    with pytest.raises(SQLSpecError, match="NUL"):
+        ParameterConverter._format_literal("a\x00b", None)
+    assert ParameterConverter._format_literal("a\x00b", "mysql") == "'a\\0b'"
+
+
+@pytest.mark.parametrize(
+    ("adapter", "sql", "params", "expected"),
+    [
+        ("psycopg", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        ("pymssql", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        ("sybase", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        (
+            "pymysql",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+        (
+            "aiomysql",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+        (
+            "asyncmy",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+    ],
+)
+def test_adapter_escape_literal_percent_uses_adapter_dialect(
+    adapter: str, sql: str, params: "tuple[str, ...]", expected: str
+) -> None:
+    """Adapter percent-escaping helpers scan with the same dialect grammar as the parameter processor."""
+    import importlib
+
+    module = importlib.import_module(f"sqlspec.adapters.{adapter}.core")
+    escaped = module.escape_literal_percent(sql, params, ParameterValidator())
+    assert escaped == expected
+
+
+def test_static_literal_requires_dialect_for_backslashes() -> None:
+    """Backslash handling is engine-specific, so it needs a dialect."""
+    assert ParameterConverter._format_literal("it's", None) == "'it''s'"
+    with pytest.raises(SQLSpecError, match="backslash"):
+        ParameterConverter._format_literal("a\\b", None)
+
+
+def test_static_literal_rejects_unknown_string_dialect() -> None:
+    with pytest.raises(SQLSpecError, match="Cannot embed a string value"):
+        ParameterConverter._format_literal("a", "not_a_dialect")
+
+
+def test_type_coercion_dispatcher_cache_is_bounded() -> None:
+    """Global type coercion dispatcher cache stays bounded by _FALLBACK_CACHE_MAX_SIZE."""
+
+    def _make_coercer(idx: int) -> Callable[[Any], int]:
+        return lambda _value: idx
+
+    _processor_module._TYPE_COERCION_DISPATCHERS.clear()
+    _processor_module._TYPE_COERCION_DISPATCHERS_BY_ID.clear()
+    _ = [
+        _processor_module.type_coercion_dispatcher(((int, _make_coercer(i)),))
+        for i in range(_processor_module._FALLBACK_CACHE_MAX_SIZE + 50)
+    ]
+    assert len(_processor_module._TYPE_COERCION_DISPATCHERS) <= _processor_module._FALLBACK_CACHE_MAX_SIZE
+    assert len(_processor_module._TYPE_COERCION_DISPATCHERS_BY_ID) <= _processor_module._FALLBACK_CACHE_MAX_SIZE
+
+
+def test_static_literal_ignores_numeric_subclass_str_override() -> None:
+    class CustomInt(int):
+        def __str__(self) -> str:
+            return "1 OR 1=1"
+
+    class CustomFloat(float):
+        def __str__(self) -> str:
+            return "1.0; DROP TABLE t"
+
+    class CustomDecimal(Decimal):
+        def __str__(self) -> str:
+            return "2.0 OR 1=1"
+
+    assert ParameterConverter._format_literal(CustomInt(42), "postgres") == "42"
+    assert ParameterConverter._format_literal(CustomFloat(3.5), "postgres") == "3.5"
+    assert ParameterConverter._format_literal(CustomDecimal("1.25"), "postgres") == "1.25"
+    assert ParameterConverter._format_literal(True, "postgres") == "TRUE"
+    assert ParameterConverter._format_literal(False, "postgres") == "FALSE"
+    assert ParameterConverter._format_literal("it's", "postgres") == "'it''s'"
+    assert ParameterConverter._format_literal("it's", "redshift") == "'it''s'"
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect", "expected"),
+    [
+        ("SELECT arr[:2] FROM t", "postgres", []),
+        ("SELECT arr[1:2] FROM t", "postgres", []),
+        ("SELECT arr[1 :2] FROM t", "postgres", []),
+        ("SELECT arr[ :2] FROM t", "postgres", []),
+        ("SELECT (arr || ARRAY[1])[:5] FROM t", "postgres", []),
+        ("SELECT arr[1][:2] FROM t", "postgres", []),
+        ("SELECT arr[(i + 1) :2] FROM t", "postgres", []),
+        ("SELECT :1, arr[:2] FROM t WHERE id = :2", "postgres", [":1", ":2"]),
+        ("SELECT ARRAY[:1, :2]", "postgres", [":1", ":2"]),
+        ("SELECT tbl.array[:2], :1 FROM t", "postgres", [":1"]),
+        ("SELECT 'arr[' || :1 FROM t", "postgres", [":1"]),
+        ("SELECT arr[:end_idx] FROM t", "postgres", [":end_idx"]),
+    ],
+)
+def test_extract_parameters_ignores_array_slice_bounds(sql: str, dialect: str, expected: "list[str]") -> None:
+    validator = ParameterValidator()
+    assert [info.placeholder_text for info in validator.extract_parameters(sql, dialect=dialect)] == expected
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect", "expected"),
+    [
+        ("SET @x = 1", "mysql", []),
+        ("SET @x = ?, @y = :val, @z := 3", "mariadb", ["?", ":val"]),
+        ("SET @a = 'x, y; z', @b = ?", "mysql", ["?"]),
+        ("SET @a = @rhs_param", "mysql", ["@rhs_param"]),
+        ("SELECT (@rn := @rn + 1) AS rn, id FROM users WHERE org = ?", "mysql", ["@rn", "?"]),
+        ("SELECT (@rn := 1) FROM users WHERE status = @status", "mariadb", ["@status"]),
+        ("CREATE PROCEDURE p() BEGIN SET @local_v = 1; END", "mysql", []),
+        ("SELECT * FROM t WHERE @a = 1", "mysql", ["@a"]),
+        ("UPDATE t SET col = @val WHERE id = @id", "mysql", ["@val", "@id"]),
+        ("SET @@sql_mode = 'STRICT_ALL_TABLES', @x = ?", "mysql", ["?"]),
+    ],
+)
+def test_extract_parameters_skips_mysql_session_variable_lhs_assignments(
+    sql: str, dialect: str, expected: "list[str]"
+) -> None:
+    validator = ParameterValidator()
+    assert [info.placeholder_text for info in validator.extract_parameters(sql, dialect=dialect)] == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "style", "sql", "prime_params", "test_params", "expected"),
+    [
+        ("sqlite", ParameterStyle.QMARK, "SELECT ?, ?", {"1": "X", "2": "Y"}, {"2": "B", "1": "A"}, ("A", "B")),
+        (
+            "sqlite",
+            ParameterStyle.QMARK,
+            "SELECT ?, ?",
+            {"param_0": "X", "param_1": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("A", "B"),
+        ),
+        ("sqlite", ParameterStyle.QMARK, "SELECT ?, ?", {"a": "X", "b": "Y"}, {"b": "B", "a": "A"}, ("B", "A")),
+        ("sqlite", ParameterStyle.QMARK, "SELECT ?1, ?2", {"1": "X", "2": "Y"}, {"2": "B", "1": "A"}, ("A", "B")),
+        ("sqlite", ParameterStyle.QMARK, "SELECT :2, :1", {":1": "X", ":2": "Y"}, {":2": "B", ":1": "A"}, ("B", "A")),
+        (
+            "sqlite",
+            ParameterStyle.QMARK,
+            "SELECT :2, :1",
+            {"param_0": "X", "param_1": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("A", "B"),
+        ),
+        (
+            "postgres",
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            "SELECT %s, %s",
+            {"1": "X", "2": "Y"},
+            {"2": "B", "1": "A"},
+            ("A", "B"),
+        ),
+        (
+            "postgres",
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            "SELECT %s, %s",
+            {"param_0": "X", "param_1": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("A", "B"),
+        ),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $1, $2",
+            {"$1": "X", "$2": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("A", "B"),
+        ),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $2, $1",
+            {"$1": "X", "$2": "Y"},
+            {"$2": "B", "$1": "A"},
+            ("A", "B"),
+        ),
+        ("postgres", ParameterStyle.NUMERIC, "SELECT $2, $1", {"a": "X", "b": "Y"}, {"b": "B", "a": "A"}, ("B", "A")),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $2, $1",
+            {"param_0": "X", "param_1": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("B", "A"),
+        ),
+        ("postgres", ParameterStyle.NUMERIC, "SELECT $1, $2", {"$1": "X", "$2": "Y"}, {"1": "A", "b": "B"}, ("A", "B")),
+    ],
+)
+def test_warm_cache_mapping_rebinds_match_cold_positional_order(
+    dialect: str,
+    style: ParameterStyle,
+    sql: str,
+    prime_params: "dict[str, str]",
+    test_params: "dict[str, str]",
+    expected: "tuple[str, ...]",
+) -> None:
+    config = StatementConfig(
+        dialect=dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=style,
+            supported_parameter_styles={style},
+            default_execution_parameter_style=style,
+            supported_execution_parameter_styles={style},
+        ),
+    )
+    cache = get_default_cache()
+    cache.clear()
+    cold_sql, cold_params = SQL(sql, test_params, statement_config=config).compile()
+    assert tuple(cold_params) == expected
+
+    cache.clear()
+    primed = SQL(sql, prime_params, statement_config=config)
+    primed.compile()
+
+    warm_sql, warm_params = SQL(sql, test_params, statement_config=config).compile()
+    assert warm_sql == cold_sql
+    assert tuple(warm_params) == expected
+
+    copy_sql, copy_params = primed.copy(parameters=test_params).compile()
+    assert copy_sql == cold_sql
+    assert tuple(copy_params) == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "style", "sql", "prime_rows", "test_rows", "expected"),
+    [
+        (
+            "sqlite",
+            ParameterStyle.QMARK,
+            "SELECT ?, ?",
+            [{"1": "X", "2": "Y"}],
+            [{"2": "B", "1": "A"}, {"param_1": "D", "param_0": "C"}],
+            [("A", "B"), ("C", "D")],
+        ),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $1, $2",
+            [{"$1": "X", "$2": "Y"}],
+            [{"param_1": "B", "param_0": "A"}, {"$2": "D", "$1": "C"}],
+            [("A", "B"), ("C", "D")],
+        ),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $2, $1",
+            [{"$1": "X", "$2": "Y"}],
+            [{"$2": "B", "$1": "A"}, {"b": "D", "a": "C"}],
+            [("A", "B"), ("D", "C")],
+        ),
+    ],
+)
+def test_warm_cache_execute_many_mapping_rebinds_match_cold_order(
+    dialect: str,
+    style: ParameterStyle,
+    sql: str,
+    prime_rows: "list[dict[str, str]]",
+    test_rows: "list[dict[str, str]]",
+    expected: "list[tuple[str, ...]]",
+) -> None:
+    config = StatementConfig(
+        dialect=dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=style,
+            supported_parameter_styles={style},
+            default_execution_parameter_style=style,
+            supported_execution_parameter_styles={style},
+        ),
+    )
+    cache = get_default_cache()
+    cache.clear()
+    cold_sql, cold_params = SQL(sql, test_rows, statement_config=config, is_many=True).compile()
+    assert [tuple(row) for row in cold_params] == expected
+
+    cache.clear()
+    SQL(sql, prime_rows, statement_config=config, is_many=True).compile()
+
+    warm_sql, warm_params = SQL(sql, test_rows, statement_config=config, is_many=True).compile()
+    assert warm_sql == cold_sql
+    assert [tuple(row) for row in warm_params] == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "sql", "params", "style", "expected_params", "expected_placeholders"),
+    [
+        (
+            "postgres",
+            "INSERT INTO t VALUES (:a,:b,:c)",
+            {"a": 1, "b": 2, "c": 3},
+            ParameterStyle.NUMERIC,
+            (1, 2, 3),
+            ("$1", "$2", "$3"),
+        ),
+        (
+            "postgres",
+            "INSERT INTO t VALUES (:a,:b,:c)",
+            {"a": 1, "b": 2, "c": 3},
+            ParameterStyle.NAMED_PYFORMAT,
+            {"a": 1, "b": 2, "c": 3},
+            ("%(a)s", "%(b)s", "%(c)s"),
+        ),
+        (
+            "postgres",
+            "INSERT INTO t VALUES ($1,$2,$3)",
+            (1, 2, 3),
+            ParameterStyle.NUMERIC,
+            [1, 2, 3],
+            ("$1", "$2", "$3"),
+        ),
+        (
+            "duckdb",
+            "INSERT INTO t VALUES (:a,:b,:c)",
+            {"a": 1, "b": 2, "c": 3},
+            ParameterStyle.QMARK,
+            (1, 2, 3),
+            ("?",),
+        ),
+        ("duckdb", "INSERT INTO t VALUES ($1,$2,$3)", (1, 2, 3), ParameterStyle.QMARK, [1, 2, 3], ("?",)),
+        ("sqlite", "SELECT :a+:b,:c", {"a": 1, "b": 2, "c": 3}, ParameterStyle.QMARK, (1, 2, 3), ("?",)),
+    ],
+)
+def test_adjacent_placeholders_without_whitespace_compile_cleanly(
+    dialect: str,
+    sql: str,
+    params: Any,
+    style: ParameterStyle,
+    expected_params: Any,
+    expected_placeholders: tuple[str, ...],
+) -> None:
+    config = StatementConfig(
+        dialect=dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={
+                ParameterStyle.QMARK,
+                ParameterStyle.NAMED_COLON,
+                ParameterStyle.NUMERIC,
+                ParameterStyle.NAMED_PYFORMAT,
+            },
+            default_execution_parameter_style=style,
+            supported_execution_parameter_styles={style},
+        ),
+    )
+    stmt = (
+        SQL(sql, params, statement_config=config)
+        if isinstance(params, dict)
+        else SQL(sql, *params, statement_config=config)
+    )
+    compiled_sql, compiled_params = stmt.compile()
+    assert compiled_params == expected_params
+    assert all(token in compiled_sql for token in expected_placeholders)
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres", "sqlite", "duckdb", "mysql", "oracle", "snowflake", "bigquery"])
+def test_extract_parameters_detects_adjacent_named_placeholders_without_whitespace(dialect: str | None) -> None:
+    validator = ParameterValidator()
+    extracted = validator.extract_parameters("INSERT INTO t VALUES (:a,:b,:c)", dialect=dialect)
+    assert [info.name for info in extracted] == ["a", "b", "c"]
+
+
+@pytest.mark.parametrize(
+    ("styles", "expected"),
+    [
+        ((), False),
+        ((ParameterStyle.QMARK,), True),
+        ((ParameterStyle.NUMERIC,), True),
+        ((ParameterStyle.POSITIONAL_COLON,), True),
+        ((ParameterStyle.POSITIONAL_PYFORMAT,), True),
+        ((ParameterStyle.QMARK, ParameterStyle.NUMERIC), True),
+        ((ParameterStyle.NAMED_COLON,), False),
+        ((ParameterStyle.NAMED_PYFORMAT,), False),
+        ((ParameterStyle.QMARK, ParameterStyle.NAMED_COLON), False),
+    ],
+)
+def test_parameter_profile_precomputes_is_positional_only(styles: tuple[ParameterStyle, ...], expected: bool) -> None:
+    infos = [
+        ParameterInfo(
+            name=None if style.value != "named_colon" else "x",
+            style=style,
+            position=idx,
+            ordinal=idx,
+            placeholder_text="?",
+        )
+        for idx, style in enumerate(styles)
+    ]
+    profile = ParameterProfile(infos)
+    assert profile.is_positional_only is expected
+
+
+def test_parameter_style_config_precomputes_execution_flags_and_hash_sorting() -> None:
+    qmark_cfg = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        type_coercion_map={int: str, str: str.upper},
+    )
+    assert qmark_cfg._positional_default_execution is True
+    assert qmark_cfg._supports_named_execution is False
+
+    psycopg_like_cfg = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
+        type_coercion_map={str: str.upper, int: str},
+    )
+    assert psycopg_like_cfg._positional_default_execution is True
+    assert psycopg_like_cfg._supports_named_execution is True
+    assert hash(qmark_cfg) != hash(psycopg_like_cfg)
+    assert hash(
+        ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK},
+            default_execution_parameter_style=ParameterStyle.QMARK,
+            supported_execution_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={str: str.upper, int: str},
+        )
+    ) == hash(qmark_cfg)
+
+
+def test_driver_common_is_mapping_parameters_and_has_only_positional_keys() -> None:
+    from types import MappingProxyType
+
+    from sqlspec.driver._common import _has_only_positional_keys, _is_mapping_parameters
+
+    assert _is_mapping_parameters({"a": 1}) is True
+    assert _is_mapping_parameters(MappingProxyType({"a": 1})) is True
+    assert _is_mapping_parameters((1, 2)) is False
+    assert _is_mapping_parameters([1, 2]) is False
+    assert _is_mapping_parameters("abc") is False
+
+    assert _has_only_positional_keys({"1": "a", "$2": "b", ":3": "c", "?4": "d", "param_0": "e"}) is True
+    assert _has_only_positional_keys({"id": 1, "1": "a"}) is False
+    assert _has_only_positional_keys({"param_x": 1}) is False

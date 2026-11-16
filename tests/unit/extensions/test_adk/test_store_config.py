@@ -10,6 +10,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.extensions.adk import SessionOrderBy, StoredEvent, StoredSession
+from sqlspec.extensions.adk._table_utils import owner_id_column_name, validate_owner_id_column_ddl
 from sqlspec.extensions.adk.artifact._types import StoredArtifact
 from sqlspec.extensions.adk.artifact.store import BaseSyncADKArtifactStore
 from sqlspec.extensions.adk.memory import StoredMemory
@@ -33,7 +34,15 @@ class _Config:
 
 class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         return StoredSession(
             id=session_id,
@@ -78,10 +87,12 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        return await self.create_session(session_id, app_name, user_id, state)
+        return await self.create_session(
+            session_id, app_name, user_id, state, app_state_delta=app_state_delta, user_state_delta=user_state_delta
+        )
 
     async def get_events(
         self,
@@ -163,7 +174,15 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
         self.create_tables_called = False
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         return StoredSession(
             id=session_id,
@@ -208,10 +227,12 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        return self.create_session(session_id, app_name, user_id, state)
+        return self.create_session(
+            session_id, app_name, user_id, state, app_state_delta=app_state_delta, user_state_delta=user_state_delta
+        )
 
     def get_events(
         self,
@@ -309,7 +330,7 @@ class _SyncMemoryStore(BaseSyncADKMemoryStore[Any]):
     ) -> list[StoredMemory]:
         return []
 
-    def delete_entries_by_session(self, session_id: str) -> int:
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         return 0
 
     def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
@@ -511,3 +532,61 @@ def test_session_list_options_reject_invalid_input(order_by: Any, limit: Any, of
     """Unsupported order columns and page bounds raise before any query is built."""
     with pytest.raises(ValueError):
         normalize_session_list_options(order_by, True, limit, offset)
+
+
+@pytest.mark.parametrize(
+    ("column_ddl", "expected_ddl", "expected_name"),
+    [
+        pytest.param("tenant_id INTEGER", "tenant_id INTEGER", "tenant_id", id="simple-int"),
+        pytest.param("  _owner_2 UUID NOT NULL  ", "_owner_2 UUID NOT NULL", "_owner_2", id="trimmed-uuid"),
+        pytest.param(
+            "tenant_id NUMERIC(19, 0) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE",
+            "tenant_id NUMERIC(19, 0) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE",
+            "tenant_id",
+            id="parameterized-numeric-fk",
+        ),
+        pytest.param(f"{'a' * 63} BIGINT", f"{'a' * 63} BIGINT", "a" * 63, id="max-length-identifier"),
+    ],
+)
+def test_owner_id_column_ddl_accepts_valid_single_column_definitions(
+    column_ddl: str, expected_ddl: str, expected_name: str
+) -> None:
+    """Valid single-column definitions pass validation and extract the leading identifier."""
+    assert validate_owner_id_column_ddl(column_ddl) == expected_ddl
+    assert owner_id_column_name(column_ddl) == expected_name
+    store = _SyncSessionStore(_Config({"owner_id_column": column_ddl}))
+    assert store.owner_id_column_ddl == expected_ddl
+    assert store.owner_id_column_name == expected_name
+
+
+@pytest.mark.parametrize(
+    "invalid_ddl",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace-only"),
+        pytest.param("tenant_id", id="missing-type"),
+        pytest.param("123tenant INT", id="digit-leading-name"),
+        pytest.param(f"{'a' * 64} INT", id="identifier-too-long"),
+        pytest.param("tenant_id INT, extra_col TEXT", id="top-level-comma"),
+        pytest.param("tenant_id INT; DROP TABLE x", id="semicolon"),
+        pytest.param("tenant_id INT -- trailing", id="line-comment"),
+        pytest.param("tenant_id INT /* block */", id="block-comment-open"),
+        pytest.param("tenant_id INT */", id="block-comment-close"),
+        pytest.param("tenant_id INT\x00", id="nul-byte"),
+        pytest.param("tenant_id VARCHAR(16) DEFAULT 'x'", id="single-quote"),
+        pytest.param('"tenant_id" INT', id="double-quote"),
+        pytest.param("`tenant_id` INT", id="backtick"),
+        pytest.param("tenant_id INT)", id="extra-closing-paren"),
+        pytest.param("tenant_id )INT(", id="closing-before-opening-paren"),
+        pytest.param("tenant_id NUMERIC(19, 0", id="unclosed-paren"),
+        pytest.param("tenant_id(10) INT", id="no-whitespace-after-name"),
+    ],
+)
+def test_owner_id_column_ddl_rejects_invalid_fragments(invalid_ddl: str) -> None:
+    """Multi-column, statement-terminating, quoted, or malformed column DDL raises ValueError."""
+    with pytest.raises(ValueError, match="Invalid owner_id_column DDL"):
+        validate_owner_id_column_ddl(invalid_ddl)
+    with pytest.raises(ValueError, match="Invalid owner_id_column DDL"):
+        owner_id_column_name(invalid_ddl)
+    with pytest.raises(ValueError, match="Invalid owner_id_column DDL"):
+        _SyncSessionStore(_Config({"owner_id_column": invalid_ddl}))

@@ -4,6 +4,8 @@ Tests text processing utilities including email validation, slugification,
 camelCase conversion, and snake_case conversion.
 """
 
+import re
+
 import pytest
 
 from sqlspec.exceptions import AmbiguousIdentifierError
@@ -11,6 +13,7 @@ from sqlspec.utils.text import (
     camelize,
     normalize_identifier,
     resolve_catalog_identifier,
+    sanitize_single_line,
     slugify,
     snake_case,
     split_qualified_identifier,
@@ -237,6 +240,8 @@ def test_normalize_identifier_preserves_explicitly_quoted_identifiers(
         ("[schema.with.dot].[table]]name]", ("schema.with.dot", "table]name")),
         ("`project.dataset.table`", ("project.dataset.table",)),
         ("dataset.`table.with.dot`", ("dataset", "table.with.dot")),
+        ('ord"ers', ('ord"ers',)),
+        ("app.ord`ers", ("app", "ord`ers")),
     ],
 )
 def test_split_qualified_identifier_respects_quoted_dots(identifier: str, expected: tuple[str, ...]) -> None:
@@ -327,3 +332,19 @@ def test_resolve_catalog_identifier(requested: str, candidates: list[str], expec
 def test_resolve_catalog_identifier_rejects_ambiguous_case_insensitive_matches() -> None:
     with pytest.raises(AmbiguousIdentifierError, match="Orders"):
         resolve_catalog_identifier("ORDERS", ["orders", "Orders", "orders"])
+
+
+_SAFE_TOKEN = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def test_sanitize_single_line_keeps_trimmed_first_line() -> None:
+    assert sanitize_single_line("  abc-1 \r\nInjected: yes", max_length=32, pattern=_SAFE_TOKEN) == "abc-1"
+
+
+def test_sanitize_single_line_truncates_before_matching() -> None:
+    assert sanitize_single_line("abcdefgh", max_length=4, pattern=_SAFE_TOKEN) == "abcd"
+
+
+def test_sanitize_single_line_rejects_values_outside_pattern() -> None:
+    assert sanitize_single_line("abc def", max_length=32, pattern=_SAFE_TOKEN) == ""
+    assert sanitize_single_line("\nabc", max_length=32, pattern=_SAFE_TOKEN) == ""

@@ -5,6 +5,7 @@ import datetime as dt
 import decimal
 import importlib
 import math
+import os
 import re
 import tempfile
 from collections.abc import Mapping, Sized
@@ -15,10 +16,11 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import UUID
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-from sqlspec.adapters.adbc._typing import AdbcStatusCode
+from sqlspec.adapters.adbc._typing import AdbcNativeError, AdbcStatusCode
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter, get_adbc_type_converter
 from sqlspec.core import (
     DriverParameterProfile,
@@ -28,6 +30,7 @@ from sqlspec.core import (
     build_statement_config_from_profile,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -44,6 +47,7 @@ from sqlspec.exceptions import (
     OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -52,17 +56,19 @@ from sqlspec.exceptions import (
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import import_optional, import_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
-from sqlspec.utils.uuids import uuid4, uuid_from_string
+from sqlspec.utils.type_guards import has_rowcount, has_sqlstate, resolve_row_format
+from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.core import SQL
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = (
@@ -83,6 +89,7 @@ __all__ = (
     "driver_kind_from_uri",
     "driver_profile",
     "enforce_strict_type_coercion",
+    "execute_cache_hit",
     "get_statement_config",
     "handle_postgres_rollback",
     "is_postgres_dialect",
@@ -109,10 +116,14 @@ __all__ = (
     "resolve_parameter_casts",
     "resolve_reconcile_adbc_dialect",
     "resolve_rowcount",
+    "split_db2_table_name",
     "split_teradata_table_name",
 )
 
 _MAX_TCP_PORT: Final = 65535
+_MIN_BRACED_VALUE_LEN: Final = 2
+_FLIGHTSQL_HEADER_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+_URI_HOST_FORBIDDEN_CHARS: Final[frozenset[str]] = frozenset({"/", "?", "#", "@", " ", "\t", "\r", "\n", "\x00"})
 COLUMN_CACHE_MAX_SIZE: int = 256
 RECONCILE_ADBC_DIALECTS: Final = frozenset({
     "bigquery",
@@ -125,7 +136,7 @@ RECONCILE_ADBC_DIALECTS: Final = frozenset({
     "teradata",
     "sqlite",
 })
-_IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
+_IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?!\d)(?:[A-Z0-9_]+)\Z")
 _UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
 NoneType: Final = type(None)
 _STRICT_COERCION_ALLOWED_TYPES: Final[tuple[type[Any], ...]] = (
@@ -883,9 +894,8 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
 
     if isinstance(uri, str) and driver_kind == "sqlite" and uri.lower().startswith("sqlite://"):
         config["uri"] = uri[9:]
-    if isinstance(uri, str) and driver_kind == "duckdb" and uri.lower().startswith("duckdb://"):
-        config["path"] = uri[9:]
-        config.pop("uri", None)
+    if driver_kind == "duckdb" or str(config.get("entrypoint", "")).strip().lower() == "duckdb_adbc_init":
+        _normalize_and_validate_duckdb_config(config, uri)
     if isinstance(uri, str) and driver_kind == "db2" and not uri.lower().startswith("db2://"):
         _normalize_db2_cli_dsn(config, uri)
 
@@ -1036,22 +1046,8 @@ _ADBC_STATUS_CODE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "INTERNAL": (OperationalError, "internal error"),
     "NOT_IMPLEMENTED": (SQLSpecError, "not implemented"),
 }
-
-
-def _map_adbc_status_exception(error: Any) -> "SQLSpecError | None":
-    status_code = getattr(error, "status_code", None)
-    if status_code is None:
-        return None
-    status_name: str | None = getattr(status_code, "name", None)
-    if status_name is None and isinstance(status_code, int) and AdbcStatusCode is not None:
-        with contextlib.suppress(ValueError):
-            status_name = AdbcStatusCode(status_code).name
-    if status_name is None:
-        status_name = str(status_code).upper()
-    if status_name in _ADBC_STATUS_CODE_MAP:
-        exc_cls, desc = _ADBC_STATUS_CODE_MAP[status_name]
-        return _create_adbc_error(error, exc_cls, desc)
-    return None
+_MIN_QUALIFIED_PARTS: Final = 2
+_MAX_TERADATA_QUALIFIED_PARTS: Final[int] = 2
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
@@ -1094,58 +1090,6 @@ def create_teradata_mapped_exception(error: Any) -> SQLSpecError:
         A SQLSpec exception that wraps the original error.
     """
     return _create_mapped_exception(error, assume_teradata=True)
-
-
-def _create_mapped_exception(error: Any, *, assume_teradata: bool) -> SQLSpecError:
-    status_mapped = _map_adbc_status_exception(error)
-    if isinstance(status_mapped, (QueryTimeoutError, OperationCancelledError)):
-        return status_mapped
-
-    raw_message = str(error)
-    error_msg = raw_message.lower()
-    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
-    sqlstate = sqlstate_attr.strip().upper() if isinstance(sqlstate_attr, str) and sqlstate_attr.strip() else None
-
-    if enterprise_mapped := _map_enterprise_exception(
-        error, raw_message, error_msg, sqlstate, assume_teradata=assume_teradata
-    ):
-        return enterprise_mapped
-
-    if sqlstate:
-        return _map_sqlstate_exception(error, sqlstate)
-
-    if "unique" in error_msg or "duplicate" in error_msg:
-        return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
-    if "foreign key" in error_msg:
-        return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-    if "not null" in error_msg or "null value" in error_msg:
-        return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
-    if "check constraint" in error_msg:
-        return _create_adbc_error(error, CheckViolationError, "check constraint violation")
-    if "constraint" in error_msg:
-        return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
-
-    if "deadlock" in error_msg:
-        return _create_adbc_error(error, DeadlockError, "deadlock detected")
-    if "serialization" in error_msg or "concurrent update" in error_msg:
-        return _create_adbc_error(error, SerializationConflictError, "serialization failure")
-
-    if message_class := _classify_timeout_or_cancellation(error_msg):
-        return _create_adbc_error(error, message_class, "query terminated")
-
-    if "permission" in error_msg or "denied" in error_msg or "unauthorized" in error_msg:
-        return _create_adbc_error(error, PermissionDeniedError, "permission denied")
-
-    if "syntax" in error_msg:
-        return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
-
-    if "connection" in error_msg or "connect" in error_msg:
-        return _create_adbc_error(error, DatabaseConnectionError, "connection error")
-
-    if status_mapped is not None:
-        return status_mapped
-
-    return _create_adbc_error(error, SQLSpecError, "database error")
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -1264,8 +1208,17 @@ def apply_driver_features(
 
 
 def create_duckdb_profile_path() -> Path:
-    """Allocate a unique temporary file path for DuckDB JSON statement profiling."""
-    return Path(tempfile.gettempdir()) / f"sqlspec_duckdb_profile_{uuid4().hex}.json"
+    """Create a 0600 temporary file path for DuckDB JSON statement profiling."""
+    fd, raw_path = tempfile.mkstemp(prefix="sqlspec_duckdb_profile_", suffix=".json", dir=tempfile.gettempdir())
+    path = Path(raw_path)
+    try:
+        os.close(fd)
+        path.chmod(0o600)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
+        raise
+    return path
 
 
 def cleanup_duckdb_profile_path(profile_path: Path | str | None) -> None:
@@ -1431,6 +1384,130 @@ def resolve_rowcount(cursor: Any) -> int:
     return -1
 
 
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[str | None, dict[str, Any], dict[int, tuple[Any, list[str]]]]",
+) -> "SQLResult | None":
+    """Execute a cached statement on an ADBC connection and build its result.
+
+    Args:
+        connection: ADBC connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: The session's dialect name, driver features, and column-name cache.
+
+    Returns:
+        The statement result, or ``None`` for parameterized Db2 statements that return no
+        rows and for cursors without the DB-API execution surface.
+
+    Raises:
+        SQLSpecError: Mapped from any ADBC error the statement raises.
+        DataError: If Arrow cannot convert a parameter or result value.
+    """
+    dialect_name = state[0]
+    returns_rows = cached.operation_profile.returns_rows
+    if dialect_name == "db2" and not returns_rows and params:
+        return None
+    try:
+        cursor = (
+            _open_snowflake_cache_hit_cursor(connection, state[1])
+            if dialect_name == "snowflake"
+            else connection.cursor()
+        )
+        try:
+            execute = getattr(cursor, "execute", None)
+            if execute is None:
+                return None
+            if not returns_rows:
+                if not hasattr(cursor, "rowcount"):
+                    return None
+                if params:
+                    execute(cached.compiled_sql, params)
+                else:
+                    execute(cached.compiled_sql)
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetchall = getattr(cursor, "fetchall", None)
+            if fetchall is None:
+                return None
+            if params:
+                execute(cached.compiled_sql, params)
+            else:
+                execute(cached.compiled_sql)
+            fetched_data = fetchall()
+            driver_features = state[1]
+            description = cursor.description
+            data, column_names = collect_rows(
+                fetched_data,
+                description,
+                column_names=resolve_column_names(description, state[2], driver_features),
+                driver_features=driver_features,
+            )
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                cached.compiled_sql,
+                params,
+                data,
+                column_names,
+                len(data),
+                resolve_row_format(data),
+                None,
+            )
+        finally:
+            _close_cache_hit_cursor(cursor)
+    except AdbcNativeError as exc:
+        if dialect_name == "teradata":
+            mapped_error = create_teradata_mapped_exception(exc)
+            mapped_error.__cause__ = exc
+            raise mapped_error from exc
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    except Exception as exc:
+        if _is_arrow_conversion_error(exc):
+            msg = f"ADBC could not convert a parameter or result value: {exc}"
+            mapped_error = DataError(msg)
+            mapped_error.__cause__ = exc
+            raise mapped_error from exc
+        raise
+
+
+def _open_snowflake_cache_hit_cursor(connection: Any, driver_features: "dict[str, Any]") -> Any:
+    """Open a Snowflake cursor tagged with the configured query tag and active correlation id."""
+    raw_tag = driver_features.get("query_tag")
+    tag = raw_tag.strip() if isinstance(raw_tag, str) else ""
+    correlation = CorrelationContext.get()
+    if correlation and correlation != tag:
+        tag = f"{tag}:{correlation}" if tag else correlation
+    if tag:
+        return connection.cursor(adbc_stmt_kwargs={"adbc.snowflake.statement.query_tag": tag})
+    return connection.cursor()
+
+
+def _close_cache_hit_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
+
+
+def _is_arrow_conversion_error(error: BaseException) -> bool:
+    """Return whether an error is a PyArrow value or type conversion failure."""
+    invalid_error = import_optional_attr("pyarrow", "ArrowInvalid")
+    if isinstance(invalid_error, type) and isinstance(error, invalid_error):
+        return True
+    type_error = import_optional_attr("pyarrow", "ArrowTypeError")
+    return isinstance(type_error, type) and isinstance(error, type_error)
+
+
 def resolve_many_rowcount(cursor: Any, parameter_sets: Any, *, fallback_count: "int | None" = None) -> int:
     """Resolve execute_many rowcount with a parameter-count fallback.
 
@@ -1565,6 +1642,111 @@ def prepare_postgres_uuid_bindings(
     return rewritten_sql, converted_parameters
 
 
+def split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
+    """Split qualified DB2 table name into schema and table components."""
+    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
+    if len(parts) >= _MIN_QUALIFIED_PARTS:
+        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
+    return None, normalize_identifier(parts[0] if parts else table_name, "db2")
+
+
+def split_teradata_table_name(table_name: str) -> tuple[str | None, str]:
+    """Split a qualified Teradata table name into optional database and table identifiers.
+
+    Args:
+        table_name: Bare or database-qualified Teradata table name.
+
+    Returns:
+        Tuple of ``(database_or_none, table)`` with unquoted segments uppercased
+        and double-quoted segments preserved with ``""`` unescaped.
+
+    Raises:
+        ImproperConfigurationError: If the table name is empty, malformed, or has more than two parts.
+    """
+    cleaned = table_name.strip()
+    if not cleaned or cleaned.startswith(".") or cleaned.endswith("."):
+        msg = f"Invalid Teradata table name: {table_name!r}"
+        raise ImproperConfigurationError(msg)
+    parts = _split_raw_teradata_segments(cleaned)
+    if not parts or len(parts) > _MAX_TERADATA_QUALIFIED_PARTS or any(not part.strip() for part in parts):
+        msg = f"Invalid Teradata table name {table_name!r}: expected '[database.]table'"
+        raise ImproperConfigurationError(msg)
+    if len(parts) == _MAX_TERADATA_QUALIFIED_PARTS:
+        return (
+            _normalize_teradata_identifier_segment(parts[0], table_name),
+            _normalize_teradata_identifier_segment(parts[1], table_name),
+        )
+    return None, _normalize_teradata_identifier_segment(parts[0], table_name)
+
+
+def _map_adbc_status_exception(error: Any) -> "SQLSpecError | None":
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        return None
+    status_name: str | None = getattr(status_code, "name", None)
+    if status_name is None and isinstance(status_code, int) and AdbcStatusCode is not None:
+        with contextlib.suppress(ValueError):
+            status_name = AdbcStatusCode(status_code).name
+    if status_name is None:
+        status_name = str(status_code).upper()
+    if status_name in _ADBC_STATUS_CODE_MAP:
+        exc_cls, desc = _ADBC_STATUS_CODE_MAP[status_name]
+        return _create_adbc_error(error, exc_cls, desc)
+    return None
+
+
+def _create_mapped_exception(error: Any, *, assume_teradata: bool) -> SQLSpecError:
+    status_mapped = _map_adbc_status_exception(error)
+    if isinstance(status_mapped, (QueryTimeoutError, OperationCancelledError)):
+        return status_mapped
+
+    raw_message = str(error)
+    error_msg = raw_message.lower()
+    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
+    sqlstate = sqlstate_attr.strip().upper() if isinstance(sqlstate_attr, str) and sqlstate_attr.strip() else None
+
+    if enterprise_mapped := _map_enterprise_exception(
+        error, raw_message, error_msg, sqlstate, assume_teradata=assume_teradata
+    ):
+        return enterprise_mapped
+
+    if sqlstate:
+        return _map_sqlstate_exception(error, sqlstate)
+
+    if "unique" in error_msg or "duplicate" in error_msg:
+        return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
+    if "foreign key" in error_msg:
+        return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    if "not null" in error_msg or "null value" in error_msg:
+        return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
+    if "check constraint" in error_msg:
+        return _create_adbc_error(error, CheckViolationError, "check constraint violation")
+    if "constraint" in error_msg:
+        return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
+
+    if "deadlock" in error_msg:
+        return _create_adbc_error(error, DeadlockError, "deadlock detected")
+    if "serialization" in error_msg or "concurrent update" in error_msg:
+        return _create_adbc_error(error, SerializationConflictError, "serialization failure")
+
+    if message_class := _classify_timeout_or_cancellation(error_msg):
+        return _create_adbc_error(error, message_class, "query terminated")
+
+    if "permission" in error_msg or "denied" in error_msg or "unauthorized" in error_msg:
+        return _create_adbc_error(error, PermissionDeniedError, "permission denied")
+
+    if "syntax" in error_msg:
+        return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
+
+    if "connection" in error_msg or "connect" in error_msg:
+        return _create_adbc_error(error, DatabaseConnectionError, "connection error")
+
+    if status_mapped is not None:
+        return status_mapped
+
+    return _create_adbc_error(error, SQLSpecError, "database error")
+
+
 def _try_rollback(rollback: "Callable[[], Any]") -> bool:
     """Run a rollback callable and report whether it succeeded.
 
@@ -1667,6 +1849,7 @@ def _is_uuid_array_data_type(target: Any) -> bool:
     return len(element_types) == 1 and _is_uuid_data_type(element_types[0])
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _RewriteCacheState:
     __slots__ = ("cache", "hits", "maxsize", "misses")
 
@@ -1977,6 +2160,8 @@ def _map_enterprise_exception(
 
 
 def _map_sqlstate_exception(error: Any, sqlstate: str) -> SQLSpecError:
+    if sqlstate == "25006":
+        return _create_adbc_error(error, ReadOnlyTransactionError, "read-only transaction")
     if sqlstate == "23505":
         return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
     if sqlstate == "23503":
@@ -2197,7 +2382,13 @@ def _lift_flightsql_common_options(
     config: "dict[str, Any]", db_kwargs_dict: "dict[str, Any]", authorization_header_key: str
 ) -> None:
     if "authorization_header" in config:
-        db_kwargs_dict.setdefault(authorization_header_key, config.pop("authorization_header"))
+        auth_header = config.pop("authorization_header")
+        if auth_header is not None:
+            auth_header_text = str(auth_header)
+            if "\x00" in auth_header_text or "\r" in auth_header_text or "\n" in auth_header_text:
+                msg = "FlightSQL authorization_header contains disallowed control characters."
+                raise ImproperConfigurationError(msg)
+            db_kwargs_dict.setdefault(authorization_header_key, auth_header_text)
 
     if "grpc_max_message_size" in config:
         db_kwargs_dict.setdefault(_FLIGHTSQL_WITH_MAX_MSG_SIZE_KEY, str(config.pop("grpc_max_message_size")))
@@ -2225,9 +2416,25 @@ def _lift_flightsql_common_options(
 
     if "headers" in config:
         headers = config.pop("headers")
-        if isinstance(headers, dict):
+        if headers is not None:
+            if not isinstance(headers, Mapping):
+                msg = "FlightSQL headers must be a mapping."
+                raise ImproperConfigurationError(msg)
             for hdr_key, hdr_val in headers.items():
-                db_kwargs_dict.setdefault(f"{_FLIGHTSQL_RPC_CALL_HEADER_PREFIX}{hdr_key}", str(hdr_val))
+                if (
+                    not isinstance(hdr_key, str)
+                    or "\x00" in hdr_key
+                    or "\r" in hdr_key
+                    or "\n" in hdr_key
+                    or _FLIGHTSQL_HEADER_KEY_PATTERN.fullmatch(hdr_key) is None
+                ):
+                    msg = f"Invalid FlightSQL header key: {hdr_key!r}."
+                    raise ImproperConfigurationError(msg)
+                hdr_val_text = str(hdr_val)
+                if "\x00" in hdr_val_text or "\r" in hdr_val_text or "\n" in hdr_val_text:
+                    msg = f"FlightSQL header {hdr_key!r} contains disallowed control characters."
+                    raise ImproperConfigurationError(msg)
+                db_kwargs_dict.setdefault(f"{_FLIGHTSQL_RPC_CALL_HEADER_PREFIX}{hdr_key}", hdr_val_text)
 
 
 def _get_adbc_driver_info(connection: Any) -> "dict[Any, Any]":
@@ -2326,13 +2533,15 @@ _SNOWFLAKE_BOOLEAN_OPTIONS: Final[tuple[str, ...]] = (
     "tls_skip_verify",
     "use_high_precision",
 )
-_SNOWFLAKE_DURATION_OPTIONS: Final[tuple[str, ...]] = (
-    "login_timeout",
-    "request_timeout",
-    "client_timeout",
-    "jwt_expire_timeout",
+_SNOWFLAKE_DURATION_OPTIONS: Final[tuple[tuple[str, str], ...]] = (
+    ("login_timeout", "login_timeout"),
+    ("connection_timeout", "login_timeout"),
+    ("request_timeout", "request_timeout"),
+    ("query_timeout", "request_timeout"),
+    ("client_timeout", "client_timeout"),
+    ("jwt_expire_timeout", "jwt_expire_timeout"),
 )
-_GO_DURATION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:\d+(?:\.\d+)?(?:ns|us|\u00b5s|ms|s|m|h))+$")
+_GO_DURATION_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?:\d+(?:\.\d+)?(?:ns|us|\u00b5s|ms|s|m|h))+\Z")
 _SNOWFLAKE_ERROR_MARKER: Final = "[snowflake]"
 _SNOWFLAKE_ERROR_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b(\d{6})(?:\s*\([0-9A-Z]{5}\))?\s*:")
 _SNOWFLAKE_ERROR_CODES: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
@@ -2481,11 +2690,11 @@ def _lift_snowflake_db_kwargs(config: dict[str, Any]) -> None:
                 msg = f"Snowflake {field} must be a boolean."
                 raise ImproperConfigurationError(msg)
             options.setdefault("adbc.snowflake.sql.client_option." + field, _snowflake_option_text(value).lower())
-    for field in _SNOWFLAKE_DURATION_OPTIONS:
+    for field, option in _SNOWFLAKE_DURATION_OPTIONS:
         if field in config:
             value = config.pop(field)
             options.setdefault(
-                "adbc.snowflake.sql.client_option." + field, _format_go_duration(value, field_name=field)
+                "adbc.snowflake.sql.client_option." + option, _format_go_duration(value, field_name=field)
             )
     auth = config.pop("auth_type", None)
     if auth is not None:
@@ -2560,18 +2769,98 @@ def _lift_driver_specific_db_kwargs(
             config["db_kwargs"] = db_kwargs_dict
 
 
+def _validate_uri_host(host: str, *, backend: str) -> str:
+    """Validate a discrete URI host token, supporting IPv4, hostname, and IPv6 literals."""
+    if not host or any(ch in _URI_HOST_FORBIDDEN_CHARS for ch in host):
+        msg = f"Invalid {backend} host: {host!r}."
+        raise ImproperConfigurationError(msg)
+    if host.startswith("[") or host.endswith("]"):
+        if (
+            len(host) <= _MIN_BRACED_VALUE_LEN
+            or not (host.startswith("[") and host.endswith("]"))
+            or "[" in host[1:-1]
+            or "]" in host[1:-1]
+        ):
+            msg = f"Invalid {backend} host: {host!r}."
+            raise ImproperConfigurationError(msg)
+        return host
+    if ":" in host:
+        if "[" in host or "]" in host:
+            msg = f"Invalid {backend} host: {host!r}."
+            raise ImproperConfigurationError(msg)
+        return f"[{host}]"
+    return host
+
+
 def _parse_db2_cli_dsn(uri: str) -> "dict[str, str] | None":
-    """Parse a semicolon-delimited IBM Db2 CLI keyword DSN when valid."""
+    """Parse semicolon-delimited Db2 CLI keyword=value pairs with MS-ODBCSTR brace awareness."""
     if "://" in uri or ";" not in uri:
         return None
+    if "\x00" in uri or "\r" in uri or "\n" in uri:
+        msg = "Db2 CLI DSN contains disallowed control characters."
+        raise ImproperConfigurationError(msg)
+    segments: list[str] = []
+    buf: list[str] = []
+    in_braces = False
+    idx = 0
+    length = len(uri)
+    while idx < length:
+        ch = uri[idx]
+        if in_braces:
+            if ch == "}":
+                if idx + 1 < length and uri[idx + 1] == "}":
+                    buf.append("}}")
+                    idx += 2
+                    continue
+                in_braces = False
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch == "{":
+            in_braces = True
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch == "}":
+            msg = "Db2 CLI DSN contains an unmatched closing brace."
+            raise ImproperConfigurationError(msg)
+        if ch == ";":
+            segments.append("".join(buf))
+            buf.clear()
+            idx += 1
+            continue
+        buf.append(ch)
+        idx += 1
+    if in_braces:
+        msg = "Db2 CLI DSN contains an unclosed opening brace."
+        raise ImproperConfigurationError(msg)
+    segments.append("".join(buf))
+
     parsed: dict[str, str] = {}
-    for raw_segment in uri.split(";"):
+    for raw_segment in segments:
         segment = raw_segment.strip()
         if not segment or "=" not in segment:
             continue
-        key, value = segment.split("=", 1)
+        key, raw_value = segment.split("=", 1)
         normalized_key = key.strip().lower()
-        normalized_val = value.strip()
+        if "{" in normalized_key or "}" in normalized_key:
+            msg = f"Invalid Db2 CLI DSN keyword: {key.strip()!r}."
+            raise ImproperConfigurationError(msg)
+        trimmed_val = raw_value.strip()
+        if trimmed_val.startswith("{"):
+            if len(trimmed_val) < _MIN_BRACED_VALUE_LEN or not trimmed_val.endswith("}"):
+                msg = f"Malformed braced value for Db2 CLI keyword {key.strip()!r}."
+                raise ImproperConfigurationError(msg)
+            inner = trimmed_val[1:-1]
+            if "}" in inner.replace("}}", ""):
+                msg = f"Unescaped closing brace in Db2 CLI keyword {key.strip()!r}."
+                raise ImproperConfigurationError(msg)
+            normalized_val = inner.replace("}}", "}")
+        elif "{" in trimmed_val or "}" in trimmed_val:
+            msg = f"Malformed brace in Db2 CLI keyword {key.strip()!r}."
+            raise ImproperConfigurationError(msg)
+        else:
+            normalized_val = trimmed_val
         if normalized_key and normalized_val:
             parsed[normalized_key] = normalized_val
     if "driver" in parsed:
@@ -2590,9 +2879,21 @@ def _normalize_db2_cli_dsn(config: "dict[str, Any]", uri: str) -> None:
         return
     database = parsed.get("database") or parsed.get("dbalias") or ""
     host = parsed.get("hostname") or parsed.get("host") or ""
-    port = parsed.get("port", "")
-    formatted_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    config["uri"] = f"db2://{formatted_host}:{port}/{database}" if port else f"db2://{formatted_host}/{database}"
+    port_raw = parsed.get("port", "")
+    formatted_host = _validate_uri_host(host, backend="Db2")
+    encoded_database = quote(database, safe="")
+    if port_raw:
+        try:
+            port_num = int(port_raw)
+        except ValueError as exc:
+            msg = f"Db2 port must be an integer between 1 and 65535, got {port_raw!r}."
+            raise ImproperConfigurationError(msg) from exc
+        if not 1 <= port_num <= _MAX_TCP_PORT:
+            msg = f"Db2 port must be an integer between 1 and 65535, got {port_num}."
+            raise ImproperConfigurationError(msg)
+        config["uri"] = f"db2://{formatted_host}:{port_num}/{encoded_database}"
+    else:
+        config["uri"] = f"db2://{formatted_host}/{encoded_database}"
 
     uid = parsed.get("uid") or parsed.get("user")
     if uid is not None:
@@ -2642,6 +2943,56 @@ def _apply_driver_manager_config(config: "dict[str, Any]", driver_kind: "str | N
             config["db_kwargs"] = db_kwargs_dict
 
 
+def _normalize_duckdb_memory_path(value: str) -> str:
+    stripped = value.strip()
+    if stripped in {":memory:", "/:memory:"}:
+        return ":memory:"
+    if stripped.startswith((":memory:", "/:memory:")):
+        msg = "DuckDB ADBC does not support named ':memory:<name>' identifiers; use ':memory:' instead."
+        raise ImproperConfigurationError(msg)
+    return value
+
+
+def _normalize_and_validate_duckdb_config(config: "dict[str, Any]", uri: Any) -> None:
+    if isinstance(config.get("uri"), str):
+        raw_uri = config.pop("uri")
+        raw_path = raw_uri[9:] if raw_uri.lower().startswith("duckdb://") else raw_uri
+        if raw_path.startswith("/:memory:"):
+            raw_path = raw_path[1:]
+        if "path" not in config:
+            config["path"] = raw_path
+    elif "uri" in config:
+        config.pop("uri", None)
+
+    path_value = config.get("path")
+    if isinstance(path_value, str):
+        config["path"] = _normalize_duckdb_memory_path(path_value)
+
+    db_kwargs = config.get("db_kwargs")
+    if isinstance(db_kwargs, dict):
+        updated_kwargs = dict(db_kwargs)
+        changed = False
+        for key in ("path", "uri"):
+            nested_val = updated_kwargs.get(key)
+            if isinstance(nested_val, str):
+                candidate = (
+                    nested_val[9:] if key == "uri" and nested_val.lower().startswith("duckdb://") else nested_val
+                )
+                if candidate.startswith("/:memory:"):
+                    candidate = candidate[1:]
+                normalized = _normalize_duckdb_memory_path(candidate)
+                if normalized != nested_val:
+                    updated_kwargs[key] = normalized
+                    changed = True
+        if changed:
+            config["db_kwargs"] = updated_kwargs
+    elif isinstance(uri, str) and uri.lower().startswith("duckdb://") and "path" not in config:
+        raw_path = uri[9:]
+        if raw_path.startswith("/:memory:"):
+            raw_path = raw_path[1:]
+        config["path"] = _normalize_duckdb_memory_path(raw_path)
+
+
 driver_profile: Final[DriverParameterProfile] = build_profile()
 
 _DB2_TABLE_EXISTS_SQL: Final = (
@@ -2650,15 +3001,6 @@ _DB2_TABLE_EXISTS_SQL: Final = (
 _DB2_INDEX_EXISTS_SQL: Final = (
     "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
 )
-_MIN_QUALIFIED_PARTS: Final = 2
-
-
-def split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
-    """Split qualified DB2 table name into schema and table components."""
-    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
-    if len(parts) >= _MIN_QUALIFIED_PARTS:
-        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
-    return None, normalize_identifier(parts[0] if parts else table_name, "db2")
 
 
 _TERADATA_ERROR_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[\s*Error\s+(\d+)\s*\]", re.IGNORECASE)
@@ -2769,9 +3111,12 @@ def _build_or_augment_teradata_uri(config: dict[str, Any]) -> None:
     if isinstance(uri, str) and all(value is None for value in (host, port, database, username, password)):
         return
     parsed = urlsplit(uri) if isinstance(uri, str) else None
-    host_text = str(host) if host is not None else (parsed.hostname or "" if parsed is not None else "")
-    if ":" in host_text and not host_text.startswith("["):
-        host_text = "[" + host_text + "]"
+    if host is not None:
+        host_text = _validate_uri_host(str(host), backend="Teradata")
+    elif parsed is not None and parsed.hostname:
+        host_text = _validate_uri_host(parsed.hostname, backend="Teradata")
+    else:
+        host_text = ""
     resolved_port = port if port is not None else (parsed.port if parsed is not None else 1025)
     raw_auth = parsed.netloc.rsplit("@", 1)[0] if parsed is not None and "@" in parsed.netloc else ""
     raw_user, separator, raw_password = raw_auth.partition(":")
@@ -2810,7 +3155,6 @@ _TERADATA_INDEX_EXISTS_SQL: Final[str] = (
     "AND UPPER(TRIM(TableName)) = UPPER(TRIM(CAST(? AS VARCHAR(128)))) "
     "AND UPPER(TRIM(IndexName)) = UPPER(TRIM(CAST(? AS VARCHAR(128))))"
 )
-_MAX_TERADATA_QUALIFIED_PARTS: Final[int] = 2
 
 
 def _normalize_teradata_identifier_segment(segment: str, raw_table_name: str) -> str:
@@ -2865,32 +3209,3 @@ def _split_raw_teradata_segments(table_name: str) -> list[str]:
         raise ImproperConfigurationError(msg)
     segments.append("".join(buf))
     return segments
-
-
-def split_teradata_table_name(table_name: str) -> tuple[str | None, str]:
-    """Split a qualified Teradata table name into optional database and table identifiers.
-
-    Args:
-        table_name: Bare or database-qualified Teradata table name.
-
-    Returns:
-        Tuple of ``(database_or_none, table)`` with unquoted segments uppercased
-        and double-quoted segments preserved with ``""`` unescaped.
-
-    Raises:
-        ImproperConfigurationError: If the table name is empty, malformed, or has more than two parts.
-    """
-    cleaned = table_name.strip()
-    if not cleaned or cleaned.startswith(".") or cleaned.endswith("."):
-        msg = f"Invalid Teradata table name: {table_name!r}"
-        raise ImproperConfigurationError(msg)
-    parts = _split_raw_teradata_segments(cleaned)
-    if not parts or len(parts) > _MAX_TERADATA_QUALIFIED_PARTS or any(not part.strip() for part in parts):
-        msg = f"Invalid Teradata table name {table_name!r}: expected '[database.]table'"
-        raise ImproperConfigurationError(msg)
-    if len(parts) == _MAX_TERADATA_QUALIFIED_PARTS:
-        return (
-            _normalize_teradata_identifier_segment(parts[0], table_name),
-            _normalize_teradata_identifier_segment(parts[1], table_name),
-        )
-    return None, _normalize_teradata_identifier_segment(parts[0], table_name)

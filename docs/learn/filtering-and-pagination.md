@@ -13,20 +13,20 @@ Pass any combination of `StatementFilter` instances as positional arguments to `
 | `OnBeforeAfterFilter` | `OnBeforeAfterFilter(field_name, on_or_before=None, on_or_after=None)` | `WHERE col <= :col_on_or_before AND col >= :col_on_or_after` | Filter for inclusive datetime range queries. |
 | `InCollectionFilter` | `InCollectionFilter(field_name, values=None)` | `WHERE col IN (:col_in_0, :col_in_1, ...)` | Filter for IN clause queries. |
 | `NotInCollectionFilter` | `NotInCollectionFilter(field_name, values=None)` | `WHERE col NOT IN (:col_notin_0, :col_notin_1, ...)` | Filter for NOT IN clause queries. |
-| `AnyCollectionFilter` | `AnyCollectionFilter(field_name, values=None)` | `WHERE col = ANY ([:col_any_0, :col_any_1, ...])` | Filter for PostgreSQL-style ANY clause queries. |
-| `NotAnyCollectionFilter` | `NotAnyCollectionFilter(field_name, values=None)` | `WHERE NOT (col = ANY ([:col_not_any_0, ...]))` | Filter for PostgreSQL-style NOT ANY clause queries. |
+| `AnyCollectionFilter` | `AnyCollectionFilter(field_name, values=None)` | `WHERE col = ANY(ARRAY[:col_any_0, :col_any_1, ...])` | Filter for PostgreSQL-style ANY clause queries. |
+| `NotAnyCollectionFilter` | `NotAnyCollectionFilter(field_name, values=None)` | `WHERE NOT col = ANY(ARRAY[:col_not_any_0, ...])` | Filter for PostgreSQL-style NOT ANY clause queries. |
 | `ChoicesFilter` | `ChoicesFilter(field_name, values=None)` | `WHERE col IN (:col_choices_0, :col_choices_1, ...)` | Filter for field matching a defined set of choice values. |
 | `LimitOffsetFilter` | `LimitOffsetFilter(limit, offset)` | `LIMIT :limit OFFSET :offset` | Filter for LIMIT and OFFSET clauses. |
-| `CursorFilter` | `CursorFilter(keys, limit, cursor=None, secret=None)` | `WHERE (col, id) > (:cursor_k0, :cursor_k1) ORDER BY col ASC, id ASC LIMIT :cursor_limit` | Paginate by ordered keys whose last key uniquely identifies each row. |
+| `CursorFilter` | `CursorFilter(keys, limit, cursor=None, secret=None, ttl=None, encrypted=False)` | `WHERE (col, id) > (:cursor_k0, :cursor_k1) ORDER BY col ASC, id ASC LIMIT :cursor_limit` | Paginate by ordered keys whose last key uniquely identifies each row. |
 | `OrderByFilter` | `OrderByFilter(field_name, sort_order='asc', nulls=None)` | `ORDER BY col ASC / DESC [NULLS FIRST / LAST]` | Filter for ORDER BY clauses. |
-| `SearchFilter` | `SearchFilter(field_name, value, ignore_case=False)` | `WHERE col LIKE :col_search (or ILIKE when ignore_case=True)` | Filter for text search queries. |
-| `NotInSearchFilter` | `NotInSearchFilter(field_name, value, ignore_case=False)` | `WHERE col NOT LIKE :col_not_search (or NOT ILIKE when ignore_case=True)` | Filter for negated text search queries. |
+| `SearchFilter` | `SearchFilter(field_name, value, ignore_case=False, escape_wildcards=False)` | `WHERE col LIKE :col_search [ESCAPE '/'] (or ILIKE when ignore_case=True)` | Filter for text search queries. |
+| `NotInSearchFilter` | `NotInSearchFilter(field_name, value, ignore_case=False, escape_wildcards=False)` | `WHERE col NOT LIKE :col_not_search [ESCAPE '/'] (or NOT ILIKE when ignore_case=True)` | Filter for negated text search queries. |
 | `NullFilter` | `NullFilter(field_name)` | `WHERE col IS NULL` | Filter for IS NULL queries. |
 | `NotNullFilter` | `NotNullFilter(field_name)` | `WHERE col IS NOT NULL` | Filter for IS NOT NULL queries. |
 | `BooleanFilter` | `BooleanFilter(field_name, value)` | `WHERE col = :col_boolean` | Filter for boolean comparison queries. |
 <!-- GENERATED:END filter-catalog -->
 
-- **Multi-column and escaped `LIKE` search**: `SearchFilter` and `NotInSearchFilter` accept `set[str]` to filter across multiple columns (`OR` for `SearchFilter`, `AND` for `NotInSearchFilter`). Call `SearchFilter.escape_like_value(raw)` to escape literal `%`, `_`, and `\` wildcards before passing user input.
+- **Multi-column and escaped `LIKE` search**: `SearchFilter` and `NotInSearchFilter` accept `set[str]` to filter across multiple columns (`OR` for `SearchFilter`, `AND` for `NotInSearchFilter`). Pass `escape_wildcards=True` so `%`, `_`, and `/` in user input are automatically escaped with `LIKE_ESCAPE_CHAR` (`"/"`) and rendered with an `ESCAPE '/'` clause, or call `SearchFilter.escape_like_value(raw)` manually.
 - **Named parameter binding**: Because `StatementFilter` objects bind named parameters (`:limit`, `:offset`, etc.), always bind any additional base-query parameters as **named** keyword arguments (`status="active"`), never positional tuples.
 
 ### Combining Multiple Filters on One Query
@@ -90,7 +90,10 @@ Large tables degrade under deep `OFFSET 100000` scans because the engine must re
 ```
 
 - **Unique tie-breaker key**: Always include a unique column (such as `CursorKey("id", "desc")`) as the final key in `CursorKeys` so rows with identical timestamps paginate deterministically.
-- **HMAC-SHA256 cursor signing**: Pass `secret="your-signing-key"` to `CursorFilter(keys, limit=20, cursor=token, secret=...)` so tampered tokens or sort-order mismatches raise `InvalidCursorError`.
+- **Unsigned default & cursor readability**: Used directly, without a `secret`, `CursorFilter` emits unsigned `v1.<payload>` base64url JSON tokens that contain the cursor sort values in readable form (plus issued/expiry timestamps when `ttl` is set). Add a `secret` for tamper detection (`v1.<payload>.<mac>`) or set `encrypted=True` (`e1.<nonce+ciphertext>.<mac>`) whenever sort-key values should remain opaque to clients.
+- **HMAC-SHA256 signing, TTL, and encryption on `CursorFilter`**: Pass `secret="your-signing-key"` for HMAC-SHA256 signing (`v1.`), `ttl=timedelta(minutes=15)` (or positive seconds as `int | float`) to enforce token expiration (`InvalidCursorError` on expired tokens or non-expiring tokens checked against a required `ttl`), and `encrypted=True` with a non-empty `secret` to encrypted tokens with stdlib HMAC-SHA256 counter-mode encryption and authenticate them before decryption.
+- **Framework plugin & `FilterConfig` options**: On `SQLSpecPlugin` (Litestar, Starlette, FastAPI) and `extension_config` (`LitestarConfig`, `StarletteConfig`, `FastAPIConfig`), or per-route `FilterConfig`, configure `pagination_cursor_secret`, `pagination_cursor_ttl`, and `pagination_cursor_encrypted`. Framework providers resolve configuration in order: `FilterConfig` override -> `SQLSpecPlugin` / `extension_config` -> `SQLSPEC_PAGINATION_CURSOR_SECRET` -> `SECRET_KEY`, deriving endpoint-scoped subkeys automatically. Framework providers require a secret: a cursor request without one raises `ImproperConfigurationError`, and there is no unsigned mode. Tokens are also bound to the request tenant of every tenant-enabled database configuration, so a token issued for one tenant fails verification for another and clients restart from the first page after tenant binding is enabled. Search providers escape `%`, `_`, and `/` in request input by default; set `search_escape_wildcards=False` on `FilterConfig` to let them act as wildcards.
+- **Sharing secrets across worker processes**: Configure an explicit shared `secret` / `pagination_cursor_secret` (or `SQLSPEC_PAGINATION_CURSOR_SECRET` / `SECRET_KEY` environment variable) across all worker processes and instances so cursors issued by one worker validate and decrypt on another.
 - **Direct driver vs service assembly**: Call `cursor_filter.build_page(rows)` when executing via a raw driver session (`session.select(query, cursor_filter)`), or call `service.paginate_cursor(query, cursor_filter)` on `SQLSpecSyncService` / `SQLSpecAsyncService`.
 
 ## Declarative HTTP Filter Providers (Litestar)

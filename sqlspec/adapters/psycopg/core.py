@@ -16,6 +16,7 @@ from sqlspec.core import (
     StatementConfig,
     build_statement_config_from_profile,
 )
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.driver import ExecutionResult, rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -31,6 +32,7 @@ from sqlspec.exceptions import (
     OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -50,6 +52,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from sqlspec.core import ParameterStyleConfig, StackOperation
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "OPEN_TRANSACTION_STATUSES",
@@ -74,11 +77,14 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "escape_literal_percent",
+    "execute_cache_hit",
+    "execute_cache_hit_async",
     "execute_with_optional_parameters",
     "execute_with_optional_parameters_async",
     "pipeline_supported",
     "resolve_many_rowcount",
     "resolve_rowcount",
+    "source_uses_pyformat",
 )
 
 TRANSACTION_STATUS_IDLE = 0
@@ -289,6 +295,7 @@ class PsycopgSyncStreamSource:
         "_chunk_size",
         "_column_names",
         "_column_types_resolver",
+        "_connection",
         "_cursor",
         "_driver",
         "_parameters",
@@ -310,6 +317,7 @@ class PsycopgSyncStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._connection: Any = None
         self._cursor: Any = None
         self._transaction: Any = None
         self._column_names: list[str] | None = None
@@ -334,11 +342,15 @@ class PsycopgSyncStreamSource:
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
+        transaction = self._transaction
+        self._transaction = None
+        owned = self._driver.connection is self._connection
+        self._connection = None
+        if not owned:
+            return
         if cursor is not None:
             with contextlib.suppress(Exception):
                 cursor.close()
-        transaction = self._transaction
-        self._transaction = None
         if transaction is not None:
             with contextlib.suppress(Exception):
                 if error:
@@ -347,11 +359,12 @@ class PsycopgSyncStreamSource:
                     transaction.__exit__(None, None, None)
 
     def _start(self) -> None:
-        transaction = self._driver.connection.transaction()
+        self._connection = self._driver.connection
+        transaction = self._connection.transaction()
         transaction.__enter__()
         self._transaction = transaction
         try:
-            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+            cursor = self._connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
             cursor.itersize = self._chunk_size
             execute_with_optional_parameters(cursor, self._sql, self._parameters)
             self._cursor = cursor
@@ -375,6 +388,7 @@ class PsycopgAsyncStreamSource:
         "_chunk_size",
         "_column_names",
         "_column_types_resolver",
+        "_connection",
         "_cursor",
         "_driver",
         "_parameters",
@@ -396,6 +410,7 @@ class PsycopgAsyncStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._connection: Any = None
         self._cursor: Any = None
         self._transaction: Any = None
         self._column_names: list[str] | None = None
@@ -420,11 +435,15 @@ class PsycopgAsyncStreamSource:
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor
         self._cursor = None
+        transaction = self._transaction
+        self._transaction = None
+        owned = self._driver.connection is self._connection
+        self._connection = None
+        if not owned:
+            return
         if cursor is not None:
             with contextlib.suppress(Exception):
                 await cursor.close()
-        transaction = self._transaction
-        self._transaction = None
         if transaction is not None:
             with contextlib.suppress(Exception):
                 if error:
@@ -433,21 +452,25 @@ class PsycopgAsyncStreamSource:
                     await transaction.__aexit__(None, None, None)
 
     async def _start(self) -> None:
-        transaction = self._driver.connection.transaction()
+        self._connection = self._driver.connection
+        transaction = self._connection.transaction()
         await transaction.__aenter__()
         self._transaction = transaction
+        start_error: BaseException | None = None
         try:
-            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+            cursor = self._connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
             cursor.itersize = self._chunk_size
             await execute_with_optional_parameters_async(cursor, self._sql, self._parameters)
             self._cursor = cursor
             if self._column_types_resolver is not None:
                 self.column_types = self._column_types_resolver(cursor.description)
         except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             self._transaction = None
             with contextlib.suppress(Exception):
-                await transaction.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
+                await transaction.__aexit__(type(start_error), start_error, start_error.__traceback__)
+            raise start_error
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -466,6 +489,135 @@ def resolve_rowcount(cursor: Any) -> int:
     if isinstance(rowcount, int) and rowcount > 0:
         return rowcount
     return 0
+
+
+def execute_cache_hit(
+    connection: Any, sql: str, params: Any, cached: "CachedQuery", statement_config: "StatementConfig", state: Any
+) -> "SQLResult | None":
+    """Execute a cached statement on a psycopg connection and build its result.
+
+    Statements whose compiled SQL holds percent signs other than its parameter
+    placeholders are declined.
+
+    Args:
+        connection: psycopg connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Unused executor state.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+
+    Raises:
+        SQLSpecError: Mapped from any ``psycopg.Error`` the statement raises.
+    """
+    _ = state
+    compiled_sql = cached.compiled_sql
+    if compiled_sql.count("%") != (cached.parameter_profile.total_count if params else 0):
+        return None
+    cursor: Any = None
+    try:
+        cursor = connection.cursor()
+        if params:
+            cursor.execute(compiled_sql, params)
+        else:
+            cursor.execute(compiled_sql)
+        if not cached.operation_profile.returns_rows:
+            return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+        fetched = cursor.fetchall()
+        data: list[Any] = fetched or []
+        description = cursor.description
+        column_names: list[str] = [column.name for column in description] if description else []
+        return SQLResult.create_cached_select(
+            sql,
+            statement_config,
+            cached.processed_state,
+            compiled_sql,
+            params,
+            data,
+            column_names,
+            len(data),
+            resolve_row_format(data),
+            None,
+        )
+    except psycopg.Error as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    finally:
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+
+async def execute_cache_hit_async(
+    connection: Any, sql: str, params: Any, cached: "CachedQuery", statement_config: "StatementConfig", state: Any
+) -> "SQLResult | None":
+    """Execute a cached statement on an async psycopg connection and build its result.
+
+    Statements whose compiled SQL holds percent signs other than its parameter
+    placeholders are declined.
+
+    Args:
+        connection: psycopg connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Unused executor state.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+
+    Raises:
+        SQLSpecError: Mapped from any ``psycopg.Error`` the statement raises.
+    """
+    _ = state
+    compiled_sql = cached.compiled_sql
+    if compiled_sql.count("%") != (cached.parameter_profile.total_count if params else 0):
+        return None
+    cursor: Any = None
+    error: BaseException | None = None
+    result: SQLResult | None = None
+    try:
+        cursor = connection.cursor()
+        if params:
+            await cursor.execute(compiled_sql, params)
+        else:
+            await cursor.execute(compiled_sql)
+        if not cached.operation_profile.returns_rows:
+            result = DMLResult(cached.operation_type, resolve_rowcount(cursor))
+        else:
+            fetched = await cursor.fetchall()
+            data: list[Any] = fetched or []
+            description = cursor.description
+            column_names: list[str] = [column.name for column in description] if description else []
+            result = SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                params,
+                data,
+                column_names,
+                len(data),
+                resolve_row_format(data),
+                None,
+            )
+    except psycopg.Error as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        error = mapped_error
+    except BaseException as cleanup_trigger:
+        error = cleanup_trigger
+    if cursor is not None:
+        with contextlib.suppress(Exception):
+            await cursor.close()
+    if error is not None:
+        raise error
+    return result
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:
@@ -655,6 +807,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             return _create_postgres_error(error, sqlstate_code, termination_class, description)
         if sqlstate_code == "55P03":
             return _create_postgres_error(error, sqlstate_code, QueryTimeoutError, description)
+        if sqlstate_code == "25006":
+            return _create_postgres_error(error, sqlstate_code, ReadOnlyTransactionError, "read-only transaction")
         if sqlstate_code.startswith("25"):
             return _create_postgres_error(error, sqlstate_code, TransactionError, description)
         return _create_postgres_error(error, sqlstate_code, error_class, description)
@@ -667,6 +821,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             return _create_postgres_error(error, error_code, termination_class, "query terminated")
         if error_code == "55P03":
             return _create_postgres_error(error, error_code, QueryTimeoutError, "lock timeout")
+        if error_code == "25006":
+            return _create_postgres_error(error, error_code, ReadOnlyTransactionError, "read-only transaction")
         if error_code.startswith("25"):
             return _create_postgres_error(error, error_code, TransactionError, "invalid transaction state")
         exc_class = map_sqlstate_to_exception(error_code)
@@ -676,15 +832,44 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     return _create_postgres_error(error, error_code, SQLSpecError, "database error")
 
 
-def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
-    """Escape literal percent characters before driver-side interpolation."""
+def source_uses_pyformat(raw_sql: str, validator: "ParameterValidator") -> bool:
+    """Return whether the caller's SQL text used psycopg ``%s`` or ``%(name)s`` placeholders.
+
+    Args:
+        raw_sql: SQL text as written by the caller.
+        validator: Parameter validator used to scan placeholders.
+
+    Returns:
+        ``True`` when the text contains a pyformat placeholder outside literals and comments.
+    """
+    return any(
+        info.style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}
+        for info in validator.extract_parameters(raw_sql, dialect="postgres")
+    )
+
+
+def escape_literal_percent(
+    sql: str, parameters: Any, validator: "ParameterValidator", *, preserve_percent_escapes: bool = False
+) -> str:
+    """Escape literal percent characters before driver-side interpolation.
+
+    Args:
+        sql: Compiled SQL text using ``%s`` or ``%(name)s`` placeholders.
+        parameters: Prepared parameters payload; no escaping happens without parameters.
+        validator: Parameter validator used to locate placeholders.
+        preserve_percent_escapes: Keep an existing ``%%`` as written. Set when the caller's
+            SQL already used pyformat placeholders and therefore escaped literal percents itself.
+
+    Returns:
+        SQL text where every literal percent survives psycopg interpolation unchanged.
+    """
     if not parameters or "%" not in sql:
         return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
+    keep = {info.position for info in validator.extract_parameters(sql, dialect="postgres")}
     segments: list[str] = []
     index = 0
     while index < len(sql):
-        if sql[index : index + 2] == "%%":
+        if preserve_percent_escapes and sql[index : index + 2] == "%%":
             segments.append("%%")
             index += 2
             continue
@@ -702,6 +887,7 @@ def _register_exception_mappings() -> None:
         _EXCEPTION_MAPPING[pool_timeout] = ("", ConnectionTimeoutError, "connection pool timeout")
 
     _EXCEPTION_MAPPING.update({
+        pg_errors.ReadOnlySqlTransaction: ("25006", ReadOnlyTransactionError, "read-only transaction"),
         pg_errors.LockNotAvailable: ("55P03", QueryTimeoutError, "lock not available"),
         pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
         pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),

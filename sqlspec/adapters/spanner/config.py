@@ -2,6 +2,9 @@
 
 import contextlib
 import warnings
+from collections.abc import Mapping
+from datetime import datetime, timedelta
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Protocol, TypedDict, cast
 
 from sqlspec.adapters.spanner._typing import SpannerAbstractSessionPool as AbstractSessionPool
@@ -30,12 +33,19 @@ from sqlspec.adapters.spanner.core import (
     default_statement_config,
     execute_partitioned_dml_async,
     execute_partitioned_dml_sync,
+    resolve_snapshot_kwargs,
     resolve_transaction_completion,
     run_in_transaction_async,
     run_in_transaction_sync,
 )
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
-from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+from sqlspec.config import (
+    AsyncDatabaseConfig,
+    SyncDatabaseConfig,
+    _ReadAsyncContext,
+    _ReadSelectionReceipt,
+    _ReadSyncContext,
+)
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import (
     AsyncPoolConnectionContext,
@@ -46,10 +56,12 @@ from sqlspec.driver import (
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable
+    from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from logging import Logger
     from types import TracebackType
     from uuid import UUID
@@ -85,7 +97,7 @@ _DEFAULT_SESSION_TRANSACTION: bool = True
 """Default ``transaction`` flag for ``provide_session`` / ``provide_connection``.
 
 ``True`` yields a write-capable ``Transaction`` context; read-only
-``Snapshot`` contexts are available through ``provide_read_session``."""
+``Snapshot`` contexts are available through ``provide_replica_session``."""
 
 _CLIENT_CONFIG_FIELDS = frozenset({
     "project",
@@ -229,6 +241,8 @@ class SpannerPoolParams(SpannerConnectionParams):
 class SpannerDriverFeatures(TypedDict):
     """Driver feature flags configuring Spanner codecs, RPC options, and Batch Write ingestion."""
 
+    default_staleness: "NotRequired[Mapping[str, Any]]"
+    """Default timestamp bound for read-only snapshot providers."""
     enable_uuid_conversion: "NotRequired[bool]"
     """Automatically coerce ``UUID`` parameters to strings (defaults to ``True``)."""
     json_serializer: "NotRequired[Callable[[Any], str]]"
@@ -277,11 +291,14 @@ def build_connection_config(
 class SpannerSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for sync Spanner connections (Snapshot or Transaction)."""
 
-    __slots__ = ("_connection", "_session", "_transaction")
+    __slots__ = ("_connection", "_session", "_snapshot_kwargs", "_transaction")
 
-    def __init__(self, config: "SpannerSyncConfig", transaction: bool = False) -> None:
+    def __init__(
+        self, config: "SpannerSyncConfig", transaction: bool = False, *, snapshot_kwargs: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(config)
         self._transaction = transaction
+        self._snapshot_kwargs = snapshot_kwargs if snapshot_kwargs is not None else {"multi_use": True}
         self._connection: SpannerSyncConnection | None = None
         self._session: Any = None
 
@@ -300,7 +317,7 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
                 raise
             self._connection = cast("SpannerSyncConnection", txn)
         else:
-            self._session = cast("Any", database).snapshot(multi_use=True)
+            self._session = cast("Any", database).snapshot(**self._snapshot_kwargs)
             self._connection = cast("SpannerSyncConnection", self._session.__enter__())
         try:
             hook = getattr(self._config, "_user_connection_hook", None) or getattr(
@@ -322,6 +339,7 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._transaction:
+            rollback_failed = False
             try:
                 if self._connection is not None:
                     txn = cast("Any", self._connection)
@@ -334,12 +352,17 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
                     elif action == "rollback":
                         try:
                             txn.rollback()
-                        except SpannerGoogleAPICallError as exc:
+                        except BaseException as exc:
+                            rollback_failed = True
                             if exc_type is None:
-                                raise create_mapped_exception(exc) from exc
+                                if isinstance(exc, SpannerGoogleAPICallError):
+                                    raise create_mapped_exception(exc) from exc
+                                raise
             finally:
                 if self._session is not None:
-                    cast("Any", self._config.get_database()).sessions_manager.put_session(self._session)
+                    _return_spanner_session_sync(
+                        self._config.get_database(), self._session, rollback_failed=rollback_failed
+                    )
                 self._connection = None
                 self._session = None
             return None
@@ -354,14 +377,19 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
 class _SpannerSyncSessionConnectionHandler(SyncPoolSessionFactory):
     """Sync session handler that uses SpannerSyncConnectionContext."""
 
-    __slots__ = ("_transaction",)
+    __slots__ = ("_snapshot_kwargs", "_transaction")
 
-    def __init__(self, config: "SpannerSyncConfig", transaction: bool = False) -> None:
+    def __init__(
+        self, config: "SpannerSyncConfig", transaction: bool = False, *, snapshot_kwargs: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(config)
         self._transaction = transaction
+        self._snapshot_kwargs = snapshot_kwargs
 
     def acquire_connection(self) -> "SpannerSyncConnection":
-        self._ctx = SpannerSyncConnectionContext(self._config, transaction=self._transaction)
+        self._ctx = SpannerSyncConnectionContext(
+            self._config, transaction=self._transaction, snapshot_kwargs=self._snapshot_kwargs
+        )
         return cast("SpannerSyncConnectionContext", self._ctx).__enter__()
 
     def release_connection(self, _conn: "SpannerSyncConnection", **kwargs: Any) -> None:
@@ -409,6 +437,10 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         on_connection_create: "Callable[[Any], Any | None] | None" = None,
         **kwargs: Any,
     ) -> None:
+        replicas = kwargs.pop("replicas", None)
+        if replicas is not None and not isinstance(replicas, bool):
+            msg = "Spanner uses a single Database client; replicas must be a boolean"
+            raise ImproperConfigurationError(msg)
         self.connection_config, raw_driver_features = _prepare_settings(
             connection_config, driver_features, default_pool_type=FixedSizePool
         )
@@ -434,14 +466,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
 
         self._client: Client | None = None
         self._database: Database | None = None
-
-    def _build_storage_capabilities(self) -> "StorageCapabilities":
-        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
-        capabilities = super()._build_storage_capabilities()
-        arrow_ready = self._dependency_available(ensure_pyarrow)
-        capabilities["arrow_import_enabled"] = arrow_ready
-        capabilities["arrow_export_enabled"] = arrow_ready
-        return capabilities
 
     def get_database(self) -> "Database":
         """Return the configured database, creating the pool and client on first use.
@@ -479,8 +503,63 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         """
         return cast("SpannerSyncConnection", cast("Any", self.get_database()).snapshot(multi_use=True))
 
+    def _resolve_snapshot_options(
+        self, options: Mapping[str, Any], *, transaction: bool, apply_defaults: bool
+    ) -> dict[str, Any]:
+        return resolve_snapshot_kwargs(
+            exact_staleness=options.get("exact_staleness"),
+            max_staleness=options.get("max_staleness"),
+            read_timestamp=options.get("read_timestamp"),
+            min_read_timestamp=options.get("min_read_timestamp"),
+            multi_use=options.get("multi_use"),
+            default_staleness=self.driver_features.get("default_staleness"),
+            transaction=transaction,
+            apply_default_staleness=apply_defaults,
+            bind_key=self.bind_key,
+        )
+
+    def provide_replica_connection(
+        self,
+        *args: Any,
+        replica_group: str | None = None,
+        exact_staleness: "timedelta | None" = None,
+        max_staleness: "timedelta | None" = None,
+        read_timestamp: "datetime | None" = None,
+        min_read_timestamp: "datetime | None" = None,
+        multi_use: bool | None = None,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[SpannerSyncConnection]":
+        """Provide a snapshot connection using configured or request read bounds."""
+        self._resolve_replica_group(replica_group)
+        if kwargs.pop("transaction", False):
+            msg = "Read-only Spanner snapshots cannot use transaction=True"
+            raise ImproperConfigurationError(msg)
+        options = self._resolve_snapshot_options(
+            {
+                **kwargs,
+                "exact_staleness": exact_staleness,
+                "max_staleness": max_staleness,
+                "read_timestamp": read_timestamp,
+                "min_read_timestamp": min_read_timestamp,
+                "multi_use": multi_use,
+            },
+            transaction=False,
+            apply_defaults=True,
+        )
+        context = SpannerSyncConnectionContext(self, transaction=False, snapshot_kwargs=options)
+        receipt = _ReadSelectionReceipt()
+        return _ReadSyncContext(self._primary_read_sync(context, receipt), receipt)
+
     def provide_connection(
-        self, *args: Any, transaction: "bool" = _DEFAULT_SESSION_TRANSACTION, **kwargs: Any
+        self,
+        *args: Any,
+        transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
+        exact_staleness: "timedelta | None" = None,
+        max_staleness: "timedelta | None" = None,
+        read_timestamp: "datetime | None" = None,
+        min_read_timestamp: "datetime | None" = None,
+        multi_use: bool | None = None,
+        **kwargs: Any,
     ) -> "SpannerSyncConnectionContext":
         """Yield a Transaction (default) or Snapshot context from the configured pool.
 
@@ -489,12 +568,32 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
             transaction: If True (default), yields a Transaction context that
                 supports execute_update() for DML statements. If False, yields
                 a read-only Snapshot context for SELECT queries.
+            exact_staleness: Fixed snapshot age; mutually exclusive with other bounds.
+            max_staleness: Maximum snapshot age; requires a single-use snapshot.
+            read_timestamp: Exact timezone-aware snapshot timestamp.
+            min_read_timestamp: Earliest snapshot timestamp; requires a single-use snapshot.
+            multi_use: Whether the snapshot supports multiple statements.
             **kwargs: Additional keyword arguments (unused, for interface compatibility).
 
         Returns:
             A Spanner connection context manager.
         """
-        return SpannerSyncConnectionContext(self, transaction=transaction)
+        return SpannerSyncConnectionContext(
+            self,
+            transaction=transaction,
+            snapshot_kwargs=self._resolve_snapshot_options(
+                {
+                    **kwargs,
+                    "exact_staleness": exact_staleness,
+                    "max_staleness": max_staleness,
+                    "read_timestamp": read_timestamp,
+                    "min_read_timestamp": min_read_timestamp,
+                    "multi_use": multi_use,
+                },
+                transaction=transaction,
+                apply_defaults=False,
+            ),
+        )
 
     def provide_session(
         self,
@@ -508,12 +607,17 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
+        exact_staleness: "timedelta | None" = None,
+        max_staleness: "timedelta | None" = None,
+        read_timestamp: "datetime | None" = None,
+        min_read_timestamp: "datetime | None" = None,
+        multi_use: bool | None = None,
         **kwargs: Any,
     ) -> "SpannerSyncSessionContext":
         """Provide a Spanner driver session context manager.
 
         Returns a write-capable Transaction session by default. Pass
-        ``transaction=False`` or use :meth:`provide_read_session` to obtain a
+        ``transaction=False`` or use :meth:`provide_replica_session` to obtain a
         read-only Snapshot session.
 
         Args:
@@ -528,6 +632,11 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
             query_options: Session-scoped QueryOptions for Spanner statements.
             retry: Session-scoped retry policy for Spanner statement calls.
             timeout: Session-scoped timeout for Spanner statement calls.
+            exact_staleness: Fixed snapshot age; mutually exclusive with other bounds.
+            max_staleness: Maximum snapshot age; requires a single-use snapshot.
+            read_timestamp: Exact timezone-aware snapshot timestamp.
+            min_read_timestamp: Earliest snapshot timestamp; requires a single-use snapshot.
+            multi_use: Whether the snapshot supports multiple statements.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -536,7 +645,22 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         if tenant is not None or bypass_tenant:
             msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
             raise ImproperConfigurationError(msg)
-        handler = _SpannerSyncSessionConnectionHandler(self, transaction=transaction)
+        handler = _SpannerSyncSessionConnectionHandler(
+            self,
+            transaction=transaction,
+            snapshot_kwargs=self._resolve_snapshot_options(
+                {
+                    **kwargs,
+                    "exact_staleness": exact_staleness,
+                    "max_staleness": max_staleness,
+                    "read_timestamp": read_timestamp,
+                    "min_read_timestamp": min_read_timestamp,
+                    "multi_use": multi_use,
+                },
+                transaction=transaction,
+                apply_defaults=False,
+            ),
+        )
         return SpannerSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
@@ -576,33 +700,70 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
             **kwargs,
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
+        replica_group: str | None = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
         statement_config: "StatementConfig | None" = None,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
         query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
+        exact_staleness: "timedelta | None" = None,
+        max_staleness: "timedelta | None" = None,
+        read_timestamp: "datetime | None" = None,
+        min_read_timestamp: "datetime | None" = None,
+        multi_use: bool | None = None,
         **kwargs: Any,
-    ) -> "SpannerSyncSessionContext":
+    ) -> "AbstractContextManager[SpannerSyncDriver]":
         """Provide a read-only Snapshot Spanner session.
 
         Use for query workloads that benefit from Spanner's snapshot reads.
         For DDL/DML, use :meth:`provide_session` (write-capable by default).
         """
-        return self.provide_session(
+        self._resolve_replica_group(replica_group)
+        if kwargs.pop("transaction", False):
+            msg = "Read-only Spanner snapshots cannot use transaction=True"
+            raise ImproperConfigurationError(msg)
+        options = self._resolve_snapshot_options(
+            {
+                **kwargs,
+                "exact_staleness": exact_staleness,
+                "max_staleness": max_staleness,
+                "read_timestamp": read_timestamp,
+                "min_read_timestamp": min_read_timestamp,
+                "multi_use": multi_use,
+            },
+            transaction=False,
+            apply_defaults=True,
+        )
+        receipt = _ReadSelectionReceipt()
+        context = self.provide_session(
             *args,
             statement_config=statement_config,
             transaction=False,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
             request_options=request_options,
             directed_read_options=directed_read_options,
             query_options=query_options,
             retry=retry,
             timeout=timeout,
-            **kwargs,
+            **options,
         )
+
+        return _ReadSyncContext(self._primary_read_sync(context, receipt), receipt)
+
+    @deprecated("0.72.0", removal_in="0.74.0", alternative="provide_replica_session", kind="method")
+    def provide_read_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[SpannerSyncDriver]":
+        """Provide a read-only Snapshot Spanner session.
+
+        Deprecated alias of :meth:`provide_replica_session`.
+        """
+        return self.provide_replica_session(*args, **kwargs)
 
     def run_in_transaction(self, fn: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
         """Execute a callable inside Spanner's retryable transaction runner.
@@ -641,6 +802,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         namespace = super().get_signature_namespace()
         namespace.update({
             "SpannerConnectionParams": SpannerConnectionParams,
+            "datetime": datetime,
+            "timedelta": timedelta,
             "SpannerDriverFeatures": SpannerDriverFeatures,
             "SpannerPoolParams": SpannerPoolParams,
             "SpannerSyncConfig": SpannerSyncConfig,
@@ -654,6 +817,14 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return queue defaults for Spanner JSON and transaction handling."""
         return EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        return capabilities
 
     def _get_client(self) -> "Client":
         if self._client is None:
@@ -702,11 +873,14 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
 class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
     """Context manager for async Spanner connections (Snapshot or Transaction)."""
 
-    __slots__ = ("_session", "_transaction")
+    __slots__ = ("_session", "_snapshot_kwargs", "_transaction")
 
-    def __init__(self, config: "SpannerAsyncConfig", transaction: bool = False) -> None:
+    def __init__(
+        self, config: "SpannerAsyncConfig", transaction: bool = False, *, snapshot_kwargs: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(config)
         self._transaction = transaction
+        self._snapshot_kwargs = snapshot_kwargs if snapshot_kwargs is not None else {"multi_use": True}
         self._connection: SpannerAsyncConnection | None = None
         self._session: Any = None
 
@@ -725,7 +899,7 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
                 raise
             self._connection = cast("SpannerAsyncConnection", txn)
         else:
-            self._session = cast("Any", database).snapshot(multi_use=True)
+            self._session = cast("Any", database).snapshot(**self._snapshot_kwargs)
             self._connection = cast("SpannerAsyncConnection", await self._session.__aenter__())
         try:
             hook = getattr(self._config, "_user_connection_hook", None) or getattr(
@@ -747,6 +921,7 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._transaction:
+            rollback_failed = False
             try:
                 if self._connection is not None:
                     txn = cast("Any", self._connection)
@@ -759,13 +934,16 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
                     elif action == "rollback":
                         try:
                             await txn.rollback()
-                        except SpannerGoogleAPICallError as exc:
+                        except BaseException as exc:
+                            rollback_failed = True
                             if exc_type is None:
-                                raise create_mapped_exception(exc) from exc
+                                if isinstance(exc, SpannerGoogleAPICallError):
+                                    raise create_mapped_exception(exc) from exc
+                                raise
             finally:
                 if self._session is not None:
                     database = await self._config.get_database()
-                    await cast("Any", database).sessions_manager.put_session(self._session)
+                    await _return_spanner_session_async(database, self._session, rollback_failed=rollback_failed)
                 self._connection = None
                 self._session = None
             return None
@@ -780,15 +958,20 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
 class _SpannerAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     """Async session handler that uses SpannerAsyncConnectionContext."""
 
-    __slots__ = ("_ctx", "_transaction")
+    __slots__ = ("_ctx", "_snapshot_kwargs", "_transaction")
 
-    def __init__(self, config: "SpannerAsyncConfig", transaction: bool = False) -> None:
+    def __init__(
+        self, config: "SpannerAsyncConfig", transaction: bool = False, *, snapshot_kwargs: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(config)
         self._transaction = transaction
+        self._snapshot_kwargs = snapshot_kwargs
         self._ctx: SpannerAsyncConnectionContext | None = None
 
     async def acquire_connection(self) -> "SpannerAsyncConnection":
-        self._ctx = SpannerAsyncConnectionContext(self._config, transaction=self._transaction)
+        self._ctx = SpannerAsyncConnectionContext(
+            self._config, transaction=self._transaction, snapshot_kwargs=self._snapshot_kwargs
+        )
         return await self._ctx.__aenter__()
 
     async def release_connection(self, _conn: "SpannerAsyncConnection", **kwargs: Any) -> None:
@@ -835,6 +1018,10 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         on_connection_create: "Callable[[Any], Any | None] | None" = None,
         **kwargs: Any,
     ) -> None:
+        replicas = kwargs.pop("replicas", None)
+        if replicas is not None and not isinstance(replicas, bool):
+            msg = "Spanner uses a single Database client; replicas must be a boolean"
+            raise ImproperConfigurationError(msg)
         self.connection_config, raw_driver_features = _prepare_settings(
             connection_config, driver_features, default_pool_type=AsyncFixedSizePool
         )
@@ -860,14 +1047,6 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
 
         self._client: AsyncClient | None = None
         self._database: AsyncDatabase | None = None
-
-    def _build_storage_capabilities(self) -> "StorageCapabilities":
-        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
-        capabilities = super()._build_storage_capabilities()
-        arrow_ready = self._dependency_available(ensure_pyarrow)
-        capabilities["arrow_import_enabled"] = arrow_ready
-        capabilities["arrow_export_enabled"] = arrow_ready
-        return capabilities
 
     async def get_database(self) -> "AsyncDatabase":
         """Return the configured database, creating the pool and client on first use.
@@ -906,8 +1085,63 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         database = await self.get_database()
         return cast("SpannerAsyncConnection", cast("Any", database).snapshot(multi_use=True))
 
+    def _resolve_snapshot_options(
+        self, options: Mapping[str, Any], *, transaction: bool, apply_defaults: bool
+    ) -> dict[str, Any]:
+        return resolve_snapshot_kwargs(
+            exact_staleness=options.get("exact_staleness"),
+            max_staleness=options.get("max_staleness"),
+            read_timestamp=options.get("read_timestamp"),
+            min_read_timestamp=options.get("min_read_timestamp"),
+            multi_use=options.get("multi_use"),
+            default_staleness=self.driver_features.get("default_staleness"),
+            transaction=transaction,
+            apply_default_staleness=apply_defaults,
+            bind_key=self.bind_key,
+        )
+
+    def provide_replica_connection(
+        self,
+        *args: Any,
+        replica_group: str | None = None,
+        exact_staleness: "timedelta | None" = None,
+        max_staleness: "timedelta | None" = None,
+        read_timestamp: "datetime | None" = None,
+        min_read_timestamp: "datetime | None" = None,
+        multi_use: bool | None = None,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[SpannerAsyncConnection]":
+        """Provide a snapshot connection using configured or request read bounds."""
+        self._resolve_replica_group(replica_group)
+        if kwargs.pop("transaction", False):
+            msg = "Read-only Spanner snapshots cannot use transaction=True"
+            raise ImproperConfigurationError(msg)
+        options = self._resolve_snapshot_options(
+            {
+                **kwargs,
+                "exact_staleness": exact_staleness,
+                "max_staleness": max_staleness,
+                "read_timestamp": read_timestamp,
+                "min_read_timestamp": min_read_timestamp,
+                "multi_use": multi_use,
+            },
+            transaction=False,
+            apply_defaults=True,
+        )
+        context = SpannerAsyncConnectionContext(self, transaction=False, snapshot_kwargs=options)
+        receipt = _ReadSelectionReceipt()
+        return _ReadAsyncContext(self._primary_read_async(context, receipt), receipt)
+
     def provide_connection(
-        self, *args: Any, transaction: "bool" = _DEFAULT_SESSION_TRANSACTION, **kwargs: Any
+        self,
+        *args: Any,
+        transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
+        exact_staleness: "timedelta | None" = None,
+        max_staleness: "timedelta | None" = None,
+        read_timestamp: "datetime | None" = None,
+        min_read_timestamp: "datetime | None" = None,
+        multi_use: bool | None = None,
+        **kwargs: Any,
     ) -> "SpannerAsyncConnectionContext":
         """Yield a Transaction (default) or Snapshot context from the configured pool.
 
@@ -916,12 +1150,32 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             transaction: If True (default), yields a Transaction context that
                 supports execute_update() for DML statements. If False, yields
                 a read-only Snapshot context for SELECT queries.
+            exact_staleness: Fixed snapshot age; mutually exclusive with other bounds.
+            max_staleness: Maximum snapshot age; requires a single-use snapshot.
+            read_timestamp: Exact timezone-aware snapshot timestamp.
+            min_read_timestamp: Earliest snapshot timestamp; requires a single-use snapshot.
+            multi_use: Whether the snapshot supports multiple statements.
             **kwargs: Additional keyword arguments (unused, for interface compatibility).
 
         Returns:
             An async Spanner connection context manager.
         """
-        return SpannerAsyncConnectionContext(self, transaction=transaction)
+        return SpannerAsyncConnectionContext(
+            self,
+            transaction=transaction,
+            snapshot_kwargs=self._resolve_snapshot_options(
+                {
+                    **kwargs,
+                    "exact_staleness": exact_staleness,
+                    "max_staleness": max_staleness,
+                    "read_timestamp": read_timestamp,
+                    "min_read_timestamp": min_read_timestamp,
+                    "multi_use": multi_use,
+                },
+                transaction=transaction,
+                apply_defaults=False,
+            ),
+        )
 
     def provide_session(
         self,
@@ -935,12 +1189,17 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
+        exact_staleness: "timedelta | None" = None,
+        max_staleness: "timedelta | None" = None,
+        read_timestamp: "datetime | None" = None,
+        min_read_timestamp: "datetime | None" = None,
+        multi_use: bool | None = None,
         **kwargs: Any,
     ) -> "SpannerAsyncSessionContext":
         """Provide an async Spanner driver session context manager.
 
         Returns a write-capable Transaction session by default. Pass
-        ``transaction=False`` or use :meth:`provide_read_session` to obtain a
+        ``transaction=False`` or use :meth:`provide_replica_session` to obtain a
         read-only Snapshot session.
 
         Args:
@@ -955,6 +1214,11 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             query_options: Session-scoped QueryOptions for Spanner statements.
             retry: Session-scoped retry policy for Spanner statement calls.
             timeout: Session-scoped timeout for Spanner statement calls.
+            exact_staleness: Fixed snapshot age; mutually exclusive with other bounds.
+            max_staleness: Maximum snapshot age; requires a single-use snapshot.
+            read_timestamp: Exact timezone-aware snapshot timestamp.
+            min_read_timestamp: Earliest snapshot timestamp; requires a single-use snapshot.
+            multi_use: Whether the snapshot supports multiple statements.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -963,7 +1227,22 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         if tenant is not None or bypass_tenant:
             msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
             raise ImproperConfigurationError(msg)
-        handler = _SpannerAsyncSessionConnectionHandler(self, transaction=transaction)
+        handler = _SpannerAsyncSessionConnectionHandler(
+            self,
+            transaction=transaction,
+            snapshot_kwargs=self._resolve_snapshot_options(
+                {
+                    **kwargs,
+                    "exact_staleness": exact_staleness,
+                    "max_staleness": max_staleness,
+                    "read_timestamp": read_timestamp,
+                    "min_read_timestamp": min_read_timestamp,
+                    "multi_use": multi_use,
+                },
+                transaction=transaction,
+                apply_defaults=False,
+            ),
+        )
         return SpannerAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
@@ -1003,33 +1282,70 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             **kwargs,
         )
 
-    def provide_read_session(
+    def provide_replica_session(
         self,
         *args: Any,
+        replica_group: str | None = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
         statement_config: "StatementConfig | None" = None,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
         query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
+        exact_staleness: "timedelta | None" = None,
+        max_staleness: "timedelta | None" = None,
+        read_timestamp: "datetime | None" = None,
+        min_read_timestamp: "datetime | None" = None,
+        multi_use: bool | None = None,
         **kwargs: Any,
-    ) -> "SpannerAsyncSessionContext":
+    ) -> "AbstractAsyncContextManager[SpannerAsyncDriver]":
         """Provide a read-only Snapshot async Spanner session.
 
         Use for query workloads that benefit from Spanner's snapshot reads.
         For DDL/DML, use :meth:`provide_session` (write-capable by default).
         """
-        return self.provide_session(
+        self._resolve_replica_group(replica_group)
+        if kwargs.pop("transaction", False):
+            msg = "Read-only Spanner snapshots cannot use transaction=True"
+            raise ImproperConfigurationError(msg)
+        options = self._resolve_snapshot_options(
+            {
+                **kwargs,
+                "exact_staleness": exact_staleness,
+                "max_staleness": max_staleness,
+                "read_timestamp": read_timestamp,
+                "min_read_timestamp": min_read_timestamp,
+                "multi_use": multi_use,
+            },
+            transaction=False,
+            apply_defaults=True,
+        )
+        receipt = _ReadSelectionReceipt()
+        context = self.provide_session(
             *args,
             statement_config=statement_config,
             transaction=False,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
             request_options=request_options,
             directed_read_options=directed_read_options,
             query_options=query_options,
             retry=retry,
             timeout=timeout,
-            **kwargs,
+            **options,
         )
+
+        return _ReadAsyncContext(self._primary_read_async(context, receipt), receipt)
+
+    @deprecated("0.72.0", removal_in="0.74.0", alternative="provide_replica_session", kind="method")
+    def provide_read_session(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[SpannerAsyncDriver]":
+        """Provide a read-only Snapshot Spanner session.
+
+        Deprecated alias of :meth:`provide_replica_session`.
+        """
+        return self.provide_replica_session(*args, **kwargs)
 
     async def run_in_transaction(self, fn: "Callable[..., Awaitable[Any]]", *args: Any, **kwargs: Any) -> Any:
         """Execute a coroutine function inside Spanner's async retryable transaction runner.
@@ -1075,6 +1391,8 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             "SpannerAsyncDriver": SpannerAsyncDriver,
             "SpannerAsyncSessionContext": SpannerAsyncSessionContext,
             "SpannerConnectionParams": SpannerConnectionParams,
+            "datetime": datetime,
+            "timedelta": timedelta,
             "SpannerDriverFeatures": SpannerDriverFeatures,
             "SpannerPoolParams": SpannerPoolParams,
         })
@@ -1083,6 +1401,14 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return queue defaults for Spanner JSON and transaction handling."""
         return EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)
+
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        return capabilities
 
     def _get_client(self) -> "AsyncClient":
         if self._client is None:
@@ -1226,3 +1552,27 @@ def _pool_kwargs(connection_config: "dict[str, Any]", pool_kind: str) -> dict[st
             )
         )
     return pool_kwargs
+
+
+def _return_spanner_session_sync(database: Any, session: Any, *, rollback_failed: bool) -> None:
+    """Return a Spanner session to the manager or evict non-multiplexed sessions on failed rollback."""
+    if not rollback_failed:
+        cast("Any", database).sessions_manager.put_session(session)
+        return
+    if getattr(session, "is_multiplexed", False) is not True:
+        with contextlib.suppress(Exception):
+            session.delete()
+
+
+async def _return_spanner_session_async(database: Any, session: Any, *, rollback_failed: bool) -> None:
+    """Return an async Spanner session to the manager or evict non-multiplexed sessions on failed rollback."""
+    if not rollback_failed:
+        result = cast("Any", database).sessions_manager.put_session(session)
+        if isawaitable(result):
+            await result
+        return
+    if getattr(session, "is_multiplexed", False) is not True:
+        with contextlib.suppress(Exception):
+            delete_result = session.delete()
+            if isawaitable(delete_result):
+                await delete_result

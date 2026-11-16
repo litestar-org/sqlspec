@@ -237,7 +237,7 @@ async def test_session_exit_rolls_back_autocommit_off_work(fake_ibm_db: FakeModu
     async with db2_mode.enter(config.provide_session()) as driver:
         await db2_mode.call(driver.execute, INSERT)
 
-    assert connection.rollbacks == 1
+    assert connection.rollbacks == 2
     assert connection.committed == []
     assert connection.pending == []
     await db2_mode.call(config.close_pool)
@@ -383,3 +383,22 @@ async def test_rollback_failure_resets_transaction_state_and_restores_autocommit
     assert connection.autocommit is True
     assert not hasattr(driver, "release_open_work")
     assert hasattr(driver, "_release_open_work")
+
+
+@pytest.mark.anyio
+async def test_release_open_work_closes_handle_on_rollback_failure(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_release_open_work closes the connection handle so the pool evicts it when rollback fails."""
+    connection = _registered_connection(fake_ibm_db)
+    driver = db2_mode.driver(connection)
+    await db2_mode.call(driver.begin)
+
+    def failing_rollback() -> None:
+        raise FakeDb2OperationalError("SQL30081N  A communication error has been detected.")
+
+    monkeypatch.setattr(connection, "rollback", failing_rollback)
+    await db2_mode.call(driver._release_open_work, autocommit_baseline=True)  # pyright: ignore[reportPrivateUsage]
+
+    assert connection.closed is True
+    assert connection.conn_handler is None

@@ -11,7 +11,13 @@ import duckdb
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _secret_sql, _validate_sql_identifier
+from sqlspec.adapters.duckdb.pool import (
+    DuckDBConnectionPool,
+    _format_secret_literal,
+    _secret_sql,
+    _validate_sql_identifier,
+)
+from sqlspec.exceptions import DatabaseConnectionError, OperationalError
 
 pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
 
@@ -27,6 +33,7 @@ def test_pool_propagates_commit_conflicts_and_releases_connection(tmp_path: Path
                 connection.execute("BEGIN")
                 connection.execute("INSERT INTO items VALUES (1)")
                 other.execute("INSERT INTO items VALUES (1)")
+                connection.commit()
         assert pool.size() == 0
         assert other.execute("SELECT id FROM items").fetchall() == [(1,)]
     finally:
@@ -529,8 +536,8 @@ def test_close_closes_connections_opened_on_other_threads(tmp_path: Path) -> Non
             connection.execute("SELECT 1")
 
 
-def test_clean_exit_commits_an_open_transaction(tmp_path: Path) -> None:
-    """A file-backed session that exits normally must keep its work."""
+def test_normal_exit_rolls_back_open_transaction(tmp_path: Path) -> None:
+    """Uncommitted work is rolled back when a pooled connection is returned normally."""
     database = str(tmp_path / "commit.duckdb")
     pool = DuckDBConnectionPool(connection_config={"database": database})
     try:
@@ -540,7 +547,7 @@ def test_clean_exit_commits_an_open_transaction(tmp_path: Path) -> None:
             connection.execute("INSERT INTO items VALUES (1)")
 
         with pool.get_connection() as connection:
-            assert connection.execute("SELECT id FROM items").fetchall() == [(1,)]
+            assert connection.execute("SELECT id FROM items").fetchall() == []
     finally:
         pool.close()
 
@@ -651,8 +658,141 @@ def test_duckdb_nested_cancelled_error_handled_by_outer_commit(tmp_path: Path) -
                     raise asyncio.CancelledError()
             except asyncio.CancelledError:
                 pass
+            connection.commit()
 
         with pool.get_connection() as connection:
             assert connection.execute("SELECT COUNT(*) FROM items").fetchone() == (1,)
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("bad_float", [float("nan"), float("inf"), float("-inf")])
+def test_format_secret_literal_rejects_non_finite_floats(bad_float: float) -> None:
+    """_format_secret_literal rejects NaN and infinity while preserving finite numbers and booleans."""
+    with pytest.raises(ValueError, match="finite"):
+        _format_secret_literal(bad_float)
+
+    assert _format_secret_literal(1.5) == "1.5"
+    assert _format_secret_literal(42) == "42"
+    assert _format_secret_literal(True) == "true"
+    assert _format_secret_literal(False) == "false"
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_cls"),
+    [
+        (lambda: duckdb.ConnectionException("unable to connect"), DatabaseConnectionError),
+        (lambda: duckdb.IOException("cannot open database file"), OperationalError),
+    ],
+    ids=["connection_exception", "io_exception"],
+)
+def test_duckdb_open_connection_maps_native_error(
+    monkeypatch: pytest.MonkeyPatch, exc_factory: Any, expected_cls: type[Exception]
+) -> None:
+    """DuckDB connection failures map to SQLSpec connection/operational errors for replica failover."""
+    native = exc_factory()
+
+    def failing_connect(**_: Any) -> Any:
+        raise native
+
+    monkeypatch.setattr(duckdb, "connect", failing_connect)
+    pool = DuckDBConnectionPool(connection_config={"database": ":memory:"})
+    try:
+        with pytest.raises(expected_cls) as exc_info:
+            pool.acquire()
+        assert exc_info.value.__cause__ is native
+    finally:
+        pool.close()
+
+
+@pytest.mark.anyio
+async def test_duckdb_pool_isolates_concurrent_async_tasks(tmp_path: Path) -> None:
+    """Concurrent asyncio tasks receive separate DuckDB connections and transaction lifecycles."""
+    database = str(tmp_path / "async_isolation.duckdb")
+    pool = DuckDBConnectionPool(connection_config={"database": database})
+    try:
+        with pool.get_connection() as setup_conn:
+            setup_conn.execute("CREATE TABLE items (name VARCHAR)")
+
+        seen_ids: list[int] = []
+        entered_both = asyncio.Event()
+        entered_count = 0
+
+        async def commit_worker() -> None:
+            nonlocal entered_count
+            with pool.get_connection() as outer:
+                seen_ids.append(id(outer))
+                with pool.get_connection() as inner:
+                    assert inner is outer
+                outer.execute("BEGIN")
+                outer.execute("INSERT INTO items VALUES ('committed')")
+                entered_count += 1
+                if entered_count == 2:
+                    entered_both.set()
+                await entered_both.wait()
+                await asyncio.sleep(0.01)
+                outer.commit()
+
+        async def failing_worker() -> None:
+            nonlocal entered_count
+            with pytest.raises(RuntimeError, match="task boom"):
+                with pool.get_connection() as conn:
+                    seen_ids.append(id(conn))
+                    conn.execute("BEGIN")
+                    conn.execute("INSERT INTO items VALUES ('rolled_back')")
+                    entered_count += 1
+                    if entered_count == 2:
+                        entered_both.set()
+                    await entered_both.wait()
+                    raise RuntimeError("task boom")
+
+        await asyncio.gather(commit_worker(), failing_worker())
+        assert len(set(seen_ids)) == 2
+        with pool.get_connection() as verify_conn:
+            rows = verify_conn.execute("SELECT name FROM items").fetchall()
+        assert rows == [("committed",)]
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize(
+    ("raw_database", "expected_name"),
+    [
+        ("", ":memory:"),
+        (":memory:", ":memory:"),
+        (":memory:shared_db", ":memory:"),
+        ("md:analytics?motherduck_token=eyJhbGciOiJsecret", "md:analytics"),
+        ("motherduck:reporting?motherduck_token=tok&attach_mode=single", "motherduck:reporting"),
+        (
+            "md://alice:secret_pass@md.example.com:8443/analytics?motherduck_token=tok#frag",
+            "md://md.example.com:8443/analytics",
+        ),
+        (
+            "https://user:pass@storage.example.com/warehouse.duckdb?token=abc",
+            "https://storage.example.com/warehouse.duckdb",
+        ),
+        ("/tmp/data/analytics.duckdb", "/tmp/data/analytics.duckdb"),
+    ],
+)
+def test_duckdb_database_name_redacts_motherduck_and_uri_credentials(raw_database: str, expected_name: str) -> None:
+    """_database_name strips userinfo, query tokens, and fragments from DuckDB URIs."""
+    pool = DuckDBConnectionPool(connection_config={"database": raw_database})
+    assert pool._database_name == expected_name
+
+
+def test_inner_release_keeps_outer_checkout_session_state(tmp_path: Path) -> None:
+    pool = DuckDBConnectionPool(
+        connection_config={"database": str(tmp_path / "nested.duckdb")}, reset_session_on_release=True
+    )
+    try:
+        with pool.get_connection() as outer:
+            outer.execute("CREATE TEMP TABLE scratch (id INTEGER)")
+            inner = pool.acquire()
+            assert inner is outer
+            pool.release(inner)
+            assert outer.execute("SELECT count(*) FROM scratch").fetchone() == (0,)
+        with pool.get_connection() as after:
+            temporary = after.execute("SELECT table_name FROM duckdb_tables() WHERE temporary").fetchall()
+            assert temporary == []
     finally:
         pool.close()

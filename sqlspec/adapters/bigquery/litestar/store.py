@@ -1,4 +1,8 @@
-"""BigQuery session store for Litestar integration."""
+"""BigQuery session store for Litestar integration.
+
+BigQuery statements run as independent jobs without a request-scoped transaction, so this store
+always uses its own client connection instead of the request session.
+"""
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, cast
@@ -250,7 +254,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             data = result.get("data")
             expires_at = result.get("expires_at")
 
-            if renew_for is not None and expires_at is not None:
+            if self._is_renewal_requested(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 new_expires_at_ts = self._datetime_to_timestamp(new_expires_at)
                 if new_expires_at_ts is not None:

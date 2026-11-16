@@ -4,7 +4,11 @@ This module tests that CTEs with duplicate parameter names are properly
 handled with unique parameter naming to prevent collisions.
 """
 
-from typing import cast
+from collections.abc import Callable
+from typing import Any, cast
+
+import pytest
+from sqlglot import expressions as exp
 
 from sqlspec import sql
 
@@ -271,3 +275,218 @@ def test_from_subquery_keeps_nested_cte_owner_isolated() -> None:
 
     assert source.build().sql == before
     assert "FALSE" in target.build().sql
+
+
+@pytest.mark.parametrize(
+    "build_query",
+    [
+        pytest.param(
+            lambda owned: (
+                sql.select("*").from_("tasks").where_in("project_id", owned).where(sql.column("assignee_id") == 200)
+            ),
+            id="where_in",
+        ),
+        pytest.param(
+            lambda owned: sql.select("*").from_("tasks").where_exists(owned).where(sql.column("assignee_id") == 200),
+            id="where_exists",
+        ),
+        pytest.param(
+            lambda owned: (
+                sql
+                .select("*")
+                .from_("tasks")
+                .where(sql.column("project_id") == sql.any_(owned))
+                .where(sql.column("assignee_id") == 200)
+            ),
+            id="sql_any",
+        ),
+        pytest.param(
+            lambda owned: (
+                sql.select("*").from_("tasks").where_any("project_id", owned).where(sql.column("assignee_id") == 200)
+            ),
+            id="where_any",
+        ),
+        pytest.param(
+            lambda owned: sql.select("*").from_("tasks").with_("owned", owned).where(sql.column("assignee_id") == 200),
+            id="with_",
+        ),
+        pytest.param(
+            lambda owned: (
+                sql
+                .update("tasks")
+                .set(status="done")
+                .where_in("project_id", owned)
+                .where(sql.column("assignee_id") == 200)
+            ),
+            id="update",
+        ),
+        pytest.param(
+            lambda owned: sql.delete("tasks").where_in("project_id", owned).where(sql.column("assignee_id") == 200),
+            id="delete",
+        ),
+        pytest.param(
+            lambda owned: sql.select(owned).from_("tasks").where(sql.column("assignee_id") == 200), id="scalar_select"
+        ),
+        pytest.param(
+            lambda owned: (
+                sql.select(sql.exists_(owned).as_("has_proj")).from_("tasks").where(sql.column("assignee_id") == 200)
+            ),
+            id="select_exists_fragment",
+        ),
+        pytest.param(
+            lambda owned: (
+                sql
+                .select("*")
+                .from_("tasks")
+                .join(owned, on="tasks.project_id = owned.id", alias="owned")
+                .where(sql.column("assignee_id") == 200)
+            ),
+            id="join_subquery",
+        ),
+        pytest.param(
+            lambda owned: (
+                sql
+                .select("*")
+                .from_("tasks")
+                .where_eq("active", True)
+                .or_where_exists(sql.exists_(owned))
+                .where(sql.column("assignee_id") == 200)
+            ),
+            id="or_where_exists_fragment",
+        ),
+    ],
+)
+def test_embedded_subquery_preserves_distinct_where_param_bindings(build_query: Callable[[Any], Any]) -> None:
+    """Embedding a parameterized subquery keeps inner and outer where_param_N bindings distinct."""
+    owned = sql.select("id").from_("projects").where(sql.column("owner_id") == 100)
+    built = build_query(owned).build()
+
+    owner_keys = [name for name, val in built.parameters.items() if val == 100]
+    assignee_keys = [name for name, val in built.parameters.items() if val == 200]
+    assert len(owner_keys) == 1
+    assert len(assignee_keys) == 1
+    assert owner_keys[0] != assignee_keys[0]
+    assert f":{owner_keys[0]}" in built.sql
+    assert f":{assignee_keys[0]}" in built.sql
+
+
+@pytest.mark.parametrize(
+    "build_query",
+    [
+        pytest.param(
+            lambda owned: (
+                sql.select("*").from_("tasks").where(sql.column("assignee_id") == 200).where_in("project_id", owned)
+            ),
+            id="where_in",
+        ),
+        pytest.param(
+            lambda owned: sql.select("*").from_("tasks").where(sql.column("assignee_id") == 200).where_exists(owned),
+            id="where_exists",
+        ),
+        pytest.param(
+            lambda owned: (
+                sql
+                .select("*")
+                .from_("tasks")
+                .where(sql.column("assignee_id") == 200)
+                .where(sql.column("project_id") == sql.any_(owned))
+            ),
+            id="sql_any",
+        ),
+        pytest.param(
+            lambda owned: (
+                sql
+                .update("tasks")
+                .set(status="done")
+                .where(sql.column("assignee_id") == 200)
+                .where_in("project_id", owned)
+            ),
+            id="update",
+        ),
+        pytest.param(
+            lambda owned: sql.delete("tasks").where(sql.column("assignee_id") == 200).where_in("project_id", owned),
+            id="delete",
+        ),
+    ],
+)
+def test_outer_where_before_embedded_subquery_avoids_parameter_overwrite(build_query: Callable[[Any], Any]) -> None:
+    """Binding outer where_param_1 before embedding a subquery renames colliding inner placeholders."""
+    owned = sql.select("id").from_("projects").where(sql.column("owner_id") == 100)
+    built = build_query(owned).build()
+
+    owner_keys = [name for name, val in built.parameters.items() if val == 100]
+    assignee_keys = [name for name, val in built.parameters.items() if val == 200]
+    assert len(owner_keys) == 1
+    assert len(assignee_keys) == 1
+    assert owner_keys[0] != assignee_keys[0]
+    assert f":{owner_keys[0]}" in built.sql
+    assert f":{assignee_keys[0]}" in built.sql
+
+
+def test_multi_parameter_subquery_advances_outer_counter_beyond_all_inner_indices() -> None:
+    """Outer parameters after a multi-parameter subquery never collide with its higher-numbered keys."""
+    owned = sql.select("id").from_("projects").where(sql.column("owner_id") == 100).where(sql.column("org_id") == 101)
+    built = (
+        sql
+        .select("*")
+        .from_("tasks")
+        .where(sql.column("assignee_id") == 200)
+        .where_in("project_id", owned)
+        .where(sql.column("reviewer_id") == 300)
+        .build()
+    )
+
+    assert sorted(built.parameters.values()) == [100, 101, 200, 300]
+    assert len(built.parameters) == 4
+
+
+def test_merge_with_subquery_and_condition_fragment_preserves_distinct_parameters() -> None:
+    """Merge using and WHEN condition fragment preserve distinct parameter bindings."""
+    owned = sql.select("id").from_("projects").where(sql.column("owner_id") == 100)
+    guard = sql.select("id").from_("projects").where(sql.column("owner_id") == 200)
+    built = (
+        sql
+        .merge("tasks", dialect="postgres")
+        .using(owned, alias="owned")
+        .on("tasks.project_id = owned.id")
+        .when_matched_then_update(status="done", condition=sql.exists_(guard))
+        .build()
+    )
+
+    values = list(built.parameters.values())
+    assert 100 in values
+    assert 200 in values
+    assert "done" in values
+
+
+def test_reusable_subquery_fragment_stays_isolated_with_outer_where_params() -> None:
+    """Reusing one subquery fragment across queries keeps each query's parameter names distinct."""
+    owned = sql.select("id").from_("projects").where(sql.column("owner_id") == 100)
+    fragment = sql.exists_(owned)
+
+    first = sql.select("*").from_("tasks").where(fragment).where(sql.column("assignee_id") == 200).build()
+    second = (
+        sql
+        .select("*")
+        .from_("tasks")
+        .where(sql.column("reviewer_id") == 300)
+        .where(fragment)
+        .where(sql.column("assignee_id") == 400)
+        .build()
+    )
+
+    assert sorted(first.parameters.values()) == [100, 200]
+    assert sorted(second.parameters.values()) == [100, 300, 400]
+
+
+def test_merge_sanitizes_non_identifier_child_names() -> None:
+    """Merged child parameters with non-identifier names are renamed and their placeholders rewritten."""
+    outer = sql.select("*").from_("t")
+    mapping = outer._merge_parameter_dict({"a-b": 5})  # pyright: ignore[reportPrivateUsage]
+
+    assert mapping == {"a-b": "a_b"}
+    assert outer.parameters == {"a_b": 5}
+    rewritten = outer._update_placeholders(  # pyright: ignore[reportPrivateUsage]
+        exp.EQ(this=exp.column("v"), expression=exp.Placeholder(this="a-b")), mapping
+    )
+    assert rewritten.sql() == "v = :a_b"

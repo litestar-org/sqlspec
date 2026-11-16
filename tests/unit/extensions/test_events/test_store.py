@@ -148,6 +148,20 @@ def test_normalize_event_channel_name_empty() -> None:
         normalize_event_channel_name("")
 
 
+@pytest.mark.parametrize("name", ["notifications\n", "notifications\r\n", "\nnotifications"])
+def test_normalize_event_channel_name_rejects_newlines(name: str) -> None:
+    """Channel names containing trailing or leading newlines are rejected."""
+    with pytest.raises(EventChannelError, match="Invalid events channel name"):
+        normalize_event_channel_name(name)
+
+
+@pytest.mark.parametrize("name", ["events_queue\n", "app_schema.events_queue\n", "app_schema\n.events_queue"])
+def test_normalize_queue_table_name_rejects_newlines(name: str) -> None:
+    """Table names containing trailing or embedded newlines are rejected."""
+    with pytest.raises(EventChannelError, match="Invalid events table name"):
+        normalize_queue_table_name(name)
+
+
 @pytest.mark.parametrize("method_name", ["reconcile_schema_sync", "reconcile_schema_async"])
 def test_event_schema_return_type_reflection(method_name: str) -> None:
     """Framework reflection resolves the real schema result before first use."""

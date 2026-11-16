@@ -1,5 +1,6 @@
 """IBM Db2 ADK stores for Google Agent Development Kit session and memory storage."""
 
+import contextlib
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
@@ -14,7 +15,7 @@ from sqlspec.adapters.db2.core import (
     utc_now,
 )
 from sqlspec.adapters.db2.migrations import build_guarded_drop_table
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import DeadlockError, SerializationConflictError, SQLSpecError, UniqueViolationError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
     BaseSyncADKStore,
@@ -23,6 +24,7 @@ from sqlspec.extensions.adk import (
     StoredSession,
     normalize_session_list_options,
 )
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
@@ -35,6 +37,7 @@ __all__ = ("Db2AsyncADKMemoryStore", "Db2AsyncADKStore", "Db2SyncADKMemoryStore"
 
 JSON_COLUMN_TYPE: Final[str] = "CLOB(1M)"
 MISSING_OBJECT_SQLSTATE: Final[str] = "42704"
+_MAX_STATE_MERGE_ATTEMPTS: Final[int] = 8
 
 
 class _Db2ADKStoreMixin:
@@ -51,6 +54,17 @@ class _Db2ADKStoreMixin:
         _user_state_table: str
         _metadata_table: str
         _owner_id_column_ddl: str | None
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return catalog-probed drops for the ADK tables in FK-safe order."""
+        tables = (
+            self._metadata_table,
+            self._user_state_table,
+            self._app_state_table,
+            self._events_table,
+            self._session_table,
+        )
+        return [build_guarded_drop_table(table, _drop_table_sql(table)) for table in tables]
 
     def _table_specs(self) -> list[tuple[str, str]]:
         """Return each ADK table name with the DDL that creates it, in creation order."""
@@ -83,22 +97,29 @@ class _Db2ADKStoreMixin:
             _drop_table_sql(self._session_table),
         ]
 
-    def downgrade_drops(self) -> "list[DropStatement]":
-        """Return catalog-probed drops for the ADK tables in FK-safe order."""
-        tables = (
-            self._metadata_table,
-            self._user_state_table,
-            self._app_state_table,
-            self._events_table,
-            self._session_table,
-        )
-        return [build_guarded_drop_table(table, _drop_table_sql(table)) for table in tables]
-
     def _upsert_app_state_sql(self) -> str:
         return _upsert_state_sql(self._app_state_table, ("app_name",))
 
     def _upsert_user_state_sql(self) -> str:
         return _upsert_state_sql(self._user_state_table, ("app_name", "user_id"))
+
+    def _select_app_state_for_update_sql(self) -> str:
+        return _select_state_for_update_sql(self._app_state_table, ("app_name",))
+
+    def _select_user_state_for_update_sql(self) -> str:
+        return _select_state_for_update_sql(self._user_state_table, ("app_name", "user_id"))
+
+    def _insert_app_state_sql(self) -> str:
+        return _insert_state_sql(self._app_state_table, ("app_name",))
+
+    def _update_app_state_sql(self) -> str:
+        return _update_state_sql(self._app_state_table, ("app_name",))
+
+    def _insert_user_state_sql(self) -> str:
+        return _insert_state_sql(self._user_state_table, ("app_name", "user_id"))
+
+    def _update_user_state_sql(self) -> str:
+        return _update_state_sql(self._user_state_table, ("app_name", "user_id"))
 
     def _upsert_metadata_sql(self) -> str:
         return _upsert_metadata_sql(self._metadata_table)
@@ -111,7 +132,9 @@ class _Db2ADKStoreMixin:
         after_timestamp: datetime | None = None,
         limit: int | None = None,
     ) -> tuple[str, tuple[Any, ...]]:
-        return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
+        return _events_query(
+            self._events_table, self._session_table, app_name, user_id, session_id, after_timestamp, limit
+        )
 
 
 class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
@@ -140,30 +163,93 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             driver.commit()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        """Create a new ADK session."""
+        """Create a new ADK session and optionally merge scoped state deltas."""
+        session_state = dict(state)
         params = _session_insert_params(
-            session_id, app_name, user_id, state, self._owner_id_column_name is not None, owner_id
+            session_id, app_name, user_id, session_state, self._owner_id_column_name is not None, owner_id
         )
-        with self._config.provide_session() as driver:
-            driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
-            row = driver.select_one_or_none(_session_select_sql(self._session_table), (app_name, user_id, session_id))
-            driver.commit()
-        return _created_session_record(row)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            with self._config.provide_session(transaction=True) as driver:
+                try:
+                    driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
+                    row = driver.select_one_or_none(
+                        _session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    )
+                    scoped_started = True
+                    current_app_state = (
+                        self._apply_state_delta(
+                            driver,
+                            self._select_app_state_for_update_sql(),
+                            self._insert_app_state_sql(),
+                            self._update_app_state_sql(),
+                            (app_name,),
+                            app_state_delta,
+                        )
+                        if app_state_delta
+                        else self._select_state(driver, _select_app_state_sql(self._app_state_table), (app_name,))
+                    )
+                    current_user_state = (
+                        self._apply_state_delta(
+                            driver,
+                            self._select_user_state_for_update_sql(),
+                            self._insert_user_state_sql(),
+                            self._update_user_state_sql(),
+                            (app_name, user_id),
+                            user_state_delta,
+                        )
+                        if user_state_delta
+                        else self._select_state(
+                            driver, _select_user_state_sql(self._user_state_table), (app_name, user_id)
+                        )
+                    )
+                    driver.commit()
+                except (DeadlockError, SerializationConflictError, UniqueViolationError) as exc:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    if (
+                        (not isinstance(exc, UniqueViolationError) or scoped_started)
+                        and has_deltas
+                        and attempt + 1 < max_attempts
+                    ):
+                        continue
+                    raise
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
+                else:
+                    record = _created_session_record(row)
+                    record["state"] = merge_scoped_state(record["state"], current_app_state, current_user_state)
+                    return record
+        msg = f"Failed to merge scoped state during create_session after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
     ) -> StoredSession | None:
         """Return a scoped session or None if absent."""
+        should_renew = self._is_renewal_requested(renew_for)
         try:
-            with self._config.provide_session() as driver:
-                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            with self._provide_replica_session(primary=renew_for is not None) as driver:
+                if should_renew:
                     driver.execute(_touch_session_sql(self._session_table), (utc_now(), app_name, user_id, session_id))
                 row = driver.select_one_or_none(
                     _session_select_sql(self._session_table), (app_name, user_id, session_id)
                 )
-                if renew_for is not None:
+                if should_renew:
                     driver.commit()
         except SQLSpecError as exc:
             if _is_table_missing(exc):
@@ -198,7 +284,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
@@ -206,12 +292,27 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         return [_session_record_from_row(row) for row in rows]
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete a session. Event rows cascade through the FK."""
-        self._execute(_delete_session_sql(self._session_table), (app_name, user_id, session_id), commit=True)
+        """Delete a session and its associated events."""
+        with self._config.provide_session() as driver:
+            driver.execute(_delete_session_events_sql(self._events_table), (app_name, user_id, session_id))
+            driver.execute(_delete_session_sql(self._session_table), (app_name, user_id, session_id))
+            driver.commit()
 
     def append_event(self, event_record: StoredEvent) -> None:
-        """Append an event to a session."""
-        self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
+        """Append an event after verifying session ownership."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        with self._config.provide_session() as driver:
+            row = driver.select_one_or_none(
+                _session_ownership_sql(self._session_table), (session_id, app_name, user_id)
+            )
+            if row is None:
+                driver.rollback()
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
+            driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+            driver.commit()
 
     def append_event_and_update_state(
         self,
@@ -221,25 +322,75 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
-        with self._config.provide_session() as driver:
-            driver.execute(
-                _update_session_state_sql(self._session_table),
-                (to_json(state), utc_now(), app_name, user_id, session_id),
-            )
-            row = driver.select_one_or_none(_session_select_sql(self._session_table), (app_name, user_id, session_id))
-            if row is None:
-                _raise_session_not_found(session_id)
-            driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
-            if app_state is not None:
-                driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state), utc_now()))
-            if user_state is not None:
-                driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state), utc_now()))
-            driver.commit()
-        return _session_record_from_row(row)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
+        session_state = dict(state)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            with self._config.provide_session(transaction=True) as driver:
+                try:
+                    driver.execute(
+                        _update_session_state_sql(self._session_table),
+                        (to_json(session_state), utc_now(), app_name, user_id, session_id),
+                    )
+                    row = driver.select_one_or_none(
+                        _session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    )
+                    if row is None:
+                        driver.rollback()
+                        _raise_session_not_found(session_id)
+                    driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                    scoped_started = True
+                    merged_app_state = (
+                        self._apply_state_delta(
+                            driver,
+                            self._select_app_state_for_update_sql(),
+                            self._insert_app_state_sql(),
+                            self._update_app_state_sql(),
+                            (app_name,),
+                            app_state_delta,
+                        )
+                        if app_state_delta
+                        else None
+                    )
+                    merged_user_state = (
+                        self._apply_state_delta(
+                            driver,
+                            self._select_user_state_for_update_sql(),
+                            self._insert_user_state_sql(),
+                            self._update_user_state_sql(),
+                            (app_name, user_id),
+                            user_state_delta,
+                        )
+                        if user_state_delta
+                        else None
+                    )
+                    driver.commit()
+                except (DeadlockError, SerializationConflictError, UniqueViolationError) as exc:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    if (
+                        (not isinstance(exc, UniqueViolationError) or scoped_started)
+                        and has_deltas
+                        and attempt + 1 < max_attempts
+                    ):
+                        continue
+                    raise
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
+                else:
+                    record = _session_record_from_row(row)
+                    record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
+                    return record
+        msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     def get_events(
         self,
@@ -250,15 +401,20 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         limit: int | None = None,
     ) -> list[StoredEvent]:
         """Return events for a scoped session ordered by event timestamp."""
-        if limit is not None and limit <= 0:
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
+        if limit == 0:
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
             raise
+        if limit is not None:
+            rows = list(reversed(rows))
         return [_event_record_from_row(row) for row in rows]
 
     def delete_expired_events(self, before: datetime, app_name: str | None = None) -> int:
@@ -279,12 +435,12 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
 
     def get_app_state(self, app_name: str) -> dict[str, Any] | None:
         """Return app-scoped state."""
-        row = self._fetch_scoped_row(_app_state_select_sql(self._app_state_table), (app_name,))
+        row = self._fetch_scoped_row(_select_app_state_sql(self._app_state_table), (app_name,))
         return _json_dict(row["state"]) if row is not None else None
 
     def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
         """Return user-scoped state."""
-        row = self._fetch_scoped_row(_user_state_select_sql(self._user_state_table), (app_name, user_id))
+        row = self._fetch_scoped_row(_select_user_state_sql(self._user_state_table), (app_name, user_id))
         return _json_dict(row["state"]) if row is not None else None
 
     def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
@@ -302,6 +458,15 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
     def set_metadata(self, key: str, value: str) -> None:
         """Set a metadata key-value pair."""
         self._execute(self._upsert_metadata_sql(), (key, value), commit=True)
+
+    def get_schema_targets_sync(self, driver: Any) -> list[SchemaTarget]:
+        """Return Db2 session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Db2 ADK session and event indexes without committing."""
+        _reconcile_db2_indexes_sync(driver, self._index_specs())
 
     def _sessions_table_ddl(self) -> str:
         """Return Db2 DDL for the sessions table."""
@@ -334,15 +499,6 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         )
         return [_db2_schema_target(table, ddl) for table, ddl in ddl_targets]
 
-    def get_schema_targets_sync(self, driver: Any) -> list[SchemaTarget]:
-        """Return Db2 session-store SchemaTarget definitions without opening a session."""
-        del driver
-        return self._schema_targets()
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing Db2 ADK session and event indexes without committing."""
-        _reconcile_db2_indexes_sync(driver, self._index_specs())
-
     def _fetch_scoped_row(self, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         """Read one row, treating a missing table as no row."""
         try:
@@ -351,6 +507,34 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             if _is_table_missing(exc):
                 return None
             raise
+
+    def _select_state(self, driver: "Db2SyncDriver", sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+        try:
+            row = driver.select_one_or_none(sql, params)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return None
+            raise
+        return _json_dict(row["state"]) if row is not None else None
+
+    def _apply_state_delta(
+        self,
+        driver: "Db2SyncDriver",
+        lock_sql: str,
+        insert_sql: str,
+        update_sql: str,
+        key_params: tuple[Any, ...],
+        delta: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = driver.select_one_or_none(lock_sql, key_params)
+        if row is None:
+            merged = dict(delta)
+            driver.execute(insert_sql, (*key_params, to_json(merged), utc_now()))
+            return merged
+        existing = _json_dict(row["state"])
+        merged = {**existing, **delta}
+        driver.execute(update_sql, (to_json(merged), utc_now(), *key_params))
+        return merged
 
     def _delete_counted(self, count_sql: str, delete_sql: str, params: tuple[Any, ...]) -> int:
         """Delete the matching rows in a single session; a missing table deletes nothing."""
@@ -367,9 +551,9 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         with self._config.provide_session() as driver:
             return driver.select_one_or_none(sql, params)
 
-    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        with self._config.provide_session() as driver:
-            return driver.select(sql, params)
+    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False) -> list[dict[str, Any]]:
+        with self._provide_replica_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
         with self._config.provide_session() as driver:
@@ -405,34 +589,95 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             await driver.commit()
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        """Create a new ADK session."""
+        """Create a new ADK session and optionally merge scoped state deltas."""
+        session_state = dict(state)
         params = _session_insert_params(
-            session_id, app_name, user_id, state, self._owner_id_column_name is not None, owner_id
+            session_id, app_name, user_id, session_state, self._owner_id_column_name is not None, owner_id
         )
-        async with self._config.provide_session() as driver:
-            await driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
-            row = await driver.select_one_or_none(
-                _session_select_sql(self._session_table), (app_name, user_id, session_id)
-            )
-            await driver.commit()
-        return _created_session_record(row)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            async with self._config.provide_session(transaction=True) as driver:
+                try:
+                    await driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
+                    row = await driver.select_one_or_none(
+                        _session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    )
+                    scoped_started = True
+                    current_app_state = (
+                        await self._apply_state_delta(
+                            driver,
+                            self._select_app_state_for_update_sql(),
+                            self._insert_app_state_sql(),
+                            self._update_app_state_sql(),
+                            (app_name,),
+                            app_state_delta,
+                        )
+                        if app_state_delta
+                        else await self._select_state(driver, _select_app_state_sql(self._app_state_table), (app_name,))
+                    )
+                    current_user_state = (
+                        await self._apply_state_delta(
+                            driver,
+                            self._select_user_state_for_update_sql(),
+                            self._insert_user_state_sql(),
+                            self._update_user_state_sql(),
+                            (app_name, user_id),
+                            user_state_delta,
+                        )
+                        if user_state_delta
+                        else await self._select_state(
+                            driver, _select_user_state_sql(self._user_state_table), (app_name, user_id)
+                        )
+                    )
+                    await driver.commit()
+                except (DeadlockError, SerializationConflictError, UniqueViolationError) as exc:
+                    with contextlib.suppress(Exception):
+                        await driver.rollback()
+                    if (
+                        (not isinstance(exc, UniqueViolationError) or scoped_started)
+                        and has_deltas
+                        and attempt + 1 < max_attempts
+                    ):
+                        continue
+                    raise
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        await driver.rollback()
+                    raise
+                else:
+                    record = _created_session_record(row)
+                    record["state"] = merge_scoped_state(record["state"], current_app_state, current_user_state)
+                    return record
+        msg = f"Failed to merge scoped state during create_session after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
     ) -> StoredSession | None:
         """Return a scoped session or None if absent."""
+        should_renew = self._is_renewal_requested(renew_for)
         try:
-            async with self._config.provide_session() as driver:
-                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            async with self._provide_replica_session(primary=renew_for is not None) as driver:
+                if should_renew:
                     await driver.execute(
                         _touch_session_sql(self._session_table), (utc_now(), app_name, user_id, session_id)
                     )
                 row = await driver.select_one_or_none(
                     _session_select_sql(self._session_table), (app_name, user_id, session_id)
                 )
-                if renew_for is not None:
+                if should_renew:
                     await driver.commit()
         except SQLSpecError as exc:
             if _is_table_missing(exc):
@@ -467,7 +712,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = await self._execute_fetchall(sql, params)
+            rows = await self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
@@ -475,12 +720,27 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         return [_session_record_from_row(row) for row in rows]
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete a session. Event rows cascade through the FK."""
-        await self._execute(_delete_session_sql(self._session_table), (app_name, user_id, session_id), commit=True)
+        """Delete a session and its associated events."""
+        async with self._config.provide_session() as driver:
+            await driver.execute(_delete_session_events_sql(self._events_table), (app_name, user_id, session_id))
+            await driver.execute(_delete_session_sql(self._session_table), (app_name, user_id, session_id))
+            await driver.commit()
 
     async def append_event(self, event_record: StoredEvent) -> None:
-        """Append an event to a session."""
-        await self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
+        """Append an event after verifying session ownership."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        async with self._config.provide_session() as driver:
+            row = await driver.select_one_or_none(
+                _session_ownership_sql(self._session_table), (session_id, app_name, user_id)
+            )
+            if row is None:
+                await driver.rollback()
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
+            await driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+            await driver.commit()
 
     async def append_event_and_update_state(
         self,
@@ -490,27 +750,75 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
-        async with self._config.provide_session() as driver:
-            await driver.execute(
-                _update_session_state_sql(self._session_table),
-                (to_json(state), utc_now(), app_name, user_id, session_id),
-            )
-            row = await driver.select_one_or_none(
-                _session_select_sql(self._session_table), (app_name, user_id, session_id)
-            )
-            if row is None:
-                _raise_session_not_found(session_id)
-            await driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
-            if app_state is not None:
-                await driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state), utc_now()))
-            if user_state is not None:
-                await driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state), utc_now()))
-            await driver.commit()
-        return _session_record_from_row(row)
+        _validate_event_belongs_to_session(event_record, app_name, user_id, session_id)
+        session_state = dict(state)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            async with self._config.provide_session(transaction=True) as driver:
+                try:
+                    await driver.execute(
+                        _update_session_state_sql(self._session_table),
+                        (to_json(session_state), utc_now(), app_name, user_id, session_id),
+                    )
+                    row = await driver.select_one_or_none(
+                        _session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    )
+                    if row is None:
+                        await driver.rollback()
+                        _raise_session_not_found(session_id)
+                    await driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                    scoped_started = True
+                    merged_app_state = (
+                        await self._apply_state_delta(
+                            driver,
+                            self._select_app_state_for_update_sql(),
+                            self._insert_app_state_sql(),
+                            self._update_app_state_sql(),
+                            (app_name,),
+                            app_state_delta,
+                        )
+                        if app_state_delta
+                        else None
+                    )
+                    merged_user_state = (
+                        await self._apply_state_delta(
+                            driver,
+                            self._select_user_state_for_update_sql(),
+                            self._insert_user_state_sql(),
+                            self._update_user_state_sql(),
+                            (app_name, user_id),
+                            user_state_delta,
+                        )
+                        if user_state_delta
+                        else None
+                    )
+                    await driver.commit()
+                except (DeadlockError, SerializationConflictError, UniqueViolationError) as exc:
+                    with contextlib.suppress(Exception):
+                        await driver.rollback()
+                    if (
+                        (not isinstance(exc, UniqueViolationError) or scoped_started)
+                        and has_deltas
+                        and attempt + 1 < max_attempts
+                    ):
+                        continue
+                    raise
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        await driver.rollback()
+                    raise
+                else:
+                    record = _session_record_from_row(row)
+                    record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
+                    return record
+        msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     async def get_events(
         self,
@@ -521,15 +829,20 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         limit: int | None = None,
     ) -> list[StoredEvent]:
         """Return events for a scoped session ordered by event timestamp."""
-        if limit is not None and limit <= 0:
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
+        if limit == 0:
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = await self._execute_fetchall(sql, params)
+            rows = await self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
             raise
+        if limit is not None:
+            rows = list(reversed(rows))
         return [_event_record_from_row(row) for row in rows]
 
     async def delete_expired_events(self, before: datetime, app_name: str | None = None) -> int:
@@ -550,12 +863,12 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
 
     async def get_app_state(self, app_name: str) -> dict[str, Any] | None:
         """Return app-scoped state."""
-        row = await self._fetch_scoped_row(_app_state_select_sql(self._app_state_table), (app_name,))
+        row = await self._fetch_scoped_row(_select_app_state_sql(self._app_state_table), (app_name,))
         return _json_dict(row["state"]) if row is not None else None
 
     async def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
         """Return user-scoped state."""
-        row = await self._fetch_scoped_row(_user_state_select_sql(self._user_state_table), (app_name, user_id))
+        row = await self._fetch_scoped_row(_select_user_state_sql(self._user_state_table), (app_name, user_id))
         return _json_dict(row["state"]) if row is not None else None
 
     async def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
@@ -573,6 +886,15 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
     async def set_metadata(self, key: str, value: str) -> None:
         """Set a metadata key-value pair."""
         await self._execute(self._upsert_metadata_sql(), (key, value), commit=True)
+
+    async def get_schema_targets_async(self, driver: Any) -> list[SchemaTarget]:
+        """Return Db2 session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return await self._schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing Db2 ADK session and event indexes without committing."""
+        await _reconcile_db2_indexes_async(driver, self._index_specs())
 
     async def _sessions_table_ddl(self) -> str:
         """Return Db2 DDL for the sessions table."""
@@ -605,15 +927,6 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         )
         return [_db2_schema_target(table, ddl) for table, ddl in ddl_targets]
 
-    async def get_schema_targets_async(self, driver: Any) -> list[SchemaTarget]:
-        """Return Db2 session-store SchemaTarget definitions without opening a session."""
-        del driver
-        return await self._schema_targets()
-
-    async def reconcile_companion_objects_async(self, driver: Any) -> None:
-        """Create missing Db2 ADK session and event indexes without committing."""
-        await _reconcile_db2_indexes_async(driver, self._index_specs())
-
     async def _fetch_scoped_row(self, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         """Read one row, treating a missing table as no row."""
         try:
@@ -623,6 +936,34 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             if _is_table_missing(exc):
                 return None
             raise
+
+    async def _select_state(self, driver: "Db2AsyncDriver", sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+        try:
+            row = await driver.select_one_or_none(sql, params)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return None
+            raise
+        return _json_dict(row["state"]) if row is not None else None
+
+    async def _apply_state_delta(
+        self,
+        driver: "Db2AsyncDriver",
+        lock_sql: str,
+        insert_sql: str,
+        update_sql: str,
+        key_params: tuple[Any, ...],
+        delta: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = await driver.select_one_or_none(lock_sql, key_params)
+        if row is None:
+            merged = dict(delta)
+            await driver.execute(insert_sql, (*key_params, to_json(merged), utc_now()))
+            return merged
+        existing = _json_dict(row["state"])
+        merged = {**existing, **delta}
+        await driver.execute(update_sql, (to_json(merged), utc_now(), *key_params))
+        return merged
 
     async def _delete_counted(self, count_sql: str, delete_sql: str, params: tuple[Any, ...]) -> int:
         """Delete the matching rows in a single session; a missing table deletes nothing."""
@@ -635,9 +976,11 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             raise
         return max(count, 0)
 
-    async def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        async with self._config.provide_session() as driver:
-            return await driver.select(sql, params)
+    async def _execute_fetchall(
+        self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False
+    ) -> list[dict[str, Any]]:
+        async with self._provide_replica_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", await driver.select(sql, params))
 
     async def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
         async with self._config.provide_session() as driver:
@@ -657,15 +1000,15 @@ class _Db2ADKMemoryStoreMixin:
     if TYPE_CHECKING:
         _memory_table: str
 
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the catalog-probed drop for the memory table."""
+        return [build_guarded_drop_table(self._memory_table, _drop_table_sql(self._memory_table))]
+
     def _memory_index_specs(self) -> list[tuple[str, str, str]]:
         return _memory_index_specs(self._memory_table)
 
     def _drop_memory_table_sql(self) -> list[str]:
         return [_drop_table_sql(self._memory_table)]
-
-    def downgrade_drops(self) -> "list[DropStatement]":
-        """Return the catalog-probed drop for the memory table."""
-        return [build_guarded_drop_table(self._memory_table, _drop_table_sql(self._memory_table))]
 
 
 class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2SyncConfig]):
@@ -700,11 +1043,11 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             return 0
 
         unique_entries: list[StoredMemory] = []
-        seen_batch: set[str] = set()
+        seen_batch: set[tuple[str, str, str]] = set()
         for entry in entries:
-            eid = entry["event_id"]
-            if eid not in seen_batch:
-                seen_batch.add(eid)
+            key = (entry["app_name"], entry["user_id"], entry["event_id"])
+            if key not in seen_batch:
+                seen_batch.add(key)
                 unique_entries.append(entry)
 
         inserted_count = 0
@@ -712,14 +1055,14 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
         has_owner = self._owner_id_column_name is not None
         placeholders = ", ".join("?" for _ in unique_entries)
         existing_rows = self._execute_fetchall(
-            f"SELECT id, event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})",
+            f"SELECT app_name, user_id, event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})",
             tuple(e["event_id"] for e in unique_entries),
         )
-        existing_ids = {str(row["event_id"] if "event_id" in row else row["EVENT_ID"]) for row in existing_rows}
+        existing_keys = {_memory_row_key(row) for row in existing_rows}
 
         with self._config.provide_session() as driver:
             for entry in unique_entries:
-                if entry["event_id"] in existing_ids:
+                if (entry["app_name"], entry["user_id"], entry["event_id"]) in existing_keys:
                     continue
                 driver.execute(insert_sql, _memory_insert_row(entry, has_owner, owner_id))
                 inserted_count += 1
@@ -744,18 +1087,18 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             self._memory_table, query, app_name, user_id, scope_filter, effective_limit
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
             raise
         return [_memory_record_from_row(row) for row in rows]
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        _, delete_sql = _memory_session_delete_statements(self._memory_table)
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner."""
+        _, delete_sql, params = _memory_session_delete_statements(self._memory_table, session_id, app_name, user_id)
         try:
-            count = self._execute(delete_sql, (session_id,), commit=True)
+            count = self._execute(delete_sql, params, commit=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return 0
@@ -773,15 +1116,6 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             raise
         return max(count, 0)
 
-    def _memory_table_ddl(self) -> str:
-        return _memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
-
-    def _schema_targets(self) -> list[SchemaTarget]:
-        """Build the Db2 SchemaTarget definition for the ADK memory table when enabled."""
-        if not self._enabled:
-            return []
-        return [_db2_schema_target(self._memory_table, self._memory_table_ddl())]
-
     def get_schema_targets_sync(self, driver: Any) -> list[SchemaTarget]:
         """Return Db2 memory-store SchemaTarget definitions without opening a session."""
         del driver
@@ -793,9 +1127,18 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             return
         _reconcile_db2_indexes_sync(driver, self._memory_index_specs())
 
-    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        with self._config.provide_session() as driver:
-            return driver.select(sql, params)
+    def _memory_table_ddl(self) -> str:
+        return _memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
+
+    def _schema_targets(self) -> list[SchemaTarget]:
+        """Build the Db2 SchemaTarget definition for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
+        return [_db2_schema_target(self._memory_table, self._memory_table_ddl())]
+
+    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False) -> list[dict[str, Any]]:
+        with self._provide_replica_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
         with self._config.provide_session() as driver:
@@ -837,11 +1180,11 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             return 0
 
         unique_entries: list[StoredMemory] = []
-        seen_batch: set[str] = set()
+        seen_batch: set[tuple[str, str, str]] = set()
         for entry in entries:
-            eid = entry["event_id"]
-            if eid not in seen_batch:
-                seen_batch.add(eid)
+            key = (entry["app_name"], entry["user_id"], entry["event_id"])
+            if key not in seen_batch:
+                seen_batch.add(key)
                 unique_entries.append(entry)
 
         inserted_count = 0
@@ -849,14 +1192,14 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
         has_owner = self._owner_id_column_name is not None
         placeholders = ", ".join("?" for _ in unique_entries)
         existing_rows = await self._execute_fetchall(
-            f"SELECT id, event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})",
+            f"SELECT app_name, user_id, event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})",
             tuple(e["event_id"] for e in unique_entries),
         )
-        existing_ids = {str(row["event_id"] if "event_id" in row else row["EVENT_ID"]) for row in existing_rows}
+        existing_keys = {_memory_row_key(row) for row in existing_rows}
 
         async with self._config.provide_session() as driver:
             for entry in unique_entries:
-                if entry["event_id"] in existing_ids:
+                if (entry["app_name"], entry["user_id"], entry["event_id"]) in existing_keys:
                     continue
                 await driver.execute(insert_sql, _memory_insert_row(entry, has_owner, owner_id))
                 inserted_count += 1
@@ -881,18 +1224,18 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             self._memory_table, query, app_name, user_id, scope_filter, effective_limit
         )
         try:
-            rows = await self._execute_fetchall(sql, params)
+            rows = await self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
             raise
         return [_memory_record_from_row(row) for row in rows]
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        _, delete_sql = _memory_session_delete_statements(self._memory_table)
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner."""
+        _, delete_sql, params = _memory_session_delete_statements(self._memory_table, session_id, app_name, user_id)
         try:
-            count = await self._execute(delete_sql, (session_id,), commit=True)
+            count = await self._execute(delete_sql, params, commit=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return 0
@@ -910,15 +1253,6 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             raise
         return max(count, 0)
 
-    async def _memory_table_ddl(self) -> str:
-        return _memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
-
-    async def _schema_targets(self) -> list[SchemaTarget]:
-        """Build the Db2 SchemaTarget definition for the ADK memory table when enabled."""
-        if not self._enabled:
-            return []
-        return [_db2_schema_target(self._memory_table, await self._memory_table_ddl())]
-
     async def get_schema_targets_async(self, driver: Any) -> list[SchemaTarget]:
         """Return Db2 memory-store SchemaTarget definitions without opening a session."""
         del driver
@@ -930,9 +1264,20 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             return
         await _reconcile_db2_indexes_async(driver, self._memory_index_specs())
 
-    async def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        async with self._config.provide_session() as driver:
-            return await driver.select(sql, params)
+    async def _memory_table_ddl(self) -> str:
+        return _memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
+
+    async def _schema_targets(self) -> list[SchemaTarget]:
+        """Build the Db2 SchemaTarget definition for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
+        return [_db2_schema_target(self._memory_table, await self._memory_table_ddl())]
+
+    async def _execute_fetchall(
+        self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False
+    ) -> list[dict[str, Any]]:
+        async with self._provide_replica_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", await driver.select(sql, params))
 
     async def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
         async with self._config.provide_session() as driver:
@@ -1066,6 +1411,22 @@ def _upsert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
     """
 
 
+def _select_state_for_update_sql(table: str, key_columns: tuple[str, ...]) -> str:
+    where_clause = " AND ".join(f"{column} = ?" for column in key_columns)
+    return f"SELECT state FROM {table} WHERE {where_clause} FETCH FIRST 1 ROWS ONLY FOR UPDATE WITH RS"
+
+
+def _insert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
+    columns = ", ".join((*key_columns, "state", "update_time"))
+    key_casts = ", ".join("CAST(? AS VARCHAR(128))" for _ in key_columns)
+    return f"INSERT INTO {table} ({columns}) VALUES ({key_casts}, CAST(? AS {JSON_COLUMN_TYPE}), CAST(? AS TIMESTAMP))"
+
+
+def _update_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
+    where_clause = " AND ".join(f"{column} = ?" for column in key_columns)
+    return f"UPDATE {table} SET state = CAST(? AS {JSON_COLUMN_TYPE}), update_time = CAST(? AS TIMESTAMP) WHERE {where_clause}"
+
+
 def _upsert_metadata_sql(table: str) -> str:
     return f"""
     MERGE INTO {table} AS target
@@ -1080,21 +1441,27 @@ def _upsert_metadata_sql(table: str) -> str:
 
 
 def _events_query(
-    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: datetime | None, limit: int | None
+    events_table: str,
+    session_table: str,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+    after_timestamp: datetime | None,
+    limit: int | None,
 ) -> tuple[str, tuple[Any, ...]]:
     params: list[Any] = [app_name, user_id, session_id]
     after_clause = ""
     if after_timestamp is not None:
-        after_clause = " AND timestamp > ?"
+        after_clause = " AND e.timestamp > ?"
         params.append(to_db_timestamp(after_timestamp))
-    limit_clause = ""
-    if limit is not None:
-        limit_clause = f" FETCH FIRST {int(limit)} ROWS ONLY"
+    limit_clause = f" FETCH FIRST {int(limit)} ROWS ONLY" if limit is not None else ""
+    order_by = "ORDER BY e.timestamp DESC, e.id DESC" if limit is not None else "ORDER BY e.timestamp ASC, e.id ASC"
     sql = f"""
-    SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-    FROM {table}
-    WHERE app_name = ? AND user_id = ? AND session_id = ?{after_clause}
-    ORDER BY timestamp ASC{limit_clause}
+    SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
+    FROM {events_table} e
+    JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
+    WHERE s.app_name = ? AND s.user_id = ? AND s.id = ?{after_clause}
+    {order_by}{limit_clause}
     """
     return sql, tuple(params)
 
@@ -1233,6 +1600,20 @@ def _datetime_value(value: Any) -> datetime:
 def _is_table_missing(exc: BaseException) -> bool:
     """Return whether an error reports an undefined object (SQLSTATE 42704)."""
     return extract_sqlstate(exc) == MISSING_OBJECT_SQLSTATE
+
+
+def _validate_event_belongs_to_session(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+        app_name,
+        user_id,
+        session_id,
+    ):
+        msg = (
+            "event_record scope "
+            f"({event_record['app_name']!r}, {event_record['user_id']!r}, {event_record['session_id']!r}) "
+            f"does not match ({app_name!r}, {user_id!r}, {session_id!r})"
+        )
+        raise ValueError(msg)
 
 
 def _raise_session_not_found(session_id: str) -> None:
@@ -1403,6 +1784,14 @@ def _update_session_state_sql(table: str) -> str:
     """
 
 
+def _session_ownership_sql(table: str) -> str:
+    return f"SELECT 1 FROM {table} WHERE id = ? AND app_name = ? AND user_id = ? FETCH FIRST 1 ROWS ONLY"
+
+
+def _delete_session_events_sql(table: str) -> str:
+    return f"DELETE FROM {table} WHERE app_name = ? AND user_id = ? AND session_id = ?"
+
+
 def _delete_session_sql(table: str) -> str:
     return f"DELETE FROM {table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
@@ -1423,11 +1812,11 @@ def _retention_statements(
     )
 
 
-def _app_state_select_sql(table: str) -> str:
+def _select_app_state_sql(table: str) -> str:
     return f"SELECT state FROM {table} WHERE app_name = ? FETCH FIRST 1 ROWS ONLY"
 
 
-def _user_state_select_sql(table: str) -> str:
+def _select_user_state_sql(table: str) -> str:
     return f"""
     SELECT state
     FROM {table}
@@ -1465,7 +1854,7 @@ CREATE TABLE {table} (
     metadata_json {JSON_COLUMN_TYPE},
     inserted_at TIMESTAMP NOT NULL{owner_line},
     CONSTRAINT pk_{prefix}_id PRIMARY KEY (id),
-    CONSTRAINT uq_{prefix}_event UNIQUE (event_id)
+    CONSTRAINT uq_{prefix}_event UNIQUE (app_name, user_id, event_id)
 )
 """
 
@@ -1480,7 +1869,14 @@ def _memory_index_specs(table: str) -> "list[tuple[str, str, str]]":
 
 
 def _memory_exists_sql(table: str) -> str:
-    return f"SELECT id FROM {table} WHERE event_id = ? FETCH FIRST 1 ROWS ONLY"
+    return f"SELECT id FROM {table} WHERE app_name = ? AND user_id = ? AND event_id = ? FETCH FIRST 1 ROWS ONLY"
+
+
+def _memory_row_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    app_val = row["app_name"] if "app_name" in row else row["APP_NAME"]
+    user_val = row["user_id"] if "user_id" in row else row["USER_ID"]
+    event_val = row["event_id"] if "event_id" in row else row["EVENT_ID"]
+    return (str(app_val), str(user_val), str(event_val))
 
 
 def _memory_insert_sql(table: str, owner_column_name: "str | None") -> str:
@@ -1516,10 +1912,16 @@ def _memory_search_statement(
     return sql, (*scope_params, query)
 
 
-def _memory_session_delete_statements(table: str) -> "tuple[str, str]":
+def _memory_session_delete_statements(
+    table: str, session_id: str, app_name: str, user_id: str
+) -> "tuple[str, str, tuple[Any, ...]]":
+    clauses = ["session_id = ?", "app_name = ?", "user_id = ?"]
+    params: list[Any] = [session_id, app_name, user_id]
+    where_sql = " AND ".join(clauses)
     return (
-        f"SELECT COUNT(*) AS row_count FROM {table} WHERE session_id = ?",
-        f"DELETE FROM {table} WHERE session_id = ?",
+        f"SELECT COUNT(*) AS row_count FROM {table} WHERE {where_sql}",
+        f"DELETE FROM {table} WHERE {where_sql}",
+        tuple(params),
     )
 
 

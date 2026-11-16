@@ -123,6 +123,12 @@ filtered = (
 | `.where_any(c, vs)` / `.where_not_any(c, vs)` | `.or_where_any(c, vs)` / `.or_where_not_any(c, vs)` | `c = ANY(ARRAY(:c_any_1, ...))` / `c <> ALL(ARRAY(...))` |
 | `.where_exists(subq)` / `.where_not_exists(subq)` | `.or_where_exists(subq)` / `.or_where_not_exists(subq)` | `EXISTS (SELECT ...)` |
 
+Explicit parameter names passed to `add_parameter(value, name=...)` or `load_parameters(...)` must be ASCII identifiers (`[A-Za-z_][A-Za-z0-9_]*`) or positional numbers; other names raise `SQLBuilderError`. Names carried in by embedded subqueries that are not identifiers are renamed automatically.
+
+`.where_in(column, [])` matches no rows (it renders `1 = 0`) and `.where_not_in(column, [])` matches every row (it renders `1 = 1`).
+
+The column argument of every `.where_*()` method is a trusted SQL identifier or expression and must never come from request input. The value argument is always bound as a parameter.
+
 ## Joins and Time-Travel Queries
 
 Chain `.inner_join()`, `.left_join()`, `.right_join()`, `.full_join()`, `.cross_join()`, `.lateral_join()`, `.left_lateral_join()`, or `.cross_lateral_join()`, or build join clauses with `sql.inner_join_`, `sql.left_join_`, and `sql.lateral_join_`. Pass `as_of` to `.from_()` or call `.as_of()` on a join builder for time-travel reads. The timestamp renders as a literal: `FOR SYSTEM_TIME AS OF` on BigQuery, `AS OF TIMESTAMP` on Oracle, `AS OF SYSTEM TIME` on CockroachDB, and `AT (TIMESTAMP => ...)` on DuckDB and Snowflake. Lateral joins render as `JOIN LATERAL`, `LEFT JOIN LATERAL`, or `CROSS JOIN LATERAL`, with `ON TRUE` when no condition is given:

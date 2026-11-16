@@ -1,10 +1,11 @@
 """Db2 tenant strategies set, verify, and restore session global variables."""
 
 from inspect import isawaitable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+import sqlspec.adapters.db2._typing as db2_typing
 from sqlspec.adapters.db2 import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.tenant import (
     Db2AsyncGlobalVariableStrategy,
@@ -16,22 +17,58 @@ from sqlspec.adapters.db2.tenant import (
 from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+from tests.unit.adapters.test_db2._fakes import FakeIbmDbDbiModule, FakeIbmDbModule
 
 pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture(autouse=True)
+def _patch_tenant_ibm_db(fake_ibm_db: tuple[FakeIbmDbModule, FakeIbmDbDbiModule]) -> None:
+    """Ensure ibm_db autocommit lookups use the paired Db2 test fake."""
+    _ = fake_ibm_db
 
 
 class GlobalVariableSession:
     """Model Db2 session global variables at the cursor boundary."""
 
-    def __init__(self, asynchronous: bool, values: dict[str, str | None] | None = None) -> None:
+    def __init__(
+        self,
+        asynchronous: bool,
+        values: dict[str, str | None] | None = None,
+        *,
+        autocommit: bool = True,
+        ibm_db_fake: FakeIbmDbModule | None = None,
+    ) -> None:
         self.asynchronous = asynchronous
         self.values: dict[str, str | None] = dict(values or {})
         self.statements: list[tuple[str, tuple[Any, ...]]] = []
         self.corrupt = False
         self.fail = False
+        self.rollback_fail = False
         self.closed = 0
         self.rollbacks = 0
+        self.autocommit = autocommit
+        self.conn_handler = object()
         self._row: tuple[str | None, ...] | None = None
+        active_ibm_db = ibm_db_fake or getattr(db2_typing, "ibm_db", None)
+        if active_ibm_db is not None and hasattr(active_ibm_db, "connections"):
+            active_ibm_db.connections[self.conn_handler] = cast("Any", self)
+
+    def rollback(self) -> Any:
+        def _do_rollback() -> None:
+            if self.rollback_fail:
+                msg = "rollback failed"
+                raise RuntimeError(msg)
+            self.rollbacks += 1
+
+        if self.asynchronous:
+
+            async def _async_rollback() -> None:
+                _do_rollback()
+
+            return _async_rollback()
+        _do_rollback()
+        return None
 
     def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         self.statements.append((sql, tuple(params)))
@@ -262,3 +299,30 @@ async def test_async_lease_returns_verified_connections_and_discards_the_rest(ch
     else:
         await lease.release()
         assert events == ["rollback", "release"]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+async def test_checkin_ends_verification_unit_of_work_when_autocommit_off(asynchronous: bool, autocommit: bool) -> None:
+    """checkin rolls back after the SYSIBM.SYSDUMMY1 verification query only when autocommit is off."""
+    session = GlobalVariableSession(asynchronous, {"APP.CURRENT_TENANT_ID": "prev"}, autocommit=autocommit)
+    strategy = _strategy(asynchronous)
+    state = await _invoke(strategy.checkout, session, TenantContextPayload("tenant-a"))
+
+    await _invoke(strategy.checkin, session, state)
+
+    assert session.values == {"APP.CURRENT_TENANT_ID": "prev"}
+    assert session.rollbacks == (0 if autocommit else 1)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_checkin_raises_cleanup_error_when_verification_rollback_fails(asynchronous: bool) -> None:
+    """A failure ending the verification unit of work raises TenantCleanupError."""
+    session = GlobalVariableSession(asynchronous, {"APP.CURRENT_TENANT_ID": "prev"}, autocommit=False)
+    strategy = _strategy(asynchronous)
+    state = await _invoke(strategy.checkout, session, TenantContextPayload("tenant-a"))
+    session.rollback_fail = True
+
+    with pytest.raises(TenantCleanupError, match="verification unit of work") as caught:
+        await _invoke(strategy.checkin, session, state)
+    assert isinstance(caught.value.__cause__, RuntimeError)

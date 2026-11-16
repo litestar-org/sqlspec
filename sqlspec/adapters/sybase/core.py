@@ -3,8 +3,10 @@
 import re
 from collections.abc import Callable, Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import unquote, urlsplit
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.dialects.sybase import Sybase as _SybaseDialect
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -12,25 +14,29 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from logging import Logger
 
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.parameters import ParameterValidator
 
 __all__ = (
@@ -47,6 +53,7 @@ __all__ = (
     "driver_profile",
     "escape_literal_percent",
     "escape_sql_literal",
+    "execute_cache_hit",
     "extract_error_number",
     "format_identifier",
     "normalize_execute_many_parameters",
@@ -63,10 +70,14 @@ DEFAULT_SYBASE_CONN_PROPERTIES: Final[str] = (
 )
 DEFAULT_SYBASE_TDS_VERSION: Final[str] = "5.0"
 
+logger = get_logger("sqlspec.adapters.sybase")
+
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _SYBASE_CONSTRAINT_547: Final[int] = 547
+_SYBASE_READ_ONLY: Final[int] = 3906
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    3906: (ReadOnlyTransactionError, "read-only database"),
     2601: (UniqueViolationError, "unique index violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
     546: (ForeignKeyViolationError, "foreign key constraint violation"),
@@ -156,7 +167,7 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     """Escape literal percent characters before driver-side interpolation."""
     if not parameters or "%" not in sql:
         return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
+    keep = {info.position for info in validator.extract_parameters(sql, dialect="tsql")}
     return "".join(["%%" if char == "%" and index not in keep else char for index, char in enumerate(sql)])
 
 
@@ -228,6 +239,14 @@ def apply_driver_features(
 
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a Sybase ASE exception to SQLSpec's exception hierarchy."""
+    if (
+        getattr(error, "sqlstate", None) == "25006"
+        or "25006" in str(error)
+        or extract_error_number(error) == _SYBASE_READ_ONLY
+    ):
+        mapped_readonly = ReadOnlyTransactionError(str(error))
+        mapped_readonly.__cause__ = error
+        return mapped_readonly
     error_number = extract_error_number(error)
 
     if error_number == _SYBASE_CONSTRAINT_547:
@@ -250,6 +269,8 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
         return constraint_exception
 
     exc_name = type(error).__name__
+    if exc_name == "InterfaceError":
+        return DatabaseConnectionError(f"Sybase ASE interface error. Original error: {error}")
     if exc_name == "IntegrityError":
         return IntegrityError(f"Sybase ASE integrity error. Original error: {error}")
     if exc_name == "OperationalError":
@@ -301,6 +322,77 @@ def resolve_rowcount(cursor: Any) -> int:
     if isinstance(rowcount, int) and rowcount >= 0:
         return rowcount
     return 0
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    column_name_cache: "dict[int, tuple[Any, list[str]]]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a Sybase pymssql connection and build its result.
+
+    Args:
+        connection: pymssql connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        column_name_cache: Session-local cache of resolved column names.
+
+    Returns:
+        The statement result, or ``None`` when the statement has no parameters or the compiled SQL
+        holds a literal percent that needs escaping.
+
+    Raises:
+        SQLSpecError: Mapped from any other exception the statement raises.
+    """
+    parameters = tuple(params) if isinstance(params, list) else params
+    if not parameters:
+        return None
+    compiled_sql = cached.compiled_sql
+    if (
+        "%" in compiled_sql
+        and escape_literal_percent(compiled_sql, parameters, statement_config.parameter_validator) != compiled_sql
+    ):
+        return None
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(compiled_sql, parameters)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            rows, column_names, _row_format = collect_rows(fetched_data, cursor.description or None, column_name_cache)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                rows,
+                column_names,
+                len(rows),
+                resolve_row_format(rows),
+            )
+        finally:
+            _close_cursor(cursor)
+    except SQLSpecError:
+        raise
+    except Exception as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:
@@ -385,6 +477,66 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         config["user"] = user_alias
     tds_version = str(config.pop("tds_version", config.pop("_sybase_tds_version", DEFAULT_SYBASE_TDS_VERSION)))
     config["_sybase_tds_version"] = tds_version
+    return config
+
+
+def merge_sybase_derive_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve explicit endpoint aliases in a fresh derivation mapping."""
+    config = dict(base_config)
+    config.update(overrides)
+    explicit = dict(overrides)
+    if "url" in explicit:
+        explicit.update(parse_sybase_replica_endpoint(str(explicit.pop("url"))))
+        config.update(explicit)
+        config.pop("url", None)
+    for canonical, alias in (("user", "username"), ("database", "db")):
+        if alias in explicit and canonical not in explicit:
+            config[canonical] = explicit[alias]
+            config.pop(alias, None)
+    freetds_server = explicit.get("freetds_server")
+    server_alias = explicit.get("server_alias")
+    alias_name = freetds_server or server_alias
+    has_alias_flag = "is_server_alias" in explicit or "_sybase_server_alias" in explicit
+    explicit_alias_flag = bool(explicit.get("is_server_alias") or explicit.get("_sybase_server_alias"))
+    for key in ("freetds_server", "server_alias", "is_server_alias"):
+        config.pop(key, None)
+    if alias_name:
+        config["server"] = alias_name
+        config["_sybase_server_alias"] = True
+        config.pop("host", None)
+    elif "host" in explicit:
+        config.pop("_sybase_server_alias", None)
+        if "server" not in explicit:
+            config["server"] = explicit["host"]
+            config.pop("host", None)
+    elif has_alias_flag:
+        if explicit_alias_flag:
+            config["_sybase_server_alias"] = True
+        else:
+            config.pop("_sybase_server_alias", None)
+    return config
+
+
+def parse_sybase_replica_endpoint(endpoint: str) -> dict[str, Any]:
+    """Parse a reader URL or host endpoint without connecting."""
+    try:
+        parsed = urlsplit(endpoint if "://" in endpoint else "//" + endpoint)
+        hostname, port = parsed.hostname, parsed.port
+    except ValueError as exc:
+        msg = "Invalid sybase replica endpoint"
+        raise ImproperConfigurationError(msg) from exc
+    if not hostname or (parsed.scheme and parsed.scheme != "sybase"):
+        msg = "Invalid sybase replica endpoint"
+        raise ImproperConfigurationError(msg)
+    config: dict[str, Any] = {"host": hostname}
+    if port is not None:
+        config["port"] = port
+    if parsed.username is not None:
+        config["user"] = unquote(parsed.username)
+    if parsed.password is not None:
+        config["password"] = unquote(parsed.password)
+    if parsed.path.strip("/"):
+        config["database"] = unquote(parsed.path.strip("/"))
     return config
 
 

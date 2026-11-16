@@ -29,7 +29,7 @@ def test_spanner_native_named_at_parameters_allow_reuse_and_identifier_variants(
     assert row["repeated"] == "TestUser"
 
 
-def test_spanner_native_types_round_trip_through_read_session(spanner_session: SpannerSyncDriver) -> None:
+def test_spanner_native_types_round_trip_through_replica_session(spanner_session: SpannerSyncDriver) -> None:
     """Spanner infers native scalar parameter types for read-only SELECT statements."""
     timestamp = datetime(2024, 6, 15, 14, 30, 0, tzinfo=UTC)
     row = spanner_session.select_one(
@@ -55,7 +55,7 @@ def test_spanner_date_parameter_allows_emulator_datetime_return(spanner_session:
     assert result.day == 25
 
 
-def test_spanner_null_parameters_round_trip_through_write_and_read_sessions(
+def test_spanner_null_parameters_round_trip_through_write_and_replica_sessions(
     spanner_config: SpannerSyncConfig, test_users_table: str
 ) -> None:
     """Spanner preserves NULL values across explicit write and read sessions."""
@@ -71,7 +71,7 @@ def test_spanner_null_parameters_round_trip_through_write_and_read_sessions(
         )
         assert result.rows_affected == 1
 
-    with spanner_config.provide_read_session() as session:
+    with spanner_config.provide_replica_session() as session:
         row = session.select_one(f"SELECT name, email, age FROM {test_users_table} WHERE id = @id", id=user_id)
         assert row["name"] == "Null Test"
         assert row["email"] is None
@@ -97,7 +97,7 @@ def test_spanner_array_parameter_with_unnest_uses_read_and_write_sessions(
                 age=20,
             )
 
-    with spanner_config.provide_read_session() as session:
+    with spanner_config.provide_replica_session() as session:
         rows = session.select(
             f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY name", ids=user_ids
         )
@@ -125,7 +125,7 @@ def test_spanner_parameterized_limit_uses_native_parameter_syntax(
                 age=index,
             )
 
-    with spanner_config.provide_read_session() as session:
+    with spanner_config.provide_replica_session() as session:
         rows = session.select(
             f"SELECT name FROM {test_users_table} WHERE name LIKE 'Limit Test%' ORDER BY age LIMIT @row_limit",
             row_limit=3,

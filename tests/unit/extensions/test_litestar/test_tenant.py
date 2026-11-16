@@ -39,7 +39,7 @@ from sqlspec.extensions.litestar import (
     is_scope_authenticated,
     require_tenant,
     resolve_litestar_tenant,
-    set_connection_tenant,
+    set_request_tenant,
 )
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 from tests.unit.extensions.test_litestar._request import within_tenant_request
@@ -75,7 +75,7 @@ async def test_tenant_bypass_precedes_extractor() -> None:
 async def test_tenant_explicit_scope_receipt(as_connection: bool) -> None:
     scope: dict[str, Any] = {}
     target = SimpleNamespace(scope=scope) if as_connection else scope
-    payload = set_connection_tenant(target, UUID("12345678-1234-5678-1234-567812345678"), variables={"region": "eu"})
+    payload = set_request_tenant(target, UUID("12345678-1234-5678-1234-567812345678"), variables={"region": "eu"})
 
     assert await _resolve(scope) == payload
     assert payload.tenant_id == "12345678-1234-5678-1234-567812345678"
@@ -613,7 +613,7 @@ def test_litestar_unguarded_routes_controller_bypass_and_websockets_translate_te
         ):
 
             async def provide(request_scope: Any = scope) -> Any:
-                return plugin.provide_request_session_sync("db_connection", app.state, request_scope)
+                return plugin.provide_db_session_sync("db_connection", app.state, request_scope)
 
             with pytest.raises(error):
                 asyncio.run(within_tenant_request(plugin._tenant_targets(), scope, provide))
@@ -635,9 +635,7 @@ async def test_provide_request_session_async_translates_missing_tenant() -> None
 
     async def provide(scope: Any) -> Any:
         return await within_tenant_request(
-            plugin._tenant_targets(),
-            scope,
-            lambda: plugin.provide_request_session_async("db_connection", app.state, scope),
+            plugin._tenant_targets(), scope, lambda: plugin.provide_db_session_async("db_connection", app.state, scope)
         )
 
     with pytest.raises(NotAuthorizedException):
@@ -671,14 +669,14 @@ def test_set_connection_tenant_key_scopes_receipts_to_one_configuration() -> Non
 
     @get("/keyed")
     async def keyed(request: Any) -> dict[str, bool]:
-        set_connection_tenant(request, "shared")
-        set_connection_tenant(request, "alpha-tenant", key="alpha_db")
+        set_request_tenant(request, "shared")
+        set_request_tenant(request, "alpha-tenant", key="alpha_db")
         await open_both()
         return {"ok": True}
 
     @get("/shared")
     async def shared(request: Any) -> dict[str, bool]:
-        set_connection_tenant(request, "shared")
+        set_request_tenant(request, "shared")
         await open_both()
         return {"ok": True}
 

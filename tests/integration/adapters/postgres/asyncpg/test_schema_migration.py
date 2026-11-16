@@ -1,5 +1,7 @@
 """Integration tests for migration tracking table schema migration with PostgreSQL."""
 
+from typing import Any
+
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
@@ -22,6 +24,15 @@ def _create_config(postgres_service: "PostgresService") -> AsyncpgConfig:
     )
 
 
+async def _tracking_columns(driver: Any, tracker: AsyncMigrationTracker) -> set[str]:
+    """Return the tracking table's column names in the schema the tracker resolved."""
+    result = await driver.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = :table_name",
+        {"table_name": tracker.version_table_name},
+    )
+    return {row["column_name"] for row in result.get_data()}
+
+
 @pytest.mark.postgres
 async def test_asyncpg_tracker_creates_full_schema(postgres_service: "PostgresService") -> None:
     """Test AsyncPG tracker creates complete schema with all columns."""
@@ -32,13 +43,7 @@ async def test_asyncpg_tracker_creates_full_schema(postgres_service: "PostgresSe
         async with config.provide_session() as driver:
             await tracker.ensure_tracking_table(driver)
 
-            result = await driver.execute(f"""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = '{tracker.version_table}'
-            """)
-
-            columns = {row["column_name"] for row in result.get_data()}
+            columns = await _tracking_columns(driver, tracker)
 
             expected_columns = {
                 "version_num",
@@ -77,13 +82,7 @@ async def test_asyncpg_tracker_migrates_legacy_schema(postgres_service: "Postgre
 
             await tracker.ensure_tracking_table(driver)
 
-            result = await driver.execute(f"""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = '{tracker.version_table}'
-            """)
-
-            columns = {row["column_name"] for row in result.get_data()}
+            columns = await _tracking_columns(driver, tracker)
 
             assert "version_type" in columns
             assert "execution_sequence" in columns
@@ -294,21 +293,11 @@ async def test_asyncpg_migration_schema_is_idempotent(postgres_service: "Postgre
 
             await tracker.ensure_tracking_table(driver)
 
-            result1 = await driver.execute(f"""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = '{tracker.version_table}'
-            """)
-            columns1 = {row["column_name"] for row in result1.get_data()}
+            columns1 = await _tracking_columns(driver, tracker)
 
             await tracker.ensure_tracking_table(driver)
 
-            result2 = await driver.execute(f"""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = '{tracker.version_table}'
-            """)
-            columns2 = {row["column_name"] for row in result2.get_data()}
+            columns2 = await _tracking_columns(driver, tracker)
 
             assert columns1 == columns2
     finally:

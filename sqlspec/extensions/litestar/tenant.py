@@ -29,18 +29,18 @@ __all__ = (
     "TenantResolutionSettings",
     "is_scope_authenticated",
     "raise_missing_tenant_http_exception",
-    "receipt_state_key",
     "require_tenant",
     "resolve_litestar_tenant",
     "resolve_route_tenant",
-    "set_connection_tenant",
+    "set_request_tenant",
+    "tenant_receipt_key",
 )
 
 _TENANT_SCOPE_KEY: Final = "_sqlspec_tenant_context"
 _UNSET: Final[Any] = object()
 
 
-def receipt_state_key(key: str | None) -> str:
+def tenant_receipt_key(key: str | None) -> str:
     """Return the scope state key holding a tenant receipt for ``key``, or the shared receipt."""
     return _receipt_key(key)
 
@@ -49,7 +49,7 @@ def _receipt_key(key: str | None) -> str:
     return _TENANT_SCOPE_KEY if key is None else f"{_TENANT_SCOPE_KEY}_{key}"
 
 
-def set_connection_tenant(
+def set_request_tenant(
     connection_or_scope: Any,
     tenant_id: str | UUID | TenantContextPayload,
     *,
@@ -193,7 +193,7 @@ def require_tenant(
 
     async def guard(connection: "ASGIConnection[Any, Any, Any, Any]", route_handler: "BaseRouteHandler") -> None:
         if route_tenant_plan(route_handler).bypass:
-            set_connection_tenant(connection, TenantContextPayload.bypass())
+            set_request_tenant(connection, TenantContextPayload.bypass())
             return
         scope = cast("MutableMapping[str, Any]", connection.scope)
         scope.setdefault("route_handler", route_handler)
@@ -203,7 +203,7 @@ def require_tenant(
             payload = await payload
         if payload is None:
             raise_missing_tenant_http_exception(scope)
-        set_connection_tenant(connection, payload)
+        set_request_tenant(connection, payload)
 
     if isinstance(path_parameter, str):
         guard.tenant_parameter = path_parameter  # type: ignore[attr-defined]

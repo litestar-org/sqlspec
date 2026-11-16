@@ -5,16 +5,20 @@ This module contains functions to create dependency providers for services and f
 
 import copy
 import datetime as dt
+import hashlib
+import hmac
 import inspect
 import typing
 from collections.abc import Callable, Mapping
 from enum import Enum
-from functools import partial
+from functools import lru_cache, partial
 from inspect import isclass
 from types import GenericAlias
-from typing import Annotated, Any, Literal, NamedTuple, NotRequired, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple, NotRequired, TypedDict, TypeVar, cast
 from uuid import UUID
 
+from litestar import Request
+from litestar.datastructures import State
 from litestar.di import NamedDependency, Provide
 from litestar.exceptions import ValidationException
 from litestar.params import QueryParameter, SkipValidation
@@ -37,8 +41,13 @@ from sqlspec.core import (
     SearchFilter,
     normalize_cursor_keys,
 )
+from sqlspec.core._cursor import resolve_env_pagination_cursor_secret
 from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
+from sqlspec.utils.tenant import resolve_cursor_tenant_identity
 from sqlspec.utils.text import camelize
+
+if TYPE_CHECKING:
+    from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 
 __all__ = (
     "DEPENDENCY_DEFAULTS",
@@ -60,6 +69,9 @@ __all__ = (
     "dep_cache",
     "normalize_choice_field_types",
 )
+
+_UNSET_STATE: State = cast("State", None)
+_UNSET_REQUEST: Request[Any, Any, Any] = cast("Request[Any, Any, Any]", None)
 
 DTorNone = dt.datetime | None
 StringOrNone = str | None
@@ -136,16 +148,22 @@ class FilterConfig(TypedDict):
     """Default sort order. Defaults to ``"desc"``."""
     pagination_type: NotRequired[Literal["limit_offset", "cursor"]]
     """Pagination strategy to enable: ``"limit_offset"`` or ``"cursor"``."""
-    cursor_keys: NotRequired[CursorKeys]
+    pagination_cursor_keys: NotRequired[CursorKeys]
     """Field names, (field, direction) pairs, or CursorKey values. The last key must be unique per row."""
-    cursor_secret: NotRequired[str | bytes]
+    pagination_cursor_secret: NotRequired[str | bytes]
     """Secret enabling HMAC-SHA256 signed cursors."""
+    pagination_cursor_ttl: NotRequired[int | float | dt.timedelta]
+    """Cursor expiration window in seconds or timedelta."""
+    pagination_cursor_encrypted: NotRequired[bool]
+    """Encrypt cursor payloads at rest when a cursor secret is configured."""
     pagination_size: NotRequired[int]
     """Default page size for limit/offset or cursor pagination."""
     pagination_max_size: NotRequired[int]
     """Largest page size a client may request. Defaults to ``1000``."""
     search: NotRequired[str | set[str] | list[str]]
     """SQL-facing field or fields to search. Strings may be comma-separated."""
+    search_escape_wildcards: NotRequired[bool]
+    """Escape %, _, and the escape character in search input so they match literally. Defaults to True."""
     search_ignore_case: NotRequired[bool]
     """Whether search filtering is case-insensitive. Defaults to ``False``."""
     created_at: NotRequired[bool]
@@ -194,9 +212,18 @@ def create_filter_dependencies(
     Returns:
         A dependency provider function for the combined filter function.
     """
-    if (deps := dep_cache.get_dependencies(cache_key := hash(_make_hashable(config)))) is not None:
+    env_secret = (
+        resolve_env_pagination_cursor_secret()
+        if config.get("pagination_type") == "cursor" and config.get("pagination_cursor_secret") is None
+        else None
+    )
+    if config.get("pagination_type") == "cursor" and config.get("pagination_cursor_secret") is None:
+        cache_key = hash((_make_hashable(config), env_secret))
+    else:
+        cache_key = hash(_make_hashable(config))
+    if (deps := dep_cache.get_dependencies(cache_key)) is not None:
         return deps
-    deps = _create_statement_filters(config, dep_defaults)
+    deps = _create_statement_filters(config, dep_defaults, env_secret=env_secret)
     dep_cache.add_dependencies(cache_key, deps)
     return deps
 
@@ -216,13 +243,14 @@ class _SortFieldResolution(NamedTuple):
 
 
 def _create_statement_filters(
-    config: FilterConfig, dep_defaults: DependencyDefaults = DEPENDENCY_DEFAULTS
+    config: FilterConfig, dep_defaults: DependencyDefaults = DEPENDENCY_DEFAULTS, *, env_secret: str | None = None
 ) -> dict[str, Provide]:
     """Create filter dependencies based on configuration.
 
     Args:
         config: Configuration dictionary specifying which filters to enable
         dep_defaults: Dependency defaults to use for the filter dependencies
+        env_secret: Environment cursor secret resolved at dependency creation time.
 
     Returns:
         Dictionary of filter provider functions
@@ -261,7 +289,10 @@ def _create_statement_filters(
     if search_fields := config.get("search"):
         filters[dep_defaults.SEARCH_FILTER_DEPENDENCY_KEY] = _create_provide(
             _bind_provider(
-                _SearchFilterProvider(search_fields, config.get("search_ignore_case", False)), _provide_search_filter
+                _SearchFilterProvider(
+                    search_fields, config.get("search_ignore_case", False), config.get("search_escape_wildcards", True)
+                ),
+                _provide_search_filter,
             )
         )
 
@@ -316,19 +347,22 @@ def _create_statement_filters(
             )
 
     if config.get("pagination_type") == "cursor":
-        cursor_keys = config.get("cursor_keys")
-        if not cursor_keys:
-            msg = "pagination_type='cursor' requires a non-empty 'cursor_keys' value"
+        pagination_cursor_keys = config.get("pagination_cursor_keys")
+        if not pagination_cursor_keys:
+            msg = "pagination_type='cursor' requires a non-empty 'pagination_cursor_keys' value"
             raise ImproperConfigurationError(msg)
         filters[dep_defaults.CURSOR_FILTER_DEPENDENCY_KEY] = _create_provide(
             _bind_provider(
                 _CursorFilterProvider(
-                    cursor_keys,
+                    pagination_cursor_keys,
                     config.get("pagination_size", dep_defaults.DEFAULT_PAGINATION_SIZE),
                     config.get("pagination_max_size", dep_defaults.DEFAULT_PAGINATION_MAX_SIZE),
-                    config.get("cursor_secret"),
+                    config.get("pagination_cursor_secret"),
                     config.get("sort_field"),
                     config,
+                    ttl=config.get("pagination_cursor_ttl"),
+                    encrypted=config.get("pagination_cursor_encrypted"),
+                    env_secret=env_secret,
                 ),
                 _provide_cursor_filter,
             )
@@ -490,9 +524,33 @@ def _make_hashable(value: Any) -> HashableType:
         hashable_items = [_make_hashable(item) for item in value]
         filtered_items = [item for item in hashable_items if item is not None]
         return tuple(sorted(filtered_items, key=str))
+    if isinstance(value, dt.timedelta):
+        return ("__timedelta__", value.days, value.seconds, value.microseconds)
     if isinstance(value, (str, bytes, int, float, bool, type(None))):
         return value
     return str(value)
+
+
+def _resolve_cursor_route_identity(request: Any) -> str:
+    if request is None:
+        return "litestar:standalone"
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, Mapping):
+        root_path = str(scope.get("root_path") or "")
+        route_template = scope.get("path_template") or scope.get("path") or ""
+        return f"{root_path}{route_template}" or "litestar:standalone"
+    url = getattr(request, "url", None)
+    path = getattr(url, "path", None)
+    return str(path or "litestar:standalone")
+
+
+_CURSOR_KEY_REQUIRED_MESSAGE = "Cursor pagination requires a cursor secret; set pagination_cursor_secret or the SQLSPEC_PAGINATION_CURSOR_SECRET environment variable"
+
+
+@lru_cache(maxsize=256)
+def _derive_route_cursor_key(secret: str | bytes, context_identity: str) -> bytes:
+    secret_bytes = secret if isinstance(secret, bytes) else secret.encode("utf-8")
+    return hmac.new(secret_bytes, context_identity.encode("utf-8"), hashlib.sha256).digest()
 
 
 def _set_provider_metadata(
@@ -508,7 +566,8 @@ def _bind_provider(context: Any, provider: Callable[..., Any]) -> Callable[..., 
 
 
 def _create_provide(provider: Callable[..., Any]) -> Provide:
-    dependency = Provide(provider, sync_to_thread=False)
+    is_async = inspect.iscoroutinefunction(getattr(provider, "func", provider))
+    dependency = Provide(provider) if is_async else Provide(provider, sync_to_thread=False)
     dependency.parsed_fn_signature = ParsedSignature.from_signature(
         inspect.signature(provider), getattr(provider, "__annotations__", {})
     )
@@ -735,17 +794,23 @@ class _LimitOffsetFilterProvider:
 class _CursorFilterProvider:
     def __init__(
         self,
-        cursor_keys: CursorKeys,
+        pagination_cursor_keys: CursorKeys,
         default_page_size: int,
         max_page_size: int,
         secret: str | bytes | None,
         sort_field: SortField | None,
         config: FilterConfig,
+        ttl: float | dt.timedelta | None = None,
+        encrypted: bool | None = None,
+        env_secret: str | None = None,
     ) -> None:
-        self.cursor_keys = normalize_cursor_keys(cursor_keys)
+        self.pagination_cursor_keys = normalize_cursor_keys(pagination_cursor_keys)
         self.default_page_size = default_page_size
         self.max_page_size = max_page_size
         self.secret = secret
+        self.ttl = config.get("pagination_cursor_ttl") if ttl is None else ttl
+        self.encrypted = config.get("pagination_cursor_encrypted") if encrypted is None else encrypted
+        self.env_secret = env_secret
         self.sort_field = sort_field
         self.config = copy.deepcopy(config)
         self.sort_resolution = (
@@ -770,29 +835,45 @@ class _CursorFilterProvider:
         ]
         if sort_field:
             parameters.extend(_OrderByProvider(sort_field, config).signature.parameters.values())
+        parameters.extend([
+            inspect.Parameter("state", kind=inspect.Parameter.KEYWORD_ONLY, default=_UNSET_STATE, annotation=State),
+            inspect.Parameter(
+                "request",
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=_UNSET_REQUEST,
+                annotation=Request[Any, Any, Any],
+            ),
+        ])
         self.signature = inspect.Signature(parameters=parameters, return_annotation=CursorFilter)
         self.annotations = {parameter.name: parameter.annotation for parameter in parameters}
         self.annotations["return"] = CursorFilter
 
-    def __call__(
+    async def __call__(
         self,
         cursor: str | None = None,
         page_size: int | None = None,
         field_name: str | None = None,
         sort_order: SortOrder | None = None,
+        state: State = _UNSET_STATE,
+        request: Request[Any, Any, Any] = _UNSET_REQUEST,
     ) -> CursorFilter:
-        return _provide_cursor_filter(self, cursor, page_size, field_name, sort_order)
+        return await _provide_cursor_filter(
+            self, cursor, page_size, field_name, sort_order, state=state, request=request
+        )
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "_CursorFilterProvider":
         return _memoize_deepcopy(
             self,
             _CursorFilterProvider(
-                self.cursor_keys,
+                self.pagination_cursor_keys,
                 self.default_page_size,
                 self.max_page_size,
                 self.secret,
                 copy.deepcopy(self.sort_field, memo),
                 copy.deepcopy(self.config, memo),
+                ttl=copy.deepcopy(self.ttl, memo),
+                encrypted=self.encrypted,
+                env_secret=self.env_secret,
             ),
             memo,
         )
@@ -802,40 +883,76 @@ def _effective_cursor_keys(
     context: _CursorFilterProvider, field_name: str | None, sort_order: SortOrder | None
 ) -> tuple[CursorKey, ...]:
     if context.sort_resolution is None:
-        return context.cursor_keys
+        return context.pagination_cursor_keys
     resolved_field = context.sort_resolution.normalize(field_name or context.sort_resolution.default_query_value)
     if resolved_field is None:
         msg = f"Invalid orderBy field '{field_name}'. Allowed fields: {context.allowed_field_names}"
         raise ValidationException(detail=msg)
-    existing = next((key for key in context.cursor_keys if key.field_name == resolved_field), None)
+    existing = next((key for key in context.pagination_cursor_keys if key.field_name == resolved_field), None)
     leading = CursorKey(
         resolved_field,
         sort_order or context.sort_order_default,
         nulls=existing.nulls if existing else None,
         result_name=existing.result_name if existing else None,
     )
-    return (leading, *(key for key in context.cursor_keys if key.field_name != resolved_field))
+    return (leading, *(key for key in context.pagination_cursor_keys if key.field_name != resolved_field))
 
 
-def _provide_cursor_filter(
+async def _provide_cursor_filter(
     context: _CursorFilterProvider,
     cursor: str | None = None,
     page_size: int | None = None,
     field_name: str | None = None,
     sort_order: SortOrder | None = None,
+    *,
+    state: State = _UNSET_STATE,
+    request: Request[Any, Any, Any] = _UNSET_REQUEST,
 ) -> CursorFilter:
     resolved_page_size = page_size if page_size is not None else context.default_page_size
     keys = _effective_cursor_keys(context, field_name, sort_order)
+    plugin: SQLSpecPlugin | None = getattr(state, "sqlspec", None) if state is not None else None
+
+    if context.secret is not None:
+        resolved_secret: str | bytes | None = context.secret
+    elif plugin is not None and plugin.pagination_cursor_secret is not None:
+        resolved_secret = plugin.pagination_cursor_secret
+    else:
+        resolved_secret = context.env_secret
+
+    resolved_ttl = (
+        context.ttl if context.ttl is not None else (plugin.pagination_cursor_ttl if plugin is not None else None)
+    )
+    plugin_encrypted = plugin.pagination_cursor_encrypted if plugin is not None else None
+    resolved_encrypted = bool(
+        context.encrypted
+        if context.encrypted is not None
+        else (plugin_encrypted if plugin_encrypted is not None else False)
+    )
+
+    if resolved_secret is None:
+        raise ImproperConfigurationError(_CURSOR_KEY_REQUIRED_MESSAGE)
+    tenant_identity = await resolve_cursor_tenant_identity(plugin._tenant_configs() if plugin is not None else ())
+    derived_secret = _derive_route_cursor_key(
+        resolved_secret, _resolve_cursor_route_identity(request) + tenant_identity
+    )
     try:
-        return CursorFilter(keys, resolved_page_size, cursor, context.secret)
+        return CursorFilter(
+            keys, resolved_page_size, cursor, derived_secret, ttl=resolved_ttl, encrypted=resolved_encrypted
+        )
     except InvalidCursorError as exc:
         raise ValidationException(detail="Invalid pagination cursor") from exc
 
 
 class _SearchFilterProvider:
-    def __init__(self, search_fields: str | set[str] | list[str], ignore_case_default: bool) -> None:
+    def __init__(
+        self,
+        search_fields: str | set[str] | list[str],
+        ignore_case_default: bool,
+        escape_wildcards_default: bool = True,
+    ) -> None:
         self.search_fields = search_fields
         self.ignore_case_default = ignore_case_default
+        self.escape_wildcards_default = escape_wildcards_default
         self.return_annotation = SearchFilter
         search_annotation = _query_parameter_annotation(
             StringOrNone, QueryParameter(name="searchString", required=False, title="Search term")
@@ -872,11 +989,16 @@ class _SearchFilterProvider:
             field_name=field_names,
             value=search_string,
             ignore_case=self.ignore_case_default if ignore_case is None else ignore_case,
+            escape_wildcards=self.escape_wildcards_default,
         )
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "_SearchFilterProvider":
         return _memoize_deepcopy(
-            self, _SearchFilterProvider(copy.deepcopy(self.search_fields, memo), self.ignore_case_default), memo
+            self,
+            _SearchFilterProvider(
+                copy.deepcopy(self.search_fields, memo), self.ignore_case_default, self.escape_wildcards_default
+            ),
+            memo,
         )
 
 
@@ -1022,6 +1144,7 @@ def _provide_search_filter(
         field_name=field_names,
         value=search_string,
         ignore_case=context.ignore_case_default if ignore_case is None else ignore_case,
+        escape_wildcards=context.escape_wildcards_default,
     )
 
 

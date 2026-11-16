@@ -89,9 +89,23 @@ class CockroachAsyncpgSessionContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        try:
+            if driver is not None:
+                await driver._close_open_streams(error=exc_type is not None)
+        except BaseException as close_exc:
+            if exc_type is None:
+                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
+            raise
+        finally:
+            try:
+                if self._connection is not None:
+                    await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                    self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._mark_closed()
         return None
 
 

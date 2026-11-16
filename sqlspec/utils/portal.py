@@ -6,6 +6,7 @@ from sync frameworks like Flask. Based on the portal pattern from Advanced Alche
 
 import asyncio
 import atexit
+import contextvars
 import functools
 import os
 import queue
@@ -25,6 +26,7 @@ logger = get_logger("sqlspec.utils.portal")
 
 _R = TypeVar("_R")
 _REQUEST_WITH_FUTURE_HOLDER_LEN: Final[int] = 5
+_REQUEST_WITH_CONTEXT_LEN: Final[int] = 6
 
 
 class PortalProvider:
@@ -152,8 +154,9 @@ class PortalProvider:
 
         local_result_queue: queue.Queue[tuple[_R | None, BaseException | None]] = queue.Queue()
         future_holder: list[concurrent.futures.Future[Any]] = []
+        caller_context = contextvars.copy_context()
 
-        self._request_queue.put((func, args, kwargs, local_result_queue, future_holder))
+        self._request_queue.put((func, args, kwargs, local_result_queue, future_holder, caller_context))
 
         self._loop.call_soon_threadsafe(self._process_request)
 
@@ -201,6 +204,14 @@ class PortalProvider:
         result: _R = await func(*args, **kwargs)
         return result
 
+    def _submit_coroutine(
+        self, func: "Callable[..., Coroutine[Any, Any, _R]]", args: "tuple[Any, ...]", kwargs: "dict[str, Any]"
+    ) -> "concurrent.futures.Future[_R]":
+        if self._loop is None:
+            msg = "Portal provider not started. Call start() first."
+            raise ImproperConfigurationError(msg)
+        return asyncio.run_coroutine_threadsafe(self._async_caller(func, args, kwargs), self._loop)
+
     def _process_request(self) -> None:
         """Process a request from the request queue in the event loop."""
         if self._loop is None:
@@ -211,13 +222,22 @@ class PortalProvider:
         except queue.Empty:
             return
 
-        if len(request) == _REQUEST_WITH_FUTURE_HOLDER_LEN:
+        caller_context: contextvars.Context | None
+        if len(request) == _REQUEST_WITH_CONTEXT_LEN:
+            func, args, kwargs, local_result_queue, future_holder, caller_context = request
+        elif len(request) == _REQUEST_WITH_FUTURE_HOLDER_LEN:
             func, args, kwargs, local_result_queue, future_holder = request
+            caller_context = None
         else:
             func, args, kwargs, local_result_queue = request
             future_holder = None
+            caller_context = None
 
-        future = asyncio.run_coroutine_threadsafe(self._async_caller(func, args, kwargs), self._loop)
+        future = (
+            caller_context.run(self._submit_coroutine, func, args, kwargs)
+            if caller_context is not None
+            else self._submit_coroutine(func, args, kwargs)
+        )
         if future_holder is not None:
             future_holder.append(future)
 
