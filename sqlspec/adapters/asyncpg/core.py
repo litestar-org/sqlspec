@@ -593,6 +593,7 @@ class AsyncpgStreamSource:
         self._connection = None
         if self._driver.connection is not connection:
             return
+        close_error: BaseException | None = None
         try:
             if cursor is not None and getattr(cursor, "_portal_name", None):
                 await cursor._close_portal(self._timeout)
@@ -601,10 +602,12 @@ class AsyncpgStreamSource:
                     await transaction.rollback()
                 else:
                     await transaction.commit()
-        except BaseException:
+        except BaseException as exc:
+            close_error = exc
+        if close_error is not None:
             with contextlib.suppress(Exception):
                 await connection.close()
-            raise
+            raise close_error
 
     async def _start(self) -> None:
         connection = self._driver.connection
@@ -614,21 +617,28 @@ class AsyncpgStreamSource:
             transaction = connection.transaction()
             await transaction.start()
             self._transaction = transaction
+        cursor_error: BaseException | None = None
         try:
             if self._timeout is not None:
                 self._cursor = await connection.cursor(self._sql, *self._parameters, timeout=self._timeout)
             else:
                 self._cursor = await connection.cursor(self._sql, *self._parameters)
-        except BaseException:
-            transaction = self._transaction
-            self._transaction = None
-            if transaction is not None:
-                try:
-                    await transaction.rollback()
-                except BaseException:
-                    with contextlib.suppress(Exception):
-                        await connection.close()
-            raise
+        except BaseException as exc:
+            cursor_error = exc
+        if cursor_error is None:
+            return
+        transaction = self._transaction
+        self._transaction = None
+        if transaction is not None:
+            rollback_failed = False
+            try:
+                await transaction.rollback()
+            except BaseException:
+                rollback_failed = True
+            if rollback_failed:
+                with contextlib.suppress(Exception):
+                    await connection.close()
+        raise cursor_error
 
 
 def _convert_datetime_param(value: Any) -> Any:

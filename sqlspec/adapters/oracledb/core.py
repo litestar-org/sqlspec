@@ -2332,6 +2332,7 @@ class OracleAsyncStreamSource:
 
     async def _start(self) -> None:
         self._driver._apply_session_tracing(self._driver.connection)
+        start_error: BaseException | None = None
         try:
             cursor = self._driver.connection.cursor()
             self._cursor = cursor
@@ -2352,9 +2353,11 @@ class OracleAsyncStreamSource:
                 version_cache=getattr(self._driver, "_oracle_version_cache", None),
             )
             await cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
-        except BaseException:
+        except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             await self.close(error=True)
-            raise
+            raise start_error
 
     def _caller_wants_locators(self) -> bool:
         """Report whether the caller asked to receive LOB locators.

@@ -317,15 +317,18 @@ class MysqlConnectorAsyncStreamSource:
                     await cursor.close()
 
     async def _start(self) -> None:
+        start_error: BaseException | None = None
         try:
             cursor = await self._driver.connection.cursor(**self._cursor_options)
             self._cursor = cursor
             await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
             self.column_types = _resolve_column_types(self._cursor.description)
-        except BaseException:
+        except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             await self.close(error=True)
-            raise
+            raise start_error
 
 
 def build_profile() -> "DriverParameterProfile":

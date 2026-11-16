@@ -372,15 +372,18 @@ class PsqlpyStreamSource:
         transaction = connection.transaction()
         await transaction.begin()
         self._transaction = transaction
+        start_error: BaseException | None = None
         try:
             cursor = transaction.cursor(self._sql, self._parameters, array_size=self._chunk_size)
             await cursor.start()
             self._cursor = cursor
-        except BaseException:
+        except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             self._transaction = None
             with contextlib.suppress(Exception):
                 await transaction.rollback()
-            raise
+            raise start_error
 
 
 def coerce_numeric_for_write(value: Any) -> Any:

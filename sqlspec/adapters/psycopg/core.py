@@ -456,6 +456,7 @@ class PsycopgAsyncStreamSource:
         transaction = self._connection.transaction()
         await transaction.__aenter__()
         self._transaction = transaction
+        start_error: BaseException | None = None
         try:
             cursor = self._connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
             cursor.itersize = self._chunk_size
@@ -464,10 +465,12 @@ class PsycopgAsyncStreamSource:
             if self._column_types_resolver is not None:
                 self.column_types = self._column_types_resolver(cursor.description)
         except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             self._transaction = None
             with contextlib.suppress(Exception):
-                await transaction.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
+                await transaction.__aexit__(type(start_error), start_error, start_error.__traceback__)
+            raise start_error
 
 
 def resolve_rowcount(cursor: Any) -> int:
