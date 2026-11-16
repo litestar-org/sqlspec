@@ -759,6 +759,18 @@ class BaseMigrationTracker(Generic[DriverT]):
             .where(Column("owner_token") == owner_token)
         )
 
+    def _lease_owner_query(self, lock_name: str) -> "Select":
+        """Get SQL builder reading the current holder of a lease."""
+        return Select("owner_token", "expires_at").from_(self.lock_table).where(Column("lock_name") == lock_name)
+
+    @staticmethod
+    def _lease_holder(result: Any) -> "tuple[str, int] | None":
+        """Return the owner token and expiry of the lease row in ``result``, or None when no row exists."""
+        for row in result.get_data():
+            values = {str(key).lower(): value for key, value in row.items()}
+            return str(values["owner_token"]), int(values["expires_at"])
+        return None
+
     def _migration_lock_key(self) -> "tuple[str, int]":
         """Derive the bounded lock name and signed 64-bit integer advisory lock ID."""
         raw_key = f"sqlspec_mig_{self._configured_version_table}"

@@ -3,8 +3,8 @@
 import logging
 import sqlite3
 import time
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -18,6 +18,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgSyncDriver
 from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
@@ -149,6 +150,54 @@ def test_renew_lock_raises_after_takeover(tmp_path: Path) -> None:
                     tracker.renew_lock(driver)
     finally:
         config.close_pool()
+
+
+class _NoRowcountDuckDBDriver(DuckDBDriver):
+    """Reports zero affected rows for every UPDATE and DELETE, like drivers without rowcounts."""
+
+    def execute(self, statement: Any, /, *parameters: Any, **kwargs: Any) -> Any:
+        result = super().execute(statement, *parameters, **kwargs)
+        if result.operation_type in {"UPDATE", "DELETE"}:
+            result.rows_affected = 0
+        return result
+
+
+@contextmanager
+def _no_rowcount_driver(db_path: Path) -> "Iterator[_NoRowcountDuckDBDriver]":
+    config = _duckdb_config(db_path)
+    try:
+        with config.provide_connection() as connection:
+            yield _NoRowcountDuckDBDriver(
+                connection, statement_config=config.statement_config, driver_features=config.driver_features
+            )
+    finally:
+        config.close_pool()
+
+
+def test_lease_renews_and_releases_without_reported_rowcounts(tmp_path: Path) -> None:
+    with _no_rowcount_driver(tmp_path / "no_rowcount.duckdb") as driver:
+        tracker = SyncMigrationTracker()
+        with tracker.acquire_lock(driver):
+            tracker.renew_lock(driver)
+            assert len(driver.select("SELECT lock_name FROM ddl_migrations_lock")) == 1
+
+        assert driver.select("SELECT lock_name FROM ddl_migrations_lock") == []
+
+
+def test_renew_detects_takeover_without_reported_rowcounts(tmp_path: Path) -> None:
+    with _no_rowcount_driver(tmp_path / "no_rowcount_renew.duckdb") as driver:
+        tracker = SyncMigrationTracker()
+        with pytest.raises(MigrationError, match="lease expired"):
+            with tracker.acquire_lock(driver):
+                driver.execute("UPDATE ddl_migrations_lock SET owner_token = 'another-migrator'")
+                tracker.renew_lock(driver)
+
+
+def test_release_detects_takeover_without_reported_rowcounts(tmp_path: Path) -> None:
+    with _no_rowcount_driver(tmp_path / "no_rowcount_release.duckdb") as driver:
+        with pytest.raises(MigrationError, match="lease expired"):
+            with SyncMigrationTracker().acquire_lock(driver):
+                driver.execute("UPDATE ddl_migrations_lock SET owner_token = 'another-migrator'")
 
 
 def test_renew_lock_without_lease_is_noop(tmp_path: Path) -> None:

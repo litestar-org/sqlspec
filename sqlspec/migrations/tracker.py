@@ -296,7 +296,8 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver: Active session driver.
 
         Raises:
-            MigrationError: If the lease row is gone because the lease expired.
+            MigrationError: If this tracker no longer holds the lease. A driver that reports no affected
+                rows is checked against the stored lease row.
         """
         held = self._lease_owners.get(id(driver))
         if held is None:
@@ -304,7 +305,9 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         expires_at = _wall_clock_ms() + self.lock_lease_seconds * _MILLISECONDS_PER_SECOND
         result = driver.execute(self._lease_renew(held[0], held[1], expires_at))
         if getattr(result, "rows_affected", None) == 0:
-            raise _lease_expired_error()
+            holder = self._lease_holder(driver.execute(self._lease_owner_query(held[0])))
+            if holder != (held[1], expires_at):
+                raise _lease_expired_error()
         self._safe_commit(driver)
 
     def acquire_lock(
@@ -667,7 +670,8 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             driver: Active async session driver.
 
         Raises:
-            MigrationError: If the lease row is gone because the lease expired.
+            MigrationError: If this tracker no longer holds the lease. A driver that reports no affected
+                rows is checked against the stored lease row.
         """
         held = self._lease_owners.get(id(driver))
         if held is None:
@@ -675,7 +679,9 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         expires_at = _wall_clock_ms() + self.lock_lease_seconds * _MILLISECONDS_PER_SECOND
         result = await driver.execute(self._lease_renew(held[0], held[1], expires_at))
         if getattr(result, "rows_affected", None) == 0:
-            raise _lease_expired_error()
+            holder = self._lease_holder(await driver.execute(self._lease_owner_query(held[0])))
+            if holder != (held[1], expires_at):
+                raise _lease_expired_error()
         await self._safe_commit(driver)
 
     def acquire_lock(
@@ -1242,9 +1248,10 @@ class _SyncMigrationLockContext:
         self._release_lease()
 
     def _release_lease(self) -> None:
-        result = self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
+        holder = self._tracker._lease_holder(self._driver.execute(self._tracker._lease_owner_query(self._lock_name)))
+        self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
         self._tracker._safe_commit(self._driver)
-        if getattr(result, "rows_affected", None) == 0:
+        if holder is None or holder[0] != self._owner_token:
             raise _lease_expired_error()
 
     def __exit__(
@@ -1433,9 +1440,12 @@ class _AsyncMigrationLockContext:
         await self._release_lease()
 
     async def _release_lease(self) -> None:
-        result = await self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
+        holder = self._tracker._lease_holder(
+            await self._driver.execute(self._tracker._lease_owner_query(self._lock_name))
+        )
+        await self._driver.execute(self._tracker._lease_release(self._lock_name, self._owner_token))
         await self._tracker._safe_commit(self._driver)
-        if getattr(result, "rows_affected", None) == 0:
+        if holder is None or holder[0] != self._owner_token:
             raise _lease_expired_error()
 
     async def __aexit__(
