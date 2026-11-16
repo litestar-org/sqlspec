@@ -46,7 +46,7 @@ Start here to install `sqlspec`, run your first parameterized query, and wire da
 
 | Guide | Focus |
 | --- | --- |
-| [Installation](installation.md) | Install `sqlspec` with `uv`, `pip`, `pdm`, or `poetry` and select optional extras by database family, web framework, serializer, or storage backend. |
+| [Installation](installation.md) | Install the base package, verify your environment, and find setup guides for optional features. |
 | [Quickstart](quickstart.md) | Execute synchronous and asynchronous SQLite queries and decode rows into `msgspec.Struct` models. |
 | [Configuration](configuration.md) | Register single or multiple databases on `SQLSpec`, choose pooled vs direct configs, customize `StatementConfig`, and attach lifecycle hooks. |
 

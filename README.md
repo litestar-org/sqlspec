@@ -25,57 +25,49 @@ SQLSpec provides unified synchronous and asynchronous session APIs, SQLGlot-back
 uv add sqlspec
 ```
 
-Install optional driver, schema validation, or framework extras as needed:
-
-```bash
-uv add "sqlspec[asyncpg,msgspec,litestar]"
-```
+Python's built-in SQLite driver needs no extra packages. For other setups, see
+[Database Adapters](https://sqlspec.dev/databases/) and
+[Integrations](https://sqlspec.dev/integrations/).
 
 ## Quickstart
 
 ```python
-import msgspec
-
 from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 
-
-class User(msgspec.Struct):
-    id: int
-    name: str
-
-
 spec = SQLSpec()
-config = spec.add_config(
-    SqliteConfig(connection_config={"database": ":memory:"})
-)
+config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
 
 with spec.provide_session(config) as session:
     session.execute(
         """
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,
-            name TEXT
+            name TEXT,
+            points INTEGER
         )
         """
     )
     session.execute(
         """
-        INSERT INTO users (name)
-        VALUES (:name)
+        INSERT INTO users (name, points)
+        VALUES (:name, :points)
         """,
         name="Ada",
+        points=42,
     )
-    user = session.select_one(
+    count = session.select_value("SELECT COUNT(*) FROM users", value_type=int)
+    row = session.select_one(
         """
-        SELECT id, name
+        SELECT id, name, points
         FROM users
         WHERE name = :name
         """,
         name="Ada",
-        schema_type=User,
     )
 ```
+
+For typed model results, see [Schema Mapping](https://sqlspec.dev/learn/schema-mapping/).
 
 ## Capabilities
 

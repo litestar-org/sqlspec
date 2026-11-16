@@ -14,7 +14,7 @@ SQLSpec ships first-party framework plugins and ecosystem extensions under `sqls
 | **[Flask](flask.md)** | `sqlspec.extensions.flask` | `sqlspec[flask]` | `plugin.get_session()` (`g`-scoped) | `autocommit` (default), `autocommit_include_redirect`, `manual` | — | — | `sqlspec` CLI |
 | **[Sanic](sanic.md)** | `sqlspec.extensions.sanic` | `sqlspec[sanic]` | `db_plugin.get_session(request)` (`request.ctx`) | `autocommit` (default), `autocommit_include_redirect`, `manual` | — | — | `sqlspec` CLI |
 | **[Dishka](dishka.md)** | `dishka` | `dishka` | `FromDishka[DriverT]` (`Scope.REQUEST`) | Explicit session or service scope | Combines with any adapter store | Combines with `SQLSpecAsyncService` / `SQLSpecSyncService` | Shared `Scope.APP` container across web, CLI, and workers |
-| **[OpenTelemetry](../learn/observability.md)** | `sqlspec.extensions.otel` | `sqlspec[otel]` (`opentelemetry-api`) | `enable_tracing(...)` (`ObservabilityConfig`) | — | `SpanManager` (`db.system`, `db.operation`) | — | — |
+| **[OpenTelemetry](../learn/observability.md)** | `sqlspec.extensions.otel` | `sqlspec[opentelemetry]` | `enable_tracing(...)` (`ObservabilityConfig`) | — | `SpanManager` (`db.system`, `db.operation`) | — | — |
 | **[Prometheus](../learn/observability.md)** | `sqlspec.extensions.prometheus` | `sqlspec[prometheus]` (`prometheus-client`) | `enable_metrics(...)` (`StatementObserver`) | — | `PrometheusStatementObserver` (`Counter`, `Histogram`) | — | — |
 
 ## Shared Extension Configuration Pattern

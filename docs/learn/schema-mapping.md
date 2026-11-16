@@ -4,7 +4,12 @@ By default, `select`, `select_one`, `select_one_or_none`, and their `fetch*` ali
 
 ## Mapping Rows to msgspec.Struct
 
-`msgspec.Struct` is the fastest and lowest-memory target for typed row hydration in SQLSpec (`msgspec` extra):
+Use `msgspec.Struct` for typed row objects. Install the `msgspec` extra before
+running this example:
+
+```bash
+uv add "sqlspec[msgspec]"
+```
 
 ```{ .python title="docs/examples/querying/schema_mapping.py" }
 --8<-- "docs/examples/querying/schema_mapping.py:example"
@@ -27,6 +32,10 @@ SQLSpec's schema dispatcher supports five model families out of the box without 
 | `dataclasses.dataclass` | *(built-in)* | Standard-library domain value objects with zero external dependencies |
 | `pydantic.BaseModel` | `sqlspec[pydantic]` | FastAPI applications or rich field validators (`EmailStr`, custom `@field_validator`) |
 | `attrs` (`@define`) | `sqlspec[attrs]` | Codebases standardized on `attrs` and `cattrs` converters |
+
+Choose the extra matching your model library; they can be combined with a driver
+extra in the same requirement. The `pydantic` extra includes `pydantic-extra-types`;
+the `attrs` extra includes `cattrs`. `TypedDict` and dataclasses need no model-library extra.
 
 ## Comparing Schema Definitions
 

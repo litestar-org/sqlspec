@@ -14,29 +14,8 @@ This guide uses shared tables. For request auth, see the [Tenant Request Contrac
 
 ## Create the Policy and Application Role
 
-=== "uv"
-
-    ```bash
-    uv add "sqlspec[asyncpg]"
-    ```
-
-=== "pip"
-
-    ```bash
-    pip install "sqlspec[asyncpg]"
-    ```
-
-=== "pdm"
-
-    ```bash
-    pdm add "sqlspec[asyncpg]"
-    ```
-
-=== "poetry"
-
-    ```bash
-    poetry add "sqlspec[asyncpg]"
-    ```
+This example requires PostgreSQL and the `asyncpg` extra. Follow the
+[asyncpg setup guide](../../databases/postgres/asyncpg.md#installation-quickstart) before continuing.
 
 Use an admin connection to create the role, table, and policy. Set the role's login password through your secret store.
 

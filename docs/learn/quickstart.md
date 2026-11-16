@@ -66,7 +66,9 @@ Use positional parameters for quick single-column statements and named parameter
 
 ## Asynchronous Sessions
 
-Switching from synchronous `sqlite3` to `asyncio` uses the exact same session methods with `await` and `async with`. Install `sqlspec[aiosqlite]` and swap `SqliteConfig` for `AiosqliteConfig`:
+Async sessions use the same query methods with `await` and `async with`.
+Follow the [SQLite guide](../databases/sqlite.md#installation-quickstart) to install
+`sqlspec[aiosqlite]`, then swap `SqliteConfig` for `AiosqliteConfig`:
 
 ```python
 --8<-- "docs/examples/quickstart/async_connection.py:example"
@@ -76,7 +78,9 @@ Always call `await config.close_pool()` during application shutdown (or let a fr
 
 ## Typed Row Mapping
 
-By default, `select` and `select_one` return `dict[str, Any]` rows. Pass `schema_type=` to decode rows directly into `msgspec.Struct`, `TypedDict`, `pydantic.BaseModel`, `dataclass`, or `attrs` instances (`msgspec` ships with the `sqlspec[msgspec]` extra):
+By default, queries return dictionaries. Pass `schema_type=` to map rows into typed
+objects. This example uses `msgspec.Struct`; install `sqlspec[msgspec]` as described
+in [Schema Mapping](schema-mapping.md), which also covers other model libraries:
 
 ```python
 --8<-- "docs/examples/quickstart/typed_mapping.py:example"
