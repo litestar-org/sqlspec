@@ -21,6 +21,7 @@ from sqlspec.adapters.aiosqlite.core import (
 )
 from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -763,6 +764,7 @@ class AiosqliteConnectionPool:
         connection = await self.new_connection()
         registered = False
         register_error: BaseException | None = None
+        pool_connection: AiosqlitePoolConnection | None = None
         try:
             pool_connection = AiosqlitePoolConnection(connection)
             pool_connection.mark_as_idle()
@@ -794,7 +796,7 @@ class AiosqliteConnectionPool:
         if register_error is not None:
             raise register_error
 
-        if not registered:
+        if not registered or pool_connection is None:
             msg = "Pool closed during connection creation"
             raise AiosqlitePoolClosedError(msg)
         return pool_connection
@@ -1106,15 +1108,29 @@ async def _reset_session_state(
     original_factory = connection.row_factory
     connection.row_factory = None
     try:
-        async with connection.execute("PRAGMA database_list") as cursor:
+        database_cursor = connection.execute("PRAGMA database_list")
+        cursor = await database_cursor.__aenter__()
+        database_error: BaseException | None = None
+        databases: Any = ()
+        try:
             databases = await cursor.fetchall()
+        except BaseException as caught:
+            database_error = caught
+        await exit_async_context(database_cursor, database_error)
         for _, name, _file in databases:
             if name not in {"main", "temp"}:
                 await _execute(connection, f"DETACH DATABASE {_quote_identifier(name)}")
-        async with connection.execute(
+        temp_cursor = connection.execute(
             "SELECT type, name FROM temp.sqlite_master WHERE name NOT LIKE 'sqlite!_%' ESCAPE '!'"
-        ) as cursor:
+        )
+        cursor = await temp_cursor.__aenter__()
+        temp_error: BaseException | None = None
+        temp_objects: Any = ()
+        try:
             temp_objects = await cursor.fetchall()
+        except BaseException as caught:
+            temp_error = caught
+        await exit_async_context(temp_cursor, temp_error)
         for object_type in _TEMP_OBJECT_DROP_ORDER:
             for found_type, name in temp_objects:
                 if found_type == object_type:

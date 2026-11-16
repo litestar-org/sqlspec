@@ -154,6 +154,8 @@ class Db2AsyncGlobalVariableStrategy(_Db2GlobalVariables):
         names, values = self._assignments(payload)
         cursor: Any = None
         assign_error: BaseException | None = None
+        prior: tuple[Any, ...] = ()
+        current: tuple[Any, ...] = ()
         try:
             cursor = await connection.cursor()
             await cursor.execute(_read_sql(names))
@@ -186,6 +188,7 @@ class Db2AsyncGlobalVariableStrategy(_Db2GlobalVariables):
         values = tuple(state.baseline.values())
         cursor: Any = None
         restore_error: BaseException | None = None
+        restored: tuple[Any, ...] = ()
         try:
             cursor = await connection.cursor()
             await cursor.execute(_assign_sql(names), values)

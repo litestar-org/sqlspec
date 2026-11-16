@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
 from sqlspec.utils.module_loader import ensure_obstore
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, exit_async_context
 from sqlspec.utils.uuids import uuid4
 
 _MAX_SIGN_EXPIRES_SECONDS: Final[int] = 604800
@@ -1061,9 +1061,12 @@ class ObStoreBackend:
             writer_options = _resolve_obstore_writer_options(overwrite, store_kwargs)
 
             async def _do_stream_write_async() -> None:
-                async with _AsyncObstoreWriteStream(
+                stream_context = _AsyncObstoreWriteStream(
                     self.store, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
-                ) as sink:
+                )
+                sink = await stream_context.__aenter__()
+                stream_error: BaseException | None = None
+                try:
                     chunk_size = writer_options.get("buffer_size", 1048576)
                     await encode_arrow_to_async_sink(
                         table,
@@ -1073,6 +1076,9 @@ class ObStoreBackend:
                         write_options=merged_write_options,
                         chunk_size=chunk_size,
                     )
+                except BaseException as caught:
+                    stream_error = caught
+                await exit_async_context(stream_context, stream_error)
 
             await execute_async_storage_operation(
                 _do_stream_write_async, backend=self.backend_type, operation="write_arrow", path=resolved_path
@@ -1087,9 +1093,12 @@ class ObStoreBackend:
             stage = _obstore_stage_key(resolved_path)
 
             async def _do_staged_stream_write_async() -> None:
-                async with _AsyncObstoreStagedCreateStream(
+                stream_context = _AsyncObstoreStagedCreateStream(
                     self.store, stage, resolved_path, writer_options, backend_type=self.backend_type, log_fields=None
-                ) as sink:
+                )
+                sink = await stream_context.__aenter__()
+                stream_error: BaseException | None = None
+                try:
                     chunk_size = writer_options.get("buffer_size", 1048576)
                     await encode_arrow_to_async_sink(
                         table,
@@ -1099,6 +1108,9 @@ class ObStoreBackend:
                         write_options=merged_write_options,
                         chunk_size=chunk_size,
                     )
+                except BaseException as caught:
+                    stream_error = caught
+                await exit_async_context(stream_context, stream_error)
 
             await execute_async_storage_operation(
                 _do_staged_stream_write_async, backend=self.backend_type, operation="write_arrow", path=resolved_path

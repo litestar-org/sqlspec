@@ -27,7 +27,7 @@ from sqlspec.storage.backends.base import AsyncArrowBatchIterator
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, exit_async_context
 from sqlspec.utils.type_guards import (
     supports_async_read_bytes,
     supports_async_write_bytes,
@@ -757,7 +757,12 @@ class AsyncStoragePipeline(_StoragePipelineBase):
             format_choice, overwrite=overwrite
         ):
             start = perf_counter()
-            async with backend.open_write_stream_async(path, overwrite=overwrite) as sink:
+            stream_context = backend.open_write_stream_async(path, overwrite=overwrite)
+            sink = await stream_context.__aenter__()
+            stream_error: BaseException | None = None
+            bytes_written = 0
+            rows_written = 0
+            try:
                 bytes_written, rows_written = await encode_arrow_to_async_sink(
                     table,
                     sink,
@@ -765,6 +770,9 @@ class AsyncStoragePipeline(_StoragePipelineBase):
                     compression=compression,
                     write_options=resolved_write_options,
                 )
+            except BaseException as caught:
+                stream_error = caught
+            await exit_async_context(stream_context, stream_error)
             elapsed = perf_counter() - start
             _METRICS.record_bytes(bytes_written)
             telemetry: StorageTelemetry = {
@@ -870,7 +878,12 @@ class AsyncStoragePipeline(_StoragePipelineBase):
                 file_format, overwrite=overwrite
             ):
                 start = perf_counter()
-                async with backend.open_write_stream_async(path, overwrite=overwrite) as sink:
+                stream_context = backend.open_write_stream_async(path, overwrite=overwrite)
+                sink = await stream_context.__aenter__()
+                stream_error: BaseException | None = None
+                bytes_written = 0
+                rows_written = 0
+                try:
                     bytes_written, rows_written = await encode_arrow_to_async_sink(
                         batches,
                         sink,
@@ -878,6 +891,9 @@ class AsyncStoragePipeline(_StoragePipelineBase):
                         compression=compression,
                         write_options=resolved_write_options,
                     )
+                except BaseException as caught:
+                    stream_error = caught
+                await exit_async_context(stream_context, stream_error)
                 elapsed = perf_counter() - start
                 _METRICS.record_bytes(bytes_written)
                 telemetry = {

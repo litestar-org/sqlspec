@@ -730,6 +730,7 @@ class AsyncEventChannel:
                     self._runtime, "dequeue", self._backend_name, self._adapter_name, channel, mode="async"
                 )
                 dequeue_error: Exception | None = None
+                event: EventMessage | None = None
                 try:
                     event = await self._backend.dequeue(channel, poll_interval)
                 except Exception as error:

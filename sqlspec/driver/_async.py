@@ -70,6 +70,7 @@ from sqlspec.storage.pipeline import (
 from sqlspec.utils.arrow_helpers import arrow_batches_from_async_rows, convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -1408,6 +1409,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
                 for index, operation in enumerate(stack.operations):
                     operation_error: Exception | None = None
+                    result: SQLResult | ArrowResult | None = None
                     try:
                         result = await self._execute_stack_operation(operation)
                     except Exception as exc:  # pragma: no cover
@@ -1758,6 +1760,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         started = perf_counter()
         self._pending_statement_profile = None
         run_error: Exception | None = None
+        result: SQLResult | None = None
         try:
             result = await runner(**runner_kwargs)
         except Exception as exc:
@@ -1784,6 +1787,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 db_system=db_system,
             )
             raise run_error
+        assert result is not None
         profile = self._consume_statement_profile()
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
@@ -2080,7 +2084,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         direct_statement: SQL | None = None
         result: SQLResult | None = None
         try:
-            async with self.with_cursor(self.connection) as cursor:
+            cursor_context = self.with_cursor(self.connection)
+            cursor = await cursor_context.__aenter__()
+            cursor_error: BaseException | None = None
+            try:
                 wire_sql = self._format_wire_sql(cached.compiled_sql)
                 returns_rows = cached.operation_profile.returns_rows
                 execute = getattr(cursor, "execute", None) if cursor is not self.connection else None
@@ -2127,6 +2134,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                             else 0
                         )
                         result = DMLResult(cached.operation_type, affected_rows)
+            except BaseException as caught:
+                cursor_error = caught
+            await exit_async_context(cursor_context, cursor_error)
             assert result is not None
             return result
         finally:
@@ -2135,9 +2145,18 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
     async def _execute_cached_statement_with_cursor(self, statement: "SQL") -> "SQLResult":
         """Execute a prepared statement while owning only the cursor context."""
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        result: SQLResult | None = None
+        try:
             execution_result = await self.dispatch_execute(cursor, statement)
-            return self.build_statement_result(statement, execution_result)
+            result = self.build_statement_result(statement, execution_result)
+        except BaseException as caught:
+            cursor_error = caught
+        await exit_async_context(cursor_context, cursor_error)
+        assert result is not None
+        return result
 
     async def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}

@@ -18,6 +18,7 @@ from sqlspec.extensions.events._payload import coerce_dict, coerce_optional_dict
 from sqlspec.extensions.events.primitives import claim_verified, lock_clause, row_limit_clause, select_limit_prefix
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -751,7 +752,10 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             if self._use_run_in_transaction
             else self._config.provide_session(transaction=True)
         )
-        async with cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx) as driver:
+        session = cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx)
+        driver = await session.__aenter__()
+        publish_error: BaseException | None = None
+        try:
             if self._use_run_in_transaction:
                 run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
                 if callable(run_in_tx):
@@ -762,6 +766,9 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             else:
                 await self._execute_many_with_driver(driver, records)
                 await driver.commit()
+        except BaseException as exc:
+            publish_error = exc
+        await exit_async_context(session, publish_error)
         self._runtime.increment_metric("events.publisher.session")
         self._runtime.increment_metric("events.publisher.statement")
         self._runtime.increment_metric("events.publish", len(records))
@@ -873,40 +880,45 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         """Fetch the next candidate event row, using a read-only session when unlocked."""
         current_time = self._utcnow()
         self._runtime.increment_metric("events.poll.query")
-        async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]",
-            _provide_session(self._config, read_only=not self._select_for_update),
-        ) as driver:
-            row = await driver.select_one_or_none(
-                SQL(
-                    self._select_statement,
-                    self._candidate_parameters(channel, current_time),
-                    statement_config=self._statement_config,
-                )
-            )
-            return self._normalize_queue_row(row)
+        return await self._select_queue_row(
+            SQL(
+                self._select_statement,
+                self._candidate_parameters(channel, current_time),
+                statement_config=self._statement_config,
+            ),
+            read_only=not self._select_for_update,
+        )
+
+    async def _select_queue_row(self, statement: SQL, *, read_only: bool) -> "dict[str, Any] | None":
+        """Run one row lookup in its own session and return the normalized row."""
+        session = cast(
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=read_only)
+        )
+        driver = await session.__aenter__()
+        select_error: BaseException | None = None
+        row: Any = None
+        try:
+            row = await driver.select_one_or_none(statement)
+        except BaseException as exc:
+            select_error = exc
+        await exit_async_context(session, select_error)
+        return self._normalize_queue_row(row)
 
     async def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
-        async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
-        ) as driver:
-            row = await driver.select_one_or_none(
-                SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
-            )
-            return self._normalize_queue_row(row)
+        return await self._select_queue_row(
+            SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config),
+            read_only=True,
+        )
 
     async def _fetch_claimable_by_event_id(
         self, event_id: str, channel: str, now: "datetime"
     ) -> "dict[str, Any] | None":
         parameters = self._candidate_parameters(channel, now)
         parameters["event_id"] = event_id
-        async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
-        ) as driver:
-            row = await driver.select_one_or_none(
-                SQL(self._select_claimable_by_id_statement, parameters, statement_config=self._statement_config)
-            )
-            return self._normalize_queue_row(row)
+        return await self._select_queue_row(
+            SQL(self._select_claimable_by_id_statement, parameters, statement_config=self._statement_config),
+            read_only=True,
+        )
 
     async def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
         session_ctx = (
@@ -914,58 +926,71 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             if self._use_run_in_transaction
             else self._config.provide_session(transaction=True)
         )
-        async with cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx) as driver:
-            if self._use_run_in_transaction:
-                run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
-                if callable(run_in_tx):
-                    return cast(
-                        "int",
-                        await cast("Any", run_in_tx)(
-                            partial(self._execute_with_driver, sql=sql, parameters=parameters)
-                        ),
-                    )
-            rows_affected = await self._execute_with_driver(driver, sql, parameters)
-            await driver.commit()
-            return rows_affected
+        session = cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx)
+        driver = await session.__aenter__()
+        execute_error: BaseException | None = None
+        rows_affected = 0
+        try:
+            run_in_tx = (
+                cast("Any", getattr(driver, "run_in_transaction", None)) if self._use_run_in_transaction else None
+            )
+            if callable(run_in_tx):
+                rows_affected = cast(
+                    "int",
+                    await cast("Any", run_in_tx)(partial(self._execute_with_driver, sql=sql, parameters=parameters)),
+                )
+            else:
+                rows_affected = await self._execute_with_driver(driver, sql, parameters)
+                await driver.commit()
+        except BaseException as exc:
+            execute_error = exc
+        await exit_async_context(session, execute_error)
+        return rows_affected
 
     async def _claim_locked_candidate(self, channel: str) -> "EventMessage | None":
         current_time = self._utcnow()
-        async with cast(
+        session = cast(
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
-        ) as driver:
-            claim_error: Exception | None = None
-            try:
-                row = await self._fetch_candidate_with_driver(driver, channel, current_time)
-                if row is None:
-                    await driver.rollback()
-                    return None
-                now = self._utcnow()
-                leased_until = self._lease_deadline(now)
-                claimed = await self._execute_with_driver(
-                    driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
+        )
+        driver = await session.__aenter__()
+        claim_error: BaseException | None = None
+        event: EventMessage | None = None
+        try:
+            event = await self._claim_candidate_with_driver(driver, channel, current_time)
+        except BaseException as exc:
+            claim_error = exc
+        if isinstance(claim_error, Exception):
+            with suppress(Exception):
+                await driver.rollback()
+        await exit_async_context(session, claim_error)
+        return event
+
+    async def _claim_candidate_with_driver(
+        self, driver: "AsyncDriverAdapterBase", channel: str, current_time: "datetime"
+    ) -> "EventMessage | None":
+        """Select, claim and commit one candidate on the given session, or roll back when none is claimed."""
+        row = await self._fetch_candidate_with_driver(driver, channel, current_time)
+        if row is None:
+            await driver.rollback()
+            return None
+        now = self._utcnow()
+        leased_until = self._lease_deadline(now)
+        claimed = await self._execute_with_driver(
+            driver, self._claim_statement, self._claim_parameters(row, now, leased_until)
+        )
+        if not claimed:
+            verify_row = await driver.select_one_or_none(
+                SQL(
+                    self._select_by_id_statement, {"event_id": row["event_id"]}, statement_config=self._statement_config
                 )
-                if not claimed:
-                    verify_row = await driver.select_one_or_none(
-                        SQL(
-                            self._select_by_id_statement,
-                            {"event_id": row["event_id"]},
-                            statement_config=self._statement_config,
-                        )
-                    )
-                    verify_row = self._normalize_queue_row(verify_row)
-                    claimed = self._claim_verified(verify_row, leased_until)
-                if not claimed:
-                    await driver.rollback()
-                    return None
-                await driver.commit()
-                return self._claimed_event(row, leased_until)
-            except Exception as exc:
-                claim_error = exc
-            if claim_error is not None:
-                with suppress(Exception):
-                    await driver.rollback()
-                raise claim_error
-        return None
+            )
+            verify_row = self._normalize_queue_row(verify_row)
+            claimed = self._claim_verified(verify_row, leased_until)
+        if not claimed:
+            await driver.rollback()
+            return None
+        await driver.commit()
+        return self._claimed_event(row, leased_until)
 
     async def _fetch_candidate_with_driver(
         self, driver: "AsyncDriverAdapterBase", channel: str, current_time: "datetime"
@@ -986,19 +1011,26 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
         oracle_driver = cast("Any", driver)
         sql, prepared_parameters = oracle_driver._compiled_sql(statement, self._statement_config)
-        async with oracle_driver.with_cursor(oracle_driver.connection) as cursor:
+        cursor_context = oracle_driver.with_cursor(oracle_driver.connection)
+        cursor = await cursor_context.__aenter__()
+        fetch_error: BaseException | None = None
+        rows: list[Any] = []
+        column_names: list[str] = []
+        try:
             await cursor.execute(sql, prepared_parameters or {})
             row = await cursor.fetchone()
-            if row is None:
-                return None
-            column_names, requires_lob_coercion = oracle_driver._resolve_row_metadata(cursor.description)
-            rows, column_names = await collect_async_rows(
-                [row],
-                cursor.description,
-                oracle_driver.driver_features,
-                column_names=column_names,
-                requires_lob_coercion=requires_lob_coercion,
-            )
+            if row is not None:
+                column_names, requires_lob_coercion = oracle_driver._resolve_row_metadata(cursor.description)
+                rows, column_names = await collect_async_rows(
+                    [row],
+                    cursor.description,
+                    oracle_driver.driver_features,
+                    column_names=column_names,
+                    requires_lob_coercion=requires_lob_coercion,
+                )
+        except BaseException as exc:
+            fetch_error = exc
+        await exit_async_context(cursor_context, fetch_error)
         if not rows:
             return None
         return dict(zip(column_names, rows[0], strict=False))

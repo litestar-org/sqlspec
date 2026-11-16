@@ -15,6 +15,7 @@ from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import DataError, ImproperConfigurationError, InvalidCursorError, NotFoundError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.routing import RoutingContext
+from sqlspec.utils.sync_tools import exit_async_context
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -98,28 +99,34 @@ async def _async_paginate(
             raise ImproperConfigurationError(msg)
         statement, parameters = cursor_parameters
         return await _async_paginate_cursor(context, statement, parameters, schema_type, kwargs)
-    async with context as driver:
-        pending = statement.filters if isinstance(statement, SQL) else []
-        limit_offset: LimitOffsetFilter | None = find_filter(LimitOffsetFilter, (*pending, *parameters))
-
+    driver = await context.__aenter__()
+    page_error: BaseException | None = None
+    items: Any = None
+    total = 0
+    try:
         items, total = await driver.select_with_total(
             statement, *parameters, schema_type=schema_type, count_with_window=count_with_window, **kwargs
         )
+    except BaseException as caught:
+        page_error = caught
+    await exit_async_context(context, page_error)
+    pending = statement.filters if isinstance(statement, SQL) else []
+    limit_offset: LimitOffsetFilter | None = find_filter(LimitOffsetFilter, (*pending, *parameters))
 
-        if schema_type is None:
-            return OffsetPagination(
-                items=cast("list[dict[str, Any]]", items),
-                limit=limit_offset.limit if limit_offset is not None else len(items),
-                offset=limit_offset.offset if limit_offset is not None else 0,
-                total=total,
-            )
-
+    if schema_type is None:
         return OffsetPagination(
-            items=cast("list[SchemaT]", items),
+            items=cast("list[dict[str, Any]]", items),
             limit=limit_offset.limit if limit_offset is not None else len(items),
             offset=limit_offset.offset if limit_offset is not None else 0,
             total=total,
         )
+
+    return OffsetPagination(
+        items=cast("list[SchemaT]", items),
+        limit=limit_offset.limit if limit_offset is not None else len(items),
+        offset=limit_offset.offset if limit_offset is not None else 0,
+        total=total,
+    )
 
 
 def _cursor_pagination_parameters(
@@ -149,25 +156,36 @@ async def _async_paginate_cursor(
     kwargs: dict[str, Any],
 ) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
     """Execute cursor pagination inside the supplied service session context."""
-    async with context as driver:
-        cursor_filter = cast("CursorFilter", parameters[-1])
-        try:
-            items = await driver.select(statement, *parameters, **kwargs)
-        except DataError as exc:
-            if cursor_filter.values is None:
-                raise
-            raise InvalidCursorError(_INVALID_CURSOR_VALUE_MESSAGE) from exc
+    driver = await context.__aenter__()
+    cursor_filter = cast("CursorFilter", parameters[-1])
+    page_error: BaseException | None = None
+    result: Any = None
+    try:
+        items = await driver.select(statement, *parameters, **kwargs)
         page = cursor_filter.build_page(items)
-        if schema_type is None:
-            return page
-        return CursorPagination(
-            items=cast("list[SchemaT]", driver.to_schema(page.items, schema_type=schema_type)),
-            limit=page.limit,
-            next_cursor=page.next_cursor,
-            previous_cursor=page.previous_cursor,
-            has_next=page.has_next,
-            has_previous=page.has_previous,
+        result = (
+            page
+            if schema_type is None
+            else CursorPagination(
+                items=cast("list[SchemaT]", driver.to_schema(page.items, schema_type=schema_type)),
+                limit=page.limit,
+                next_cursor=page.next_cursor,
+                previous_cursor=page.previous_cursor,
+                has_next=page.has_next,
+                has_previous=page.has_previous,
+            )
         )
+    except DataError as exc:
+        if cursor_filter.values is None:
+            page_error = exc
+        else:
+            invalid_cursor = InvalidCursorError(_INVALID_CURSOR_VALUE_MESSAGE)
+            invalid_cursor.__cause__ = exc
+            page_error = invalid_cursor
+    except BaseException as caught:
+        page_error = caught
+    await exit_async_context(context, page_error)
+    return cast("CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]", result)
 
 
 async def _async_get_one(
@@ -179,11 +197,17 @@ async def _async_get_one(
     kwargs: dict[str, Any],
 ) -> "SchemaT | dict[str, Any]":
     """Execute the async service get_one operation in the supplied session context."""
-    async with context as driver:
+    driver = await context.__aenter__()
+    get_error: BaseException | None = None
+    result: Any = None
+    try:
         result = await driver.select_one_or_none(statement, *parameters, schema_type=schema_type, **kwargs)
         if result is None:
-            raise NotFoundError(error_message or "Record not found")
-        return result
+            get_error = NotFoundError(error_message or "Record not found")
+    except BaseException as caught:
+        get_error = caught
+    await exit_async_context(context, get_error)
+    return cast("SchemaT | dict[str, Any]", result)
 
 
 async def _async_exists(
@@ -196,8 +220,15 @@ async def _async_exists(
     pending = statement.filters if isinstance(statement, SQL) else []
     has_limit = find_filter(LimitOffsetFilter, (*pending, *parameters)) is not None
     bound_params = parameters if has_limit else (*parameters, LimitOffsetFilter(limit=1, offset=0))
-    async with context as driver:
-        return await driver.select_one_or_none(statement, *bound_params, **kwargs) is not None
+    driver = await context.__aenter__()
+    exists_error: BaseException | None = None
+    found = False
+    try:
+        found = await driver.select_one_or_none(statement, *bound_params, **kwargs) is not None
+    except BaseException as caught:
+        exists_error = caught
+    await exit_async_context(context, exists_error)
+    return found
 
 
 def _sync_paginate(
@@ -420,19 +451,24 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
             return driver
         stack = AsyncExitStack()
         enter_error: BaseException | None = None
+        entered: AsyncDriverT | None = None
+        bound_state: _TransactionState | None = None
         try:
-            driver = await stack.enter_async_context(service.provide_session())
-            await stack.enter_async_context(driver.transaction())
-            state, token = _bind_transaction(key, driver)
-            stack.callback(_release_transaction, state, token)
+            entered = await stack.enter_async_context(service.provide_session())
+            await stack.enter_async_context(entered.transaction())
+            bound_state, token = _bind_transaction(key, entered)
+            stack.callback(_release_transaction, bound_state, token)
         except BaseException as exc:
             enter_error = exc
-        if enter_error is not None:
+        if enter_error is not None or entered is None or bound_state is None:
+            if enter_error is None:
+                msg = "Service transaction did not open a session"
+                enter_error = RuntimeError(msg)
             await stack.__aexit__(type(enter_error), enter_error, enter_error.__traceback__)
             raise enter_error
         self._stack = stack
-        self._state = state
-        return driver
+        self._state = bound_state
+        return entered
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc: "BaseException | None", traceback: "TracebackType | None"

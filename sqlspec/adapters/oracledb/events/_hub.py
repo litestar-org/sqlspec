@@ -230,6 +230,7 @@ class OracleAsyncAQHub:
                 allow_condition=self._backend_name != "txeventq",
             )
             dequeue_error: Exception | None = None
+            message: Any = None
             try:
                 message = await queue.deqone()
             except Exception as error:

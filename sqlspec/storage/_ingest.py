@@ -44,6 +44,7 @@ from sqlspec.storage.pipeline import (
     ingest_telemetry_from_batches,
 )
 from sqlspec.utils.arrow_helpers import coerce_arrow_table
+from sqlspec.utils.sync_tools import exit_async_context
 
 __all__ = (
     "execute_load_from_storage_async",
@@ -157,8 +158,12 @@ async def execute_staged_load_async(
     if drop_indexes or stage_table or conflict_keys:
         ensure_teradata_ddl_outside_transaction(driver, "staged load")
     if drop_indexes:
-        async with AsyncWithoutIndexesContext(driver, table, concurrent=concurrent_indexes):
-            return await execute_staged_load_async(
+        index_context = AsyncWithoutIndexesContext(driver, table, concurrent=concurrent_indexes)
+        await index_context.__aenter__()
+        index_error: BaseException | None = None
+        staged_job: StorageBridgeJob | None = None
+        try:
+            staged_job = await execute_staged_load_async(
                 driver,
                 table,
                 source,
@@ -176,6 +181,11 @@ async def execute_staged_load_async(
                 type_casts=type_casts,
                 multi_worker=multi_worker,
             )
+        except BaseException as caught:
+            index_error = caught
+        await exit_async_context(index_context, index_error)
+        assert staged_job is not None
+        return staged_job
 
     dialect = normalize_storage_dialect(str(getattr(driver, "dialect", "") or ""))
     resolved_stage = resolve_stage_table_name(table, stage_table, conflict_keys=conflict_keys, dialect=dialect)
@@ -191,6 +201,7 @@ async def execute_staged_load_async(
     for ddl in build_stage_table_ddl(dialect, table, resolved_stage, multi_worker=multi_worker):
         await execute_ddl(ddl)
     load_error: BaseException | None = None
+    job: StorageBridgeJob | None = None
     try:
         if overwrite and not conflict_keys:
             await driver.execute(
@@ -226,6 +237,7 @@ async def execute_staged_load_async(
             await driver.execute(build_drop_stage_table_sql(dialect, resolved_stage))
     if load_error is not None:
         raise load_error
+    assert job is not None
     return job
 
 
@@ -487,8 +499,12 @@ async def execute_load_from_storage_async(
     if drop_indexes or checkpoint_table or stage_table or conflict_keys:
         ensure_teradata_ddl_outside_transaction(driver, "storage load")
     if drop_indexes:
-        async with AsyncWithoutIndexesContext(driver, table, concurrent=concurrent_indexes):
-            return await execute_load_from_storage_async(
+        index_context = AsyncWithoutIndexesContext(driver, table, concurrent=concurrent_indexes)
+        await index_context.__aenter__()
+        index_error: BaseException | None = None
+        storage_job: StorageBridgeJob | None = None
+        try:
+            storage_job = await execute_load_from_storage_async(
                 driver,
                 table,
                 source,
@@ -510,6 +526,11 @@ async def execute_load_from_storage_async(
                 arrow_schema=arrow_schema,
                 type_casts=type_casts,
             )
+        except BaseException as caught:
+            index_error = caught
+        await exit_async_context(index_context, index_error)
+        assert storage_job is not None
+        return storage_job
 
     pipeline = driver._storage_pipeline()
     if is_source_sequence:

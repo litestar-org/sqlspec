@@ -22,6 +22,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.extensions.events._buffer import enqueue_with_capacity, resolve_listener_queue_capacity
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import is_notification
 from sqlspec.utils.uuids import uuid4
 
@@ -316,9 +317,15 @@ class PsqlpyListenerHub:
         self._ready_events.setdefault(channel, {})[payload] = ready
         try:
             listener_config = self._resolve_listener_config()
-            async with listener_config.provide_session() as driver:
+            probe_session = listener_config.provide_session()
+            driver = await probe_session.__aenter__()
+            probe_error: BaseException | None = None
+            try:
                 await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, payload))
                 await driver.commit()
+            except BaseException as caught:
+                probe_error = caught
+            await exit_async_context(probe_session, probe_error)
             await asyncio.wait_for(ready.wait(), timeout=timeout)
         except TimeoutError:
             logger.debug("psqlpy listener ready probe timed out for channel %s", channel)

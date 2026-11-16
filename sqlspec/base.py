@@ -1031,8 +1031,9 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
             raw_connection: Any | None = None
             connection_created = False
             enter_error: BaseException | None = None
+            prepared: Any = None
             try:
-                prepared: Any = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+                prepared = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
                 driver = prepared
                 raw_connection = prepared.connection
                 if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:

@@ -1838,6 +1838,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             return execution_time
 
         schema_reset = False
+        execution_time = 0
         script_error: BaseException | None = None
         try:
             if default_schema:

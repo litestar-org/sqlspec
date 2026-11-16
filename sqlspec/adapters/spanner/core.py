@@ -44,6 +44,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import exit_async_context
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Generator, Sequence
@@ -1176,12 +1177,20 @@ class _SpannerWriteTransactionProtocol(Protocol):
 async def _run_read_async(
     database: Any, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
 ) -> "list[Any]":
+    rows: list[Any] = []
     try:
-        async with cast("Any", database).snapshot() as snapshot:
+        snapshot_context = cast("Any", database).snapshot()
+        snapshot = await snapshot_context.__aenter__()
+        read_error: BaseException | None = None
+        try:
             result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
-            return [row async for row in result_set]
+            rows = [row async for row in result_set]
+        except BaseException as caught:
+            read_error = caught
+        await exit_async_context(snapshot_context, read_error)
     except api_exceptions.GoogleAPICallError as exc:
         raise create_mapped_exception(exc) from exc
+    return rows
 
 
 def _adk_config(config: Any) -> "dict[str, Any]":

@@ -38,7 +38,7 @@ from sqlspec.storage.backends.local import (
     _open_local_stage,
 )
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
-from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.sync_tools import async_, exit_async_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -726,7 +726,7 @@ class FSSpecBackend:
             open_mode = "wb" if overwrite else "xb"
 
             async def _do_stream_write_async() -> None:
-                async with _AsyncFsspecWriteStream(
+                stream_context = _AsyncFsspecWriteStream(
                     self.fs,
                     resolved_path,
                     strategy=strategy,
@@ -735,7 +735,10 @@ class FSSpecBackend:
                     overwrite=overwrite,
                     backend_type=self.backend_type,
                     log_fields=None,
-                ) as sink:
+                )
+                sink = await stream_context.__aenter__()
+                stream_error: BaseException | None = None
+                try:
                     await encode_arrow_to_async_sink(
                         table,
                         sink,
@@ -743,6 +746,9 @@ class FSSpecBackend:
                         compression=compression,
                         write_options=merged_write_options,
                     )
+                except BaseException as caught:
+                    stream_error = caught
+                await exit_async_context(stream_context, stream_error)
 
             await execute_async_storage_operation(
                 _do_stream_write_async, backend=self.backend_type, operation="write_arrow", path=resolved_path
