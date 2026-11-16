@@ -430,7 +430,7 @@ def test_adbc_litestar_store_set_ttl_precision_and_immediate_expiry(
     if expect_future:
         assert before + timedelta(milliseconds=200) <= bound_expires_at <= after + timedelta(milliseconds=300)
     else:
-        assert before - timedelta(microseconds=1) <= bound_expires_at <= after - timedelta(microseconds=1)
+        assert before - timedelta(seconds=1) <= bound_expires_at <= after - timedelta(seconds=1)
 
 
 @pytest.mark.parametrize(

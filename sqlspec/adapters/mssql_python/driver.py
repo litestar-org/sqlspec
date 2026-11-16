@@ -708,7 +708,10 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached statement through the compiled mssql-python cache-hit executor."""
-        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._column_name_cache)
+        wire_sql = self._format_wire_sql(cached.compiled_sql) if self.statement_config.enable_sqlcommenter else None
+        return execute_cache_hit(
+            self.connection, sql, params, cached, self.statement_config, self._column_name_cache, wire_sql
+        )
 
     @staticmethod
     def _validate_bulk_column_mappings(column_mappings: "Sequence[str] | Sequence[tuple[int, str]] | None") -> None:

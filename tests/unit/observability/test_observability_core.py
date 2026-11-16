@@ -1575,3 +1575,30 @@ def test_create_statement_event_preserves_profile_when_redaction_disabled() -> N
     )
 
     assert event.profile == {"query_name": "SELECT 'raw' WHERE id = 7"}
+
+
+def test_get_trace_context_caches_otel_trace_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_trace_context resolves opentelemetry.trace once per process instead of re-importing per query."""
+    import builtins
+
+    import sqlspec.observability._common as obs_common
+
+    obs_common._reset_otel_trace_cache()
+    real_import = builtins.__import__
+    import_attempts = 0
+
+    def _counting_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        nonlocal import_attempts
+        if name == "opentelemetry" or name.startswith("opentelemetry."):
+            import_attempts += 1
+        return real_import(name, *args, **kwargs)
+
+    try:
+        monkeypatch.setattr(builtins, "__import__", _counting_import)
+        obs_common.get_trace_context()
+        first_count = import_attempts
+        obs_common.get_trace_context()
+        obs_common.get_w3c_trace_context()
+        assert import_attempts == first_count
+    finally:
+        obs_common._reset_otel_trace_cache()

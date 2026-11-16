@@ -100,7 +100,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SqliteDataDictionary | None = None
-        self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
+        self._rowid_target_cache: dict[Any, bool] = {}
         self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), SqliteDriver) else None
         self._cache_hit_state = self._rowid_target_cache
 
@@ -142,6 +142,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 effective_rowcount,
                 statement._get_shared_expression(),
                 self._rowid_target_cache,
+                sql,
             )
 
             return self.create_execution_result(
@@ -162,6 +163,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             affected_rows,
             statement._get_shared_expression(),
             self._rowid_target_cache,
+            sql,
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
@@ -415,7 +417,10 @@ class SqliteDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached statement through the compiled SQLite cache-hit executor."""
-        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._rowid_target_cache)
+        wire_sql = self._format_wire_sql(cached.compiled_sql) if self.statement_config.enable_sqlcommenter else None
+        return execute_cache_hit(
+            self.connection, sql, params, cached, self.statement_config, self._rowid_target_cache, wire_sql
+        )
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in ROWID_SAFE_OPERATIONS:

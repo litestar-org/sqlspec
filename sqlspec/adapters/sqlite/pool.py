@@ -7,7 +7,6 @@ import threading
 import time
 import weakref
 from collections.abc import Mapping
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -21,7 +20,7 @@ from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable
 
 __all__ = ("SqliteConnectionPool",)
 
@@ -198,18 +197,13 @@ class SqliteConnectionPool:
 
         return cast("SqliteConnection", connection)
 
-    @contextmanager
-    def get_connection(self) -> "Generator[SqliteConnection, None, None]":
+    def get_connection(self) -> "_SqliteConnectionLease":
         """Lease a connection, serializing writer leases when configured.
 
-        Yields:
-            A connection with its lease held until context exit.
+        Returns:
+            A slotted context manager holding the connection lease until exit.
         """
-        with (
-            self._write_lock if self._write_lock is not None else contextlib.nullcontext(),
-            self._get_connection_unlocked() as connection,
-        ):
-            yield connection
+        return _SqliteConnectionLease(self)
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -305,50 +299,6 @@ class SqliteConnectionPool:
                             if token is not None:
                                 return token
         return None
-
-    @contextmanager
-    def _get_connection_unlocked(self) -> "Generator[SqliteConnection, None, None]":
-        """Get a thread-local connection.
-
-        Yields:
-            SqliteConnection: A thread-local connection.
-        """
-        connection = self._get_thread_connection()
-        with self._registry_lock:
-            depth = self._connection_depths.get(connection, 0)
-            self._connection_depths[connection] = depth + 1
-            if depth == 0:
-                self._checked_out_count += 1
-        outermost = depth == 0
-        try:
-            yield connection
-        except BaseException:
-            if outermost:
-                try:
-                    end_transaction(connection, commit=False)
-                except Exception:
-                    self._retire_failed_connection(connection)
-            raise
-        else:
-            if outermost:
-                try:
-                    end_transaction(connection, commit=True)
-                except BaseException:
-                    try:
-                        end_transaction(connection, commit=False)
-                    except Exception:
-                        self._retire_failed_connection(connection)
-                    raise
-                self._reset_connection_or_retire(connection)
-        finally:
-            with self._registry_lock:
-                remaining = self._connection_depths.get(connection, 1) - 1
-                if remaining > 0:
-                    self._connection_depths[connection] = remaining
-                else:
-                    self._connection_depths.pop(connection, None)
-                if outermost and self._checked_out_count > 0:
-                    self._checked_out_count -= 1
 
     def _reset_connection(self, connection: SqliteConnection) -> None:
         if not self._reset_session_on_release:
@@ -717,6 +667,83 @@ class SqliteConnectionPool:
             holder.connection = None
             holder.created_at = 0.0
             holder.last_used = 0.0
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _SqliteConnectionLease:
+    """Slotted context manager for SQLite pooled connection leases."""
+
+    __slots__ = ("_connection", "_outermost", "_pool", "_write_lock_acquired")
+
+    def __init__(self, pool: SqliteConnectionPool) -> None:
+        self._pool = pool
+        self._connection: SqliteConnection | None = None
+        self._outermost = False
+        self._write_lock_acquired = False
+
+    def __enter__(self) -> SqliteConnection:
+        pool = self._pool
+        write_lock = pool._write_lock
+        if write_lock is not None:
+            write_lock.acquire()
+            self._write_lock_acquired = True
+        try:
+            connection = pool._get_thread_connection()
+        except BaseException:
+            if self._write_lock_acquired and write_lock is not None:
+                self._write_lock_acquired = False
+                write_lock.release()
+            raise
+        with pool._registry_lock:
+            depth = pool._connection_depths.get(connection, 0)
+            pool._connection_depths[connection] = depth + 1
+            if depth == 0:
+                pool._checked_out_count += 1
+        self._connection = connection
+        self._outermost = depth == 0
+        return connection
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
+    ) -> "bool | None":
+        connection = self._connection
+        if connection is None:
+            return None
+        pool = self._pool
+        outermost = self._outermost
+        self._connection = None
+        try:
+            if outermost:
+                if exc_type is not None:
+                    try:
+                        end_transaction(connection, commit=False)
+                    except Exception:
+                        pool._retire_failed_connection(connection)
+                else:
+                    try:
+                        end_transaction(connection, commit=True)
+                    except BaseException:
+                        try:
+                            end_transaction(connection, commit=False)
+                        except Exception:
+                            pool._retire_failed_connection(connection)
+                        raise
+                    pool._reset_connection_or_retire(connection)
+        finally:
+            try:
+                with pool._registry_lock:
+                    remaining = pool._connection_depths.get(connection, 1) - 1
+                    if remaining > 0:
+                        pool._connection_depths[connection] = remaining
+                    else:
+                        pool._connection_depths.pop(connection, None)
+                    if outermost and pool._checked_out_count > 0:
+                        pool._checked_out_count -= 1
+            finally:
+                if self._write_lock_acquired and pool._write_lock is not None:
+                    self._write_lock_acquired = False
+                    pool._write_lock.release()
+        return None
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

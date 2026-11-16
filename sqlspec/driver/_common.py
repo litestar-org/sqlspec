@@ -56,7 +56,7 @@ from sqlspec.core import (
     matches_param_type,
     split_sql_script,
 )
-from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
+from sqlspec.core._pool import ObjectPool, get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import (
     _POSITIONAL_NUMBERED_STYLES,
     CachedQuery,
@@ -1836,6 +1836,7 @@ class CommonDriverAttributesMixin:
         "_cache_hit_executor",
         "_cache_hit_state",
         "_cache_holder",
+        "_has_active_observability",
         "_observability",
         "_open_streams",
         "_pending_statement_profile",
@@ -1902,8 +1903,9 @@ class CommonDriverAttributesMixin:
             | None
         ) = None
         self._cache_hit_state: Any = None
-        self._statement_pool = get_sql_pool()
-        self._processed_state_pool = get_processed_state_pool()
+        self._has_active_observability = False
+        self._statement_pool: ObjectPool[SQL] | None = None
+        self._processed_state_pool: ObjectPool[ProcessedState] | None = None
         self._refresh_statement_cache_state()
 
     @property
@@ -2360,6 +2362,7 @@ class CommonDriverAttributesMixin:
         return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
+        self._has_active_observability = self._observability is not None and not self._observability.is_idle
         self._stmt_cache_enabled = bool(
             self.connection is not _CLOSED_CONNECTION
             and self._stmt_cache_max_size > 0
@@ -2397,9 +2400,23 @@ class CommonDriverAttributesMixin:
         remediation = "Override storage methods on the adapter to enable this capability."
         raise StorageCapabilityError(msg, capability=capability, remediation=remediation)
 
+    def _get_statement_pool(self) -> "ObjectPool[SQL]":
+        pool = self._statement_pool
+        if pool is None:
+            pool = get_sql_pool()
+            self._statement_pool = pool
+        return pool
+
+    def _get_processed_state_pool(self) -> "ObjectPool[ProcessedState]":
+        pool = self._processed_state_pool
+        if pool is None:
+            pool = get_processed_state_pool()
+            self._processed_state_pool = pool
+        return pool
+
     def _release_pooled_statement(self, statement: "SQL") -> None:
         if statement._pooled:
-            self._statement_pool.release(statement)
+            self._get_statement_pool().release(statement)
 
     def _cached_statement(
         self,
@@ -2531,7 +2548,7 @@ class CommonDriverAttributesMixin:
         return statements
 
     def _sub_statement(self, sql: str, execution_parameters: "ConvertedParameters") -> "SQL":
-        direct_state = self._processed_state_pool.acquire()
+        direct_state = self._get_processed_state_pool().acquire()
         ProcessedState.__init__(direct_state, compiled_sql=sql, execution_parameters=execution_parameters)
         return SQL._create_cached_direct(sql, self.statement_config, direct_state)
 
@@ -3705,20 +3722,6 @@ def cache_hit_hooks_unchanged(driver_type: type, owner: type) -> bool:
     return all(getattr(driver_type, name, None) is getattr(owner, name, None) for name in _CACHE_HIT_HOOKS)
 
 
-async def _await_cache_hit(
-    driver: "CommonDriverAttributesMixin",
-    pending: "Awaitable[SQLResult | None]",
-    statement: str,
-    params: "tuple[Any, ...] | list[Any] | dict[str, Any]",
-    cached: "CachedQuery",
-) -> "SQLResult | None":
-    """Await an async cache-hit executor and run the driver's cache-hit method when it declines."""
-    outcome = await pending
-    if outcome is not None:
-        return outcome
-    return await cast("Awaitable[SQLResult]", driver._execute_cache_hit(statement, params, cached))
-
-
 def run_cached_execution(
     driver: "CommonDriverAttributesMixin", statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
 ) -> "SQLResult | Awaitable[SQLResult | None] | None":
@@ -3757,8 +3760,7 @@ def run_cached_execution(
                     param_values, param_config.type_coercion_map, passthrough_types=passthrough
                 )
             if not needs_rebind:
-                runtime = driver._observability
-                if runtime is not None and not runtime.is_idle:
+                if driver._has_active_observability and driver._observability is not None:
                     return driver._execute_cache_hit_observed(statement, params, cached)
                 executor = driver._cache_hit_executor
                 if executor is None:
@@ -3766,9 +3768,7 @@ def run_cached_execution(
                 outcome = executor(driver.connection, statement, params, cached, config, driver._cache_hit_state)
                 if outcome is None:
                     return driver._execute_cache_hit(statement, params, cached)
-                if isinstance(outcome, SQLResult):
-                    return outcome
-                return _await_cache_hit(driver, outcome, statement, params, cached)
+                return outcome
     elif param_config.ast_transformer is not None:
         return None
 
@@ -3800,8 +3800,7 @@ def run_cached_execution(
                     positional_passthrough=cached.positional_passthrough,
                     simple_wire_fast_path=False,
                 )
-        runtime = driver._observability
-        if runtime is not None and not runtime.is_idle:
+        if driver._has_active_observability and driver._observability is not None:
             return driver._execute_cache_hit_observed(statement, params, effective_cached)
         executor = driver._cache_hit_executor
         if executor is None:
@@ -3809,9 +3808,7 @@ def run_cached_execution(
         outcome = executor(driver.connection, statement, params, effective_cached, config, driver._cache_hit_state)
         if outcome is None:
             return driver._execute_cache_hit(statement, params, effective_cached)
-        if isinstance(outcome, SQLResult):
-            return outcome
-        return _await_cache_hit(driver, outcome, statement, params, effective_cached)
+        return outcome
 
     if needs_rebind:
         rebound_params = driver.stmt_cache_rebind(params, cached)
@@ -3829,8 +3826,7 @@ def run_cached_execution(
     prepared = driver._cached_statement(
         statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
     )
-    runtime = driver._observability
-    if runtime is not None and not runtime.is_idle:
+    if driver._has_active_observability and driver._observability is not None:
         return driver._execute_cached_statement_observed(prepared, compiled_sql, rebound_params, cached.operation_type)
     return driver._execute_cached_statement(prepared)
 

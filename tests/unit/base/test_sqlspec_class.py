@@ -604,3 +604,44 @@ def test_logging_during_concurrent_operations() -> None:
         concurrent.futures.wait(futures)
 
     assert len(errors) == 0, f"Concurrent operation errors: {errors}"
+
+
+def test_provide_session_and_connection_bypass_runtime_wrapper_when_lifecycle_idle() -> None:
+    """Idle session lifecycle skips _RuntimeSyncContext while preserving observers and explicit lifecycle hooks."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.adapters.sqlite.config import SqliteConnectionContext, SqliteSessionContext
+    from sqlspec.observability import ObservabilityConfig
+
+    spec = SQLSpec()
+    cfg = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+    try:
+        assert isinstance(spec.provide_connection(cfg), SqliteConnectionContext)
+        assert isinstance(spec.provide_session(cfg), SqliteSessionContext)
+    finally:
+        cfg.close_pool()
+
+    observed: list[object] = []
+    obs_spec = SQLSpec(observability_config=ObservabilityConfig(statement_observers=(observed.append,)))
+    obs_cfg = obs_spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+    try:
+        session_ctx = obs_spec.provide_session(obs_cfg)
+        assert isinstance(session_ctx, SqliteSessionContext)
+        with session_ctx as session:
+            session.execute("SELECT 1")
+        assert len(observed) == 1
+    finally:
+        obs_cfg.close_pool()
+
+    lifecycle_starts: list[object] = []
+    hook_spec = SQLSpec(
+        observability_config=ObservabilityConfig(lifecycle={"on_session_start": [lifecycle_starts.append]})
+    )
+    hook_cfg = hook_spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+    try:
+        hook_ctx = hook_spec.provide_session(hook_cfg)
+        assert not isinstance(hook_ctx, SqliteSessionContext)
+        with hook_ctx as session:
+            session.execute("SELECT 1")
+        assert len(lifecycle_starts) == 1
+    finally:
+        hook_cfg.close_pool()

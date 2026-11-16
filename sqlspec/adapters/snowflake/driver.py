@@ -297,7 +297,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
     ) -> "SQLResult":
         """Apply statement correlation and Snowflake row semantics on cache hits."""
         statement = self._cached_statement(
-            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            sql, params, cached, params, params_are_simple=True, compiled_sql=self._format_wire_sql(cached.compiled_sql)
         )
         try:
             with self.with_cursor(self.connection) as cursor:

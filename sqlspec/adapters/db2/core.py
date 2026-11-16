@@ -383,6 +383,7 @@ def execute_cache_hit(
     cached: "CachedQuery",
     statement_config: "StatementConfig",
     state: "tuple[dict[int, tuple[Any, list[str]]], bool]",
+    wire_sql: "str | None" = None,
 ) -> "SQLResult":
     """Execute a cached statement on an ``ibm_db_dbi`` connection and build its result.
 
@@ -393,6 +394,7 @@ def execute_cache_hit(
         cached: Cached compilation of ``sql``.
         statement_config: Statement configuration the result uses to rebuild its statement.
         state: Session-local column name cache and whether uppercase column names are lowercased.
+        wire_sql: Optional wire SQL override with sqlcommenter formatting applied.
 
     Returns:
         The statement result.
@@ -401,7 +403,7 @@ def execute_cache_hit(
         SQLSpecError: Mapped from any ``ibm_db_dbi`` error the statement raises.
     """
     parameters = normalize_execute_parameters(params) or ()
-    compiled_sql = cached.compiled_sql
+    compiled_sql = cached.compiled_sql if wire_sql is None else wire_sql
     try:
         cursor = connection.cursor()
         try:
@@ -439,6 +441,7 @@ async def execute_cache_hit_async(
     cached: "CachedQuery",
     statement_config: "StatementConfig",
     state: "tuple[dict[int, tuple[Any, list[str]]], bool]",
+    wire_sql: "str | None" = None,
 ) -> "SQLResult":
     """Execute a cached statement on an ``ibm_db_dbi`` async connection and build its result.
 
@@ -449,6 +452,7 @@ async def execute_cache_hit_async(
         cached: Cached compilation of ``sql``.
         statement_config: Statement configuration the result uses to rebuild its statement.
         state: Session-local column name cache and whether uppercase column names are lowercased.
+        wire_sql: Optional wire SQL override with sqlcommenter formatting applied.
 
     Returns:
         The statement result.
@@ -457,7 +461,7 @@ async def execute_cache_hit_async(
         SQLSpecError: Mapped from any ``ibm_db_dbi`` error the statement raises.
     """
     parameters = normalize_execute_parameters(params) or ()
-    compiled_sql = cached.compiled_sql
+    compiled_sql = cached.compiled_sql if wire_sql is None else wire_sql
     try:
         cursor = await connection.cursor()
         error: BaseException | None = None

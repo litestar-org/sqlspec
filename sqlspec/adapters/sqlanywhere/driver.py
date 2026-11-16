@@ -435,7 +435,10 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached statement through the compiled SQL Anywhere cache-hit executor."""
-        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._column_name_cache)
+        wire_sql = self._format_wire_sql(cached.compiled_sql) if self.statement_config.enable_sqlcommenter else None
+        return execute_cache_hit(
+            self.connection, sql, params, cached, self.statement_config, self._column_name_cache, wire_sql
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Return whether a transaction opened by this driver remains active."""

@@ -905,3 +905,30 @@ def test_memory_detection_parses_uri(database: str, uri: "bool | None", expected
     if uri is not None:
         params["uri"] = uri
     assert pool_module._classify_memory_mode(params) == expected
+
+
+@pytest.mark.anyio
+async def test_end_transaction_skips_worker_hop_on_clean_idle_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clean commit on an idle empty-queue connection avoids dispatching to the worker thread."""
+    import sqlspec.adapters.aiosqlite.core as aiosqlite_core
+
+    pool = AiosqliteConnectionPool({"database": ":memory:"}, pool_size=1, min_size=1)
+    worker_calls = 0
+
+    try:
+        async with pool.get_connection() as conn:
+            await conn.execute("SELECT 1")
+
+            async def _counting_worker_hop(connection: Any, fn: Any, *args: Any, **kwargs: Any) -> Any:
+                nonlocal worker_calls
+                worker_calls += 1
+                return await conn._execute(fn, *args, **kwargs)
+
+            monkeypatch.setattr(aiosqlite_core, "run_on_worker_thread", _counting_worker_hop)
+            await aiosqlite_core.end_transaction(conn, commit=True)
+            assert worker_calls == 0
+
+            await aiosqlite_core.end_transaction(conn, commit=False)
+            assert worker_calls == 1
+    finally:
+        await pool.close()

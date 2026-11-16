@@ -440,6 +440,7 @@ def execute_cache_hit(
     cached: "CachedQuery",
     statement_config: "StatementConfig",
     column_name_cache: "dict[int, tuple[Any, list[str]]]",
+    wire_sql: "str | None" = None,
 ) -> "SQLResult":
     """Execute a cached statement on an mssql-python connection and build its result.
 
@@ -450,6 +451,7 @@ def execute_cache_hit(
         cached: Cached compilation of ``sql``.
         statement_config: Statement configuration the result uses to rebuild its statement.
         column_name_cache: Session-local cache of resolved column names.
+        wire_sql: Optional wire SQL override with sqlcommenter formatting applied.
 
     Returns:
         The statement result.
@@ -458,7 +460,7 @@ def execute_cache_hit(
         SQLSpecError: Mapped from any mssql-python error the statement raises.
     """
     parameters = normalize_execute_parameters(params) or ()
-    compiled_sql = cached.compiled_sql
+    compiled_sql = cached.compiled_sql if wire_sql is None else wire_sql
     try:
         cursor = connection.cursor()
         try:

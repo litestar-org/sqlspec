@@ -530,18 +530,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
-        fast_params = _resolve_fast_params(parameters, kwargs)
         if (
             self._stmt_cache_enabled
             and (statement_config is None or statement_config is self.statement_config)
             and isinstance(statement, str)
-            and fast_params is not None
         ):
-            if self._auto_begin_on_write:
-                self._ensure_transaction_for_cached_sql(statement, fast_params)
-            fast_result = run_cached_execution(self, statement, fast_params)
-            if fast_result is not None:
-                return cast("SQLResult", fast_result)
+            fast_params = _resolve_fast_params(parameters, kwargs)
+            if fast_params is not None:
+                if self._auto_begin_on_write:
+                    self._ensure_transaction_for_cached_sql(statement, fast_params)
+                fast_result = run_cached_execution(self, statement, fast_params)
+                if fast_result is not None:
+                    return cast("SQLResult", fast_result)
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
@@ -1707,6 +1707,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         is_many: bool,
         is_script: bool,
         runner: "Callable[..., SQLResult]",
+        precomputed_sql_hash: "str | None" = None,
         **runner_kwargs: Any,
     ) -> "SQLResult":
         """Execute a sync runner while emitting spans, lifecycle hooks, and statement events."""
@@ -1731,9 +1732,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         if db_system is not None:
             query_context["db_system"] = db_system
         runtime.emit_query_start_sync(**query_context)
-        sql_hash = None
-        if runtime.span_manager.is_enabled or (
-            runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
+        sql_hash = precomputed_sql_hash if not is_script else None
+        if sql_hash is None and (
+            runtime.span_manager.is_enabled
+            or (runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash)
         ):
             sql_hash = observability_runtime.compute_sql_hash(observed_sql)
         span = runtime.start_query_span(observed_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
@@ -1849,13 +1851,21 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
     ) -> "SQLResult":
         """Execute a fast-path cache hit wrapped in observability instrumentation."""
         obs_params = list(params) if isinstance(params, tuple) else params
+        wire_sql = self._format_wire_sql(cached.compiled_sql)
+        sql_hash: str | None = None
+        if not self.statement_config.enable_sqlcommenter:
+            sql_hash = cached._sql_hash
+            if sql_hash is None:
+                sql_hash = observability_runtime.compute_sql_hash(wire_sql)
+                cached._sql_hash = sql_hash
         return self._execute_with_observability_sync(
-            compiled_sql=self._format_wire_sql(cached.compiled_sql),
+            compiled_sql=wire_sql,
             execution_parameters=obs_params,
             operation=cached.operation_type,
             is_many=False,
             is_script=False,
             runner=self._execute_cache_hit,
+            precomputed_sql_hash=sql_hash,
             sql=sql,
             params=params,
             cached=cached,

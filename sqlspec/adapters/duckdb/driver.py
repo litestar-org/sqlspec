@@ -665,6 +665,17 @@ class DuckDBDriver(SyncDriverAdapterBase):
         inserted_rows = 0
         manage_transaction = overwrite and not self._connection_in_transaction()
         columns_sql = ", ".join(format_identifier(col) for col in source_columns) if source_columns else None
+        if columns_sql and source_columns and not overwrite:
+            try:
+                table_info_rows = self.connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+            except Exception:
+                table_info_rows = []
+            if table_info_rows:
+                target_columns = {str(row[1]).lower() for row in table_info_rows if len(row) > 1}
+                if len(table_info_rows) == len(source_columns) and any(
+                    col.lower() not in target_columns for col in source_columns
+                ):
+                    columns_sql = None
         insert_sql = (
             f"INSERT INTO {table_name} ({columns_sql}) SELECT {columns_sql} FROM {temp_view}"
             if columns_sql

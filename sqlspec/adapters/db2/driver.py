@@ -408,7 +408,10 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached statement through the compiled Db2 cache-hit executor."""
-        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._cache_hit_state)
+        wire_sql = self._format_wire_sql(cached.compiled_sql) if self.statement_config.enable_sqlcommenter else None
+        return execute_cache_hit(
+            self.connection, sql, params, cached, self.statement_config, self._cache_hit_state, wire_sql
+        )
 
     def _release_open_work(self, *, autocommit_baseline: bool) -> None:
         """Roll back work left open before the connection is returned to its pool.
@@ -797,8 +800,9 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached statement through the compiled Db2 async cache-hit executor."""
+        wire_sql = self._format_wire_sql(cached.compiled_sql) if self.statement_config.enable_sqlcommenter else None
         return await execute_cache_hit_async(
-            self.connection, sql, params, cached, self.statement_config, self._cache_hit_state
+            self.connection, sql, params, cached, self.statement_config, self._cache_hit_state, wire_sql
         )
 
     async def _release_open_work(self, *, autocommit_baseline: bool) -> None:

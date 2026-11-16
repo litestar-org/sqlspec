@@ -98,7 +98,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AiosqliteDataDictionary | None = None
-        self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
+        self._rowid_target_cache: dict[Any, bool] = {}
         self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), AiosqliteDriver) else None
         self._cache_hit_state = self._rowid_target_cache
 
@@ -129,6 +129,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 statement.operation_type,
                 statement._get_shared_expression(),
                 self._rowid_target_cache,
+                sql,
             )
             data, column_names, row_count = collect_rows(fetched_data, description)
             row_format = resolve_row_format(data)
@@ -152,6 +153,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             statement.operation_type,
             statement._get_shared_expression(),
             self._rowid_target_cache,
+            sql,
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
@@ -356,6 +358,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 cached.operation_type,
                 cached.processed_state.parsed_expression,
                 self._rowid_target_cache,
+                cached.compiled_sql,
             )
             data, column_names, row_count = collect_rows(fetched_data, description)
             return self.build_cached_select_result(
@@ -378,6 +381,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             cached.operation_type,
             cached.processed_state.parsed_expression,
             self._rowid_target_cache,
+            cached.compiled_sql,
         )
         return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
 

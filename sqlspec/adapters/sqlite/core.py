@@ -307,7 +307,8 @@ def resolve_lastrowid(
     operation_type: "OperationType",
     rowcount: int,
     expression: Any,
-    eligibility_cache: "dict[tuple[str | None, str], bool]",
+    eligibility_cache: "dict[Any, bool]",
+    compiled_sql: "str | None" = None,
 ) -> "int | None":
     """Resolve lastrowid only when compiled target metadata proves rowid eligibility.
 
@@ -322,12 +323,24 @@ def resolve_lastrowid(
         rowcount: Normalized affected-row count.
         expression: Compiled SQLGlot expression.
         eligibility_cache: Driver-local target eligibility cache.
+        compiled_sql: Optional compiled SQL text used to key eligibility lookups cleanly without AST walks.
 
     Returns:
         Integer lastrowid when the current target is a rowid table, otherwise None.
     """
     if operation_type != "INSERT" or rowcount <= 0:
         return None
+    if compiled_sql is not None:
+        supports_rowid = eligibility_cache.get(compiled_sql)
+        if supports_rowid is None:
+            target = _resolve_insert_target(expression)
+            if target is None:
+                return None
+            supports_rowid = _target_supports_rowid(connection, target)
+            eligibility_cache[compiled_sql] = supports_rowid
+        if not supports_rowid:
+            return None
+        return normalize_lastrowid(cursor, operation_type, rowcount)
     target = _resolve_insert_target(expression)
     if target is None:
         return None
@@ -354,7 +367,8 @@ def execute_cache_hit(
     params: Any,
     cached: "CachedQuery",
     statement_config: "StatementConfig",
-    rowid_target_cache: "dict[tuple[str | None, str], bool]",
+    rowid_target_cache: "dict[Any, bool]",
+    wire_sql: "str | None" = None,
 ) -> "SQLResult":
     """Execute a cached statement on a SQLite connection and build its result.
 
@@ -365,6 +379,7 @@ def execute_cache_hit(
         cached: Cached compilation of ``sql``.
         statement_config: Statement configuration the result uses to rebuild its statement.
         rowid_target_cache: Driver-local rowid eligibility cache, cleared when the statement can change schema.
+        wire_sql: Optional wire SQL override with sqlcommenter formatting applied.
 
     Returns:
         The statement result.
@@ -375,8 +390,9 @@ def execute_cache_hit(
     operation_type = cached.operation_type
     if operation_type not in ROWID_SAFE_OPERATIONS:
         rowid_target_cache.clear()
+    executed_sql = cached.compiled_sql if wire_sql is None else wire_sql
     try:
-        cursor = connection.execute(cached.compiled_sql, params or ())
+        cursor = connection.execute(executed_sql, params or ())
     except sqlite3.Error as exc:
         mapped_error = create_mapped_exception(exc)
         mapped_error.__cause__ = exc
@@ -397,6 +413,7 @@ def execute_cache_hit(
                     affected_rows,
                     cached.processed_state.parsed_expression,
                     rowid_target_cache,
+                    cached.compiled_sql,
                 ),
             )
         fetched_data: list[Any] = cursor.fetchall()
@@ -410,6 +427,7 @@ def execute_cache_hit(
                 effective_rowcount,
                 cached.processed_state.parsed_expression,
                 rowid_target_cache,
+                cached.compiled_sql,
             )
         description = cursor.description
         column_names: list[str] = [column[0] for column in description] if description else []
@@ -417,7 +435,7 @@ def execute_cache_hit(
             sql,
             statement_config,
             cached.processed_state,
-            cached.compiled_sql,
+            executed_sql,
             params,
             fetched_data,
             column_names,

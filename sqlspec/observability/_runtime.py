@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from time import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from sqlspec.observability._common import (
@@ -30,12 +30,15 @@ __all__ = ("ObservabilityRuntime", "compute_sql_hash")
 logger = get_logger("sqlspec.observability.runtime")
 
 _MIN_WALL_CLOCK_EPOCH_S = 1_000_000_000.0
+_CORRELATION_UNSET: Final[Any] = object()
 
 
 class ObservabilityRuntime:
     """Aggregates dispatchers, observers, spans, and custom metrics."""
 
     __slots__ = (
+        "_db_system_cache",
+        "_has_session_lifecycle_cached",
         "_is_idle_cached",
         "_metrics",
         "_redaction",
@@ -69,7 +72,28 @@ class ObservabilityRuntime:
         self._statement_observers = tuple(observers)
         self._redaction = config.redaction.copy() if config.redaction else None
         self._metrics: dict[str, float] = {}
+        self._db_system_cache: dict[tuple[str, str | None], str] = {}
+        self._has_session_lifecycle_cached = (
+            self.lifecycle.has_connection_create
+            or self.lifecycle.has_connection_destroy
+            or self.lifecycle.has_session_start
+            or self.lifecycle.has_session_end
+        )
         self._is_idle_cached = not self.lifecycle.is_enabled and not self._statement_observers
+
+    @property
+    def has_session_lifecycle(self) -> bool:
+        """Return True when session or connection lifecycle hooks or telemetry spans are active."""
+        return self._has_session_lifecycle_cached or self.span_manager.is_enabled
+
+    def _resolve_db_system_cached(self, driver: str, db_system: str | None) -> str:
+        key = (driver, db_system)
+        cached = self._db_system_cache.get(key)
+        if cached is not None:
+            return cached
+        resolved = resolve_effective_db_system(self.config_name, driver, db_system)
+        self._db_system_cache[key] = resolved
+        return resolved
 
     @property
     def is_idle(self) -> bool:
@@ -376,10 +400,11 @@ class ObservabilityRuntime:
         script_statement_index: int | None = None,
         script_statement_count: int | None = None,
         db_system: str | None = None,
+        correlation_id: Any = _CORRELATION_UNSET,
     ) -> StatementEvent:
         """Create a redacted and enriched StatementEvent instance."""
-        correlation_id = CorrelationContext.get()
-        resolved_db_system = resolve_effective_db_system(self.config_name, driver, db_system)
+        resolved_correlation_id = CorrelationContext.get() if correlation_id is _CORRELATION_UNSET else correlation_id
+        resolved_db_system = self._resolve_db_system_cached(driver, db_system)
         sanitized_sql = self._redact_sql(sql, resolved_db_system)
         sanitized_params = self._redact_parameters(parameters)
         sanitized_profile = self._redact_profile(profile, resolved_db_system)
@@ -413,7 +438,7 @@ class ObservabilityRuntime:
             is_script=is_script,
             rows_affected=rows_affected,
             duration_s=duration_s,
-            correlation_id=correlation_id,
+            correlation_id=resolved_correlation_id,
             storage_backend=storage_backend,
             started_at=resolved_started_at,
             sql_hash=sql_hash,
@@ -487,6 +512,7 @@ class ObservabilityRuntime:
             script_statement_index=script_statement_index,
             script_statement_count=script_statement_count,
             db_system=db_system,
+            correlation_id=correlation_id,
         )
         for observer in self._statement_observers:
             try:
@@ -506,7 +532,7 @@ class ObservabilityRuntime:
         if self.config.sampling is not None and not self.config.sampling.should_sample(correlation_id=correlation_id):
             return None
 
-        resolved_db_system = resolve_effective_db_system(self.config_name, driver, db_system)
+        resolved_db_system = self._resolve_db_system_cached(driver, db_system)
         redacted_sql = (
             self._redact_sql(sql, resolved_db_system)
             if (self._redaction is not None and self._redaction.mask_literals)

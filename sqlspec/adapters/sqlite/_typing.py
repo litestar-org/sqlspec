@@ -6,7 +6,7 @@ compilation to avoid ABI boundary issues.
 
 import contextlib
 import sqlite3 as sqlite_module
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 _SqliteConnection = sqlite_module.Connection
 
@@ -97,8 +97,6 @@ class SqliteSessionContext:
         "_statement_config",
     )
 
-    _default_driver_class: ClassVar["type[SqliteDriver] | None"] = None
-
     def __init__(
         self,
         acquire_connection: "Callable[[], Any]",
@@ -113,7 +111,7 @@ class SqliteSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
-        self._driver_class = driver_class or self._default_driver_class
+        self._driver_class = driver_class
         self._connection: Any = None
         self._driver: SqliteDriver | None = None
 

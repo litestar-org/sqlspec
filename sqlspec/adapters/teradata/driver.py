@@ -34,6 +34,8 @@ from sqlspec.adapters.teradata.type_converter import (
 )
 from sqlspec.core import (
     SQL,
+    CachedQuery,
+    DMLResult,
     SQLResult,
     StatementConfig,
     build_arrow_result_from_reader,
@@ -61,7 +63,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.teradata._typing import TeradataQueryParams as QueryParams
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, CachedQuery, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
@@ -625,8 +627,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a compiled cache hit while preserving FastExport, row coercion, and DDL commit rules."""
-        _ = sql
-        compiled_sql = cached.compiled_sql
+        compiled_sql = self._format_wire_sql(cached.compiled_sql)
         returns_rows = cached.operation_profile.returns_rows
         exec_sql = (
             maybe_prefix_fastexport(
@@ -642,10 +643,8 @@ class TeradataDriver(SyncDriverAdapterBase):
         names: list[str] = []
         column_types: dict[str, str] = {}
         affected = 0
-        exc_handler = self.handle_database_exceptions()
 
-        def _run(cursor: "TeradataRawCursor") -> None:
-            nonlocal names, column_types, affected
+        with self.with_cursor(self.connection) as cursor:
             cursor.arraysize = int(self.driver_features.get("arraysize", 2048))
             if _sets_session_query_band(compiled_sql):
                 self._session_query_band_dirty = True
@@ -660,33 +659,25 @@ class TeradataDriver(SyncDriverAdapterBase):
                 while chunk := cursor.fetchmany(cursor.arraysize):
                     rows.extend(coerce_teradata_row(row, description=description) for row in chunk)
                 column_types = extract_arrow_column_types(description, column_names=names)
-                return
-            if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(compiled_sql):
-                self.connection.commit()
-            affected = resolve_rowcount(cursor)
-
-        with self.with_cursor(self.connection) as cursor:
-            if sys.exc_info()[1] is None:
-                with exc_handler:
-                    _run(cursor)
             else:
-                self._run_with_exception_handler(exc_handler, _run, cursor)
-        self._check_pending_exception(exc_handler)
+                if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(compiled_sql):
+                    self.connection.commit()
+                affected = resolve_rowcount(cursor)
 
         if returns_rows:
-            return SQLResult(
-                statement=None,
-                data=rows,
-                rows_affected=len(rows),
-                operation_type=cached.operation_type,
+            result = self.build_cached_select_result(
+                sql,
+                params,
+                cached,
+                selected_data=rows,
                 column_names=names,
-                total_count=len(rows),
+                data_row_count=len(rows),
                 row_format="tuple",
-                metadata={"column_types": column_types},
+                compiled_sql=exec_sql,
             )
-        return SQLResult(
-            statement=None, data=[], rows_affected=affected, operation_type=cached.operation_type, total_count=0
-        )
+            result.metadata = {"column_types": column_types}
+            return result
+        return DMLResult(cached.operation_type, affected)
 
     def _release_open_work(self) -> None:
         for source in tuple(self._stream_sources):

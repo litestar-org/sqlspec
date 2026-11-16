@@ -3,6 +3,7 @@
 import functools
 import hashlib
 import re
+import sys
 from typing import Any, Final
 
 __all__ = (
@@ -129,15 +130,37 @@ def resolve_effective_db_system(adapter: str, driver: str | None = None, db_syst
     return resolved
 
 
+def _resolve_otel_trace() -> Any:
+    """Resolve and cache the optional ``opentelemetry.trace`` module once per process."""
+    global _OTEL_TRACE_MODULE, _OTEL_TRACE_RESOLVED
+    trace_mod = sys.modules.get("opentelemetry.trace")
+    if trace_mod is not None:
+        return trace_mod
+    otel_pkg = sys.modules.get("opentelemetry")
+    if otel_pkg is not None:
+        otel_trace = getattr(otel_pkg, "trace", None)
+        if otel_trace is not None:
+            return otel_trace
+    if _OTEL_TRACE_RESOLVED:
+        return _OTEL_TRACE_MODULE
+    try:
+        from opentelemetry import trace
+
+        _OTEL_TRACE_MODULE = trace
+    except ImportError:
+        _OTEL_TRACE_MODULE = None
+    _OTEL_TRACE_RESOLVED = True
+    return _OTEL_TRACE_MODULE
+
+
 def get_trace_context() -> "tuple[str | None, str | None]":
     """Extract trace_id and span_id from the current OTel context.
 
     Returns:
         Tuple of trace_id and span_id if available, otherwise (None, None).
     """
-    try:
-        from opentelemetry import trace
-    except ImportError:
+    trace = _resolve_otel_trace()
+    if trace is None:
         return None, None
 
     span: Any | None = trace.get_current_span()
@@ -198,17 +221,9 @@ _SQLCOMMENTER_CONTEXT: Any = None
 
 def get_w3c_trace_context() -> tuple[str | None, str]:
     """Extract W3C headers from recording or propagated OpenTelemetry spans."""
-    global _OTEL_TRACE_MODULE, _OTEL_TRACE_RESOLVED
-    if not _OTEL_TRACE_RESOLVED:
-        try:
-            from opentelemetry import trace
-
-            _OTEL_TRACE_MODULE = trace
-        except ImportError:
-            _OTEL_TRACE_MODULE = None
-        _OTEL_TRACE_RESOLVED = True
-    if _OTEL_TRACE_MODULE is not None:
-        span = _OTEL_TRACE_MODULE.get_current_span()
+    trace = _resolve_otel_trace()
+    if trace is not None:
+        span = trace.get_current_span()
         context = span.get_span_context() if span is not None else None
         if context is not None and context.is_valid and context.trace_id and context.span_id:
             raw_flags = getattr(context, "trace_flags", None)
