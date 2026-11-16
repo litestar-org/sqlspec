@@ -19,6 +19,7 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
     calculate_backoff_seconds,
     create_mapped_exception,
     driver_profile,
+    execute_cache_hit,
     is_retryable_error,
     native_export_telemetry,
     native_import_telemetry,
@@ -28,6 +29,7 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.core import SQL, register_driver_profile
 from sqlspec.driver import AsyncRowStream
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import ReadOnlyTransactionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
@@ -133,6 +135,10 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             or (DEFAULT_FOLLOWER_READ_STALENESS if self.driver_features.get("enable_follower_reads") else None),
         )
         self._data_dictionary = None
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), CockroachAsyncpgDriver) else None
+        )
+        self._cache_hit_state = self.driver_features
 
     @property
     def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":

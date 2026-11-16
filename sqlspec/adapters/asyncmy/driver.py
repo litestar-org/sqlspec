@@ -31,6 +31,7 @@ from sqlspec.adapters.asyncmy.core import (
     driver_profile,
     encode_records_for_local_infile,
     escape_literal_percent,
+    execute_cache_hit,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -42,6 +43,7 @@ from sqlspec.adapters.asyncmy.core import (
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -110,6 +112,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         self._json_deserializer: Callable[[Any], Any] = cast(
             "Callable[[Any], Any]", features.get("json_deserializer", from_json)
         )
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), AsyncmyDriver) else None
+        self._cache_hit_state = (self._json_deserializer, ASYNCMY_JSON_TYPE_CODES)
 
     @property
     def data_dictionary(self) -> "AsyncmyDataDictionary":

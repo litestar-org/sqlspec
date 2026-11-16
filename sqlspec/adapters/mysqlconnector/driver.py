@@ -32,6 +32,8 @@ from sqlspec.adapters.mysqlconnector.core import (
     default_statement_config,
     driver_profile,
     encode_records_for_local_infile,
+    execute_cache_hit,
+    execute_cache_hit_async,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -53,6 +55,7 @@ from sqlspec.driver import (
     SyncDriverAdapterBase,
     SyncRowStream,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -118,6 +121,10 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         )
         cursor_options = cast("dict[str, Any] | None", self.driver_features.get("cursor_options"))
         self._cursor_options: dict[str, Any] | None = dict(cursor_options) if cursor_options else None
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), MysqlConnectorSyncDriver) else None
+        )
+        self._cache_hit_state = (self._json_deserializer, MYSQLCONNECTOR_JSON_TYPE_CODES, self._cursor_options)
 
     @property
     def data_dictionary(self) -> "MysqlConnectorSyncDataDictionary":
@@ -403,6 +410,10 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         )
         cursor_options = cast("dict[str, Any] | None", self.driver_features.get("cursor_options"))
         self._cursor_options: dict[str, Any] | None = dict(cursor_options) if cursor_options else None
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), MysqlConnectorAsyncDriver) else None
+        )
+        self._cache_hit_state = (self._json_deserializer, MYSQLCONNECTOR_JSON_TYPE_CODES, self._cursor_options)
 
     @property
     def data_dictionary(self) -> "MysqlConnectorAsyncDataDictionary":

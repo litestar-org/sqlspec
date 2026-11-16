@@ -378,7 +378,9 @@ def execute_cache_hit(
     try:
         cursor = connection.execute(cached.compiled_sql, params or ())
     except sqlite3.Error as exc:
-        raise create_mapped_exception(exc) from exc
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
     try:
         if not cached.operation_profile.returns_rows:
             rowcount = cursor.rowcount
@@ -424,7 +426,9 @@ def execute_cache_hit(
             last_inserted_id,
         )
     except sqlite3.Error as exc:
-        raise create_mapped_exception(exc) from exc
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
     finally:
         _close_cursor(cursor)
 

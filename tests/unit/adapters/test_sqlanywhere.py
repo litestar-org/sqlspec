@@ -30,12 +30,13 @@ from sqlspec.adapters.sqlanywhere import (
 )
 from sqlspec.adapters.sqlanywhere._typing import SqlanywhereError, SqlanywhereSessionContext
 from sqlspec.adapters.sqlanywhere.adk import SqlanywhereADKMemoryStore, SqlanywhereADKStore
-from sqlspec.adapters.sqlanywhere.core import build_insert_statement, format_identifier
+from sqlspec.adapters.sqlanywhere.core import build_insert_statement, execute_cache_hit, format_identifier
 from sqlspec.adapters.sqlanywhere.data_dictionary import build_column_metadata, build_foreign_key_metadata
 from sqlspec.adapters.sqlanywhere.events import SqlanywhereEventQueueStore
 from sqlspec.adapters.sqlanywhere.litestar import SqlanywhereLitestarConfig, SqlanywhereStore
 from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
+from sqlspec.core.result._base import DMLResult
 from sqlspec.data_dictionary.dialects.sqlanywhere import SqlanywhereVersionInfo
 from sqlspec.data_dictionary.dialects.sqlanywhere.config import SQLANYWHERE_FEATURE_FLAGS
 from sqlspec.driver._common import _CLOSED_CONNECTION
@@ -1635,3 +1636,100 @@ def test_sqlanywhere_adk_create_append_and_get_events_chronological(monkeypatch:
     events = store.get_events("app", "u1", "s1", limit=2)
     assert [e["id"] for e in events] == ["e2", "e3"]
     assert "ORDER BY e.timestamp DESC LIMIT ?" in " ".join(captured[0][0].split())
+
+
+def _cache_hit_driver(cursor: FakeCursor) -> "tuple[SqlanywhereDriver, FakeConnection]":
+    connection = FakeConnection(cursor)
+    return SqlanywhereDriver(cast("SqlanywhereConnection", connection)), connection
+
+
+def _run_cache_hit_executor(driver: SqlanywhereDriver, statement: str, params: Any) -> Any:
+    cached = cast("Any", driver._stmt_cache.get(statement))
+    return execute_cache_hit(
+        driver.connection, statement, params, cached, driver.statement_config, driver._cache_hit_state
+    )
+
+
+def _raising_cursor(error: BaseException) -> FakeCursor:
+    cursor = FakeCursor()
+
+    def fail(sql: str, parameters: Any = None) -> None:
+        raise error
+
+    cursor.execute = fail  # type: ignore[method-assign]
+    return cursor
+
+
+def test_sqlanywhere_repeated_select_runs_through_cache_hit_executor(monkeypatch: pytest.MonkeyPatch) -> None:
+    statement = "SELECT id, name FROM DBA.users WHERE id = ?"
+    cursor = FakeCursor(rows=[(1, "Ada")], description=[("id",), ("name",)])
+    driver, _ = _cache_hit_driver(cursor)
+    outcomes: list[Any] = []
+
+    def recording_executor(*args: Any) -> Any:
+        outcome = execute_cache_hit(*args)
+        outcomes.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(driver, "_cache_hit_executor", recording_executor)
+
+    driver.execute(statement, 1)
+    result = driver.execute(statement, 2)
+
+    assert len(outcomes) == 1
+    assert outcomes[0] is result
+    assert result.get_data() == [{"id": 1, "name": "Ada"}]
+    assert result.column_names == ["id", "name"]
+    assert result.rows_affected == 1
+    assert result.statement.sql == statement
+    assert cursor.calls[-1] == (statement, (2,))
+    assert cursor.closed is True
+
+
+def test_sqlanywhere_cache_hit_without_parameters_executes_sql_only() -> None:
+    statement = "SELECT id, name FROM DBA.users"
+    cursor = FakeCursor(rows=[(1, "Ada"), (2, "Grace")], description=[("id",), ("name",)])
+    driver, _ = _cache_hit_driver(cursor)
+    driver.execute(statement)
+
+    result = _run_cache_hit_executor(driver, statement, ())
+
+    assert result.get_data() == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]
+    assert cursor.calls[-1] == (statement, None)
+
+
+def test_sqlanywhere_cache_hit_dml_returns_affected_rows_for_list_parameters() -> None:
+    statement = "UPDATE DBA.users SET name = ? WHERE id = ?"
+    cursor = FakeCursor(rowcount=3)
+    driver, _ = _cache_hit_driver(cursor)
+    driver.execute(statement, "Ada", 1)
+
+    result = _run_cache_hit_executor(driver, statement, ["Grace", 2])
+
+    assert isinstance(result, DMLResult)
+    assert result.operation_type == "UPDATE"
+    assert result.rows_affected == 3
+    assert cursor.calls[-1] == (statement, ("Grace", 2))
+
+
+def test_sqlanywhere_cache_hit_maps_driver_errors_and_keeps_sqlspec_errors() -> None:
+    statement = "UPDATE DBA.users SET name = ? WHERE id = ?"
+    driver, connection = _cache_hit_driver(FakeCursor(rowcount=1))
+    driver.execute(statement, "Ada", 1)
+    native = FakeSqlanydbError("23505", -193, "Primary key not unique")
+    failing = _raising_cursor(native)
+    connection.cursor_obj = failing
+
+    with pytest.raises(UniqueViolationError) as exc_info:
+        driver.execute(statement, "Ada", 2)
+
+    assert exc_info.value.__cause__ is native
+    assert failing.closed is True
+
+    already_mapped = TransactionError("already mapped")
+    connection.cursor_obj = _raising_cursor(already_mapped)
+
+    with pytest.raises(TransactionError) as mapped_info:
+        _run_cache_hit_executor(driver, statement, ("Ada", 3))
+
+    assert mapped_info.value is already_mapped

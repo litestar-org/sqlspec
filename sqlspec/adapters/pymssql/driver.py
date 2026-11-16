@@ -18,6 +18,7 @@ from sqlspec.adapters.pymssql.core import (
     default_statement_config,
     driver_profile,
     escape_literal_percent,
+    execute_cache_hit,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -36,6 +37,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
@@ -151,6 +153,8 @@ class PymssqlDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), PymssqlDriver) else None
+        self._cache_hit_state = self._column_name_cache
         self._migration_schema_restore: tuple[str, str] | None = None
         self._transaction_active = False
         self._explicit_transaction = False

@@ -279,7 +279,9 @@ async def execute_cache_hit(
             rowid_target_cache,
         )
     except (aiosqlite.Error, sqlite3.Error) as exc:
-        raise create_mapped_exception(exc) from exc
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
     data, column_names, row_count = collect_rows(fetched_data, description)
     return SQLResult.create_cached_select(
         sql,

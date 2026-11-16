@@ -23,6 +23,7 @@ from sqlspec.adapters.adbc.core import (
     detect_dialect,
     driver_profile,
     enforce_strict_type_coercion,
+    execute_cache_hit,
     get_statement_config,
     handle_postgres_rollback,
     is_postgres_dialect,
@@ -51,6 +52,7 @@ from sqlspec.core import (
 from sqlspec.core.parameters import ParameterValidator
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import DatabaseConnectionError, DataError, SQLSpecError, TransactionError
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
@@ -309,6 +311,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._previous_autocommit: bool | None = None
         self._has_streams = False
         self._stream_closers: list[Callable[[], None]] = []
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), AdbcDriver) else None
+        self._cache_hit_state = (self._dialect_name, self.driver_features, self._column_name_cache)
 
     @property
     def has_streams(self) -> bool:

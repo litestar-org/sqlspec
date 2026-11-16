@@ -4,7 +4,9 @@ import re
 from collections.abc import Callable, Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from sqlspec.adapters.pymssql._typing import PymssqlError
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -25,15 +27,17 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from logging import Logger
 
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.parameters import ParameterValidator
 
 __all__ = (
@@ -48,6 +52,7 @@ __all__ = (
     "driver_profile",
     "escape_literal_percent",
     "escape_sql_literal",
+    "execute_cache_hit",
     "extract_error_number",
     "format_identifier",
     "normalize_execute_many_parameters",
@@ -58,6 +63,8 @@ __all__ = (
     "resolve_rowcount",
     "split_schema_and_table",
 )
+
+logger = get_logger("sqlspec.adapters.pymssql")
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
@@ -343,6 +350,76 @@ def resolve_rowcount(cursor: Any) -> int:
     if isinstance(rowcount, int) and rowcount >= 0:
         return rowcount
     return 0
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    column_name_cache: "dict[int, tuple[Any, list[str]]]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a pymssql connection and build its result.
+
+    Args:
+        connection: pymssql connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        column_name_cache: Session-local cache of resolved column names.
+
+    Returns:
+        The statement result, or ``None`` when the statement has no parameters or the compiled SQL
+        holds a literal percent that needs escaping.
+
+    Raises:
+        SQLSpecError: Mapped from any pymssql error the statement raises.
+    """
+    parameters = tuple(params) if isinstance(params, list) else params
+    if not parameters:
+        return None
+    compiled_sql = cached.compiled_sql
+    if "%" in compiled_sql:
+        param_count = len(parameters) if isinstance(parameters, (list, tuple)) else -1
+        if (param_count < 0 or compiled_sql.count("%") != param_count) and (
+            escape_literal_percent(compiled_sql, parameters, statement_config.parameter_validator) != compiled_sql
+        ):
+            return None
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(compiled_sql, parameters)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            rows, column_names, _row_format = collect_rows(fetched_data, cursor.description or None, column_name_cache)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                rows,
+                column_names,
+                len(rows),
+                resolve_row_format(rows),
+            )
+        finally:
+            _close_cursor(cursor)
+    except PymssqlError as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:

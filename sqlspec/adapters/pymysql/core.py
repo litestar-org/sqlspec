@@ -6,8 +6,9 @@ from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from sqlspec.adapters.pymysql._typing import PyMysqlSSCursor
+from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError, PyMysqlSSCursor
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -33,9 +34,10 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code, resolve_row_format
 
 if TYPE_CHECKING:
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.parameters import ParameterValidator
 
 __all__ = (
@@ -55,6 +57,7 @@ __all__ = (
     "driver_profile",
     "encode_records_for_local_infile",
     "escape_literal_percent",
+    "execute_cache_hit",
     "format_identifier",
     "merge_derive_overrides",
     "normalize_execute_many_parameters",
@@ -475,6 +478,71 @@ def normalize_lastrowid(cursor: Any) -> int | None:
         return None
     last_id = cursor.lastrowid
     return last_id if isinstance(last_id, int) else None
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[Callable[[Any], Any], set[int]]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a PyMySQL connection and build its result.
+
+    Args:
+        connection: PyMySQL connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: JSON deserializer and JSON column type codes of the owning session.
+
+    Returns:
+        The statement result, or ``None`` when the compiled SQL holds a literal percent that needs escaping.
+
+    Raises:
+        SQLSpecError: Mapped from any PyMySQL error the statement raises.
+    """
+    compiled_sql = cached.compiled_sql
+    if (
+        "%" in compiled_sql
+        and escape_literal_percent(compiled_sql, params or (None,), statement_config.parameter_validator)
+        != compiled_sql
+    ):
+        return None
+    deserializer, json_type_codes = state
+    try:
+        cursor = connection.cursor()
+        try:
+            if params:
+                cursor.execute(compiled_sql, params)
+            else:
+                cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            rows, column_names, _row_format = collect_rows(
+                fetched_data, resolve_row_plan(cursor.description or None, json_type_codes), deserializer, logger=logger
+            )
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                params,
+                rows,
+                column_names,
+                len(rows),
+                resolve_row_format(rows),
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                cursor.close()
+    except PyMysqlMySQLError as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:

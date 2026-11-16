@@ -27,7 +27,7 @@ from sqlspec.adapters.sqlite.core import (
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters._registry import register_driver_profile
-from sqlspec.driver._common import validate_savepoint_name
+from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_savepoint_name
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
@@ -101,7 +101,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
-        self._cache_hit_executor = execute_cache_hit
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), SqliteDriver) else None
         self._cache_hit_state = self._rowid_target_cache
 
     @property

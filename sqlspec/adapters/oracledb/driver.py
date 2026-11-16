@@ -25,9 +25,10 @@ from sqlspec.adapters.oracledb._typing import oracledb_create_pipeline as create
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
     OracleAsyncStreamSource,
+    OracleCacheHitState,
     OracleSyncStreamSource,
-    apply_oracle_session_trace_attributes,
     apply_oracle_transaction_priority,
+    apply_session_tracing,
     build_arrow_fetch_kwargs,
     build_dbms_cloud_copy_data_sql,
     build_fetch_kwargs,
@@ -45,6 +46,8 @@ from sqlspec.adapters.oracledb.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
+    execute_cache_hit_async,
     normalize_column_names,
     resolve_dbms_cloud_source_uri,
     resolve_row_metadata,
@@ -62,7 +65,6 @@ from sqlspec.adapters.oracledb.data_dictionary import (
 )
 from sqlspec.core import (
     SQL,
-    DMLResult,
     SQLResult,
     StackResult,
     StatementConfig,
@@ -78,7 +80,7 @@ from sqlspec.core.explain import (
     ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY,
     ORACLE_MANAGED_EXPLAIN_META_KEY,
 )
-from sqlspec.core.sqlcommenter import SQLCommenterContext, format_wire_sqlcomment, strip_sqlcomment
+from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
     AsyncRowStream,
@@ -91,7 +93,7 @@ from sqlspec.driver import (
     hash_stack_operations,
     validate_savepoint_name,
 )
-from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver._common import CommonDriverAttributesMixin, cache_hit_hooks_unchanged
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.storage._utils import import_pyarrow
 from sqlspec.utils.arrow_helpers import coerce_oracle_df_to_arrow_table
@@ -171,6 +173,24 @@ class OraclePipelineMixin(CommonDriverAttributesMixin):
 
     __slots__ = ()
 
+    @property
+    def _oracle_version_cache(self) -> "OracleVersionCache | None":
+        """Pool-scoped Oracle version cache attached to this session."""
+        return cast("OracleVersionCache | None", cast("OracleCacheHitState", self._cache_hit_state).version_cache)
+
+    @_oracle_version_cache.setter
+    def _oracle_version_cache(self, value: "OracleVersionCache | None") -> None:
+        cast("OracleCacheHitState", self._cache_hit_state).version_cache = value
+
+    @property
+    def _otel_tracing_enabled(self) -> bool:
+        """Whether W3C trace context is propagated to the connection before each statement."""
+        return cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled
+
+    @_otel_tracing_enabled.setter
+    def _otel_tracing_enabled(self, value: bool) -> None:
+        cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled = bool(value)
+
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Refresh trace propagation when the session receives its runtime."""
         super().attach_observability(runtime)
@@ -186,23 +206,10 @@ class OraclePipelineMixin(CommonDriverAttributesMixin):
         target_conn = connection if connection is not None else getattr(self, "connection", None)
         if target_conn is None:
             return
-        ctx = SQLCommenterContext.get() or {}
-        attrs = driver.statement_config.sqlcommenter_attributes or {}
-        default_module = (
-            ctx.get("module")
-            or ctx.get("framework")
-            or ctx.get("controller")
-            or attrs.get("module")
-            or attrs.get("framework")
-            or attrs.get("controller")
-            or "sqlspec"
-        )
-        default_action = ctx.get("action") or ctx.get("route") or attrs.get("action") or attrs.get("route")
-        apply_oracle_session_trace_attributes(
+        apply_session_tracing(
             target_conn,
-            module=default_module,
-            action=default_action,
-            preserve_client_identifier=driver.driver_features.get("tenant_strategy") is not None,
+            driver.statement_config,
+            driver.driver_features,
             enable_session_attributes=getattr(self, "_session_tracing_enabled", False),
             enable_otel_trace_context=getattr(self, "_otel_tracing_enabled", False),
         )
@@ -415,8 +422,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         "_data_dictionary",
         "_fetch_kwargs",
         "_migration_schema_restore",
-        "_oracle_version_cache",
-        "_otel_tracing_enabled",
         "_row_metadata_cache",
         "_session_tracing_enabled",
         "_sessionless_cleanup_error",
@@ -443,15 +448,19 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: OracledbSyncDataDictionary | None = None
         self._migration_schema_restore: str | None = None
-        self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
         self._sessionless_transaction_id: bytes | None = None
         self._sessionless_cleanup_error: BaseException | None = None
-        self._otel_tracing_enabled = False
         self._fetch_kwargs = build_fetch_kwargs(self.driver_features)
         self._session_tracing_enabled = bool(
             self.driver_features.get("enable_session_tracing", False) or self.statement_config.enable_sqlcommenter
+        )
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), OracleSyncDriver) else None
+        )
+        self._cache_hit_state = OracleCacheHitState(
+            self.driver_features, self._fetch_kwargs, self._row_metadata_cache, self._session_tracing_enabled
         )
 
     @property
@@ -1301,43 +1310,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     def _execute_cache_hit_with_cursor(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Execute a cached query while owning only the cursor context."""
-        with self.with_cursor(self.connection) as cursor:
-            wire_sql = self._format_wire_sql(cached.compiled_sql)
-            returns_rows = cached.operation_profile.returns_rows
-            fetch_kwargs = self._fetch_kwargs
-            parameters = coerce_large_parameters_sync(
-                self.connection,
-                params,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=self._oracle_version_cache,
-            )
-            cast("Any", cursor).execute(wire_sql, parameters or {}, **fetch_kwargs)
-            if returns_rows and cursor.description is not None:
-                fetched_data = cursor.fetchall()
-                column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
-                data, column_names = collect_sync_rows(
-                    cast("list[Any] | None", fetched_data),
-                    cursor.description,
-                    self.driver_features,
-                    column_names=column_names,
-                    requires_lob_coercion=requires_lob_coercion,
-                )
-                return self.build_cached_select_result(
-                    sql,
-                    params,
-                    cached,
-                    selected_data=data,
-                    column_names=column_names,
-                    data_row_count=len(data),
-                    row_format="tuple",
-                    compiled_sql=wire_sql,
-                )
-            affected_rows = resolve_rowcount(cursor)
-            return cast("SQLResult", DMLResult(cached.operation_type, affected_rows))
+        """Execute a cached query through the compiled Oracle cache-hit executor."""
+        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._cache_hit_state)
 
     def _connection_in_transaction(self) -> bool:
         """Report whether a transaction is open on the connection.
@@ -1530,8 +1504,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         "_data_dictionary",
         "_fetch_kwargs",
         "_migration_schema_restore",
-        "_oracle_version_cache",
-        "_otel_tracing_enabled",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
@@ -1559,15 +1531,19 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._migration_schema_restore: str | None = None
         self._pipeline_support: bool | None = None
         self._pipeline_support_reason: str | None = None
-        self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
         self._sessionless_transaction_id: bytes | None = None
         self._sessionless_cleanup_error: BaseException | None = None
-        self._otel_tracing_enabled = False
         self._fetch_kwargs = build_fetch_kwargs(self.driver_features)
         self._session_tracing_enabled = bool(
             self.driver_features.get("enable_session_tracing", False) or self.statement_config.enable_sqlcommenter
+        )
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), OracleAsyncDriver) else None
+        )
+        self._cache_hit_state = OracleCacheHitState(
+            self.driver_features, self._fetch_kwargs, self._row_metadata_cache, self._session_tracing_enabled
         )
 
     @property
@@ -2467,43 +2443,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     async def _execute_cache_hit_with_cursor(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Execute an async cached query while owning only the cursor context."""
-        async with self.with_cursor(self.connection) as cursor:
-            wire_sql = self._format_wire_sql(cached.compiled_sql)
-            returns_rows = cached.operation_profile.returns_rows
-            fetch_kwargs = self._fetch_kwargs
-            parameters = await coerce_large_parameters_async(
-                self.connection,
-                params,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=self._oracle_version_cache,
-            )
-            await cast("Any", cursor).execute(wire_sql, parameters or {}, **fetch_kwargs)
-            if returns_rows and cursor.description is not None:
-                fetched_data = await cursor.fetchall()
-                column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
-                data, column_names = await collect_async_rows(
-                    cast("list[Any] | None", fetched_data),
-                    cursor.description,
-                    self.driver_features,
-                    column_names=column_names,
-                    requires_lob_coercion=requires_lob_coercion,
-                )
-                return self.build_cached_select_result(
-                    sql,
-                    params,
-                    cached,
-                    selected_data=data,
-                    column_names=column_names,
-                    data_row_count=len(data),
-                    row_format="tuple",
-                    compiled_sql=wire_sql,
-                )
-            affected_rows = resolve_rowcount(cursor)
-            return cast("SQLResult", DMLResult(cached.operation_type, affected_rows))
+        """Execute an async cached query through the compiled Oracle cache-hit executor."""
+        return await execute_cache_hit_async(
+            self.connection, sql, params, cached, self.statement_config, self._cache_hit_state
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Report whether a transaction is open on the connection.

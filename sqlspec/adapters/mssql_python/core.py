@@ -5,9 +5,11 @@ from collections.abc import Mapping, Sized
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from sqlspec.adapters.mssql_python._typing import MssqlPythonError
 from sqlspec.core.parameters import ParameterStyle
 from sqlspec.core.parameters._registry import build_statement_config_from_profile
 from sqlspec.core.parameters._types import DriverParameterProfile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -29,16 +31,18 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from logging import Logger
 
     from sqlspec.core import StatementConfig
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "MSSQL_PYTHON_VERSION",
@@ -52,6 +56,7 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "escape_sql_literal",
+    "execute_cache_hit",
     "extract_error_number",
     "extract_sqlstate",
     "format_identifier",
@@ -66,6 +71,8 @@ __all__ = (
     "split_schema_and_table",
     "validate_bulk_identifier",
 )
+
+logger = get_logger("sqlspec.adapters.mssql_python")
 
 _ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
 _ODBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({";", "{", "}", "="})
@@ -424,6 +431,71 @@ def materialize_tuple_rows(fetched: "Sequence[Any] | None") -> "list[tuple[Any, 
     if hasattr(first, "_values"):
         return [tuple(row._values) if not isinstance(row._values, tuple) else row._values for row in fetched]
     return [tuple(row) for row in fetched]
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    column_name_cache: "dict[int, tuple[Any, list[str]]]",
+) -> "SQLResult":
+    """Execute a cached statement on an mssql-python connection and build its result.
+
+    Args:
+        connection: mssql-python connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        column_name_cache: Session-local cache of resolved column names.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any mssql-python error the statement raises.
+    """
+    parameters = normalize_execute_parameters(params) or ()
+    compiled_sql = cached.compiled_sql
+    try:
+        cursor = connection.cursor()
+        try:
+            if parameters:
+                cursor.execute(compiled_sql, parameters)
+            else:
+                cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            column_names = resolve_column_names(cursor.description, column_name_cache)
+            rows = materialize_tuple_rows(fetched_data)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                rows,
+                column_names,
+                len(rows),
+                resolve_row_format(rows),
+            )
+        finally:
+            _close_cursor(cursor)
+    except MssqlPythonError as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
 
 
 def apply_driver_features(

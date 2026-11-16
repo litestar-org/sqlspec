@@ -21,6 +21,8 @@ from sqlspec.adapters.db2.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
+    execute_cache_hit_async,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     resolve_column_names,
@@ -40,6 +42,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import MissingDependencyError, SQLSpecError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
@@ -178,6 +181,8 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         self._data_dictionary: Db2SyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._lowercase_columns = bool(self.driver_features.get("enable_lowercase_column_names", True))
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), Db2SyncDriver) else None
+        self._cache_hit_state = (self._column_name_cache, self._lowercase_columns)
         self._transaction_active = False
         self._restore_autocommit = False
         self._migration_schema_restore: str | None = None
@@ -402,8 +407,8 @@ class Db2SyncDriver(SyncDriverAdapterBase):
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Normalize cached fast-path parameters to a tuple before calling ibm_db_dbi."""
-        return super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
+        """Execute a cached statement through the compiled Db2 cache-hit executor."""
+        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._cache_hit_state)
 
     def _release_open_work(self, *, autocommit_baseline: bool) -> None:
         """Roll back work left open before the connection is returned to its pool.
@@ -554,6 +559,10 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         self._data_dictionary: Db2AsyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._lowercase_columns = bool(self.driver_features.get("enable_lowercase_column_names", True))
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), Db2AsyncDriver) else None
+        )
+        self._cache_hit_state = (self._column_name_cache, self._lowercase_columns)
         self._transaction_active = False
         self._restore_autocommit = False
         self._migration_schema_restore: str | None = None
@@ -787,8 +796,10 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Normalize cached fast-path parameters to a tuple before calling ibm_db_dbi."""
-        return await super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
+        """Execute a cached statement through the compiled Db2 async cache-hit executor."""
+        return await execute_cache_hit_async(
+            self.connection, sql, params, cached, self.statement_config, self._cache_hit_state
+        )
 
     async def _release_open_work(self, *, autocommit_baseline: bool) -> None:
         """Roll back work left open before the connection is returned to its pool.

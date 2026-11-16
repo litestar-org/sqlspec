@@ -39,6 +39,7 @@ from sqlspec.adapters.duckdb._typing import (
     duckdb_module,
 )
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -60,6 +61,7 @@ from sqlspec.exceptions import (
 from sqlspec.storage import ResolvedStorageTarget
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.storage.backends.obstore import ObStoreBackend
+from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -70,6 +72,8 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from sqlspec.core.cache import CachedQuery, StatementCacheHolder
+    from sqlspec.core.result._base import RowFormat
     from sqlspec.storage import StorageDestination, SyncStoragePipeline
 
 
@@ -89,6 +93,7 @@ __all__ = (
     "driver_profile",
     "duckdb_copy_filename_follows_query",
     "duckdb_version_tuple",
+    "execute_cache_hit",
     "format_identifier",
     "normalize_execute_parameters",
     "read_duckdb_profile_json",
@@ -412,6 +417,106 @@ def resolve_rowcount(cursor: Any) -> int:
     if has_rowcount(cursor):
         return max(cursor.rowcount, 0)
     return 0
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[str, Any], StatementCacheHolder]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a DuckDB connection and build its result.
+
+    Row-returning statements materialize through Arrow when PyArrow is installed and the
+    statement's last observed row count is unknown or at least ``ARROW_MIN_ROWS``; otherwise
+    rows come from ``fetchall``. The observed row count is recorded on the cache holder.
+
+    Args:
+        connection: DuckDB connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: The session's driver features and statement cache holder.
+
+    Returns:
+        The statement result, or ``None`` when statement profiling is enabled or the
+        connection exposes no ``sql`` method.
+
+    Raises:
+        SQLSpecError: Mapped from any ``duckdb.Error`` the statement raises.
+    """
+    if state[0].get("enable_statement_profiling", False):
+        return None
+    wire_sql = cached.compiled_sql
+    data: list[Any]
+    column_names: list[str]
+    row_format: RowFormat
+    try:
+        if not cached.operation_profile.returns_rows:
+            connection.execute(wire_sql, params or ())
+            return DMLResult(cached.operation_type, resolve_rowcount(connection))
+        sql_method = getattr(connection, "sql", None)
+        if not callable(sql_method):
+            return None
+        cache_holder = state[1]
+        hint = cache_holder.get_row_count_hint(wire_sql)
+        if PYARROW_INSTALLED and (hint is None or hint >= ARROW_MIN_ROWS):
+            relation: Any = sql_method(wire_sql, params=params or None)
+            if relation is None:
+                data = []
+                column_names = []
+                row_format = "tuple"
+            else:
+                try:
+                    description = relation.description
+                    if description_has_arrow_divergent_types(description):
+                        data, column_names = collect_rows(relation.fetchall(), description)
+                        row_format = "tuple"
+                    else:
+                        arrow_table = relation.to_arrow_table()
+                        data = arrow_table.to_pylist()
+                        _restore_uuid_columns(data, description)
+                        column_names = list(arrow_table.column_names)
+                        row_format = "dict"
+                finally:
+                    _close_relation(relation)
+        else:
+            connection.execute(wire_sql, params or ())
+            description = connection.description
+            data, column_names = collect_rows(connection.fetchall(), description)
+            row_format = "tuple"
+        row_count = len(data)
+        if hint != row_count:
+            cache_holder.set_row_count_hint(wire_sql, row_count)
+        return SQLResult.create_cached_select(
+            sql,
+            statement_config,
+            cached.processed_state,
+            wire_sql,
+            params,
+            data,
+            column_names,
+            row_count,
+            row_format,
+            None,
+        )
+    except duckdb_module.Error as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_relation(relation: Any) -> None:
+    """Close a DuckDB relation, ignoring one that cannot be closed."""
+    close_method = getattr(relation, "close", None)
+    if callable(close_method):
+        try:
+            close_method()
+        except Exception:
+            return
 
 
 def build_profile() -> "DriverParameterProfile":

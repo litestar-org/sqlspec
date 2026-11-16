@@ -54,6 +54,8 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgPoolConfig
     from sqlspec.core import ParameterStyleConfig
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import SQLResult
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
@@ -69,6 +71,8 @@ __all__ = (
     "calculate_backoff_seconds",
     "create_mapped_exception",
     "driver_profile",
+    "execute_cache_hit",
+    "execute_cache_hit_async",
     "is_retryable_error",
     "native_export_telemetry",
     "native_import_telemetry",
@@ -449,6 +453,66 @@ def resolve_follower_read_options(
         return True, validate_follower_read_staleness(f"'-{seconds:g}s'"), read_only_session
     value = driver_features.get("default_staleness") or (DEFAULT_FOLLOWER_READ_STALENESS if enabled else None)
     return enabled, validate_follower_read_staleness(value) if value is not None else None, read_only_session
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[str, Any], bool, Any]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a CockroachDB psycopg connection through the psycopg executor.
+
+    Statements on a read-only session, and read-only statements on a session
+    with follower reads enabled, are declined.
+
+    Args:
+        connection: psycopg connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Driver feature flags, the follower-read flag, and the psycopg executor of the owning session.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+    """
+    driver_features, follower_reads_enabled, executor = state
+    if driver_features.get("read_only_session") or (follower_reads_enabled and cached.operation_profile.is_read_only):
+        return None
+    return cast("SQLResult | None", executor(connection, sql, params, cached, statement_config, None))
+
+
+async def execute_cache_hit_async(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[str, Any], bool, Any]",
+) -> "SQLResult | None":
+    """Execute a cached statement on an async CockroachDB psycopg connection through the psycopg executor.
+
+    Statements on a read-only session, and read-only statements on a session
+    with follower reads enabled, are declined.
+
+    Args:
+        connection: psycopg connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Driver feature flags, the follower-read flag, and the psycopg executor of the owning session.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+    """
+    driver_features, follower_reads_enabled, executor = state
+    if driver_features.get("read_only_session") or (follower_reads_enabled and cached.operation_profile.is_read_only):
+        return None
+    return cast("SQLResult | None", await executor(connection, sql, params, cached, statement_config, None))
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:

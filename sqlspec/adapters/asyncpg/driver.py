@@ -19,6 +19,7 @@ from sqlspec.adapters.asyncpg.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
     parse_status,
     resolve_many_rowcount,
 )
@@ -41,6 +42,7 @@ from sqlspec.driver import (
     describe_stack_statement,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
@@ -113,6 +115,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AsyncpgDataDictionary | None = None
         self._transaction: Any = None
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), AsyncpgDriver) else None
 
     @property
     def data_dictionary(self) -> "AsyncpgDataDictionary":
@@ -343,7 +346,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
+        params: tuple[Any, ...] = ()
+        if prepared_parameters:
+            params = (
+                tuple(prepared_parameters)
+                if isinstance(prepared_parameters, list)
+                else cast("tuple[Any, ...]", prepared_parameters)
+            )
         timeout = self._timeout_value(statement.statement_config)
         return AsyncRowStream(AsyncpgStreamSource(self, sql, params, chunk_size, timeout))
 

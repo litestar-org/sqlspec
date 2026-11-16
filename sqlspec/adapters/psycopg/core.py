@@ -16,6 +16,7 @@ from sqlspec.core import (
     StatementConfig,
     build_statement_config_from_profile,
 )
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.driver import ExecutionResult, rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from sqlspec.core import ParameterStyleConfig, StackOperation
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "OPEN_TRANSACTION_STATUSES",
@@ -75,6 +77,8 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "escape_literal_percent",
+    "execute_cache_hit",
+    "execute_cache_hit_async",
     "execute_with_optional_parameters",
     "execute_with_optional_parameters_async",
     "pipeline_supported",
@@ -482,6 +486,128 @@ def resolve_rowcount(cursor: Any) -> int:
     if isinstance(rowcount, int) and rowcount > 0:
         return rowcount
     return 0
+
+
+def execute_cache_hit(
+    connection: Any, sql: str, params: Any, cached: "CachedQuery", statement_config: "StatementConfig", state: Any
+) -> "SQLResult | None":
+    """Execute a cached statement on a psycopg connection and build its result.
+
+    Statements whose compiled SQL holds percent signs other than its parameter
+    placeholders are declined.
+
+    Args:
+        connection: psycopg connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Unused executor state.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+
+    Raises:
+        SQLSpecError: Mapped from any ``psycopg.Error`` the statement raises.
+    """
+    _ = state
+    compiled_sql = cached.compiled_sql
+    if compiled_sql.count("%") != (cached.parameter_profile.total_count if params else 0):
+        return None
+    cursor: Any = None
+    try:
+        cursor = connection.cursor()
+        if params:
+            cursor.execute(compiled_sql, params)
+        else:
+            cursor.execute(compiled_sql)
+        if not cached.operation_profile.returns_rows:
+            return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+        fetched = cursor.fetchall()
+        data: list[Any] = fetched or []
+        description = cursor.description
+        column_names: list[str] = [column.name for column in description] if description else []
+        return SQLResult.create_cached_select(
+            sql,
+            statement_config,
+            cached.processed_state,
+            compiled_sql,
+            params,
+            data,
+            column_names,
+            len(data),
+            resolve_row_format(data),
+            None,
+        )
+    except psycopg.Error as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    finally:
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+
+async def execute_cache_hit_async(
+    connection: Any, sql: str, params: Any, cached: "CachedQuery", statement_config: "StatementConfig", state: Any
+) -> "SQLResult | None":
+    """Execute a cached statement on an async psycopg connection and build its result.
+
+    Statements whose compiled SQL holds percent signs other than its parameter
+    placeholders are declined.
+
+    Args:
+        connection: psycopg connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Unused executor state.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+
+    Raises:
+        SQLSpecError: Mapped from any ``psycopg.Error`` the statement raises.
+    """
+    _ = state
+    compiled_sql = cached.compiled_sql
+    if compiled_sql.count("%") != (cached.parameter_profile.total_count if params else 0):
+        return None
+    cursor: Any = None
+    try:
+        cursor = connection.cursor()
+        if params:
+            await cursor.execute(compiled_sql, params)
+        else:
+            await cursor.execute(compiled_sql)
+        if not cached.operation_profile.returns_rows:
+            return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+        fetched = await cursor.fetchall()
+        data: list[Any] = fetched or []
+        description = cursor.description
+        column_names: list[str] = [column.name for column in description] if description else []
+        return SQLResult.create_cached_select(
+            sql,
+            statement_config,
+            cached.processed_state,
+            compiled_sql,
+            params,
+            data,
+            column_names,
+            len(data),
+            resolve_row_format(data),
+            None,
+        )
+    except psycopg.Error as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    finally:
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                await cursor.close()
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:

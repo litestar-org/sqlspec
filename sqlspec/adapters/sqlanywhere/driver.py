@@ -17,6 +17,7 @@ from sqlspec.adapters.sqlanywhere.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -34,6 +35,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import SQLSpecError, TransactionError
 from sqlspec.utils.logging import get_logger
 
@@ -160,6 +162,10 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SqlanywhereSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), SqlanywhereDriver) else None
+        )
+        self._cache_hit_state = self._column_name_cache
         self._transaction_active = False
 
     @property
@@ -428,8 +434,8 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        normalized_params = normalize_execute_parameters(params) if isinstance(params, list) else params
-        return super()._execute_cache_hit(sql, normalized_params, cached)
+        """Execute a cached statement through the compiled SQL Anywhere cache-hit executor."""
+        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._column_name_cache)
 
     def _connection_in_transaction(self) -> bool:
         """Return whether a transaction opened by this driver remains active."""

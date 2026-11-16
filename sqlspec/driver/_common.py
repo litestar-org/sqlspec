@@ -174,6 +174,7 @@ __all__ = (
     "ExecutionResult",
     "StackExecutionObserver",
     "SyncExceptionHandler",
+    "cache_hit_hooks_unchanged",
     "describe_stack_statement",
     "handle_single_row_error",
     "hash_stack_operations",
@@ -1889,7 +1890,10 @@ class CommonDriverAttributesMixin:
         self._stmt_cache_rebind_processor: ParameterProcessor = self._cache_holder.rebind_processor
         self._stmt_cache_enabled = False
         self._cache_hit_executor: (
-            abc.Callable[[Any, str, Any, CachedQuery, StatementConfig, Any], SQLResult | Awaitable[SQLResult]] | None
+            abc.Callable[
+                [Any, str, Any, CachedQuery, StatementConfig, Any], SQLResult | Awaitable[SQLResult | None] | None
+            ]
+            | None
         ) = None
         self._cache_hit_state: Any = None
         self._statement_pool = get_sql_pool()
@@ -3633,6 +3637,49 @@ _PASSTHROUGH_TYPES_MAX_SIZE: Final[int] = 256
 _PASSTHROUGH_TYPES_CACHE: "dict[int, tuple[dict[type, Any], int, set[type]]]" = {}
 
 
+_CACHE_HIT_HOOKS: Final[tuple[str, ...]] = (
+    "_execute_cache_hit",
+    "_execute_cache_hit_with_cursor",
+    "build_cached_select_result",
+    "collect_rows",
+    "handle_database_exceptions",
+    "resolve_rowcount",
+    "with_cursor",
+)
+
+
+def cache_hit_hooks_unchanged(driver_type: type, owner: type) -> bool:
+    """Report whether ``driver_type`` runs cached statements exactly as ``owner`` does.
+
+    A cache-hit executor replaces the driver methods a cached statement passes through, so a
+    subclass that overrides any of them keeps its overrides only on the method path.
+
+    Args:
+        driver_type: Concrete driver class being constructed.
+        owner: Adapter driver class the executor was written for.
+
+    Returns:
+        True when ``driver_type`` is ``owner`` or inherits every cache-hit method from it unchanged.
+    """
+    if driver_type is owner:
+        return True
+    return all(getattr(driver_type, name, None) is getattr(owner, name, None) for name in _CACHE_HIT_HOOKS)
+
+
+async def _await_cache_hit(
+    driver: "CommonDriverAttributesMixin",
+    pending: "Awaitable[SQLResult | None]",
+    statement: str,
+    params: "tuple[Any, ...] | list[Any] | dict[str, Any]",
+    cached: "CachedQuery",
+) -> "SQLResult | None":
+    """Await an async cache-hit executor and run the driver's cache-hit method when it declines."""
+    outcome = await pending
+    if outcome is not None:
+        return outcome
+    return await cast("Awaitable[SQLResult]", driver._execute_cache_hit(statement, params, cached))
+
+
 def run_cached_execution(
     driver: "CommonDriverAttributesMixin", statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
 ) -> "SQLResult | Awaitable[SQLResult | None] | None":
@@ -3640,6 +3687,8 @@ def run_cached_execution(
 
     A driver that registers a cache-hit executor has it called with the connection, the raw SQL,
     the parameters, the cached query, the statement configuration, and the driver's executor state.
+    An executor that returns ``None`` declines the call, which then runs through the driver's
+    ``_execute_cache_hit`` method.
 
     Args:
         driver: Driver owning the statement cache and connection.
@@ -3691,9 +3740,14 @@ def run_cached_execution(
         if runtime is not None and not runtime.is_idle:
             return driver._execute_cache_hit_observed(statement, params, effective_cached)
         executor = driver._cache_hit_executor
-        if executor is not None:
-            return executor(driver.connection, statement, params, effective_cached, config, driver._cache_hit_state)
-        return driver._execute_cache_hit(statement, params, effective_cached)
+        if executor is None:
+            return driver._execute_cache_hit(statement, params, effective_cached)
+        outcome = executor(driver.connection, statement, params, effective_cached, config, driver._cache_hit_state)
+        if outcome is None:
+            return driver._execute_cache_hit(statement, params, effective_cached)
+        if isinstance(outcome, SQLResult):
+            return outcome
+        return _await_cache_hit(driver, outcome, statement, params, effective_cached)
 
     if needs_rebind:
         rebound_params = driver.stmt_cache_rebind(params, cached)

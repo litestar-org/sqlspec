@@ -20,7 +20,7 @@ from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-from sqlspec.adapters.adbc._typing import AdbcStatusCode
+from sqlspec.adapters.adbc._typing import AdbcNativeError, AdbcStatusCode
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter, get_adbc_type_converter
 from sqlspec.core import (
     DriverParameterProfile,
@@ -30,6 +30,7 @@ from sqlspec.core import (
     build_statement_config_from_profile,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -55,17 +56,19 @@ from sqlspec.exceptions import (
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import import_optional, import_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
+from sqlspec.utils.type_guards import has_rowcount, has_sqlstate, resolve_row_format
 from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.core import SQL
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = (
@@ -86,6 +89,7 @@ __all__ = (
     "driver_kind_from_uri",
     "driver_profile",
     "enforce_strict_type_coercion",
+    "execute_cache_hit",
     "get_statement_config",
     "handle_postgres_rollback",
     "is_postgres_dialect",
@@ -1378,6 +1382,130 @@ def resolve_rowcount(cursor: Any) -> int:
     if isinstance(rowcount, int):
         return rowcount
     return -1
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[str | None, dict[str, Any], dict[int, tuple[Any, list[str]]]]",
+) -> "SQLResult | None":
+    """Execute a cached statement on an ADBC connection and build its result.
+
+    Args:
+        connection: ADBC connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: The session's dialect name, driver features, and column-name cache.
+
+    Returns:
+        The statement result, or ``None`` for parameterized Db2 statements that return no
+        rows and for cursors without the DB-API execution surface.
+
+    Raises:
+        SQLSpecError: Mapped from any ADBC error the statement raises.
+        DataError: If Arrow cannot convert a parameter or result value.
+    """
+    dialect_name = state[0]
+    returns_rows = cached.operation_profile.returns_rows
+    if dialect_name == "db2" and not returns_rows and params:
+        return None
+    try:
+        cursor = (
+            _open_snowflake_cache_hit_cursor(connection, state[1])
+            if dialect_name == "snowflake"
+            else connection.cursor()
+        )
+        try:
+            execute = getattr(cursor, "execute", None)
+            if execute is None:
+                return None
+            if not returns_rows:
+                if not hasattr(cursor, "rowcount"):
+                    return None
+                if params:
+                    execute(cached.compiled_sql, params)
+                else:
+                    execute(cached.compiled_sql)
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetchall = getattr(cursor, "fetchall", None)
+            if fetchall is None:
+                return None
+            if params:
+                execute(cached.compiled_sql, params)
+            else:
+                execute(cached.compiled_sql)
+            fetched_data = fetchall()
+            driver_features = state[1]
+            description = cursor.description
+            data, column_names = collect_rows(
+                fetched_data,
+                description,
+                column_names=resolve_column_names(description, state[2], driver_features),
+                driver_features=driver_features,
+            )
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                cached.compiled_sql,
+                params,
+                data,
+                column_names,
+                len(data),
+                resolve_row_format(data),
+                None,
+            )
+        finally:
+            _close_cache_hit_cursor(cursor)
+    except AdbcNativeError as exc:
+        if dialect_name == "teradata":
+            mapped_error = create_teradata_mapped_exception(exc)
+            mapped_error.__cause__ = exc
+            raise mapped_error from exc
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+    except Exception as exc:
+        if _is_arrow_conversion_error(exc):
+            msg = f"ADBC could not convert a parameter or result value: {exc}"
+            mapped_error = DataError(msg)
+            mapped_error.__cause__ = exc
+            raise mapped_error from exc
+        raise
+
+
+def _open_snowflake_cache_hit_cursor(connection: Any, driver_features: "dict[str, Any]") -> Any:
+    """Open a Snowflake cursor tagged with the configured query tag and active correlation id."""
+    raw_tag = driver_features.get("query_tag")
+    tag = raw_tag.strip() if isinstance(raw_tag, str) else ""
+    correlation = CorrelationContext.get()
+    if correlation and correlation != tag:
+        tag = f"{tag}:{correlation}" if tag else correlation
+    if tag:
+        return connection.cursor(adbc_stmt_kwargs={"adbc.snowflake.statement.query_tag": tag})
+    return connection.cursor()
+
+
+def _close_cache_hit_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
+
+
+def _is_arrow_conversion_error(error: BaseException) -> bool:
+    """Return whether an error is a PyArrow value or type conversion failure."""
+    invalid_error = import_optional_attr("pyarrow", "ArrowInvalid")
+    if isinstance(invalid_error, type) and isinstance(error, invalid_error):
+        return True
+    type_error = import_optional_attr("pyarrow", "ArrowTypeError")
+    return isinstance(type_error, type) and isinstance(error, type_error)
 
 
 def resolve_many_rowcount(cursor: Any, parameter_sets: Any, *, fallback_count: "int | None" = None) -> int:

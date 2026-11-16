@@ -16,9 +16,9 @@ from sqlspec.adapters.mssql_python.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
     format_identifier,
     materialize_tuple_rows,
-    normalize_execute_parameters,
     quote_bracket_identifier,
     resolve_column_names,
     resolve_many_rowcount,
@@ -39,6 +39,7 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
@@ -171,6 +172,10 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MssqlPythonSyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), MssqlPythonDriver) else None
+        )
+        self._cache_hit_state = self._column_name_cache
         self._migration_schema_restore: tuple[str, str] | None = None
         self._restore_autocommit = False
         self._transaction_active = False
@@ -702,7 +707,8 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        return super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
+        """Execute a cached statement through the compiled mssql-python cache-hit executor."""
+        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._column_name_cache)
 
     @staticmethod
     def _validate_bulk_column_mappings(column_mappings: "Sequence[str] | Sequence[tuple[int, str]] | None") -> None:

@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.dialects.sybase import SQLAnywhere as _SQLAnywhereDialect
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -25,14 +26,17 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from logging import Logger
+
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "DEFAULT_SQLANYWHERE_PORT",
@@ -46,6 +50,7 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "escape_sql_literal",
+    "execute_cache_hit",
     "extract_sqlstate_and_sqlcode",
     "format_identifier",
     "merge_sqlanywhere_derive_overrides",
@@ -59,6 +64,8 @@ __all__ = (
 )
 
 DEFAULT_SQLANYWHERE_PORT: Final[int] = 2638
+logger = get_logger("sqlspec.adapters.sqlanywhere")
+
 _MAX_SQLANYWHERE_PORT: Final[int] = 65535
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _SQLANYDB_FULL_ARGS_LEN: Final[int] = 3
@@ -324,6 +331,74 @@ def resolve_rowcount(cursor: Any) -> int:
     if isinstance(rowcount, int):
         return max(rowcount, 0)
     return 0
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    column_name_cache: "dict[int, tuple[Sequence[Any], list[str]]]",
+) -> "SQLResult":
+    """Execute a cached statement on a sqlanydb connection and build its result.
+
+    Args:
+        connection: sqlanydb connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        column_name_cache: Session-local cache of resolved column names.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any other exception the statement raises.
+    """
+    parameters = tuple(params) if isinstance(params, list) else params
+    compiled_sql = cached.compiled_sql
+    try:
+        cursor = connection.cursor()
+        try:
+            if parameters:
+                cursor.execute(compiled_sql, parameters)
+            else:
+                cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            rows, column_names, _row_format = collect_rows(fetched_data, cursor.description or None, column_name_cache)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                rows,
+                column_names,
+                len(rows),
+                resolve_row_format(rows),
+            )
+        finally:
+            _close_cursor(cursor)
+    except SQLSpecError:
+        raise
+    except Exception as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor that exposes ``close``, ignoring one that can no longer be closed."""
+    if not hasattr(cursor, "close"):
+        return
+    try:
+        cursor.close()
+    except Exception:
+        return
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: int | None = None) -> int:

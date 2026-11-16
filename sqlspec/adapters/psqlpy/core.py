@@ -21,7 +21,9 @@ from sqlspec.adapters.psqlpy._typing import (
     PsqlpyBaseConnectionError,
     PsqlpyBaseConnectionPoolError,
     PsqlpyConnectionExecuteError,
+    PsqlpyDatabaseError,
     PsqlpyDataError,
+    PsqlpyError,
     PsqlpyIntegrityError,
     PsqlpyOperationalError,
     TargetSessionAttrs,
@@ -41,6 +43,8 @@ from sqlspec.core.config_runtime import (
     resolve_runtime_statement_config,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher, type_coercion_fallbacks
+from sqlspec.core.result._base import DMLResult, SQLResult
+from sqlspec.core.sqlcommenter import split_sqlcomment
 from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -88,7 +92,9 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_cache_hit",
     "extract_rows_affected",
+    "fetch_dml_rowcount",
     "format_execute_many_parameters",
     "format_table_identifier",
     "get_parameter_casts",
@@ -113,6 +119,7 @@ PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"\A([A-Z]+)(?:\s+(\d+))?\s+
 _DML_COUNT_CTE_ALIAS: Final = "_sqlspec_affected"
 _DML_COUNT_COLUMN: Final = "_sqlspec_rows_affected"
 _DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
+_CAST_DIALECTS: Final[frozenset[str]] = frozenset({"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch"})
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple)
@@ -912,3 +919,120 @@ def _pop_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+
+async def fetch_dml_rowcount(connection: Any, sql: str, params: Any, unprepared: bool) -> "int | None":
+    """Execute one DML statement through a counting query and return its exact affected-row count.
+
+    Args:
+        connection: psqlpy connection to execute on.
+        sql: Wire SQL of the DML statement, with any trailing sqlcommenter block.
+        params: Positional parameters for the statement.
+        unprepared: Whether the statement runs without a server-side prepared statement.
+
+    Returns:
+        The affected-row count, or None when the statement cannot be wrapped in a counting query.
+
+    Raises:
+        SQLSpecError: If the counting query returns anything other than one non-negative integer.
+    """
+    base_sql, comment_suffix = split_sqlcomment(sql)
+    count_sql = _dml_count_query(base_sql)
+    if count_sql is None:
+        return None
+    wire_count_sql = f"{count_sql} {comment_suffix}" if comment_suffix else count_sql
+    count_result = (
+        await connection.fetch(wire_count_sql, params, prepared=False)
+        if unprepared
+        else await connection.fetch(wire_count_sql, params)
+    )
+    count_rows, _ = collect_rows(count_result)
+    if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
+        msg = "psqlpy DML row count query returned an invalid result"
+        raise SQLSpecError(msg)
+    rows_affected = count_rows[0][_DML_COUNT_COLUMN]
+    if type(rows_affected) is not int or rows_affected < 0:
+        msg = "psqlpy DML row count query returned an invalid count"
+        raise SQLSpecError(msg)
+    return rows_affected
+
+
+async def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[str, Any], bool]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a psqlpy connection and build its result.
+
+    Statements are declined when cast detection is disabled or the statement
+    dialect is not a PostgreSQL dialect.
+
+    Args:
+        connection: psqlpy connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration supplying parameter coercion and rebuilding the result statement.
+        state: Driver feature flags of the owning session and whether it runs statements unprepared.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+
+    Raises:
+        SQLSpecError: Mapped from any psqlpy error the statement raises.
+    """
+    driver_features, unprepared = state
+    if (
+        not driver_features.get("enable_cast_detection", True)
+        or (statement_config.dialect or "postgres") not in _CAST_DIALECTS
+    ):
+        return None
+    operation_type = cached.operation_type
+    compiled_sql = cached.compiled_sql
+    try:
+        prepared: Any = prepare_parameters_with_casts(params, cached.parameter_casts, statement_config)
+        if operation_type != "SELECT":
+            prepared = coerce_numeric_for_write(prepared)
+        args: Any = (
+            tuple(prepared)
+            if isinstance(prepared, (list, tuple))
+            else tuple(prepared.values())
+            if isinstance(prepared, dict)
+            else ()
+        )
+        if cached.operation_profile.returns_rows:
+            query_result = (
+                await connection.fetch(compiled_sql, args, prepared=False)
+                if unprepared
+                else await connection.fetch(compiled_sql, args)
+            )
+            dict_rows, column_names = collect_rows(query_result)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                params,
+                cast("list[Any]", dict_rows),
+                column_names,
+                len(dict_rows),
+                "dict",
+                None,
+            )
+        if operation_type in {"INSERT", "UPDATE", "DELETE"}:
+            rows_affected = await fetch_dml_rowcount(connection, compiled_sql, args, unprepared)
+            if rows_affected is not None:
+                return DMLResult(operation_type, rows_affected)
+        result = (
+            await connection.execute(compiled_sql, args, prepared=False)
+            if unprepared
+            else await connection.execute(compiled_sql, args)
+        )
+        return DMLResult(operation_type, extract_rows_affected(result))
+    except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc

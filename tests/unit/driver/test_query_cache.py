@@ -2004,3 +2004,54 @@ def test_warm_cache_mapping_parameters_with_numeric_and_qmark_styles(tmp_path: P
             assert driver_num_qmark == ["one_nq", "two_nq"]
     finally:
         sqlite_cfg.close_pool()
+
+
+def test_subclass_cache_hit_override_runs_for_repeated_statements(sqlite_sync_driver: Any) -> None:
+    hits: list[str] = []
+
+    class TrackingDriver(SqliteDriver):
+        def _execute_cache_hit(self, sql: str, params: Any, cached: CachedQuery) -> Any:
+            hits.append(sql)
+            return super()._execute_cache_hit(sql, params, cached)
+
+    driver = TrackingDriver(
+        connection=sqlite_sync_driver.connection,
+        statement_config=sqlite_sync_driver.statement_config,
+        driver_features=sqlite_sync_driver.driver_features,
+    )
+    driver._stmt_cache_enabled = True
+
+    assert driver.execute("SELECT ? AS v", (1,)).get_data() == [{"v": 1}]
+    assert driver.execute("SELECT ? AS v", (2,)).get_data() == [{"v": 2}]
+    assert hits == ["SELECT ? AS v"]
+
+
+def test_declined_cache_hit_runs_driver_cache_hit_method(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+    declined: list[str] = []
+
+    def decline(connection: Any, sql: str, params: Any, cached: CachedQuery, config: Any, state: Any) -> None:
+        declined.append(sql)
+
+    sqlite_sync_driver._stmt_cache_enabled = True
+    assert sqlite_sync_driver.execute("SELECT ? AS v", (1,)).get_data() == [{"v": 1}]
+    monkeypatch.setattr(sqlite_sync_driver, "_cache_hit_executor", decline)
+
+    assert sqlite_sync_driver.execute("SELECT ? AS v", (2,)).get_data() == [{"v": 2}]
+    assert declined == ["SELECT ? AS v"]
+
+
+@pytest.mark.anyio
+async def test_declined_async_cache_hit_runs_driver_cache_hit_method(
+    aiosqlite_async_driver: Any, monkeypatch: Any
+) -> None:
+    declined: list[str] = []
+
+    async def decline(connection: Any, sql: str, params: Any, cached: CachedQuery, config: Any, state: Any) -> None:
+        declined.append(sql)
+
+    aiosqlite_async_driver._stmt_cache_enabled = True
+    assert (await aiosqlite_async_driver.execute("SELECT ? AS v", (1,))).get_data() == [{"v": 1}]
+    monkeypatch.setattr(aiosqlite_async_driver, "_cache_hit_executor", decline)
+
+    assert (await aiosqlite_async_driver.execute("SELECT ? AS v", (2,))).get_data() == [{"v": 2}]
+    assert declined == ["SELECT ? AS v"]

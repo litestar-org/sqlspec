@@ -20,16 +20,17 @@ from sqlspec.adapters.psqlpy._typing import (
     PsqlpySessionContext,
 )
 from sqlspec.adapters.psqlpy.core import (
-    _DML_COUNT_COLUMN,
+    _CAST_DIALECTS,
     PsqlpyStreamSource,
-    _dml_count_query,
     coerce_json_columns,
     coerce_numeric_for_write,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_cache_hit,
     extract_rows_affected,
+    fetch_dml_rowcount,
     format_execute_many_parameters,
     format_table_identifier,
     get_parameter_casts,
@@ -38,9 +39,8 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, DMLResult, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.core.sqlcommenter import split_sqlcomment
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
@@ -53,8 +53,6 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
-
-_CAST_DIALECTS = frozenset({"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -104,6 +102,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         self._transaction_active = False
         pooler_mode = self.driver_features.get("pooler_mode", "session")
         self._pooler_unprepared = pooler_mode in {"transaction", "statement"}
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), PsqlpyDriver) else None
+        self._cache_hit_state = (self.driver_features, self._pooler_unprepared)
 
     @property
     def data_dictionary(self) -> "PsqlpyDataDictionary":
@@ -619,25 +619,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     async def _fetch_dml_rowcount(
         self, cursor: "PsqlpyConnection", sql: str, params: "Sequence[Any] | Mapping[str, Any]"
     ) -> int | None:
-        base_sql, comment_suffix = split_sqlcomment(sql)
-        count_sql = _dml_count_query(base_sql)
-        if count_sql is None:
-            return None
-        wire_count_sql = f"{count_sql} {comment_suffix}" if comment_suffix else count_sql
-        count_result = (
-            await cursor.fetch(wire_count_sql, params, prepared=False)
-            if self._pooler_unprepared
-            else await cursor.fetch(wire_count_sql, params)
-        )
-        count_rows, _ = collect_rows(count_result)
-        if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
-            msg = "psqlpy DML row count query returned an invalid result"
-            raise SQLSpecError(msg)
-        rows_affected = count_rows[0][_DML_COUNT_COLUMN]
-        if type(rows_affected) is not int or rows_affected < 0:
-            msg = "psqlpy DML row count query returned an invalid count"
-            raise SQLSpecError(msg)
-        return rows_affected
+        return await fetch_dml_rowcount(cursor, sql, params, self._pooler_unprepared)
 
     def _is_transaction_pooler_mode(self) -> bool:
         return self._pooler_unprepared

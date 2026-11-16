@@ -31,7 +31,8 @@ from sqlspec.core import (
     build_statement_config_from_profile,
     create_sql_result,
 )
-from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.core.result._base import DMLResult, SQLResult
+from sqlspec.core.sqlcommenter import SQLCommenterContext, format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.data_dictionary.dialects.oracle import (
     ORACLE_JSON_STORAGE_NATIVE,
     parse_oracle_version_components,
@@ -79,6 +80,7 @@ if TYPE_CHECKING:
         OracleSyncRawCursor,
     )
     from sqlspec.core import SQL
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.driver import AsyncExceptionHandler, SyncExceptionHandler
 
 
@@ -99,6 +101,7 @@ __all__ = (
     "OracleAcquireOptions",
     "OracleAsyncStreamSource",
     "OracleBlob",
+    "OracleCacheHitState",
     "OracleClob",
     "OracleEndUserSecurityConfig",
     "OracleEndpoint",
@@ -111,6 +114,7 @@ __all__ = (
     "apply_end_user_security_checkout",
     "apply_oracle_session_trace_attributes",
     "apply_oracle_transaction_priority",
+    "apply_session_tracing",
     "apply_wallet_ssl_context",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
@@ -144,6 +148,8 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_cache_hit",
+    "execute_cache_hit_async",
     "execute_session_checkout_async",
     "execute_session_checkout_sync",
     "execute_session_release_async",
@@ -1890,6 +1896,50 @@ async def coerce_pipeline_rows_async(
     return result
 
 
+def apply_session_tracing(
+    connection: Any,
+    statement_config: "StatementConfig",
+    driver_features: "dict[str, Any]",
+    *,
+    enable_session_attributes: bool,
+    enable_otel_trace_context: bool,
+) -> None:
+    """Set the session trace attributes for the next statement from the sqlcommenter context.
+
+    The module comes from the ``module``, ``framework``, or ``controller`` key and the action from
+    the ``action`` or ``route`` key, read from the active ``SQLCommenterContext`` first and the
+    statement configuration's static sqlcommenter attributes second. The module is ``sqlspec``
+    when neither provides one.
+
+    Args:
+        connection: Oracle sync or async connection object.
+        statement_config: Statement configuration carrying static sqlcommenter attributes.
+        driver_features: Driver feature configuration of the session.
+        enable_session_attributes: Apply traditional Oracle diagnostic attributes.
+        enable_otel_trace_context: Propagate the active W3C trace context.
+    """
+    ctx = SQLCommenterContext.get() or {}
+    attrs = statement_config.sqlcommenter_attributes or {}
+    default_module = (
+        ctx.get("module")
+        or ctx.get("framework")
+        or ctx.get("controller")
+        or attrs.get("module")
+        or attrs.get("framework")
+        or attrs.get("controller")
+        or "sqlspec"
+    )
+    default_action = ctx.get("action") or ctx.get("route") or attrs.get("action") or attrs.get("route")
+    apply_oracle_session_trace_attributes(
+        connection,
+        module=default_module,
+        action=default_action,
+        preserve_client_identifier=driver_features.get("tenant_strategy") is not None,
+        enable_session_attributes=enable_session_attributes,
+        enable_otel_trace_context=enable_otel_trace_context,
+    )
+
+
 def apply_oracle_session_trace_attributes(
     connection: Any,
     *,
@@ -2060,6 +2110,46 @@ def resolve_row_metadata(
         cache.pop(next(iter(cache)))
     cache[cache_key] = (description, normalized_column_names, requires_lob_coercion)
     return normalized_column_names, requires_lob_coercion
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class OracleCacheHitState:
+    """Session-scoped settings the Oracle cache-hit executors read.
+
+    The driver owning the session reads and writes its version cache and trace-context flag
+    through this object, so the executors always see the session's current values.
+    """
+
+    __slots__ = (
+        "driver_features",
+        "fetch_kwargs",
+        "otel_tracing_enabled",
+        "row_metadata_cache",
+        "session_tracing_enabled",
+        "version_cache",
+    )
+
+    def __init__(
+        self,
+        driver_features: "dict[str, Any]",
+        fetch_kwargs: "dict[str, object]",
+        row_metadata_cache: "dict[Any, tuple[Any, list[str], bool]]",
+        session_tracing_enabled: bool,
+    ) -> None:
+        """Initialize the session state.
+
+        Args:
+            driver_features: Driver feature configuration of the session.
+            fetch_kwargs: Keyword arguments passed to every ``cursor.execute`` call.
+            row_metadata_cache: Session-local cache of resolved row metadata.
+            session_tracing_enabled: Whether session trace attributes are applied before each statement.
+        """
+        self.driver_features = driver_features
+        self.fetch_kwargs = fetch_kwargs
+        self.row_metadata_cache = row_metadata_cache
+        self.session_tracing_enabled = session_tracing_enabled
+        self.otel_tracing_enabled: bool = False
+        self.version_cache: Any = None
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -2385,6 +2475,203 @@ async def collect_async_rows(
         row_tuple = row if isinstance(row, tuple) else tuple(row)
         data.append(await _coerce_async_row_values(row_tuple))
     return data, resolved_column_names
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "OracleCacheHitState",
+) -> "SQLResult":
+    """Execute a cached statement on a synchronous Oracle connection and build its result.
+
+    Args:
+        connection: Oracle connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Session-scoped settings of the owning driver.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any ``oracledb.DatabaseError`` the statement raises.
+    """
+    driver_features = state.driver_features
+    session_tracing_enabled = state.session_tracing_enabled
+    try:
+        arraysize = driver_features.get("arraysize")
+        prefetchrows = driver_features.get("prefetchrows")
+        if session_tracing_enabled or state.otel_tracing_enabled:
+            apply_session_tracing(
+                connection,
+                statement_config,
+                driver_features,
+                enable_session_attributes=session_tracing_enabled,
+                enable_otel_trace_context=state.otel_tracing_enabled,
+            )
+        cursor = connection.cursor()
+        try:
+            if arraysize is not None:
+                cursor.arraysize = arraysize
+            if prefetchrows is not None:
+                cursor.prefetchrows = prefetchrows
+            compiled_sql = _cache_hit_wire_sql(cached.compiled_sql, statement_config, session_tracing_enabled)
+            parameters = coerce_large_parameters_sync(
+                connection,
+                params,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=state.version_cache,
+            )
+            cursor.execute(compiled_sql, parameters or {}, **state.fetch_kwargs)
+            if cached.operation_profile.returns_rows:
+                description = cursor.description
+                if description is not None:
+                    fetched_data = cursor.fetchall()
+                    column_names, requires_lob_coercion = resolve_row_metadata(
+                        description, driver_features, state.row_metadata_cache
+                    )
+                    data, column_names = collect_sync_rows(
+                        fetched_data,
+                        description,
+                        driver_features,
+                        column_names=column_names,
+                        requires_lob_coercion=requires_lob_coercion,
+                    )
+                    return SQLResult.create_cached_select(
+                        sql,
+                        statement_config,
+                        cached.processed_state,
+                        compiled_sql,
+                        params,
+                        data,
+                        column_names,
+                        len(data),
+                        "tuple",
+                    )
+            return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+        finally:
+            _close_cache_hit_cursor(cursor)
+    except oracledb_module.DatabaseError as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+async def execute_cache_hit_async(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "OracleCacheHitState",
+) -> "SQLResult":
+    """Execute a cached statement on an asynchronous Oracle connection and build its result.
+
+    Args:
+        connection: Oracle async connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Session-scoped settings of the owning driver.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any ``oracledb.DatabaseError`` the statement raises.
+    """
+    driver_features = state.driver_features
+    session_tracing_enabled = state.session_tracing_enabled
+    try:
+        arraysize = driver_features.get("arraysize")
+        prefetchrows = driver_features.get("prefetchrows")
+        if session_tracing_enabled or state.otel_tracing_enabled:
+            apply_session_tracing(
+                connection,
+                statement_config,
+                driver_features,
+                enable_session_attributes=session_tracing_enabled,
+                enable_otel_trace_context=state.otel_tracing_enabled,
+            )
+        cursor = connection.cursor()
+        try:
+            if arraysize is not None:
+                cursor.arraysize = arraysize
+            if prefetchrows is not None:
+                cursor.prefetchrows = prefetchrows
+            compiled_sql = _cache_hit_wire_sql(cached.compiled_sql, statement_config, session_tracing_enabled)
+            parameters = await coerce_large_parameters_async(
+                connection,
+                params,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=state.version_cache,
+            )
+            await cursor.execute(compiled_sql, parameters or {}, **state.fetch_kwargs)
+            if cached.operation_profile.returns_rows:
+                description = cursor.description
+                if description is not None:
+                    fetched_data = await cursor.fetchall()
+                    column_names, requires_lob_coercion = resolve_row_metadata(
+                        description, driver_features, state.row_metadata_cache
+                    )
+                    data, column_names = await collect_async_rows(
+                        fetched_data,
+                        description,
+                        driver_features,
+                        column_names=column_names,
+                        requires_lob_coercion=requires_lob_coercion,
+                    )
+                    return SQLResult.create_cached_select(
+                        sql,
+                        statement_config,
+                        cached.processed_state,
+                        compiled_sql,
+                        params,
+                        data,
+                        column_names,
+                        len(data),
+                        "tuple",
+                    )
+            return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+        finally:
+            _close_cache_hit_cursor(cursor)
+    except oracledb_module.DatabaseError as exc:
+        mapped_error = create_mapped_exception(exc)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _cache_hit_wire_sql(compiled_sql: str, statement_config: "StatementConfig", session_tracing_enabled: bool) -> str:
+    """Return the SQL text sent to Oracle for a cached statement.
+
+    Session tracing carries the request attributes on the connection, so the sqlcommenter comment
+    is removed; otherwise sqlcommenter formatting applies when the statement configuration enables it.
+    """
+    if session_tracing_enabled:
+        return strip_sqlcomment(compiled_sql)
+    if not statement_config.enable_sqlcommenter:
+        return compiled_sql
+    return format_wire_sqlcomment(compiled_sql, statement_config)
+
+
+def _close_cache_hit_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:

@@ -22,6 +22,8 @@ from sqlspec.adapters.cockroach_psycopg.core import (
     calculate_backoff_seconds,
     create_mapped_exception,
     driver_profile,
+    execute_cache_hit,
+    execute_cache_hit_async,
     is_retryable_error,
     native_export_telemetry,
     native_import_telemetry,
@@ -40,6 +42,7 @@ from sqlspec.adapters.psycopg.driver import (
 )
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncRowStream, SyncRowStream
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import ReadOnlyTransactionError
 from sqlspec.utils.logging import get_logger
 
@@ -206,6 +209,14 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         )
         self._follower_staleness = validate_follower_read_staleness(raw_staleness) if raw_staleness else None
         self._data_dictionary = None
+        self._cache_hit_state = (
+            self.driver_features,
+            self._follower_reads_enabled,
+            PsycopgSyncDriver.cache_hit_function,
+        )
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), CockroachPsycopgSyncDriver) else None
+        )
 
     @property
     def data_dictionary(self) -> "CockroachPsycopgSyncDataDictionary":  # type: ignore[override]
@@ -510,6 +521,14 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         )
         self._follower_staleness = validate_follower_read_staleness(raw_staleness) if raw_staleness else None
         self._data_dictionary = None
+        self._cache_hit_state = (
+            self.driver_features,
+            self._follower_reads_enabled,
+            PsycopgAsyncDriver.cache_hit_function,
+        )
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), CockroachPsycopgAsyncDriver) else None
+        )
 
     @property
     def data_dictionary(self) -> "CockroachPsycopgAsyncDataDictionary":  # type: ignore[override]

@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sized
 from contextlib import AsyncExitStack, ExitStack, suppress
 from itertools import chain
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Final, Literal, LiteralString, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, LiteralString, cast
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
@@ -33,6 +33,8 @@ from sqlspec.adapters.psycopg.core import (
     default_statement_config,
     driver_profile,
     escape_literal_percent,
+    execute_cache_hit,
+    execute_cache_hit_async,
     execute_with_optional_parameters,
     execute_with_optional_parameters_async,
     pipeline_supported,
@@ -63,6 +65,7 @@ from sqlspec.driver import (
     SyncRowStream,
     describe_stack_statement,
 )
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier
@@ -212,6 +215,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
     __slots__ = ("_data_dictionary", "_restore_autocommit", "_transaction_active")
     dialect = "postgres"
+    cache_hit_function: "ClassVar[Any]" = staticmethod(execute_cache_hit)
 
     def __init__(
         self,
@@ -228,6 +232,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         self._data_dictionary: PsycopgSyncDataDictionary | None = None
         self._restore_autocommit = False
         self._transaction_active = False
+        self._cache_hit_executor = (
+            execute_cache_hit if cache_hit_hooks_unchanged(type(self), PsycopgSyncDriver) else None
+        )
 
     @property
     def data_dictionary(self) -> "PsycopgSyncDataDictionary":
@@ -846,6 +853,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
     __slots__ = ("_data_dictionary", "_restore_autocommit", "_transaction_active")
     dialect = "postgres"
+    cache_hit_function: "ClassVar[Any]" = staticmethod(execute_cache_hit_async)
 
     def __init__(
         self,
@@ -862,6 +870,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         self._data_dictionary: PsycopgAsyncDataDictionary | None = None
         self._restore_autocommit = False
         self._transaction_active = False
+        self._cache_hit_executor = (
+            execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), PsycopgAsyncDriver) else None
+        )
 
     @property
     def data_dictionary(self) -> "PsycopgAsyncDataDictionary":

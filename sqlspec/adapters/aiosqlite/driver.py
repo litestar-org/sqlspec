@@ -33,6 +33,7 @@ from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import DeadlockError
 from sqlspec.utils.type_guards import resolve_row_format
 
@@ -98,7 +99,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AiosqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
-        self._cache_hit_executor = execute_cache_hit
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), AiosqliteDriver) else None
         self._cache_hit_state = self._rowid_target_cache
 
     @property

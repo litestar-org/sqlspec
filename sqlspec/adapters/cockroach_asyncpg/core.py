@@ -12,8 +12,10 @@ from mypy_extensions import mypyc_attr
 from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
+from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgInterfaceError, CockroachAsyncpgPostgresError
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -49,6 +51,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.core import ParameterStyleConfig
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
@@ -65,6 +68,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_cache_hit",
     "is_retryable_error",
     "native_export_telemetry",
     "native_import_telemetry",
@@ -87,6 +91,7 @@ _CLUSTER_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._-]+")
 _UNSET: Final[object] = object()
 _PGVECTOR_MISSING_LOGGED = False
 _JSONB_BINARY_VERSION: Final[bytes] = b"\x01"
+_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"\A([A-Z]+)(?:\s+(\d+))?\s+(\d+)\Z", re.IGNORECASE)
 _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
 _STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")
 _STALENESS_FUNCTION: Final[re.Pattern[str]] = re.compile(
@@ -517,6 +522,108 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             return _create_postgres_error(error, sqlstate_code, exc_class, "database error")
 
     return _create_postgres_error(error, sqlstate_code, SQLSpecError, "database error")
+
+
+def _cache_hit_timeout(statement_config: "StatementConfig") -> "float | None":
+    """Return the per-statement timeout configured in the statement execution arguments."""
+    options = statement_config.execution_args
+    if not options:
+        return None
+    if "timeout" in options:
+        value = options["timeout"]
+        return float(value) if value is not None else None
+    if "command_timeout" in options:
+        value = options["command_timeout"]
+        return float(value) if value is not None else None
+    return None
+
+
+def _parse_status(status: Any) -> int:
+    """Return the affected-row count carried by a command status string, or 0 when it has none."""
+    if not status or not isinstance(status, str):
+        return 0
+    match = _STATUS_REGEX.fullmatch(status.strip())
+    if match is None:
+        return 0
+    try:
+        return int(match.group(3))
+    except ValueError:
+        return 0
+
+
+async def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    driver_features: "dict[str, Any]",
+) -> "SQLResult | None":
+    """Execute a cached statement on a CockroachDB asyncpg connection and build its result.
+
+    Statements on a read-only session, and read-only statements on a session
+    with follower reads enabled, are declined.
+
+    Args:
+        connection: asyncpg connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration supplying the timeout and rebuilding the result statement.
+        driver_features: Driver feature flags of the owning session.
+
+    Returns:
+        The statement result, or None when the statement is declined.
+
+    Raises:
+        SQLSpecError: Mapped from any asyncpg, timeout, transport, or SQLSTATE-bearing error the statement raises.
+    """
+    if driver_features.get("read_only_session") or (
+        cached.operation_profile.is_read_only and driver_features.get("enable_follower_reads", False)
+    ):
+        return None
+    timeout = _cache_hit_timeout(statement_config)
+    compiled_sql = cached.compiled_sql
+    args: Any = (
+        params if isinstance(params, (tuple, list)) else tuple(params.values()) if isinstance(params, dict) else ()
+    )
+    try:
+        if cached.operation_profile.returns_rows:
+            records = (
+                await connection.fetch(compiled_sql, *args, timeout=timeout)
+                if timeout is not None
+                else await connection.fetch(compiled_sql, *args)
+            )
+            data: list[Any] = records or []
+            column_names: list[str] = list(data[0].keys()) if data else []
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                params,
+                data,
+                column_names,
+                len(data),
+                "record",
+                None,
+            )
+        status = (
+            await connection.execute(compiled_sql, *args, timeout=timeout)
+            if timeout is not None
+            else await connection.execute(compiled_sql, *args)
+        )
+        return DMLResult(cached.operation_type, _parse_status(status))
+    except Exception as exc:
+        if isinstance(exc, SQLSpecError):
+            raise
+        if isinstance(
+            exc, (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError)
+        ) or hasattr(exc, "sqlstate"):
+            mapped_error = create_mapped_exception(exc)
+            mapped_error.__cause__ = exc
+            raise mapped_error from exc
+        raise
 
 
 def _convert_datetime_param(value: Any) -> Any:

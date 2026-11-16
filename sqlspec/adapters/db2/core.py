@@ -1,12 +1,15 @@
 """IBM Db2 adapter compiled helpers and exception translation."""
 
+import contextlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import parse_qsl, unquote, urlsplit
 
+from sqlspec.adapters.db2._typing import Db2Error
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -23,13 +26,16 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount
+from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
 
 if TYPE_CHECKING:
     from logging import Logger
+
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "INDEX_EXISTS_SQL",
@@ -44,6 +50,8 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_cache_hit",
+    "execute_cache_hit_async",
     "extract_sqlstate",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -55,6 +63,8 @@ __all__ = (
     "to_db_timestamp",
     "utc_now",
 )
+
+logger = get_logger("sqlspec.adapters.db2")
 
 TABLE_EXISTS_SQL: Final[str] = (
     "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
@@ -364,6 +374,127 @@ def resolve_rowcount(cursor: Any) -> int:
         count = cursor.rowcount
         return int(count) if count is not None and count >= 0 else -1
     return -1
+
+
+def execute_cache_hit(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[int, tuple[Any, list[str]]], bool]",
+) -> "SQLResult":
+    """Execute a cached statement on an ``ibm_db_dbi`` connection and build its result.
+
+    Args:
+        connection: ``ibm_db_dbi.Connection`` to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Session-local column name cache and whether uppercase column names are lowercased.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any ``ibm_db_dbi`` error the statement raises.
+    """
+    parameters = normalize_execute_parameters(params) or ()
+    compiled_sql = cached.compiled_sql
+    try:
+        cursor = connection.cursor()
+        try:
+            if parameters:
+                cursor.execute(compiled_sql, parameters)
+            else:
+                cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = cursor.fetchall()
+            column_names = resolve_column_names(cursor.description or None, state[0], lowercase=state[1])
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                fetched_data,
+                column_names,
+                len(fetched_data),
+                resolve_row_format(fetched_data),
+            )
+        finally:
+            _close_cursor(cursor)
+    except Db2Error as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+async def execute_cache_hit_async(
+    connection: Any,
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    state: "tuple[dict[int, tuple[Any, list[str]]], bool]",
+) -> "SQLResult":
+    """Execute a cached statement on an ``ibm_db_dbi`` async connection and build its result.
+
+    Args:
+        connection: ``ibm_db_dbi.AsyncConnection`` to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        state: Session-local column name cache and whether uppercase column names are lowercased.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any ``ibm_db_dbi`` error the statement raises.
+    """
+    parameters = normalize_execute_parameters(params) or ()
+    compiled_sql = cached.compiled_sql
+    try:
+        cursor = await connection.cursor()
+        try:
+            if parameters:
+                await cursor.execute(compiled_sql, parameters)
+            else:
+                await cursor.execute(compiled_sql)
+            if not cached.operation_profile.returns_rows:
+                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            fetched_data = await cursor.fetchall()
+            column_names = resolve_column_names(cursor.description or None, state[0], lowercase=state[1])
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                parameters,
+                fetched_data,
+                column_names,
+                len(fetched_data),
+                resolve_row_format(fetched_data),
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                await cursor.close()
+    except Db2Error as exc:
+        mapped_error = create_mapped_exception(exc, logger=logger)
+        mapped_error.__cause__ = exc
+        raise mapped_error from exc
+
+
+def _close_cursor(cursor: Any) -> None:
+    """Close a cursor, ignoring one that can no longer be closed."""
+    try:
+        cursor.close()
+    except Exception:
+        return
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any) -> int:

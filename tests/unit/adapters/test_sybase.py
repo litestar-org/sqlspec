@@ -34,11 +34,17 @@ from sqlspec.adapters.sybase import (
 )
 from sqlspec.adapters.sybase._typing import SybaseRawCursor
 from sqlspec.adapters.sybase.adk import SybaseADKMemoryStore, SybaseADKStore
-from sqlspec.adapters.sybase.core import build_insert_statement, escape_literal_percent, format_identifier
+from sqlspec.adapters.sybase.core import (
+    build_insert_statement,
+    escape_literal_percent,
+    execute_cache_hit,
+    format_identifier,
+)
 from sqlspec.adapters.sybase.events import SybaseEventQueueStore
 from sqlspec.adapters.sybase.litestar import SybaseStore
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
+from sqlspec.core.result._base import DMLResult
 from sqlspec.data_dictionary.dialects.sybase import SybaseVersionInfo
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import (
@@ -1999,3 +2005,107 @@ def test_sybase_adk_get_events_bounded_reverses_desc_rows(monkeypatch: pytest.Mo
 
     assert [e["id"] for e in events] == ["e2", "e3"]
     assert "ORDER BY e.timestamp DESC" in " ".join(captured[0][0].split())
+
+
+def _cache_hit_driver(cursor: FakeCursor) -> "tuple[SybaseDriver, FakeConnection]":
+    connection = FakeConnection(cursor)
+    return SybaseDriver(cast("SybaseConnection", connection)), connection
+
+
+def _run_cache_hit_executor(driver: SybaseDriver, statement: str, params: Any) -> Any:
+    cached = cast("Any", driver._stmt_cache.get(statement))
+    return execute_cache_hit(
+        driver.connection, statement, params, cached, driver.statement_config, driver._cache_hit_state
+    )
+
+
+def _raising_cursor(error: BaseException) -> FakeCursor:
+    cursor = FakeCursor()
+
+    def fail(sql: str, parameters: Any = None) -> None:
+        raise error
+
+    cursor.execute = fail  # type: ignore[method-assign]
+    return cursor
+
+
+def test_sybase_repeated_select_runs_through_cache_hit_executor(monkeypatch: pytest.MonkeyPatch) -> None:
+    statement = "SELECT id, name FROM dbo.users WHERE id = ?"
+    cursor = FakeCursor(rows=[(1, "Ada")], description=[("id",), ("name",)])
+    driver, _ = _cache_hit_driver(cursor)
+    outcomes: list[Any] = []
+
+    def recording_executor(*args: Any) -> Any:
+        outcome = execute_cache_hit(*args)
+        outcomes.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(driver, "_cache_hit_executor", recording_executor)
+
+    driver.execute(statement, 1)
+    result = driver.execute(statement, 2)
+
+    assert len(outcomes) == 1
+    assert outcomes[0] is result
+    assert result.get_data() == [{"id": 1, "name": "Ada"}]
+    assert result.column_names == ["id", "name"]
+    assert result.rows_affected == 1
+    assert result.statement.sql == statement
+    assert cursor.calls[-1] == ("SELECT id, name FROM dbo.users WHERE id = %s", (2,))
+    assert cursor.closed is True
+
+
+def test_sybase_cache_hit_dml_returns_affected_rows_for_list_parameters() -> None:
+    statement = "UPDATE dbo.users SET name = ? WHERE id = ?"
+    cursor = FakeCursor(rowcount=3)
+    driver, _ = _cache_hit_driver(cursor)
+    driver.execute(statement, "Ada", 1)
+
+    result = _run_cache_hit_executor(driver, statement, ["Grace", 2])
+
+    assert isinstance(result, DMLResult)
+    assert result.operation_type == "UPDATE"
+    assert result.rows_affected == 3
+    assert cursor.calls[-1] == ("UPDATE dbo.users SET name = %s WHERE id = %s", ("Grace", 2))
+
+
+def test_sybase_cache_hit_maps_driver_errors_and_keeps_sqlspec_errors() -> None:
+    statement = "UPDATE dbo.users SET name = ? WHERE id = ?"
+    driver, connection = _cache_hit_driver(FakeCursor(rowcount=1))
+    driver.execute(statement, "Ada", 1)
+    native = pymssql.IntegrityError(2601, "Attempt to insert duplicate key row with unique index")
+    failing = _raising_cursor(native)
+    connection.cursor_obj = failing
+
+    with pytest.raises(UniqueViolationError) as exc_info:
+        driver.execute(statement, "Ada", 2)
+
+    assert exc_info.value.__cause__ is native
+    assert failing.closed is True
+
+    already_mapped = TransactionError("already mapped")
+    connection.cursor_obj = _raising_cursor(already_mapped)
+
+    with pytest.raises(TransactionError) as mapped_info:
+        _run_cache_hit_executor(driver, statement, ("Ada", 3))
+
+    assert mapped_info.value is already_mapped
+
+
+def test_sybase_cache_hit_declines_empty_parameters_and_literal_percent() -> None:
+    plain = "SELECT id, name FROM dbo.users"
+    percent = "SELECT id, name FROM dbo.users WHERE name LIKE '50%' AND id = ?"
+    cursor = FakeCursor(rows=[(1, "Ada")], description=[("id",), ("name",)])
+    driver, _ = _cache_hit_driver(cursor)
+    driver.execute(plain)
+    driver.execute(percent, 1)
+    executed = len(cursor.calls)
+
+    assert _run_cache_hit_executor(driver, plain, ()) is None
+    assert _run_cache_hit_executor(driver, percent, (2,)) is None
+    assert len(cursor.calls) == executed
+
+    result = driver.execute(percent, 3)
+
+    assert result.get_data() == [{"id": 1, "name": "Ada"}]
+    assert cursor.calls[-1] == ("SELECT id, name FROM dbo.users WHERE name LIKE '50%%' AND id = %s", (3,))

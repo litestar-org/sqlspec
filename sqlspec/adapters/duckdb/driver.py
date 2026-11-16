@@ -25,6 +25,7 @@ from sqlspec.adapters.duckdb.core import (
     description_has_arrow_divergent_types,
     driver_profile,
     duckdb_copy_filename_follows_query,
+    execute_cache_hit,
     format_identifier,
     normalize_execute_parameters,
     read_duckdb_profile_json,
@@ -42,6 +43,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import PYARROW_INSTALLED, ArrowReturnFormat, StatementParameters
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
@@ -117,6 +119,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._data_dictionary: DuckDBDataDictionary | None = None
         self._transaction_active = False
         self._migration_schema_restore: str | None = None
+        self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), DuckDBDriver) else None
+        self._cache_hit_state = (self.driver_features, self._cache_holder)
 
     def __del__(self) -> None:
         self.close()

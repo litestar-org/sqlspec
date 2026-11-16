@@ -10,9 +10,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.asyncpg._typing import AsyncpgPostgresError
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from sqlspec.core import SQL, ParameterStyleConfig, StackOperation
+    from sqlspec.core.cache import CachedQuery
 
 __all__ = (
     "AsyncpgStreamSource",
@@ -59,6 +62,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_cache_hit",
     "parse_status",
     "register_json_codecs",
     "register_pgvector_support",
@@ -442,6 +446,85 @@ def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":
         return [], []
     column_names = list(records[0].keys())
     return records, column_names
+
+
+def _cache_hit_timeout(statement_config: "StatementConfig") -> "float | None":
+    """Return the per-statement timeout configured in the statement execution arguments."""
+    options = statement_config.execution_args
+    if not options:
+        return None
+    if "timeout" in options:
+        value = options["timeout"]
+        return float(value) if value is not None else None
+    if "command_timeout" in options:
+        value = options["command_timeout"]
+        return float(value) if value is not None else None
+    return None
+
+
+async def execute_cache_hit(
+    connection: Any, sql: str, params: Any, cached: "CachedQuery", statement_config: "StatementConfig", state: Any
+) -> "SQLResult":
+    """Execute a cached statement on an asyncpg connection and build its result.
+
+    Args:
+        connection: asyncpg connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration supplying the timeout and rebuilding the result statement.
+        state: Unused executor state.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any asyncpg, timeout, transport, or SQLSTATE-bearing error the statement raises.
+    """
+    _ = state
+    timeout = _cache_hit_timeout(statement_config)
+    compiled_sql = cached.compiled_sql
+    args: Any = (
+        params if isinstance(params, (tuple, list)) else tuple(params.values()) if isinstance(params, dict) else ()
+    )
+    try:
+        if cached.operation_profile.returns_rows:
+            records = (
+                await connection.fetch(compiled_sql, *args, timeout=timeout)
+                if timeout is not None
+                else await connection.fetch(compiled_sql, *args)
+            )
+            data, column_names = collect_rows(records)
+            return SQLResult.create_cached_select(
+                sql,
+                statement_config,
+                cached.processed_state,
+                compiled_sql,
+                params,
+                data,
+                column_names,
+                len(data),
+                "record",
+                None,
+            )
+        status = (
+            await connection.execute(compiled_sql, *args, timeout=timeout)
+            if timeout is not None
+            else await connection.execute(compiled_sql, *args)
+        )
+        return DMLResult(cached.operation_type, parse_status(status))
+    except Exception as exc:
+        if isinstance(exc, SQLSpecError):
+            raise
+        if (
+            isinstance(exc, (AsyncpgPostgresError, TimeoutError, OSError))
+            or hasattr(exc, "sqlstate")
+            or (asyncpg is not None and isinstance(exc, getattr(asyncpg, "InterfaceError", ())))
+        ):
+            mapped_error = create_mapped_exception(exc)
+            mapped_error.__cause__ = exc
+            raise mapped_error from exc
+        raise
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
