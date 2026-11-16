@@ -12,8 +12,10 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from sqlglot import exp
 
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -35,18 +37,20 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
-from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error
+from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.compiler import OperationType
 
 _T = TypeVar("_T")
 
 __all__ = (
     "JULIAN_EPOCH",
+    "ROWID_SAFE_OPERATIONS",
     "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "AiosqliteStreamSource",
@@ -66,6 +70,7 @@ __all__ = (
     "end_transaction",
     "execute_and_resolve_metadata",
     "execute_and_resolve_rowcount",
+    "execute_cache_hit",
     "execute_fetchall_with_description",
     "execute_fetchall_with_metadata",
     "execute_many_on_worker_thread",
@@ -96,6 +101,7 @@ _EXTENSION_PRAGMA_PROFILE = (
 )
 
 JULIAN_EPOCH = 2440587.5
+ROWID_SAFE_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"})
 SECONDS_PER_DAY = 86400.0
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
@@ -220,6 +226,73 @@ def execute_and_resolve_rowcount(connection: "AiosqliteConnection", sql: str, pa
     """Execute a statement and resolve rowcount on the worker thread."""
     rowcount, _last_inserted_id = _execute_and_resolve_metadata(connection, sql, parameters, "COMMAND", None, {})
     return rowcount
+
+
+async def execute_cache_hit(
+    connection: "AiosqliteConnection",
+    sql: str,
+    params: Any,
+    cached: "CachedQuery",
+    statement_config: "StatementConfig",
+    rowid_target_cache: "dict[tuple[str | None, str], bool]",
+) -> "SQLResult":
+    """Execute a cached statement on the aiosqlite worker thread and build its result.
+
+    Args:
+        connection: aiosqlite connection to execute on.
+        sql: Raw SQL text the caller passed.
+        params: Parameters the caller passed, already valid for the compiled SQL.
+        cached: Cached compilation of ``sql``.
+        statement_config: Statement configuration the result uses to rebuild its statement.
+        rowid_target_cache: Driver-local rowid eligibility cache, cleared when the statement can change schema.
+
+    Returns:
+        The statement result.
+
+    Raises:
+        SQLSpecError: Mapped from any SQLite error the statement raises.
+    """
+    operation_type = cached.operation_type
+    if operation_type not in ROWID_SAFE_OPERATIONS:
+        rowid_target_cache.clear()
+    try:
+        if not cached.operation_profile.returns_rows:
+            affected_rows, dml_last_inserted_id = await run_on_worker_thread(
+                connection,
+                _execute_and_resolve_metadata,
+                connection,
+                cached.compiled_sql,
+                params,
+                operation_type,
+                cached.processed_state.parsed_expression,
+                rowid_target_cache,
+            )
+            return DMLResult(operation_type, affected_rows, dml_last_inserted_id)
+        fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
+            connection,
+            _execute_fetchall_with_metadata,
+            connection,
+            cached.compiled_sql,
+            params,
+            operation_type,
+            cached.processed_state.parsed_expression,
+            rowid_target_cache,
+        )
+    except (aiosqlite.Error, sqlite3.Error) as exc:
+        raise create_mapped_exception(exc) from exc
+    data, column_names, row_count = collect_rows(fetched_data, description)
+    return SQLResult.create_cached_select(
+        sql,
+        statement_config,
+        cached.processed_state,
+        cached.compiled_sql,
+        params,
+        data,
+        column_names,
+        row_count,
+        resolve_row_format(data),
+        last_inserted_id,
+    )
 
 
 def normalize_lastrowid(cursor: Any, operation_type: "OperationType", rowcount: int) -> "int | None":

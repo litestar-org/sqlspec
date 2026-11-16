@@ -46,7 +46,7 @@ from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.parameters._declared import ParameterDeclaration
 from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
 from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import _callable_cache_key, _check_declared_parameters
+from sqlspec.driver._common import _callable_cache_key, _check_declared_parameters, run_cached_execution
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.observability import LoggingConfig, StatementEvent
@@ -402,7 +402,7 @@ def test_cached_execution_named_style_sets_needs_rebind(sqlite_sync_driver: Any,
 
     monkeypatch.setattr(sqlite_sync_driver, "stmt_cache_rebind", _fake_rebind)
 
-    result = sqlite_sync_driver._cached_execution("SELECT :id", (1,))
+    result = run_cached_execution(sqlite_sync_driver, "SELECT :id", (1,))
 
     assert result is not None
     assert called is True
@@ -413,11 +413,11 @@ async def test_async_execute_uses_fast_path_when_eligible(aiosqlite_async_driver
     sentinel = object()
     called: dict[str, object] = {}
 
-    async def _fake_try(statement: str, params: tuple[Any, ...] | list[Any]) -> object:
+    async def _fake_try(driver: Any, statement: str, params: tuple[Any, ...] | list[Any]) -> object:
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(aiosqlite_async_driver, "_cached_execution", _fake_try)
+    monkeypatch.setattr("sqlspec.driver._async.run_cached_execution", _fake_try)
     aiosqlite_async_driver._stmt_cache_enabled = True
 
     result = await aiosqlite_async_driver.execute("SELECT ?", (1,))
@@ -431,11 +431,11 @@ async def test_async_execute_uses_fast_path_with_kwargs_payload(aiosqlite_async_
     sentinel = object()
     called: dict[str, object] = {}
 
-    async def _fake_try(statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
+    async def _fake_try(driver: Any, statement: str, params: tuple[Any, ...] | list[Any] | dict[str, Any]) -> object:
         called["args"] = (statement, params)
         return sentinel
 
-    monkeypatch.setattr(aiosqlite_async_driver, "_cached_execution", _fake_try)
+    monkeypatch.setattr("sqlspec.driver._async.run_cached_execution", _fake_try)
     aiosqlite_async_driver._stmt_cache_enabled = True
 
     result = await aiosqlite_async_driver.execute("SELECT :id", id=1)
@@ -450,12 +450,12 @@ async def test_async_execute_skips_fast_path_with_statement_config_override(
 ) -> None:
     called = False
 
-    async def _fake_try(statement: str, params: tuple[Any, ...] | list[Any]) -> object:
+    async def _fake_try(driver: Any, statement: str, params: tuple[Any, ...] | list[Any]) -> object:
         nonlocal called
         called = True
         return object()
 
-    monkeypatch.setattr(aiosqlite_async_driver, "_cached_execution", _fake_try)
+    monkeypatch.setattr("sqlspec.driver._async.run_cached_execution", _fake_try)
     aiosqlite_async_driver._stmt_cache_enabled = True
 
     statement_config = aiosqlite_async_driver.statement_config.replace()
@@ -1012,7 +1012,7 @@ def test_cache_statement_command_not_cached(sqlite_sync_driver: Any) -> None:
 
 
 def test_fast_path_shapes_sync(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
-    """Parameterless and scalar/varargs positional calls route through _cached_execution while StatementFilter bypasses it."""
+    """Parameterless and scalar/varargs positional calls route through the statement cache while StatementFilter bypasses it."""
     sqlite_sync_driver._stmt_cache_enabled = True
     sqlite_sync_driver.execute("CREATE TABLE t_shapes (id INTEGER, label TEXT)")
     sqlite_sync_driver.execute("INSERT INTO t_shapes (id, label) VALUES (?, ?)", (1, "one"))
@@ -1065,19 +1065,19 @@ def test_fast_path_shapes_sync(sqlite_sync_driver: Any, monkeypatch: Any) -> Non
 
 @pytest.mark.anyio
 async def test_fast_path_shapes_async(aiosqlite_async_driver: Any, monkeypatch: Any) -> None:
-    """Async parameterless and scalar/varargs positional calls route through _cached_execution while StatementFilter bypasses it."""
+    """Async parameterless and scalar/varargs positional calls route through the statement cache while StatementFilter bypasses it."""
     aiosqlite_async_driver._stmt_cache_enabled = True
     await aiosqlite_async_driver.execute("CREATE TABLE t_shapes (id INTEGER, label TEXT)")
     await aiosqlite_async_driver.execute("INSERT INTO t_shapes (id, label) VALUES (?, ?)", (1, "one"))
 
     cache_hits: list[str] = []
-    original_hit = aiosqlite_async_driver._execute_cache_hit
+    original_hit = aiosqlite_async_driver._cache_hit_executor
 
-    async def tracked_hit(sql: str, params: Any, cached: CachedQuery) -> Any:
+    async def tracked_hit(connection: Any, sql: str, params: Any, cached: CachedQuery, config: Any, state: Any) -> Any:
         cache_hits.append(sql)
-        return await original_hit(sql, params, cached)
+        return await original_hit(connection, sql, params, cached, config, state)
 
-    monkeypatch.setattr(aiosqlite_async_driver, "_execute_cache_hit", tracked_hit)
+    monkeypatch.setattr(aiosqlite_async_driver, "_cache_hit_executor", tracked_hit)
 
     r1_no_param = await aiosqlite_async_driver.execute("SELECT 1 AS v")
     r2_no_param = await aiosqlite_async_driver.execute("SELECT 1 AS v")

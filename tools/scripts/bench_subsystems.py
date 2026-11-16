@@ -662,7 +662,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     from sqlspec.core import ParameterDeclaration
     from sqlspec.core.result._base import SQLResult
     from sqlspec.core.statement import SQL
-    from sqlspec.driver._common import _check_declared_parameters
+    from sqlspec.driver._common import _check_declared_parameters, run_cached_execution
     from sqlspec.storage.pipeline import SyncStoragePipeline, _decode_arrow_payload, _encode_row_payload
     from sqlspec.storage.registry import StorageRegistry
     from sqlspec.typing import Empty
@@ -784,7 +784,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     session.execute("INSERT INTO test (value) VALUES (?)", ("cache_prime2",))
 
     def bench_cache_execution_miss() -> None:
-        session._cached_execution("INSERT INTO unique_table (col) VALUES (?)", ("val",))
+        run_cached_execution(session, "INSERT INTO unique_table (col) VALUES (?)", ("val",))
 
     benchmarks.append(
         SubsystemBenchmark(
@@ -796,7 +796,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     )
 
     def bench_cached_execution() -> None:
-        session._cached_execution("INSERT INTO test (value) VALUES (?)", ("bench_val",))
+        run_cached_execution(session, "INSERT INTO test (value) VALUES (?)", ("bench_val",))
 
     benchmarks.append(
         SubsystemBenchmark(

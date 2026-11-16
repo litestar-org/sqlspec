@@ -12,6 +12,7 @@ from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCurs
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import (
+    ROWID_SAFE_OPERATIONS,
     AiosqliteStreamSource,
     build_insert_statement,
     collect_rows,
@@ -20,6 +21,7 @@ from sqlspec.adapters.aiosqlite.core import (
     driver_profile,
     end_transaction,
     execute_and_resolve_metadata,
+    execute_cache_hit,
     execute_fetchall_with_metadata,
     execute_many_on_worker_thread,
     format_identifier,
@@ -96,6 +98,8 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AiosqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
+        self._cache_hit_executor = execute_cache_hit
+        self._cache_hit_state = self._rowid_target_cache
 
     @property
     def data_dictionary(self) -> "AiosqliteDataDictionary":
@@ -377,7 +381,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
-        if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
+        if operation_type not in ROWID_SAFE_OPERATIONS:
             self._rowid_target_cache.clear()
 
     def _connection_in_transaction(self) -> bool:

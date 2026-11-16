@@ -383,6 +383,8 @@ def execute_cache_hit(
         if not cached.operation_profile.returns_rows:
             rowcount = cursor.rowcount
             affected_rows: int = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+            if operation_type != "INSERT" or affected_rows == 0:
+                return DMLResult(operation_type, affected_rows, None)
             return DMLResult(
                 operation_type,
                 affected_rows,

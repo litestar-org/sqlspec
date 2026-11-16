@@ -47,6 +47,7 @@ from sqlspec.driver._common import (
     describe_stack_statement,
     handle_single_row_error,
     operation_requires_transaction,
+    run_cached_execution,
     validate_savepoint_name,
 )
 from sqlspec.driver._exception_handler import _run_with_async_exception_handler
@@ -1871,29 +1872,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             cached=cached,
         )
 
-    async def _cached_execution(
-        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
-    ) -> "SQLResult | None":
-        """Attempt fast-path execution for cached query (async).
-
-        Args:
-            statement: Raw SQL string.
-            params: Query parameters.
-
-        Returns:
-            SQLResult if cache hit and execution succeeds, None otherwise.
-        """
-        if self._auto_begin_on_write and self._stmt_cache_enabled:
-            await self._ensure_transaction_for_cached_sql(statement, params)
-        result = super()._cached_execution(statement, params)
-        if result is None:
-            return None
-        return await cast("Awaitable[SQLResult | None]", result)
-
     async def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
         """Execute pre-compiled query via fast path (async).
 
-        The statement is already compiled by _cached_execution, so dispatch_execute
+        The statement is already compiled by run_cached_execution, so dispatch_execute
         will hit the fast path in _compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
@@ -1944,9 +1926,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             and isinstance(statement, str)
             and fast_params is not None
         ):
-            fast_result = await self._cached_execution(statement, fast_params)
-            if fast_result is not None:
-                return fast_result
+            if self._auto_begin_on_write:
+                await self._ensure_transaction_for_cached_sql(statement, fast_params)
+            pending_result = run_cached_execution(self, statement, fast_params)
+            if pending_result is not None:
+                fast_result = await cast("Awaitable[SQLResult | None]", pending_result)
+                if fast_result is not None:
+                    return fast_result
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )

@@ -1202,14 +1202,22 @@ class QueryCache:
             return len(self._cache)
 
     def get(self, sql: str) -> "CachedQuery | None":
-        with self._lock:
-            entry = self._cache.get(sql)
-            if entry is None:
-                self._stats.record_miss()
-                return None
-            self._cache.move_to_end(sql)
-            self._stats.record_hit()
+        """Return the cached entry for ``sql`` and mark it most recently used.
+
+        Reads take no lock: the lookup and the recency update are each a single atomic
+        ``OrderedDict`` operation, and an entry evicted between the two is still returned.
+        """
+        cache = self._cache
+        entry = cache.get(sql)
+        if entry is None:
+            self._stats.record_miss()
+            return None
+        self._stats.record_hit()
+        try:
+            cache.move_to_end(sql)
+        except KeyError:
             return entry
+        return entry
 
     def set(self, sql: str, entry: "CachedQuery") -> None:
         if self._max_size <= 0:

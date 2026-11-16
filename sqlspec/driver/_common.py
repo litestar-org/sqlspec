@@ -2566,21 +2566,6 @@ class CommonDriverAttributesMixin:
             db_system=self.observability_db_system,
         )
 
-    def _cached_execution(
-        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
-    ) -> "SQLResult | Awaitable[SQLResult | None] | None":
-        """Attempt cached execution for query.
-
-        Args:
-            statement: Raw SQL string.
-            params: Query parameters.
-
-        Returns:
-            SQLResult (sync) or Awaitable[SQLResult] (async) if cache hit,
-            None if cache miss.
-        """
-        return run_cached_execution(self, statement, params)
-
     def _execute_cached_statement(self, statement: "SQL") -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
 
