@@ -180,6 +180,8 @@ important operational fixes.
 * ADK stores on SQL Server, Sybase ASE, SQL Anywhere, and Teradata match session and owner keys case- and accent-sensitively.
 * ADBC SQLite and DuckDB staged loads (`stage_table=True` or `conflict_keys`) write rows to the target table.
 * Optional extras declare minimum supported versions.
+* Compiled wheels no longer lose or replace an error when async cleanup runs while it is being handled. A failed SQLite extension load during aiosqlite connection setup now raises instead of being ignored, and failed async row streams, pool checkouts, transaction commits, and migrations raise the original error.
+* Cancelling a task that is waiting on an async session, cursor, or storage write in a compiled wheel now cancels it. An aiosqlite event channel `unsubscribe` no longer hangs.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 

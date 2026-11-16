@@ -454,9 +454,10 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
         entered: AsyncDriverT | None = None
         bound_state: _TransactionState | None = None
         try:
-            entered = await stack.enter_async_context(service.provide_session())
-            await stack.enter_async_context(entered.transaction())
-            bound_state, token = _bind_transaction(key, entered)
+            session = await stack.enter_async_context(service.provide_session())
+            entered = session
+            await stack.enter_async_context(session.transaction())
+            bound_state, token = _bind_transaction(key, session)
             stack.callback(_release_transaction, bound_state, token)
         except BaseException as exc:
             enter_error = exc
