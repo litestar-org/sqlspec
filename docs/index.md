@@ -25,7 +25,7 @@ hide:
 
 ## Install
 
-Install `sqlspec` with your preferred package manager. Python's built-in `sqlite3` adapter works immediately with zero extra driver packages:
+Install `sqlspec` to start querying with Python's built-in SQLite driver:
 
 === "uv"
 
@@ -51,31 +51,8 @@ Install `sqlspec` with your preferred package manager. Python's built-in `sqlite
     poetry add sqlspec
     ```
 
-Add optional database driver, schema validation, or framework extras when connecting to external engines:
-
-=== "uv"
-
-    ```bash
-    uv add "sqlspec[asyncpg,msgspec,litestar]"
-    ```
-
-=== "pip"
-
-    ```bash
-    pip install "sqlspec[asyncpg,msgspec,litestar]"
-    ```
-
-=== "pdm"
-
-    ```bash
-    pdm add "sqlspec[asyncpg,msgspec,litestar]"
-    ```
-
-=== "poetry"
-
-    ```bash
-    poetry add "sqlspec[asyncpg,msgspec,litestar]"
-    ```
+For other databases or framework plugins, follow the setup instructions in
+[Databases](databases/index.md) or [Integrations](integrations/index.md).
 
 ## First Query
 

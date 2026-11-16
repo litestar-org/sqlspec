@@ -2,6 +2,22 @@
 
 SQLSpec bridges relational and analytical workloads with first-class **Apache Arrow** query results (`select_to_arrow`), bulk ingestion from Arrow tables, object storage, and Python records (`load_from_arrow`, `load_from_storage`, `load_from_records`), streaming `RecordBatch` pipelines (`read_arrow_batches` / `write_arrow_batches`), pluggable object storage (`StorageRegistry` over local paths, `obstore`, and `fsspec`), and schema-aware JSONL table fixtures.
 
+## Required Packages
+
+Arrow operations require `pyarrow`. Some adapters, including DuckDB, Snowflake,
+ADBC, and Arrow ODBC, include it in their extras. For other adapters, install
+`pyarrow` alongside the driver extra.
+
+| Feature | Packages |
+| --- | --- |
+| Polars conversion | `sqlspec[polars]` installs `polars` and `pyarrow` |
+| Pandas conversion | `sqlspec[pandas]` installs `pandas` and `pyarrow` |
+| Object storage via obstore | `sqlspec[obstore]` |
+| Filesystems via fsspec | `sqlspec[fsspec]`, plus the filesystem's protocol package when required |
+
+Local file storage needs no storage-backend extra. Arrow file formats still
+require `pyarrow`. Add only the backend and conversion packages you use.
+
 ```mermaid
 flowchart LR
     DB[("Database Session")] <-->|"select_to_arrow / load_from_arrow"| Arrow["Arrow Table / RecordBatch Stream"]

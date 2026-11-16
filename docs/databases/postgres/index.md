@@ -14,37 +14,8 @@ For Google Cloud Managed Databases, add `sqlspec[cloud-sql]` (`cloud-sql-python-
 
 ## Installation & Quickstart
 
-=== "uv"
-
-    ```bash
-    uv add "sqlspec[asyncpg]"
-    # or: uv add "sqlspec[psycopg]"
-    # or: uv add "sqlspec[psqlpy]"
-    ```
-
-=== "pip"
-
-    ```bash
-    pip install "sqlspec[asyncpg]"
-    # or: pip install "sqlspec[psycopg]"
-    # or: pip install "sqlspec[psqlpy]"
-    ```
-
-=== "pdm"
-
-    ```bash
-    pdm add "sqlspec[asyncpg]"
-    # or: pdm add "sqlspec[psycopg]"
-    # or: pdm add "sqlspec[psqlpy]"
-    ```
-
-=== "poetry"
-
-    ```bash
-    poetry add "sqlspec[asyncpg]"
-    # or: poetry add "sqlspec[psycopg]"
-    # or: poetry add "sqlspec[psqlpy]"
-    ```
+Install the driver you chose using its guide: [asyncpg](asyncpg.md#installation-quickstart),
+[psycopg](psycopg.md#installation-quickstart), or [psqlpy](psqlpy.md#installation-quickstart).
 
 === "asyncpg (Async)"
 

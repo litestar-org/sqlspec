@@ -41,6 +41,19 @@ See [Routing APIs](routing.md) for scoped intent, primary pins, and request midd
 
 ## Schema, Serialization & Identifiers
 
+| Extra | Optional dependency | Purpose |
+| --- | --- | --- |
+| `msgspec` | `msgspec` | JSON encoding/decoding and structured row mapping |
+| `orjson` | `orjson` | Alternative JSON serializer |
+| `uuid` | `uuid-utils>=0.17.0` | Accelerated UUID generation, including UUIDv6 and UUIDv7 |
+| `nanoid` | `fastnanoid>=0.4.1` | NanoID generation |
+
+Install the relevant extra as `sqlspec[extra]`. JSON serialization selects
+`msgspec`, then `orjson`, then the standard library, depending on what is installed.
+Without `uuid-utils`, `uuid6()` and `uuid7()` warn and return UUIDv4 values.
+Without `fastnanoid`, `nanoid()` warns and returns a UUID hex string instead.
+For model-library choices, see [Schema Mapping](../learn/schema-mapping.md).
+
 ::: sqlspec.utils.schema.to_schema
     options:
       heading_level: 4

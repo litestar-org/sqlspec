@@ -72,32 +72,9 @@ async def health(request):
 
 ## Installation
 
-=== "uv"
-
-    ```bash
-    uv add "sqlspec[asyncpg,litestar]"
-    ```
-
-=== "pip"
-
-    ```bash
-    pip install "sqlspec[asyncpg,litestar]"
-    ```
-
-=== "pdm"
-
-    ```bash
-    pdm add "sqlspec[asyncpg,litestar]"
-    ```
-
-=== "poetry"
-
-    ```bash
-    poetry add "sqlspec[asyncpg,litestar]"
-    ```
-
-Replace `litestar` with `fastapi`, `starlette`, `flask`, or `sanic` to match
-your web framework. Tenant strategies are available on the `asyncpg`,
+Install the extra for your [framework integration](../../integrations/index.md)
+and your chosen [database adapter](../../databases/index.md). The examples use
+PostgreSQL with `asyncpg`. Tenant strategies are available on the `asyncpg`,
 `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `oracledb`,
 `mssql_python`, `pymssql`, `db2`, and `snowflake` adapters.
 

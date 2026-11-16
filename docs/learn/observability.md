@@ -54,7 +54,13 @@ Literal redaction is dialect-aware: double-quoted strings are masked for MySQL, 
 
 ## OpenTelemetry, Prometheus, and Cloud Log Formatters
 
-Enable OpenTelemetry spans (`opentelemetry` extra) and Prometheus counters/histograms (`prometheus` extra) declaratively through `extension_config` on any adapter config, or format structured logs for Google Cloud Logging and AWS CloudWatch:
+Install `sqlspec[opentelemetry]` for spans or `sqlspec[prometheus]` for metrics.
+The extras supply `opentelemetry-api` and `opentelemetry-instrumentation`, or
+`prometheus-client`, respectively. Add your chosen OpenTelemetry SDK and exporter
+when exporting spans. Custom statement observers and cloud log formatters need
+no telemetry extra.
+
+Enable spans and counters/histograms through `extension_config` on any adapter config:
 
 ```python
 from sqlspec.adapters.sqlite import SqliteConfig

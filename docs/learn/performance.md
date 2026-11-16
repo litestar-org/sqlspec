@@ -88,7 +88,10 @@ clear_all_caches()
 
 SQLSpec compiles its hot-path modules (across `core`, `driver`, `builder`, `dialects`, `migrations`, `data_dictionary`, `storage`, `service`, `observability`, `utils`, `extensions`, and each database adapter) to native C extensions with `mypyc`.
 
-Install the `mypyc` and `performance` extras in production deployments so SQLGlot also uses its compiled C tokenizer/parser (`sqlglot[c]`) alongside `msgspec`:
+Compatible precompiled wheels provide SQLSpec's native modules. The optional
+`mypyc` extra installs `sqlglot[c]`; it does not compile SQLSpec itself.
+The `performance` extra installs `msgspec` and `librt` runtime helpers.
+Combine them when your deployment needs both:
 
 === "uv"
 
