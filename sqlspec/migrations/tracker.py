@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import IntegrityError, MigrationError, SQLSpecError
+from sqlspec.exceptions import IntegrityError, MigrationError, SerializationConflictError, SQLSpecError
 from sqlspec.migrations.base import (
     _PG_RELATION_GUARD_SQL,
     BaseMigrationTracker,
@@ -1221,7 +1221,7 @@ class _SyncMigrationLockContext:
                 self._driver.execute(tracker._lease_delete_expired(self._lock_name, now_ms))
                 self._driver.execute(tracker._lease_insert(self._lock_name, owner_token, now_ms + lease_ms))
                 tracker._safe_commit(self._driver)
-            except IntegrityError:
+            except (IntegrityError, SerializationConflictError):
                 with suppress(Exception):
                     if _driver_in_transaction_sync(self._driver):
                         self._driver.rollback()
@@ -1415,12 +1415,12 @@ class _AsyncMigrationLockContext:
         lease_ms = tracker.lock_lease_seconds * _MILLISECONDS_PER_SECOND
         while True:
             now_ms = _wall_clock_ms()
-            claim_error: IntegrityError | None = None
+            claim_error: IntegrityError | SerializationConflictError | None = None
             try:
                 await self._driver.execute(tracker._lease_delete_expired(self._lock_name, now_ms))
                 await self._driver.execute(tracker._lease_insert(self._lock_name, owner_token, now_ms + lease_ms))
                 await tracker._safe_commit(self._driver)
-            except IntegrityError as exc:
+            except (IntegrityError, SerializationConflictError) as exc:
                 claim_error = exc
             if claim_error is not None:
                 with suppress(Exception):

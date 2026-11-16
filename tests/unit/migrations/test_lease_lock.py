@@ -19,7 +19,7 @@ from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgSyncDriver
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, SerializationConflictError
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
@@ -170,6 +170,34 @@ def _no_rowcount_driver(db_path: Path) -> "Iterator[_NoRowcountDuckDBDriver]":
             yield _NoRowcountDuckDBDriver(
                 connection, statement_config=config.statement_config, driver_features=config.driver_features
             )
+    finally:
+        config.close_pool()
+
+
+class _ConflictOnceDuckDBDriver(DuckDBDriver):
+    """Fails the first lease insert with a serialization conflict, like a concurrent CockroachDB claim."""
+
+    conflicts = 0
+
+    def execute(self, statement: Any, /, *parameters: Any, **kwargs: Any) -> Any:
+        if self.conflicts == 0 and "INSERT INTO" in str(getattr(statement, "sql", statement)).upper():
+            type(self).conflicts += 1
+            msg = "restart transaction"
+            raise SerializationConflictError(msg)
+        return super().execute(statement, *parameters, **kwargs)
+
+
+def test_lease_claim_retries_after_serialization_conflict(tmp_path: Path) -> None:
+    config = _duckdb_config(tmp_path / "conflict.duckdb")
+    try:
+        with config.provide_connection() as connection:
+            driver = _ConflictOnceDuckDBDriver(
+                connection, statement_config=config.statement_config, driver_features=config.driver_features
+            )
+            tracker = SyncMigrationTracker()
+            with tracker.acquire_lock(driver, timeout_seconds=5):
+                assert len(driver.select("SELECT lock_name FROM ddl_migrations_lock")) == 1
+        assert _ConflictOnceDuckDBDriver.conflicts == 1
     finally:
         config.close_pool()
 

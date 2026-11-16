@@ -182,6 +182,7 @@ important operational fixes.
 * Optional extras declare minimum supported versions.
 * Compiled wheels no longer lose or replace an error when async cleanup runs while it is being handled. A failed SQLite extension load during aiosqlite connection setup now raises instead of being ignored, and failed async row streams, pool checkouts, transaction commits, and migrations raise the original error.
 * Cancelling a task that is waiting on an async session, cursor, or storage write in a compiled wheel now cancels it. An aiosqlite event channel `unsubscribe` no longer hangs.
+* Concurrent migrators on CockroachDB wait for the migration lock when the claim hits a serialization conflict, instead of failing with `SerializationConflictError`.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
