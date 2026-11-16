@@ -531,23 +531,27 @@ def test_split_nesting_overflow_raises_parsing_error(dialect: str) -> None:
         split_sql_script(script, dialect)
 
 
+def _fastest_split_seconds(script: str, dialect: str) -> float:
+    durations: list[float] = []
+    for _ in range(5):
+        started = time.perf_counter()
+        statements = split_sql_script(script, dialect)
+        durations.append(time.perf_counter() - started)
+        assert len(statements) == 1
+    return min(durations)
+
+
 @pytest.mark.parametrize(
-    ("script", "dialect"),
-    [
-        ("[ " * 16000, "tsql"),
-        ("q'[ " * 16000, "oracle"),
-        ('"x ' * 16000, "tsql"),
-        ("`x " * 16000, "mysql"),
-        ("'\\" * 16000, "mysql"),
-    ],
+    ("token", "dialect"),
+    [("[ ", "tsql"), ("q'[ ", "oracle"), ('"x ', "tsql"), ("`x ", "mysql"), ("'\\", "mysql")],
     ids=["tsql-bracket", "oracle-qstring", "tsql-dquote", "mysql-backtick", "mysql-backslash"],
 )
-def test_split_unterminated_tokens_linear(script: str, dialect: str) -> None:
-    started = time.perf_counter()
-    statements = split_sql_script(script, dialect)
+def test_split_unterminated_tokens_linear(token: str, dialect: str) -> None:
+    """Splitting four times as many unterminated tokens takes about four times as long, not sixteen."""
+    small = _fastest_split_seconds(token * 4000, dialect)
+    large = _fastest_split_seconds(token * 16000, dialect)
 
-    assert time.perf_counter() - started < 0.5
-    assert len(statements) == 1
+    assert large < max(small, 0.0005) * 10
 
 
 def test_split_bracket_identifier_with_semicolon() -> None:
