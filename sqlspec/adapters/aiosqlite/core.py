@@ -276,6 +276,7 @@ async def execute_cache_hit(
                 operation_type,
                 cached.processed_state.parsed_expression,
                 rowid_target_cache,
+                cached.compiled_sql,
             )
             return DMLResult(operation_type, affected_rows, dml_last_inserted_id)
         fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
@@ -287,6 +288,7 @@ async def execute_cache_hit(
             operation_type,
             cached.processed_state.parsed_expression,
             rowid_target_cache,
+            cached.compiled_sql,
         )
     except (aiosqlite.Error, sqlite3.Error) as exc:
         mapped_error = create_mapped_exception(exc)
@@ -331,6 +333,7 @@ def resolve_lastrowid(
     rowcount: int,
     expression: Any,
     eligibility_cache: "dict[Any, bool]",
+    compiled_sql: "str | None" = None,
 ) -> "int | None":
     """Resolve lastrowid only when compiled target metadata proves rowid eligibility.
 
@@ -344,13 +347,34 @@ def resolve_lastrowid(
         operation_type: Compiled statement operation type.
         rowcount: Normalized affected-row count.
         expression: Compiled SQLGlot expression.
-        eligibility_cache: Driver-local eligibility cache keyed by ``(schema, table)`` target.
+        eligibility_cache: Driver-local eligibility cache, keyed by ``(schema, table)`` target and
+            by compiled SQL text.
+        compiled_sql: Optional compiled SQL text used to key eligibility lookups without AST walks.
+            Text that ends with a comment is looked up by target only, so per-request comments
+            do not add entries.
 
     Returns:
         Integer lastrowid when the current target is a rowid table, otherwise None.
     """
     if operation_type != "INSERT" or rowcount <= 0:
         return None
+    if compiled_sql is None or compiled_sql.endswith("*/"):
+        supports_rowid = _target_rowid_eligibility(connection, expression, eligibility_cache)
+    else:
+        supports_rowid = eligibility_cache.get(compiled_sql)
+        if supports_rowid is None:
+            supports_rowid = _target_rowid_eligibility(connection, expression, eligibility_cache)
+            if supports_rowid is not None:
+                if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
+                    eligibility_cache.clear()
+                eligibility_cache[compiled_sql] = supports_rowid
+    if not supports_rowid:
+        return None
+    return normalize_lastrowid(cursor, operation_type, rowcount)
+
+
+def _target_rowid_eligibility(connection: Any, expression: Any, eligibility_cache: "dict[Any, bool]") -> "bool | None":
+    """Return whether the INSERT target of ``expression`` is a rowid table, or None without a target."""
     target = _resolve_insert_target(expression)
     if target is None:
         return None
@@ -360,9 +384,7 @@ def resolve_lastrowid(
         if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
             eligibility_cache.clear()
         eligibility_cache[target] = supports_rowid
-    if not supports_rowid:
-        return None
-    return normalize_lastrowid(cursor, operation_type, rowcount)
+    return supports_rowid
 
 
 def format_identifier(identifier: str) -> str:
@@ -835,6 +857,7 @@ def _execute_fetchall_with_metadata(
     operation_type: "OperationType",
     expression: Any,
     eligibility_cache: "dict[Any, bool]",
+    cache_key: "str | None" = None,
 ) -> "tuple[list[Any], Any, int, int | None]":
     """Execute a query and return rows plus execution metadata on the worker thread."""
     raw_connection = connection._conn
@@ -844,7 +867,7 @@ def _execute_fetchall_with_metadata(
         rowcount = cursor.rowcount if isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
         effective_rowcount = rowcount or (len(fetched_data) if operation_type == "INSERT" else 0)
         last_inserted_id = resolve_lastrowid(
-            raw_connection, cursor, operation_type, effective_rowcount, expression, eligibility_cache
+            raw_connection, cursor, operation_type, effective_rowcount, expression, eligibility_cache, cache_key
         )
         return fetched_data, cursor.description, rowcount, last_inserted_id
     finally:
@@ -859,6 +882,7 @@ def _execute_and_resolve_metadata(
     operation_type: "OperationType",
     expression: Any,
     eligibility_cache: "dict[Any, bool]",
+    cache_key: "str | None" = None,
 ) -> "tuple[int, int | None]":
     """Execute a statement and resolve rowcount and lastrowid on the worker thread."""
     raw_connection = connection._conn
@@ -868,7 +892,7 @@ def _execute_and_resolve_metadata(
             cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
         )
         return rowcount, resolve_lastrowid(
-            raw_connection, cursor, operation_type, rowcount, expression, eligibility_cache
+            raw_connection, cursor, operation_type, rowcount, expression, eligibility_cache, cache_key
         )
     finally:
         with contextlib.suppress(Exception):

@@ -310,6 +310,7 @@ def resolve_lastrowid(
     rowcount: int,
     expression: Any,
     eligibility_cache: "dict[Any, bool]",
+    compiled_sql: "str | None" = None,
 ) -> "int | None":
     """Resolve lastrowid only when compiled target metadata proves rowid eligibility.
 
@@ -323,13 +324,34 @@ def resolve_lastrowid(
         operation_type: Compiled statement operation type.
         rowcount: Normalized affected-row count.
         expression: Compiled SQLGlot expression.
-        eligibility_cache: Driver-local eligibility cache keyed by ``(schema, table)`` target.
+        eligibility_cache: Driver-local eligibility cache, keyed by ``(schema, table)`` target and
+            by compiled SQL text.
+        compiled_sql: Optional compiled SQL text used to key eligibility lookups without AST walks.
+            Text that ends with a comment is looked up by target only, so per-request comments
+            do not add entries.
 
     Returns:
         Integer lastrowid when the current target is a rowid table, otherwise None.
     """
     if operation_type != "INSERT" or rowcount <= 0:
         return None
+    if compiled_sql is None or compiled_sql.endswith("*/"):
+        supports_rowid = _target_rowid_eligibility(connection, expression, eligibility_cache)
+    else:
+        supports_rowid = eligibility_cache.get(compiled_sql)
+        if supports_rowid is None:
+            supports_rowid = _target_rowid_eligibility(connection, expression, eligibility_cache)
+            if supports_rowid is not None:
+                if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
+                    eligibility_cache.clear()
+                eligibility_cache[compiled_sql] = supports_rowid
+    if not supports_rowid:
+        return None
+    return normalize_lastrowid(cursor, operation_type, rowcount)
+
+
+def _target_rowid_eligibility(connection: Any, expression: Any, eligibility_cache: "dict[Any, bool]") -> "bool | None":
+    """Return whether the INSERT target of ``expression`` is a rowid table, or None without a target."""
     target = _resolve_insert_target(expression)
     if target is None:
         return None
@@ -339,9 +361,7 @@ def resolve_lastrowid(
         if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
             eligibility_cache.clear()
         eligibility_cache[target] = supports_rowid
-    if not supports_rowid:
-        return None
-    return normalize_lastrowid(cursor, operation_type, rowcount)
+    return supports_rowid
 
 
 def _close_cursor(cursor: Any) -> None:
@@ -404,6 +424,7 @@ def execute_cache_hit(
                     affected_rows,
                     cached.processed_state.parsed_expression,
                     rowid_target_cache,
+                    cached.compiled_sql,
                 ),
             )
         fetched_data: list[Any] = cursor.fetchall()
@@ -417,6 +438,7 @@ def execute_cache_hit(
                 effective_rowcount,
                 cached.processed_state.parsed_expression,
                 rowid_target_cache,
+                cached.compiled_sql,
             )
         description = cursor.description
         column_names: list[str] = [column[0] for column in description] if description else []
