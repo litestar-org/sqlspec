@@ -1837,7 +1837,9 @@ class CommonDriverAttributesMixin:
         "_cache_hit_executor",
         "_cache_hit_state",
         "_cache_holder",
+        "_has_active_observability",
         "_observability",
+        "_observability_generation",
         "_open_streams",
         "_pending_statement_profile",
         "_processed_state_pool",
@@ -1903,6 +1905,8 @@ class CommonDriverAttributesMixin:
             | None
         ) = None
         self._cache_hit_state: Any = None
+        self._has_active_observability = False
+        self._observability_generation = -1
         self._statement_pool: ObjectPool[SQL] | None = None
         self._processed_state_pool: ObjectPool[ProcessedState] | None = None
         self._refresh_statement_cache_state()
@@ -2361,6 +2365,9 @@ class CommonDriverAttributesMixin:
         return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
+        runtime = self._observability
+        self._has_active_observability = runtime is not None and not runtime.is_idle
+        self._observability_generation = runtime.hook_generation if runtime is not None else -1
         self._stmt_cache_enabled = bool(
             self.connection is not _CLOSED_CONNECTION
             and self._stmt_cache_max_size > 0
@@ -3720,6 +3727,19 @@ def cache_hit_hooks_unchanged(driver_type: type, owner: type) -> bool:
     return all(getattr(driver_type, name, None) is getattr(owner, name, None) for name in _CACHE_HIT_HOOKS)
 
 
+def _has_active_observability(driver: "CommonDriverAttributesMixin") -> bool:
+    """Return whether the driver's runtime has hooks, observers, or spans to notify.
+
+    The driver caches the answer and recomputes it when a lifecycle hook is registered on the runtime.
+    """
+    runtime = driver._observability
+    if runtime is None:
+        return False
+    if runtime.hook_generation != driver._observability_generation:
+        driver._refresh_statement_cache_state()
+    return driver._has_active_observability
+
+
 def run_cached_execution(
     driver: "CommonDriverAttributesMixin", statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
 ) -> "SQLResult | Awaitable[SQLResult | None] | None":
@@ -3758,8 +3778,7 @@ def run_cached_execution(
                     param_values, param_config.type_coercion_map, passthrough_types=passthrough
                 )
             if not needs_rebind:
-                runtime = driver._observability
-                if runtime is not None and not runtime.is_idle:
+                if _has_active_observability(driver):
                     return driver._execute_cache_hit_observed(statement, params, cached)
                 executor = driver._cache_hit_executor
                 if executor is None:
@@ -3799,8 +3818,7 @@ def run_cached_execution(
                     positional_passthrough=cached.positional_passthrough,
                     simple_wire_fast_path=False,
                 )
-        runtime = driver._observability
-        if runtime is not None and not runtime.is_idle:
+        if _has_active_observability(driver):
             return driver._execute_cache_hit_observed(statement, params, effective_cached)
         executor = driver._cache_hit_executor
         if executor is None:
@@ -3826,8 +3844,7 @@ def run_cached_execution(
     prepared = driver._cached_statement(
         statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
     )
-    runtime = driver._observability
-    if runtime is not None and not runtime.is_idle:
+    if _has_active_observability(driver):
         return driver._execute_cached_statement_observed(prepared, compiled_sql, rebound_params, cached.operation_type)
     return driver._execute_cached_statement(prepared)
 

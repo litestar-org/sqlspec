@@ -46,6 +46,7 @@ class ObservabilityRuntime:
         "bind_key",
         "config",
         "config_name",
+        "hook_generation",
         "lifecycle",
         "span_manager",
     )
@@ -75,6 +76,7 @@ class ObservabilityRuntime:
         self._db_system_cache: dict[tuple[str, str | None], str] = {}
         self._has_session_lifecycle_cached = False
         self._is_idle_cached = True
+        self.hook_generation = 0
         self._refresh_cached_flags()
 
     @property
@@ -270,6 +272,7 @@ class ObservabilityRuntime:
         """
         self.lifecycle.register_hook(event, callback)  # type: ignore[arg-type]
         self._refresh_cached_flags()
+        self.hook_generation += 1
 
     def emit_connection_create_sync(self, connection: Any) -> None:
         span = self._start_lifecycle_span("connection.create", subject=connection)
