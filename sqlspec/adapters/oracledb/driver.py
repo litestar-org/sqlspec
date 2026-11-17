@@ -89,7 +89,7 @@ from sqlspec.driver._common import (
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError, with_cause
 from sqlspec.storage._utils import import_pyarrow
 from sqlspec.utils.arrow_helpers import coerce_oracle_df_to_arrow_table
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -375,7 +375,7 @@ class _OracleAsyncArrowBatchIterator:
             if next_error is not None:
                 await self.aclose()
                 if isinstance(next_error, OracleError):
-                    raise create_mapped_exception(next_error) from next_error
+                    raise with_cause(create_mapped_exception(next_error), next_error) from next_error
                 raise next_error
             if stop_iteration:
                 await self.aclose()
@@ -601,7 +601,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         try:
             txid = method(resolved, timeout=timeout, defer_round_trip=defer_round_trip)
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._sessionless_transaction_id = cast("bytes", txid)
         return self._sessionless_transaction_id
 
@@ -619,7 +619,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         try:
             txid = method(cast("bytes", resolved), timeout=timeout, defer_round_trip=defer_round_trip)
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._sessionless_transaction_id = cast("bytes", txid)
         return self._sessionless_transaction_id
 
@@ -636,6 +636,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -919,6 +920,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -940,6 +942,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -1585,7 +1588,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
                 else:
                     yield import_pyarrow().RecordBatch.from_pylist([], schema=batch_table.schema)
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         finally:
             close_dfs = getattr(oracle_dfs, "close", None)
             if callable(close_dfs):
@@ -1610,7 +1613,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
                     batch_schema = batch_table.schema
                 record_batches.extend(batch_table.to_batches())
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         finally:
             close_dfs = getattr(oracle_dfs, "close", None)
             if callable(close_dfs):
@@ -1783,7 +1786,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         try:
             txid = await cast("Any", method)(resolved, timeout=timeout, defer_round_trip=defer_round_trip)
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._sessionless_transaction_id = cast("bytes", txid)
         return self._sessionless_transaction_id
 
@@ -1803,7 +1806,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
                 cast("bytes", resolved), timeout=timeout, defer_round_trip=defer_round_trip
             )
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._sessionless_transaction_id = cast("bytes", txid)
         return self._sessionless_transaction_id
 
@@ -1820,6 +1823,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -2105,6 +2109,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -2126,6 +2131,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -2866,7 +2872,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
                 close_dfs()
         if fetch_error is not None:
             if isinstance(fetch_error, OracleError):
-                raise create_mapped_exception(fetch_error) from fetch_error
+                raise with_cause(create_mapped_exception(fetch_error), fetch_error) from fetch_error
             raise fetch_error
         return record_batches, batch_schema
 
@@ -2952,7 +2958,9 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
                 if isinstance(pipeline_error, StackExecutionError):
                     raise pipeline_error
-                raise self._wrap_pipeline_error(pipeline_error, stack, continue_on_error) from pipeline_error
+                raise with_cause(
+                    self._wrap_pipeline_error(pipeline_error, stack, continue_on_error), pipeline_error
+                ) from pipeline_error
 
         return tuple(results)
 
@@ -3251,7 +3259,7 @@ def _fetch_dataframe_batches(
                 statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
             )
     except OracleError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 def _coerce_oracle_arrow_batch_table(oracle_df: Any, driver_features: Any, arrow_schema: "ArrowSchema | None") -> Any:

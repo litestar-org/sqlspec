@@ -47,7 +47,7 @@ from sqlspec.core.parameters._registry import register_driver_profile
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_load_from_storage_kwargs
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
-from sqlspec.exceptions import ReadOnlyTransactionError
+from sqlspec.exceptions import ReadOnlyTransactionError, with_cause
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -372,7 +372,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             with suppress(Exception):
                 self.rollback()
             self._transaction_active = False
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def run_transaction_with_retry(self, operation: "Callable[[], _T]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries.
@@ -707,7 +707,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             with suppress(Exception):
                 await self.rollback()
             self._transaction_active = False
-            raise create_mapped_exception(begin_error) from begin_error
+            raise with_cause(create_mapped_exception(begin_error), begin_error) from begin_error
 
     async def run_transaction_with_retry(self, operation: "Callable[[], Awaitable[_T]]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries.

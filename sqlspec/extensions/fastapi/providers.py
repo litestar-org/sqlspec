@@ -40,7 +40,7 @@ from sqlspec.core.filters import (
     SearchFilter,
     normalize_cursor_keys,
 )
-from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
+from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError, with_cause
 from sqlspec.utils.tenant._cursor import resolve_cursor_tenant_identity
 from sqlspec.utils.text import camelize
 
@@ -753,8 +753,11 @@ class _CursorFilterProvider:
                 keys, resolved_page_size, cursor, derived_secret, ttl=resolved_ttl, encrypted=resolved_encrypted
             )
         except InvalidCursorError as exc:
-            raise RequestValidationError(
-                errors=[{"loc": ("query", "cursor"), "msg": "Invalid pagination cursor", "type": "value_error"}]
+            raise with_cause(
+                RequestValidationError(
+                    errors=[{"loc": ("query", "cursor"), "msg": "Invalid pagination cursor", "type": "value_error"}]
+                ),
+                exc,
             ) from exc
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "_CursorFilterProvider":

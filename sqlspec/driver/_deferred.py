@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Generator
 from typing import Any, NoReturn
 
 from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, with_cause
 
 __all__ = ("DeferredAsyncSession", "raise_async_connection_required")
 
@@ -91,7 +91,7 @@ class DeferredAsyncSession:
             static = inspect.getattr_static(driver_type, name)
         except AttributeError:
             msg = f"'{driver_type.__name__}' object has no attribute '{name}'"
-            raise AttributeError(msg) from None
+            raise with_cause(AttributeError(msg), None) from None
         if name in _CONFIG_ATTRIBUTES:
             value = getattr(self._config, name, None)
             if value is not None:

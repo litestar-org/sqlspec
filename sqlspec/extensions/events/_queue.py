@@ -10,7 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast, final
 
 from sqlspec.core.statement import SQL, StatementConfig
-from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, with_cause
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
@@ -538,7 +538,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 with suppress(Exception):
                     self.nack(event_id)
             msg = f"Failed to decode claimed event {event_id!r}"
-            raise EventChannelError(msg) from exc
+            raise with_cause(EventChannelError(msg), exc) from exc
 
     def ack(self, event_id: str) -> bool:
         lease = self._take_lease(event_id)
@@ -854,7 +854,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             with suppress(Exception):
                 await self.nack(event_id)
         msg = f"Failed to decode claimed event {event_id!r}"
-        raise EventChannelError(msg) from decode_error
+        raise with_cause(EventChannelError(msg), decode_error) from decode_error
 
     async def ack(self, event_id: str) -> bool:
         lease = self._take_lease(event_id)

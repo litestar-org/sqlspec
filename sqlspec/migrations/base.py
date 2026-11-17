@@ -19,7 +19,7 @@ from sqlspec.builder._delete import Delete
 from sqlspec.builder._insert import Insert
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
-from sqlspec.exceptions import MigrationError, SQLSpecError, SquashValidationError
+from sqlspec.exceptions import MigrationError, SQLSpecError, SquashValidationError, with_cause
 from sqlspec.migrations.runner import BaseMigrationRunner, extract_replaces_versions
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
@@ -1172,7 +1172,7 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
                     f"Set extension_config['{ext_name}']['migrations_path'] to register "
                     "reconcilers shipped by another package."
                 )
-                raise MigrationError(msg) from exc
+                raise with_cause(MigrationError(msg), exc) from exc
             logger.warning(
                 "Extension '%s' is configured but '%s' is not importable; no migrations were "
                 "registered for it. Set extension_config['%s']['migrations_path'] to register "
@@ -1652,7 +1652,7 @@ def _ensure_schema_extraction_safe_sync(
         refused = _extract_catalog_rows(driver.execute(refusal_sql, parameters))
         omitted = _extract_catalog_rows(driver.execute(omissions_sql, parameters)) if omissions_sql else []
     except SQLSpecError as exc:
-        raise _extraction_check_error(label, exc) from exc
+        raise with_cause(_extraction_check_error(label, exc), exc) from exc
     _validate_schema_extraction_rows(
         refused, omitted, backend_label=label, exclude_tables=exclude_tables, use_squash_error=use_squash_error
     )
@@ -1682,7 +1682,7 @@ async def _ensure_schema_extraction_safe_async(
         refused = _extract_catalog_rows(await driver.execute(refusal_sql, parameters))
         omitted = _extract_catalog_rows(await driver.execute(omissions_sql, parameters)) if omissions_sql else []
     except SQLSpecError as exc:
-        raise _extraction_check_error(label, exc) from exc
+        raise with_cause(_extraction_check_error(label, exc), exc) from exc
     _validate_schema_extraction_rows(
         refused, omitted, backend_label=label, exclude_tables=exclude_tables, use_squash_error=use_squash_error
     )

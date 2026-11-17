@@ -24,6 +24,7 @@ from sqlspec.exceptions import (
     DatabaseConnectionError,
     ImproperConfigurationError,
     MissingDependencyError,
+    with_cause,
 )
 from sqlspec.utils.module_loader import import_optional
 
@@ -143,7 +144,7 @@ class TeradataConnectionPool:
                 "DatabaseError",
                 "InterfaceError",
             }:
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
         try:
             connection.autocommit = self._autocommit_baseline

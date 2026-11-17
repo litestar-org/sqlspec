@@ -26,6 +26,7 @@ from sqlspec import dialects as _dialects
 from sqlspec.core.parameters._types import TypedParameter
 from sqlspec.core.query_modifiers import sanitize_parameter_name
 from sqlspec.core.type_converter import convert_iso_date, convert_iso_datetime, convert_uuid
+from sqlspec.exceptions import with_cause
 from sqlspec.storage.registry import storage_registry
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers._json import from_json, to_json
@@ -232,7 +233,7 @@ def write_fixture_sync(
         storage = storage_registry.get(uri, **storage_kwargs)
     except Exception as exc:
         msg = f"Failed to get storage backend for '{storage_backend}': {exc}"
-        raise ValueError(msg) from exc
+        raise with_cause(ValueError(msg), exc) from exc
 
     json_content = _serialize_data(data)
 
@@ -277,7 +278,7 @@ async def write_fixture_async(
         storage = storage_registry.get(uri, **storage_kwargs)
     except Exception as exc:
         msg = f"Failed to get storage backend for '{storage_backend}': {exc}"
-        raise ValueError(msg) from exc
+        raise with_cause(ValueError(msg), exc) from exc
 
     json_content = await _async_serialize(data)
 

@@ -55,6 +55,7 @@ from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.sync_tools import exit_async_context
@@ -205,19 +206,19 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             with MysqlConnectorSyncCursor(self.connection) as cursor:
                 cursor.execute("BEGIN")
         except MysqlConnectorError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def commit(self) -> None:
         try:
             self.connection.commit()
         except MysqlConnectorError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except MysqlConnectorError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def with_cursor(self, connection: "MysqlConnectorSyncConnection") -> "MysqlConnectorSyncCursor":
         return MysqlConnectorSyncCursor(connection, self._cursor_options)
@@ -502,19 +503,19 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                 cursor_error = exc
             await exit_async_context(cursor_context, cursor_error)
         except MysqlConnectorError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def commit(self) -> None:
         try:
             await self.connection.commit()
         except MysqlConnectorError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def rollback(self) -> None:
         try:
             await self.connection.rollback()
         except MysqlConnectorError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def with_cursor(self, connection: "MysqlConnectorAsyncConnection") -> "MysqlConnectorAsyncCursor":
         return MysqlConnectorAsyncCursor(connection, self._cursor_options)

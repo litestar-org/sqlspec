@@ -8,7 +8,7 @@ from sqlglot import Dialect, TokenType, exp, parse, parse_one
 from sqlglot.errors import ParseError, TokenError
 
 from sqlspec.builder._ddl import AlterTable, ColumnDefinition, CreateTable, _parse_ddl_identifier, _parse_ddl_table
-from sqlspec.exceptions import AmbiguousIdentifierError, MigrationError
+from sqlspec.exceptions import AmbiguousIdentifierError, MigrationError, with_cause
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import resolve_catalog_identifier
 
@@ -1049,7 +1049,7 @@ def _require_unambiguous_names(
             resolve_catalog_identifier(name, catalog_names)
         except AmbiguousIdentifierError as exc:
             msg = f"Cannot reconcile {kind} {name!r} for {target.identity!r}: {exc}"
-            raise MigrationError(msg) from exc
+            raise with_cause(MigrationError(msg), exc) from exc
 
 
 def _metadata_names(metadata_rows: Sequence[Any], key: str) -> set[str]:

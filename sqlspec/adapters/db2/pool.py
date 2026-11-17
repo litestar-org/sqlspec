@@ -15,7 +15,7 @@ from mypy_extensions import mypyc_attr
 from sqlspec.adapters.db2 import _typing as typing_module
 from sqlspec.adapters.db2._typing import Db2Error, ibm_db_dbi
 from sqlspec.adapters.db2.core import build_dsn_string, create_mapped_exception
-from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, with_cause
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -176,7 +176,7 @@ class Db2SyncConnectionPool:
         try:
             connection = typing_module.ibm_db_dbi.connect(self._dsn, "", "", "", "", options)
         except Db2Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
         try:
             schema = self._connection_parameters.get("current_schema")
@@ -188,7 +188,7 @@ class Db2SyncConnectionPool:
             with contextlib.suppress(BaseException):
                 connection.close()
             if isinstance(exc, Db2Error):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
 
         return connection
@@ -237,7 +237,7 @@ class Db2SyncConnectionPool:
         try:
             connection = self._get_thread_connection()
         except Db2Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._current_holder().depth += 1
         return connection
 
@@ -642,7 +642,7 @@ class Db2AsyncConnectionPool:
         try:
             connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(self._dsn, "", "", "", "", options)
         except Db2Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         setup_error: BaseException | None = None
         try:
             schema = self._connection_parameters.get("current_schema")
@@ -658,7 +658,7 @@ class Db2AsyncConnectionPool:
             with contextlib.suppress(BaseException):
                 await connection.close()
             if isinstance(setup_error, Db2Error):
-                raise create_mapped_exception(setup_error) from setup_error
+                raise with_cause(create_mapped_exception(setup_error), setup_error) from setup_error
             raise setup_error
         return connection
 
@@ -692,7 +692,7 @@ class Db2AsyncConnectionPool:
         except BaseException as exc:
             semaphore.release()
             if isinstance(exc, Db2Error):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
         if self._closed:
             try:

@@ -33,6 +33,7 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
 from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -192,7 +193,7 @@ def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str,
         msg = str(exc).replace(
             "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
         )
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
     return tuple(statements)
 
 

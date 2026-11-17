@@ -23,7 +23,7 @@ from sqlspec.core.parameters._types import (
     PositionalParameterOutput,
 )
 from sqlspec.core.parameters._validator import ParameterValidator
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, with_cause
 
 __all__ = ("ParameterConverter",)
 
@@ -659,7 +659,7 @@ class ParameterConverter:
             rendered = exp.Literal.string(text).sql(dialect=literal_dialect, copy=False)
         except ValueError as exc:
             msg = f"Cannot embed a string value in statically compiled SQL for dialect '{dialect}'"
-            raise SQLSpecError(msg) from exc
+            raise with_cause(SQLSpecError(msg), exc) from exc
         if "\x00" in rendered:
             msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
             raise SQLSpecError(msg)

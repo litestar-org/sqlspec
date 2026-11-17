@@ -10,7 +10,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from sqlspec.exceptions import MissingDependencyError, SQLSpecError
+from sqlspec.exceptions import MissingDependencyError, SQLSpecError, with_cause
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -216,7 +216,7 @@ def module_to_os_path(dotted_path: str = "app") -> "Path":
     try:
         src = find_spec(dotted_path)
     except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(msg, name=dotted_path) from e
+        raise with_cause(ModuleNotFoundError(msg, name=dotted_path), e) from e
 
     if src is None:
         raise ModuleNotFoundError(msg, name=dotted_path)
@@ -385,7 +385,7 @@ def _require_dependency(
 def _raise_import_error(msg: str, exc: "Exception | None" = None) -> None:
     """Raise an ImportError with optional exception chaining."""
     if exc is not None:
-        raise ImportError(msg) from exc
+        raise with_cause(ImportError(msg), exc) from exc
     raise ImportError(msg)
 
 

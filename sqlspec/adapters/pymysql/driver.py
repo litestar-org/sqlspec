@@ -45,6 +45,7 @@ from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -192,19 +193,19 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         try:
             self.connection.begin()
         except PyMysqlMySQLError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def commit(self) -> None:
         try:
             self.connection.commit()
         except PyMysqlMySQLError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except PyMysqlMySQLError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def with_cursor(self, connection: "PyMysqlConnection") -> "PyMysqlCursor":
         return PyMysqlCursor(connection)

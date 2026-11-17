@@ -19,7 +19,7 @@ from sqlspec.builder._parsing_utils import (
     unwrap_expression_source,
 )
 from sqlspec.core.query_modifiers import is_valid_parameter_name, parse_column_for_condition
-from sqlspec.exceptions import SQLBuilderError, SQLSpecError
+from sqlspec.exceptions import SQLBuilderError, SQLSpecError, with_cause
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers._schema import schema_dump
 from sqlspec.utils.type_guards import is_dict
@@ -402,7 +402,7 @@ class UpdateSetClauseMixin:
             try:
                 return parse_column_for_condition(col)
             except SQLSpecError as exc:
-                raise SQLBuilderError(str(exc)) from exc
+                raise with_cause(SQLBuilderError(str(exc)), exc) from exc
         return exp.column(col, copy=False)
 
     def _process_update_value(self, val: Any, col: Any) -> exp.Expr:
@@ -608,7 +608,7 @@ def _parse_returning_column(column: str, dialect: "DialectType | None") -> exp.E
     try:
         statements = sqlglot.parse(f"SELECT {stripped}", dialect=_normalize_dialect(dialect))
     except (ParseError, TokenError) as exc:
-        raise SQLBuilderError(msg) from exc
+        raise with_cause(SQLBuilderError(msg), exc) from exc
     select = statements[0] if len(statements) == 1 else None
     if not isinstance(select, exp.Select) or len(select.expressions) != 1:
         raise SQLBuilderError(msg)

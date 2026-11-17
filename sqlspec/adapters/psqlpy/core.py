@@ -59,6 +59,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
     _classify_timeout_or_cancellation,
+    with_cause,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.logging import get_logger
@@ -699,7 +700,7 @@ def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[An
         serialized_value = serializer(value)
     except Exception as error:
         msg = "Failed to serialize JSON parameter for psqlpy."
-        raise SQLSpecError(msg) from error
+        raise with_cause(SQLSpecError(msg), error) from error
     return serialized_value
 
 
@@ -713,7 +714,7 @@ def _coerce_uuid_parameter(value: Any) -> Any:
             return uuid_from_string(value)
         except ValueError as error:
             msg = "Invalid UUID parameter for psqlpy."
-            raise SQLSpecError(msg) from error
+            raise with_cause(SQLSpecError(msg), error) from error
     return value
 
 
@@ -728,7 +729,7 @@ def _coerce_timestamp_parameter(value: Any) -> Any:
             return dt.datetime.fromisoformat(normalized_value)
         except ValueError as error:
             msg = "Invalid ISO timestamp parameter for psqlpy."
-            raise SQLSpecError(msg) from error
+            raise with_cause(SQLSpecError(msg), error) from error
     return value
 
 

@@ -19,7 +19,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core.statement import SQL, ProcessedState
-from sqlspec.exceptions import MultipleResultsFoundError
+from sqlspec.exceptions import MultipleResultsFoundError, with_cause
 from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
     StorageDestination,
@@ -993,7 +993,7 @@ class SQLResult(StatementResult):
                 keys = first_row.keys
             except AttributeError as exc:
                 msg = "row_format='record' requires dict-like rows"
-                raise AssertionError(msg) from exc
+                raise with_cause(AssertionError(msg), exc) from exc
             assert callable(keys), "row_format='record' requires dict-like rows"
 
     def _get_schema_rows(

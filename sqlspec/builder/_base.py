@@ -50,7 +50,7 @@ from sqlspec.core.query_modifiers import is_valid_parameter_name, sanitize_param
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.data_dictionary._types import DialectConfig
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.exceptions import SQLBuilderError, with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, is_expression
 from sqlspec.utils.uuids import uuid4
@@ -629,7 +629,7 @@ class QueryBuilder:
         Raises:
             SQLBuilderError: Always raises this exception.
         """
-        raise SQLBuilderError(message) from cause
+        raise with_cause(SQLBuilderError(message), cause) from cause
 
     @staticmethod
     def _raise_invalid_expression_type(expression: Any) -> NoReturn:
@@ -669,7 +669,7 @@ class QueryBuilder:
             SQLBuilderError: Always raised with chained cause
         """
         msg = f"Failed to parse CTE query: {cause!s}"
-        raise SQLBuilderError(msg) from cause
+        raise with_cause(SQLBuilderError(msg), cause) from cause
 
     def _prepare_expression_for_build(self, dialect: DialectType = None, *, copy: bool = True) -> exp.Expr:
         """Validate builder state and return the expression ready for optimization and rendering."""

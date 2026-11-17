@@ -10,7 +10,7 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
 from sqlspec.data_dictionary._registry import normalize_adapter_dialect_name
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, with_cause
 from sqlspec.utils.arrow_helpers import sql_type_from_arrow_type
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.uuids import uuid4
@@ -252,7 +252,7 @@ def validate_sql_cast_type(type_sql: str, dialect: str | None = None) -> str:
         statements = sqlglot.parse(f"SELECT CAST(x AS {stripped})", read=cast_dialect)
     except SqlglotError as exc:
         msg = f"Invalid SQL cast type: {type_sql!r}"
-        raise ValueError(msg) from exc
+        raise with_cause(ValueError(msg), exc) from exc
 
     stmt = statements[0] if len(statements) == 1 else None
     if not isinstance(stmt, exp.Select) or len(stmt.expressions) != 1:

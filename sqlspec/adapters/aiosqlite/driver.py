@@ -37,7 +37,7 @@ from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream
-from sqlspec.exceptions import DeadlockError
+from sqlspec.exceptions import DeadlockError, with_cause
 from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import resolve_row_format
 
@@ -230,7 +230,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         try:
             await end_transaction(self.connection, commit=True)
         except (aiosqlite.Error, sqlite3.Error) as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -239,7 +239,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             self._rowid_target_cache.clear()
         except (aiosqlite.Error, sqlite3.Error) as e:
             self._rowid_target_cache.clear()
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""
@@ -359,7 +359,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             if owns_transaction:
                 await self.rollback()
             if isinstance(load_error, (aiosqlite.Error, sqlite3.Error)):
-                raise create_mapped_exception(load_error) from load_error
+                raise with_cause(create_mapped_exception(load_error), load_error) from load_error
             raise load_error
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -531,7 +531,7 @@ async def _retry_begin_with_backoff(
         SQLSpecError: If a non-transient error occurs or every retry attempt fails.
     """
     if not _is_busy_or_locked_error(initial_error):
-        raise create_mapped_exception(initial_error) from initial_error
+        raise with_cause(create_mapped_exception(initial_error), initial_error) from initial_error
 
     for attempt in range(max_retries):
         delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)
@@ -545,7 +545,7 @@ async def _retry_begin_with_backoff(
                         await close_result
         except (aiosqlite.Error, sqlite3.Error) as exc:
             if not _is_busy_or_locked_error(exc):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             if attempt == max_retries - 1:
                 break
         else:

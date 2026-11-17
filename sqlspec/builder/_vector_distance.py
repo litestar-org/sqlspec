@@ -15,7 +15,7 @@ from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder._generation import generator_class_for_dialect, invalidate_generator_dispatch
 from sqlspec.core.splitter import contains_statement_terminator
-from sqlspec.exceptions import DialectNotSupportedError
+from sqlspec.exceptions import DialectNotSupportedError, with_cause
 
 if TYPE_CHECKING:
     from sqlglot.generator import Generator
@@ -547,7 +547,7 @@ def _validate_oracle_where_clause(where_clause: str) -> str:
         statements = sqlglot.parse(stripped, read="oracle")
     except SqlglotError as exc:
         msg = f"Invalid Oracle WHERE clause: {where_clause!r}"
-        raise ValueError(msg) from exc
+        raise with_cause(ValueError(msg), exc) from exc
     if (
         not tokens
         or any(token.comments or token.token_type == TokenType.SEMICOLON for token in tokens)
@@ -591,7 +591,7 @@ def _extract_array_number_literal(item: exp.Expr) -> str:
         numeric_val = float(raw_text)
     except ValueError as exc:
         msg = f"Vector array literal elements must be numeric literals, got {item!r}"
-        raise ValueError(msg) from exc
+        raise with_cause(ValueError(msg), exc) from exc
     if not math.isfinite(numeric_val):
         msg = f"Vector array literal elements must be finite numbers, got {item!r}"
         raise ValueError(msg)

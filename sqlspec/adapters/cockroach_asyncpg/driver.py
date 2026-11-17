@@ -33,7 +33,7 @@ from sqlspec.core.parameters._registry import register_driver_profile
 from sqlspec.core.statement import SQL
 from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_load_from_storage_kwargs
 from sqlspec.driver._stream import AsyncRowStream
-from sqlspec.exceptions import ReadOnlyTransactionError
+from sqlspec.exceptions import ReadOnlyTransactionError, with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
 
@@ -294,7 +294,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         if begin_error is not None:
             with suppress(Exception):
                 await self.rollback()
-            raise create_mapped_exception(begin_error) from begin_error
+            raise with_cause(create_mapped_exception(begin_error), begin_error) from begin_error
 
     async def run_transaction_with_retry(self, operation: "Callable[[], Awaitable[_T]]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries.

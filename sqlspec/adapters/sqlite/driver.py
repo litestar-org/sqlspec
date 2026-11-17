@@ -31,7 +31,7 @@ from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_savepoint
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, with_cause
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -215,7 +215,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                     with contextlib.suppress(Exception):
                         cursor.close()
         except sqlite3.Error as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def commit(self) -> None:
         """Commit the current transaction.
@@ -228,7 +228,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             with contextlib.suppress(AttributeError, TypeError):
                 self.connection.in_transaction = False
         except sqlite3.Error as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def rollback(self) -> None:
         """Rollback the current transaction.
@@ -243,7 +243,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             self._rowid_target_cache.clear()
         except sqlite3.Error as e:
             self._rowid_target_cache.clear()
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def create_savepoint(self, name: str) -> None:
         """Create a savepoint within the current transaction without script splitting."""
@@ -254,7 +254,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 with contextlib.suppress(Exception):
                     cursor.close()
         except sqlite3.Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def release_savepoint(self, name: str) -> None:
         """Release a savepoint without clearing rowid target cache or splitting script."""
@@ -265,7 +265,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 with contextlib.suppress(Exception):
                     cursor.close()
         except sqlite3.Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         """Create context manager for SQLite cursor.
@@ -388,7 +388,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             if owns_transaction:
                 self.rollback()
             if isinstance(exc, sqlite3.Error):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
 
         telemetry_payload = self._ingest_telemetry(arrow_table)

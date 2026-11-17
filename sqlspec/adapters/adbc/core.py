@@ -51,6 +51,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
     _classify_timeout_or_cancellation,
     map_sqlstate_to_exception,
+    with_cause,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
@@ -615,7 +616,7 @@ def resolve_driver_connect_func(driver_name: str | None, uri: str | None) -> "Ca
         connect_func = import_string(driver_path)
     except ImportError as exc:
         msg = f"Failed to import connect function from '{driver_path}'. Is the driver installed? Error: {exc}"
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
 
     if not callable(connect_func):
         msg = f"The path '{driver_path}' did not resolve to a callable function."
@@ -1896,7 +1897,7 @@ def _rewrite_postgres_uuid_placeholders(
         )
     except ParseError as exc:
         msg = f"Failed to parse PostgreSQL ADBC SQL for UUID parameter binding: {exc}"
-        raise SQLSpecError(msg) from exc
+        raise with_cause(SQLSpecError(msg), exc) from exc
     if not expressions:
         msg = "Failed to parse PostgreSQL ADBC SQL for UUID parameter binding: SQLGlot returned no statements."
         raise SQLSpecError(msg)
@@ -2003,7 +2004,7 @@ def _convert_uuid_value(value: Any, ordinal: int, row_number: int, element_index
     try:
         return str(uuid_from_string(value))
     except (TypeError, ValueError) as exc:
-        raise SQLSpecError(_uuid_binding_error(ordinal, value, row_number, element_index)) from exc
+        raise with_cause(SQLSpecError(_uuid_binding_error(ordinal, value, row_number, element_index)), exc) from exc
 
 
 def _null_array_element_error(ordinal: int, row_number: int, element_index: int) -> str:
@@ -2884,7 +2885,7 @@ def _normalize_db2_cli_dsn(config: "dict[str, Any]", uri: str) -> None:
             port_num = int(port_raw)
         except ValueError as exc:
             msg = f"Db2 port must be an integer between 1 and 65535, got {port_raw!r}."
-            raise ImproperConfigurationError(msg) from exc
+            raise with_cause(ImproperConfigurationError(msg), exc) from exc
         if not 1 <= port_num <= _MAX_TCP_PORT:
             msg = f"Db2 port must be an integer between 1 and 65535, got {port_num}."
             raise ImproperConfigurationError(msg)

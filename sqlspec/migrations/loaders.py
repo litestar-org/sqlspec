@@ -16,7 +16,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Final, cast
 
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, with_cause
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.version import extract_migration_version
@@ -538,7 +538,7 @@ class PythonFileLoader(BaseMigrationLoader):
             tree = _parse_python_migration_ast(path)
         except (OSError, SyntaxError) as exc:
             msg = f"Failed to parse migration file {path}: {exc}"
-            raise MigrationLoadError(msg) from exc
+            raise with_cause(MigrationLoadError(msg), exc) from exc
 
         if _resolve_ast_callable_binding(tree, ("up", "migrate_up")) is None:
             msg = f"Migration {path} missing required upgrade function. Expected 'up()' or 'migrate_up()'"
@@ -593,7 +593,7 @@ class PythonFileLoader(BaseMigrationLoader):
             stat_result = path.stat()
         except OSError as e:
             msg = f"Failed to execute migration module {path}: {e}"
-            raise MigrationLoadError(msg) from e
+            raise with_cause(MigrationLoadError(msg), e) from e
 
         cached = self._module_cache.get(cache_key)
         if cached is not None and cached[0] == stat_result.st_mtime_ns and cached[1] == stat_result.st_size:
@@ -617,7 +617,7 @@ class PythonFileLoader(BaseMigrationLoader):
         except Exception as e:
             sys.modules.pop(module_name, None)
             msg = f"Failed to execute migration module {path}: {e}"
-            raise MigrationLoadError(msg) from e
+            raise with_cause(MigrationLoadError(msg), e) from e
 
         self._module_cache[cache_key] = (stat_result.st_mtime_ns, stat_result.st_size, module)
         return module

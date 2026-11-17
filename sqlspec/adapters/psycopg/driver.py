@@ -55,7 +55,7 @@ from sqlspec.driver._common import StackExecutionObserver, cache_hit_hooks_uncha
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError, with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.text import normalize_identifier
@@ -445,6 +445,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                     self.connection.autocommit = True
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
+                mapped.__cause__ = e
                 raise mapped from e
             msg = f"Failed to begin transaction: {e}"
             error = SQLSpecError(msg)
@@ -460,6 +461,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
+                mapped.__cause__ = e
                 raise mapped from e
             msg = f"Failed to commit transaction: {e}"
             error = SQLSpecError(msg)
@@ -475,6 +477,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
+                mapped.__cause__ = e
                 raise mapped from e
             msg = f"Failed to rollback transaction: {e}"
             error = SQLSpecError(msg)
@@ -744,7 +747,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                                 cursor.execute(sql)
                         except Exception as exc:
                             owner = _attribute_pipeline_failure(pending, prepared)
-                            raise _stack_operation_error(type(self).__name__, owner, exc) from exc
+                            raise with_cause(_stack_operation_error(type(self).__name__, owner, exc), exc) from exc
 
                         pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
 
@@ -777,7 +780,9 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
             statement = entry.prepared.statement
             cursor = entry.cursor
             if sync_error is not None and pipeline_operation_failed(cursor, statement):
-                raise _stack_operation_error(type(self).__name__, entry.prepared, sync_error) from sync_error
+                raise with_cause(
+                    _stack_operation_error(type(self).__name__, entry.prepared, sync_error), sync_error
+                ) from sync_error
             try:
                 execution_result = build_pipeline_execution_result(
                     statement,
@@ -786,12 +791,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                     column_types_resolver=_resolve_column_types,
                 )
             except Exception as exc:
-                raise _stack_operation_error(type(self).__name__, entry.prepared, exc) from exc
+                raise with_cause(_stack_operation_error(type(self).__name__, entry.prepared, exc), exc) from exc
             sql_result = self.build_statement_result(statement, execution_result)
             results.append(StackResult.from_sql_result(sql_result))
 
         if sync_error is not None:
-            raise _stack_pipeline_sync_error(type(self).__name__, sync_error) from sync_error
+            raise with_cause(_stack_pipeline_sync_error(type(self).__name__, sync_error), sync_error) from sync_error
         return results
 
     def _resolve_column_names(self, description: Any) -> list[str]:
@@ -816,6 +821,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
+                mapped.__cause__ = e
                 raise mapped from e
             msg = f"Failed to restore autocommit: {e}"
             error = SQLSpecError(msg)
@@ -1117,6 +1123,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                     await self.connection.set_autocommit(True)
             mapped = create_mapped_exception(begin_error)
             if type(mapped) is not SQLSpecError:
+                mapped.__cause__ = begin_error
                 raise mapped from begin_error
             msg = f"Failed to begin transaction: {begin_error}"
             error = SQLSpecError(msg)
@@ -1132,6 +1139,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
+                mapped.__cause__ = e
                 raise mapped from e
             msg = f"Failed to commit transaction: {e}"
             error = SQLSpecError(msg)
@@ -1147,6 +1155,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
+                mapped.__cause__ = e
                 raise mapped from e
             msg = f"Failed to rollback transaction: {e}"
             error = SQLSpecError(msg)
@@ -1443,7 +1452,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                                 await cursor.execute(sql)
                         except Exception as exc:
                             owner = _attribute_pipeline_failure(pending, prepared)
-                            raise _stack_operation_error(type(self).__name__, owner, exc) from exc
+                            raise with_cause(_stack_operation_error(type(self).__name__, owner, exc), exc) from exc
 
                         pending.append(PipelineCursorEntry(prepared=prepared, cursor=cursor))
 
@@ -1481,7 +1490,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             statement = entry.prepared.statement
             cursor = entry.cursor
             if sync_error is not None and pipeline_operation_failed(cursor, statement):
-                raise _stack_operation_error(type(self).__name__, entry.prepared, sync_error) from sync_error
+                raise with_cause(
+                    _stack_operation_error(type(self).__name__, entry.prepared, sync_error), sync_error
+                ) from sync_error
             try:
                 execution_result = await build_async_pipeline_execution_result(
                     statement,
@@ -1490,12 +1501,12 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                     column_types_resolver=_resolve_column_types,
                 )
             except Exception as exc:
-                raise _stack_operation_error(type(self).__name__, entry.prepared, exc) from exc
+                raise with_cause(_stack_operation_error(type(self).__name__, entry.prepared, exc), exc) from exc
             sql_result = self.build_statement_result(statement, execution_result)
             results.append(StackResult.from_sql_result(sql_result))
 
         if sync_error is not None:
-            raise _stack_pipeline_sync_error(type(self).__name__, sync_error) from sync_error
+            raise with_cause(_stack_pipeline_sync_error(type(self).__name__, sync_error), sync_error) from sync_error
         return results
 
     def _resolve_column_names(self, description: Any) -> list[str]:
@@ -1520,6 +1531,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         except psycopg.Error as e:
             mapped = create_mapped_exception(e)
             if type(mapped) is not SQLSpecError:
+                mapped.__cause__ = e
                 raise mapped from e
             msg = f"Failed to restore autocommit: {e}"
             error = SQLSpecError(msg)

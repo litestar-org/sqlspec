@@ -26,6 +26,7 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers._json import from_json, to_json
@@ -526,7 +527,7 @@ def parse_sybase_replica_endpoint(endpoint: str) -> dict[str, Any]:
         hostname, port = parsed.hostname, parsed.port
     except ValueError as exc:
         msg = "Invalid sybase replica endpoint"
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
     if not hostname or (parsed.scheme and parsed.scheme != "sybase"):
         msg = "Invalid sybase replica endpoint"
         raise ImproperConfigurationError(msg)

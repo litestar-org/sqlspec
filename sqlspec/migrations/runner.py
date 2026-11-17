@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from sqlspec.core.statement import SQL
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, with_cause
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import (
@@ -870,7 +870,7 @@ class BaseMigrationRunner:
             )
             return
         msg = f"Failed to load upgrade for migration {migration.get('version')}: {error}"
-        raise ValueError(msg) from error
+        raise with_cause(ValueError(msg), error) from error
 
     def _finalize_migration_sql(self, sql_statements: Any) -> "list[str] | None":
         """Normalize loader output into a SQL statement list, or None when absent.
@@ -2112,7 +2112,7 @@ def _parse_replaces_tokens(raw_versions: str) -> list[str]:
             parse_version(version)
         except ValueError as error:
             msg = f"Invalid version {version!r} in migration replaces header"
-            raise MigrationError(msg) from error
+            raise with_cause(MigrationError(msg), error) from error
         versions.append(version)
     return versions
 

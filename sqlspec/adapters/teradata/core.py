@@ -26,6 +26,7 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
 from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
@@ -412,7 +413,7 @@ def parse_teradata_replica_endpoint(endpoint: str) -> dict[str, Any]:
         hostname, port = parsed.hostname, parsed.port
     except ValueError as exc:
         msg = "Invalid teradata replica endpoint"
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
     if not hostname or (parsed.scheme and parsed.scheme != "teradata"):
         msg = "Invalid teradata replica endpoint"
         raise ImproperConfigurationError(msg)

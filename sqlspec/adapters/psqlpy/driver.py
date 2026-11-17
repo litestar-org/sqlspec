@@ -46,6 +46,7 @@ from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream
+from sqlspec.exceptions import with_cause
 from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
@@ -256,7 +257,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.execute("BEGIN")
         except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
         columnar_error: Exception | None = None
         try:
             if self._should_set_local_columnar():
@@ -266,7 +267,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if columnar_error is not None:
             with suppress(Exception):
                 await self.connection.execute("ROLLBACK")
-            raise create_mapped_exception(columnar_error) from columnar_error
+            raise with_cause(create_mapped_exception(columnar_error), columnar_error) from columnar_error
         self._transaction_active = True
 
     async def commit(self) -> None:
@@ -277,7 +278,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.execute("COMMIT")
         except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
         finally:
             self._transaction_active = False
 
@@ -289,7 +290,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.execute("ROLLBACK")
         except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
         finally:
             self._transaction_active = False
 

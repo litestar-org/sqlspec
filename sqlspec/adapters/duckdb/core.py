@@ -59,6 +59,7 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.storage.backends.obstore import ObStoreBackend
@@ -868,7 +869,7 @@ def _build_storage_read_sql(table: str, uri: str, file_format: str, *, allow_glo
         targets = Dialect.get_or_raise("duckdb").parse_into(exp.Table, table)
     except ParseError as exc:
         msg = "Native storage import requires one qualified table identifier."
-        raise ValueError(msg) from exc
+        raise with_cause(ValueError(msg), exc) from exc
     if (
         len(targets) != 1
         or not isinstance(targets[0], exp.Table)

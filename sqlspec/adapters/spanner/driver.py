@@ -53,7 +53,7 @@ from sqlspec.driver._common import ExecutionResult, validate_load_from_storage_k
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import ReadOnlyTransactionError, SQLConversionError
+from sqlspec.exceptions import ReadOnlyTransactionError, SQLConversionError, with_cause
 from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.sync_tools import exit_async_context
 
@@ -1470,7 +1470,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         try:
             writer.delete(table, keyset)
         except SpannerGoogleAPICallError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def bind_external_transaction(self) -> None:
         """Mark the driver as bound to an externally managed transaction runner."""
@@ -1491,7 +1491,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             for chunk in chunks:
                 mutation_fn(table, column_list, chunk)
         except SpannerGoogleAPICallError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def _execute_kwargs(self, *, for_read: bool = False, for_batch: bool = False) -> dict[str, Any]:
         options = _pending_spanner_options.get() or self._pending_execute_options

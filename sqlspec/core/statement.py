@@ -53,6 +53,7 @@ from sqlspec.core.query_modifiers import (
 )
 from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer, format_wire_sqlcomment
+from sqlspec.exceptions import with_cause
 from sqlspec.observability._common import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
@@ -682,7 +683,7 @@ class SQL:
             raise
         except RecursionError as e:
             msg = "Statement nesting exceeds the supported depth"
-            raise sqlspec.exceptions.SQLParsingError(msg) from e
+            raise with_cause(sqlspec.exceptions.SQLParsingError(msg), e) from e
         except Exception as e:
             new_state = self._handle_compile_failure(e)
 
@@ -1164,7 +1165,7 @@ class SQL:
                 expression = sqlglot.parse_one(converted_sql, dialect=builder_dialect)
             except ParseError as exc:
                 msg = f"Failed to parse SQL for builder: {exc}"
-                raise sqlspec.exceptions.SQLBuilderError(msg) from exc
+                raise with_cause(sqlspec.exceptions.SQLBuilderError(msg), exc) from exc
 
         base_expression = expression
         ctes: list[exp.CTE] | None = None
@@ -1684,7 +1685,7 @@ class SQL:
             )
         except ParseError as exc:
             msg = f"Failed to parse SQL statement: {exc}"
-            raise sqlspec.exceptions.SQLParsingError(msg) from exc
+            raise with_cause(sqlspec.exceptions.SQLParsingError(msg), exc) from exc
 
     def _filter_expression(self) -> exp.Expr:
         """Return a mutable expression copy for statement filters.

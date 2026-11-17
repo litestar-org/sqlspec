@@ -19,7 +19,7 @@ from sqlspec.adapters.aiosqlite.core import (
     is_read_only_sqlite_config,
     run_on_worker_thread,
 )
-from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError, SQLSpecError, with_cause
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.uuids import uuid4
@@ -352,7 +352,7 @@ class AiosqliteConnectionPool:
                 sqlite3.SQLITE_CANTOPEN,
                 26,
             ):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
 
         pragma_lines: list[str] = []

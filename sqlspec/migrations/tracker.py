@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import IntegrityError, MigrationError, SerializationConflictError, SQLSpecError
+from sqlspec.exceptions import IntegrityError, MigrationError, SerializationConflictError, SQLSpecError, with_cause
 from sqlspec.migrations.base import (
     _PG_RELATION_GUARD_SQL,
     BaseMigrationTracker,
@@ -1201,6 +1201,7 @@ class _SyncMigrationLockContext:
             except SQLSpecError as exc:
                 translated = self._tracker._translate_mssql_lock_exception(self._lock_name, self._timeout_seconds, exc)
                 if translated is not None:
+                    translated.__cause__ = exc
                     raise translated from exc
                 raise
             self._tracker._validate_mssql_lock_result(self._lock_name, ms_result)
@@ -1238,7 +1239,7 @@ class _SyncMigrationLockContext:
                         self._driver.rollback()
                 remaining = deadline - _monotonic()
                 if remaining <= 0:
-                    raise _lease_timeout_error(self._lock_name, timeout_seconds) from None
+                    raise with_cause(_lease_timeout_error(self._lock_name, timeout_seconds), None) from None
                 _sleep(min(_LEASE_LOCK_POLL_INTERVAL_SECONDS, remaining))
                 continue
             self._owner_token = owner_token
@@ -1396,6 +1397,7 @@ class _AsyncMigrationLockContext:
             except SQLSpecError as exc:
                 translated = self._tracker._translate_mssql_lock_exception(self._lock_name, self._timeout_seconds, exc)
                 if translated is not None:
+                    translated.__cause__ = exc
                     raise translated from exc
                 raise
             self._tracker._validate_mssql_lock_result(self._lock_name, ms_result)
@@ -1439,7 +1441,7 @@ class _AsyncMigrationLockContext:
                         await self._driver.rollback()
                 remaining = deadline - _monotonic()
                 if remaining <= 0:
-                    raise _lease_timeout_error(self._lock_name, timeout_seconds) from None
+                    raise with_cause(_lease_timeout_error(self._lock_name, timeout_seconds), None) from None
                 await _async_sleep(min(_LEASE_LOCK_POLL_INTERVAL_SECONDS, remaining))
                 continue
             self._owner_token = owner_token

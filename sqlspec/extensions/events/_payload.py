@@ -4,7 +4,7 @@ import contextlib
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlspec.exceptions import EventChannelError
+from sqlspec.exceptions import EventChannelError, with_cause
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.uuids import uuid4
@@ -80,7 +80,7 @@ def decode_notify_payload(channel: str, payload: str) -> "EventMessage":
         raw = from_json(payload)
     except (TypeError, ValueError) as exc:
         msg = "Malformed event notification payload"
-        raise EventChannelError(msg) from exc
+        raise with_cause(EventChannelError(msg), exc) from exc
     data = raw if isinstance(raw, dict) else {"payload": raw}
     if "event_id" in data:
         raw_event_id = data["event_id"]

@@ -52,6 +52,7 @@ from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream
+from sqlspec.exceptions import with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.sync_tools import exit_async_context
@@ -248,7 +249,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.begin()
         except AiomysqlPymysqlError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def commit(self) -> None:
         """Commit the current transaction.
@@ -259,7 +260,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.commit()
         except AiomysqlPymysqlError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction.
@@ -270,7 +271,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.rollback()
         except AiomysqlPymysqlError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def with_cursor(self, connection: "AiomysqlConnection") -> "AiomysqlCursor":
         """Create cursor context manager for the connection.

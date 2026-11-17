@@ -39,7 +39,7 @@ from sqlspec.data_dictionary._types import (
     MetadataSupport,
     ObjectIdentity,
 )
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.exceptions import SQLBuilderError, with_cause
 from sqlspec.utils.arrow_helpers import sql_type_for_category, sql_type_from_arrow_type
 from sqlspec.utils.type_guards import has_sqlglot_expression
 
@@ -4467,7 +4467,7 @@ def _parse_ddl_expression(text: str, *, label: str, dialect: "DialectType | None
         statements = sqlglot.parse(text, read=norm_dialect)
     except (ParseError, TokenError) as exc:
         msg = f"Invalid {label}: {text!r}"
-        raise SQLBuilderError(msg) from exc
+        raise with_cause(SQLBuilderError(msg), exc) from exc
     if len(statements) != 1 or statements[0] is None:
         msg = f"Invalid {label}: {text!r}"
         raise SQLBuilderError(msg)
@@ -4498,6 +4498,6 @@ def _coerce_int_argument(value: Any, *, name: str) -> int:
                 return int(stripped)
             except ValueError as exc:
                 msg = f"{name} must be an integer, got {value!r}"
-                raise SQLBuilderError(msg) from exc
+                raise with_cause(SQLBuilderError(msg), exc) from exc
     msg = f"{name} must be an integer, got {type(value).__name__}"
     raise SQLBuilderError(msg)

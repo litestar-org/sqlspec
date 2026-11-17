@@ -41,7 +41,7 @@ from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_load_from
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, with_cause
 from sqlspec.storage._utils import import_pyarrow
 from sqlspec.typing import PYARROW_INSTALLED, ArrowReturnFormat, StatementParameters
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
@@ -1045,9 +1045,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
         except duckdb.TransactionException as exc:
             if not str(exc) or "no transaction is active" in str(exc).lower():
                 return
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         except duckdb.Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

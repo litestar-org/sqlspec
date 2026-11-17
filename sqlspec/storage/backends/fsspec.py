@@ -1047,6 +1047,7 @@ def _close_and_publish_fsspec_stream(
                 file_obj.closed = True
             mapped = _as_create_conflict(error, destination)
             if mapped is not error:
+                mapped.__cause__ = error
                 raise mapped from error
             raise
         except BaseException:

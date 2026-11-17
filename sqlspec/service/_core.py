@@ -14,7 +14,7 @@ from sqlspec.core.filters import CursorFilter, LimitOffsetFilter, OrderByFilter,
 from sqlspec.core.statement import SQL
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import DataError, ImproperConfigurationError, InvalidCursorError, NotFoundError
+from sqlspec.exceptions import DataError, ImproperConfigurationError, InvalidCursorError, NotFoundError, with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.sync_tools import exit_async_context
@@ -295,7 +295,7 @@ def _sync_paginate_cursor(
         except DataError as exc:
             if cursor_filter.values is None:
                 raise
-            raise InvalidCursorError(_INVALID_CURSOR_VALUE_MESSAGE) from exc
+            raise with_cause(InvalidCursorError(_INVALID_CURSOR_VALUE_MESSAGE), exc) from exc
         page = cursor_filter.build_page(items)
         if schema_type is None:
             return page

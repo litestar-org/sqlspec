@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlspec.exceptions import OutOfOrderMigrationError, SquashValidationError
+from sqlspec.exceptions import OutOfOrderMigrationError, SquashValidationError, with_cause
 from sqlspec.migrations.version import VersionType, parse_version
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -212,7 +212,7 @@ def validate_squash_range(
         parsed_end = parse_version(end_version)
     except ValueError as exc:
         msg = f"Squash range versions must be numeric: {start_version} to {end_version}"
-        raise SquashValidationError(msg) from exc
+        raise with_cause(SquashValidationError(msg), exc) from exc
 
     if parsed_start.extension != parsed_end.extension:
         msg = f"Cannot squash migrations from different extensions: {start_version} to {end_version}"

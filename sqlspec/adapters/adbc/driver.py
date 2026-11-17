@@ -52,7 +52,7 @@ from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_savepoint
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import DatabaseConnectionError, DataError, SQLSpecError, TransactionError
+from sqlspec.exceptions import DatabaseConnectionError, DataError, SQLSpecError, TransactionError, with_cause
 from sqlspec.observability._common import resolve_db_system
 from sqlspec.storage._utils import import_pyarrow
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
@@ -592,7 +592,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             except (AdbcNotSupportedError, NotImplementedError):
                 pass
             except AdbcNativeError as exc:
-                raise self._map_native_error(exc) from exc
+                raise with_cause(self._map_native_error(exc), exc) from exc
         if (
             native is not None
             and callable(getattr(native, "set_autocommit", None))
@@ -617,7 +617,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 with contextlib.suppress(BaseException):
                     native.set_autocommit(True)
                 if isinstance(exc, AdbcNativeError):
-                    raise self._map_native_error(exc) from exc
+                    raise with_cause(self._map_native_error(exc), exc) from exc
                 raise
             self._previous_autocommit = True
         self._transaction_active = True
@@ -1198,7 +1198,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             self._previous_autocommit = None
             self._transaction_active = False
         if isinstance(primary, AdbcNativeError):
-            raise self._map_native_error(primary) from primary
+            raise with_cause(self._map_native_error(primary), primary) from primary
         if primary is not None:
             raise primary
 

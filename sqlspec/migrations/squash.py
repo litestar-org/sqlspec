@@ -27,7 +27,7 @@ from sqlglot.tokenizer_core import Token, TokenType
 
 from sqlspec.data_dictionary._types import DDLResult
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import SquashValidationError
+from sqlspec.exceptions import SquashValidationError, with_cause
 from sqlspec.migrations._backup import create_backup, remove_backup, restore_backup
 from sqlspec.migrations.base import _ensure_schema_extraction_safe_sync
 from sqlspec.migrations.loaders import _load_migration_sql
@@ -209,7 +209,7 @@ class DDLStateFolder:
             tokens = self._dialect_impl.tokenize(sql)
         except TokenError as error:
             msg = f"it could not be tokenized ({error})"
-            raise self._refusal(msg) from error
+            raise with_cause(self._refusal(msg), error) from error
 
         chunks: list[list[Token]] = [[]]
         for token in tokens:
@@ -228,7 +228,7 @@ class DDLStateFolder:
                 parsed = self._dialect_impl.parser().parse(chunk, sql)
             except ParseError as error:
                 msg = "SQLGlot cannot parse it"
-                raise self._refusal(msg) from error
+                raise with_cause(self._refusal(msg), error) from error
             statements.extend((text, expr, chunk) for expr in parsed if expr is not None)
         return statements
 
@@ -1483,7 +1483,7 @@ class DDLStateFolder:
             sql = expr.sql(dialect=self._dialect, unsupported_level=ErrorLevel.RAISE)
         except UnsupportedError as error:
             msg = f"SQLGlot cannot render it for this dialect ({error})"
-            raise self._refusal(msg, entry) from error
+            raise with_cause(self._refusal(msg, entry), error) from error
         return _ensure_semicolon(sql)
 
     def _is_faithful(self, expr: exp.Expr, tokens: list[Token], spans: list[tuple[exp.Expr, str, int, int]]) -> bool:

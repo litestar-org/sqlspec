@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.snowflake.core import create_mapped_exception, is_snowflake_error, normalize_connection_params
-from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, MissingDependencyError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, MissingDependencyError, with_cause
 from sqlspec.typing import import_optional
 
 if TYPE_CHECKING:
@@ -338,7 +338,7 @@ class SnowflakeConnectionPool:
             )
         except Exception as exc:
             if is_snowflake_error(exc):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
 
     def _create_physical_connection(self) -> "SnowflakeConnection":

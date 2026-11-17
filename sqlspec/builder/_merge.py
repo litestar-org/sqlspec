@@ -28,7 +28,7 @@ from sqlspec.builder._parsing_utils import (
     unwrap_expression_source,
 )
 from sqlspec.core.splitter import contains_statement_terminator
-from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
+from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError, with_cause
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers._json import to_json
 
@@ -1012,7 +1012,7 @@ def _parse_merge_condition(
             statements = sqlglot.parse(condition, read=dialect_name)
         except SqlglotError as exc:
             msg = f"Could not parse {condition_label}: {condition}"
-            raise SQLBuilderError(msg) from exc
+            raise with_cause(SQLBuilderError(msg), exc) from exc
         if len(statements) != 1 or statements[0] is None:
             msg = f"Could not parse {condition_label}: {condition}"
             raise SQLBuilderError(msg)

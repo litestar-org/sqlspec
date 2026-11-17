@@ -39,7 +39,7 @@ from sqlspec.driver._common import (
 )
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError, with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
@@ -319,7 +319,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             await transaction.start()
         except Exception as e:
             self._release_failed_transaction_claim(transaction)
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
         columnar_error: Exception | None = None
         try:
             if self._should_set_local_columnar():
@@ -329,7 +329,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if columnar_error is not None:
             with suppress(Exception):
                 await transaction.rollback()
-            raise create_mapped_exception(columnar_error) from columnar_error
+            raise with_cause(create_mapped_exception(columnar_error), columnar_error) from columnar_error
         self._transaction = transaction
 
     async def commit(self) -> None:
@@ -342,7 +342,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             elif self._connection_in_transaction():
                 await self.connection.execute("COMMIT")
         except Exception as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -354,7 +354,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             elif self._connection_in_transaction():
                 await self.connection.execute("ROLLBACK")
         except Exception as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
@@ -547,7 +547,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                                 table_name, records=records, columns=columns, schema_name=schema_name
                             )
             except Exception as exc:
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
         telemetry_payload = self._ingest_telemetry_from_batches(metrics["rows_processed"], metrics["bytes_processed"])
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -656,7 +656,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 table_name, records=copy_rows, columns=resolved_columns, schema_name=schema_name
             )
         except Exception as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         telemetry_payload: StorageTelemetry = {
             "bytes_processed": 0,
             "destination": table,

@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
+from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError, with_cause
 
 __all__ = (
     "CURSOR_TOKEN_MAX_LENGTH",
@@ -351,7 +351,7 @@ def decode_cursor(
         payload = json.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         msg = "Invalid pagination cursor: malformed token"
-        raise InvalidCursorError(msg) from exc
+        raise with_cause(InvalidCursorError(msg), exc) from exc
     if (
         not isinstance(payload, dict)
         or type(payload.get("v")) is not int
@@ -370,7 +370,7 @@ def decode_cursor(
         values = tuple(_decode_value(entry) for entry in payload["k"])
     except (ValueError, TypeError, ArithmeticError, LookupError) as exc:
         msg = "Invalid pagination cursor: malformed token"
-        raise InvalidCursorError(msg) from exc
+        raise with_cause(InvalidCursorError(msg), exc) from exc
     return DecodedCursor(values, payload["d"] == "b")
 
 
@@ -458,7 +458,7 @@ def _decode_signed_parts(parts: "list[str]", *, secret: bytes | None, encrypted:
         return base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
     except binascii.Error as exc:
         msg = "Invalid pagination cursor: malformed token"
-        raise InvalidCursorError(msg) from exc
+        raise with_cause(InvalidCursorError(msg), exc) from exc
 
 
 def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypted: bool) -> bytes:
@@ -485,7 +485,7 @@ def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt
         sealed = base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))
     except binascii.Error as exc:
         msg = "Invalid pagination cursor: malformed token"
-        raise InvalidCursorError(msg) from exc
+        raise with_cause(InvalidCursorError(msg), exc) from exc
     if len(sealed) < _NONCE_LENGTH:
         msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg)
@@ -502,7 +502,7 @@ def _parse_timestamp_claim(raw_value: Any) -> float:
         numeric_value = float(raw_value)
     except OverflowError as exc:
         msg = "Invalid pagination cursor: malformed token"
-        raise InvalidCursorError(msg) from exc
+        raise with_cause(InvalidCursorError(msg), exc) from exc
     if not math.isfinite(numeric_value):
         msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg)

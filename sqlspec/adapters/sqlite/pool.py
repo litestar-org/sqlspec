@@ -15,7 +15,7 @@ from mypy_extensions import mypyc_attr
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.adapters.sqlite.core import create_mapped_exception, end_transaction, is_read_only_sqlite_config
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, with_cause
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -163,7 +163,7 @@ class SqliteConnectionPool:
             connection = sqlite3.connect(**self._connection_parameters)
         except sqlite3.Error as exc:
             if getattr(exc, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_CANTOPEN, 26):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
 
         try:

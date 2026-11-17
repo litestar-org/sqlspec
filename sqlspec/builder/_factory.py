@@ -69,7 +69,7 @@ from sqlspec.builder._update import Update
 from sqlspec.builder._values import Values
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.statement import SQL, StatementConfig
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.exceptions import SQLBuilderError, with_cause
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -197,7 +197,7 @@ class SQLFactory:
             parsed_expr = sqlglot.parse_one(statement, read=resolved_dialect)
         except Exception as e:
             msg = f"Failed to parse SQL: {e}"
-            raise SQLBuilderError(msg) from e
+            raise with_cause(SQLBuilderError(msg), e) from e
         actual_type = type(parsed_expr).__name__.upper()
         actual_type_str = actual_type
         if actual_type_str == "SELECT" or (
@@ -929,7 +929,7 @@ class SQLFactory:
                 parsed: exp.Expr = exp.maybe_parse(sql_fragment)
             except Exception as e:
                 msg = f"Failed to parse raw SQL fragment '{sql_fragment}': {e}"
-                raise SQLBuilderError(msg) from e
+                raise with_cause(SQLBuilderError(msg), e) from e
             return parsed
 
         return SQL(sql_fragment, parameters)
@@ -1761,7 +1761,7 @@ def _coerce_numeric_argument(value: Any, *, name: str) -> int | float:
                 parsed = float(stripped)
             except ValueError as exc:
                 msg = f"{name} must be a numeric value, got {value!r}"
-                raise SQLBuilderError(msg) from exc
+                raise with_cause(SQLBuilderError(msg), exc) from exc
             if not math.isfinite(parsed):
                 msg = f"{name} must be a finite numeric value, got {value!r}"
                 raise SQLBuilderError(msg)

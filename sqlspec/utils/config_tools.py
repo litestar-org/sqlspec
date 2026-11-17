@@ -17,7 +17,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError
+from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError, with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import async_, await_
@@ -124,7 +124,7 @@ def parse_pyproject_config(pyproject_path: "Path") -> str | None:
             data = tomllib.load(f)
     except Exception as e:
         msg = f"Failed to parse {pyproject_path}: {e}"
-        raise ValueError(msg) from e
+        raise with_cause(ValueError(msg), e) from e
 
     return _config_from_pyproject_data(data, pyproject_path)
 
@@ -152,7 +152,7 @@ def _load_trusted_pyproject(pyproject_path: "Path") -> "dict[str, Any] | None":
             return tomllib.load(f)
     except Exception as e:
         msg = f"Failed to parse {pyproject_path}: {e}"
-        raise ValueError(msg) from e
+        raise with_cause(ValueError(msg), e) from e
 
 
 def _config_from_pyproject_data(data: "dict[str, Any]", pyproject_path: "Path") -> str | None:
@@ -213,7 +213,7 @@ async def resolve_config_async(
         config_obj = import_string(_normalize_config_path(config_path))
     except ImportError as e:
         msg = f"Failed to import config from path '{config_path}': {e}"
-        raise ConfigResolverError(msg) from e
+        raise with_cause(ConfigResolverError(msg), e) from e
 
     if not callable(config_obj):
         return _validate_config_result(config_obj, config_path)
@@ -225,7 +225,7 @@ async def resolve_config_async(
             result = await async_(config_obj)()
     except Exception as e:
         msg = f"Failed to execute callable config '{config_path}': {e}"
-        raise ConfigResolverError(msg) from e
+        raise with_cause(ConfigResolverError(msg), e) from e
 
     return _validate_config_result(result, config_path)
 
@@ -245,7 +245,7 @@ def resolve_config_sync(
         config_obj = import_string(_normalize_config_path(config_path))
     except ImportError as e:
         msg = f"Failed to import config from path '{config_path}': {e}"
-        raise ConfigResolverError(msg) from e
+        raise with_cause(ConfigResolverError(msg), e) from e
 
     if not callable(config_obj):
         return _validate_config_result(config_obj, config_path)
@@ -257,7 +257,7 @@ def resolve_config_sync(
             result = config_obj()
     except Exception as e:
         msg = f"Failed to execute callable config '{config_path}': {e}"
-        raise ConfigResolverError(msg) from e
+        raise with_cause(ConfigResolverError(msg), e) from e
 
     return _validate_config_result(result, config_path)
 

@@ -26,6 +26,7 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers._json import from_json, to_json
@@ -519,7 +520,7 @@ def _normalize_raw_connection_config(connection_config: "Mapping[str, Any]") -> 
             parsed_port = int(port_val)
         except (TypeError, ValueError) as exc:
             msg = "SQL Anywhere port must be an integer between 1 and 65535."
-            raise ImproperConfigurationError(msg) from exc
+            raise with_cause(ImproperConfigurationError(msg), exc) from exc
         if not 1 <= parsed_port <= _MAX_SQLANYWHERE_PORT:
             msg = "SQL Anywhere port must be an integer between 1 and 65535."
             raise ImproperConfigurationError(msg)
