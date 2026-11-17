@@ -25,12 +25,13 @@ _ALLOWED_LABEL_NAMES = frozenset({
     "storage_backend",
     "transaction_state",
 })
+_MAX_CACHED_LABEL_SETS = 1024
 
 
 class PrometheusStatementObserver:
     """Statement observer that records Prometheus metrics."""
 
-    __slots__ = ("_counters", "_duration", "_label_names", "_rows")
+    __slots__ = ("_children", "_counters", "_duration", "_label_names", "_row_children", "_rows")
 
     def __init__(
         self,
@@ -48,6 +49,8 @@ class PrometheusStatementObserver:
             msg = f"High-cardinality Prometheus label names are not allowed: {disallowed_names}"
             raise ValueError(msg)
         self._label_names = resolved_labels
+        self._children: dict[tuple[str, ...], tuple[Any, Any]] = {}
+        self._row_children: dict[tuple[str, ...], Any] = {}
         self._counters = Counter(
             "query_total",
             "Total SQL statements executed",
@@ -80,10 +83,20 @@ class PrometheusStatementObserver:
 
     def __call__(self, event: StatementEvent) -> None:
         label_values = self._label_values(event)
-        self._counters.labels(*label_values).inc()
-        self._duration.labels(*label_values).observe(max(event.duration_s, 0.0))
+        children = self._children.get(label_values)
+        if children is None:
+            children = (self._counters.labels(*label_values), self._duration.labels(*label_values))
+            if len(self._children) < _MAX_CACHED_LABEL_SETS:
+                self._children[label_values] = children
+        children[0].inc()
+        children[1].observe(max(event.duration_s, 0.0))
         if event.rows_affected is not None:
-            self._rows.labels(*label_values).observe(float(event.rows_affected))
+            rows = self._row_children.get(label_values)
+            if rows is None:
+                rows = self._rows.labels(*label_values)
+                if len(self._row_children) < _MAX_CACHED_LABEL_SETS:
+                    self._row_children[label_values] = rows
+            rows.observe(float(event.rows_affected))
 
     def _label_values(self, event: StatementEvent) -> tuple[str, ...]:
         values: list[str] = []

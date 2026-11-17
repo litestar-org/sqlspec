@@ -73,18 +73,25 @@ class ObservabilityRuntime:
         self._redaction = config.redaction.copy() if config.redaction else None
         self._metrics: dict[str, float] = {}
         self._db_system_cache: dict[tuple[str, str | None], str] = {}
-        self._has_session_lifecycle_cached = (
-            self.lifecycle.has_connection_create
-            or self.lifecycle.has_connection_destroy
-            or self.lifecycle.has_session_start
-            or self.lifecycle.has_session_end
-        )
-        self._is_idle_cached = not self.lifecycle.is_enabled and not self._statement_observers
+        self._has_session_lifecycle_cached = False
+        self._is_idle_cached = True
+        self._refresh_cached_flags()
 
     @property
     def has_session_lifecycle(self) -> bool:
         """Return True when session or connection lifecycle hooks or telemetry spans are active."""
         return self._has_session_lifecycle_cached or self.span_manager.is_enabled
+
+    def _refresh_cached_flags(self) -> None:
+        """Recompute the cached lifecycle and idle flags from the dispatcher and observers."""
+        lifecycle = self.lifecycle
+        self._has_session_lifecycle_cached = (
+            lifecycle.has_connection_create
+            or lifecycle.has_connection_destroy
+            or lifecycle.has_session_start
+            or lifecycle.has_session_end
+        )
+        self._is_idle_cached = not lifecycle.is_enabled and not self._statement_observers
 
     def _resolve_db_system_cached(self, driver: str, db_system: str | None) -> str:
         key = (driver, db_system)
@@ -262,7 +269,7 @@ class ObservabilityRuntime:
             callback: Callable receiving the lifecycle context.
         """
         self.lifecycle.register_hook(event, callback)  # type: ignore[arg-type]
-        self._is_idle_cached = not self.lifecycle.is_enabled and not self._statement_observers
+        self._refresh_cached_flags()
 
     def emit_connection_create_sync(self, connection: Any) -> None:
         span = self._start_lifecycle_span("connection.create", subject=connection)

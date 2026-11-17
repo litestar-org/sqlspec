@@ -391,12 +391,12 @@ def sign_primary_pin(
 
 
 def verify_primary_pin(
-    token: str, secret: str | bytes, *, bind_key: str | None = None, clock: Callable[[], float] = time.time
+    token: Any, secret: str | bytes, *, bind_key: str | None = None, clock: Callable[[], float] = time.time
 ) -> tuple[bool, str | None]:
     """Verify an HMAC-signed primary pin cookie value and check expiration and bind key.
 
     Args:
-        token: Raw cookie value supplied by the client.
+        token: Raw cookie value supplied by the client; a missing or non-string value is invalid.
         secret: Shared HMAC secret key (non-empty ``str`` or ``bytes``).
         bind_key: Logical database bind key expected for this check.
         clock: Wall-clock epoch provider in seconds.

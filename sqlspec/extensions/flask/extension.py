@@ -22,11 +22,17 @@ from sqlspec.extensions.flask._utils import (
     set_context_value,
     set_request_tenant,
 )
-from sqlspec.utils.config_tools import resolve_extension_commit_mode
+from sqlspec.utils.config_tools import normalize_extension_status_codes, resolve_extension_commit_mode
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
-from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, apply_request_routing_hints
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    RoutingEntry,
+    apply_request_routing_hints,
+    validate_routing_middleware_settings,
+)
 from sqlspec.utils.tenant import (
     TenantContext,
     TenantContextPayload,
@@ -415,22 +421,28 @@ class SQLSpecPlugin:
         session_key = flask_config.get("session_key", DEFAULT_SESSION_KEY)
         connection_key = flask_config.get("connection_key", f"sqlspec_connection_{session_key}")
         commit_mode = resolve_extension_commit_mode(config, flask_config, DEFAULT_COMMIT_MODE)
-        extra_commit_statuses = flask_config.get("extra_commit_statuses")
-        extra_rollback_statuses = flask_config.get("extra_rollback_statuses")
-        disable_di = flask_config.get("disable_di", False)
+        extra_commit_statuses = normalize_extension_status_codes(flask_config.get("extra_commit_statuses"))
+        extra_rollback_statuses = normalize_extension_status_codes(flask_config.get("extra_rollback_statuses"))
+        disable_di = bool(flask_config.get("disable_di", False))
 
-        enable_correlation = flask_config.get("enable_correlation_middleware", True)
+        enable_correlation = bool(flask_config.get("enable_correlation_middleware", True))
         correlation_header = flask_config.get("correlation_header", "x-request-id")
         correlation_headers = flask_config.get("correlation_headers")
         if correlation_headers is not None:
             correlation_headers = tuple(correlation_headers)
-        auto_trace_headers = flask_config.get("auto_trace_headers", True)
-        enable_sqlcommenter = flask_config.get("enable_sqlcommenter_middleware", True)
+        auto_trace_headers = bool(flask_config.get("auto_trace_headers", True))
+        enable_sqlcommenter = bool(flask_config.get("enable_sqlcommenter_middleware", True))
 
         is_async = isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig))
         if flask_config.get("tenant_extractor") is not None and not _has_tenant_strategy(config):
             msg = "tenant_extractor requires driver_features['tenant_strategy'] on the same configuration"
             raise ImproperConfigurationError(msg)
+        enable_routing, routing_header, primary_pin_cookie, primary_pin_secret = validate_routing_middleware_settings(
+            enable_routing_middleware=flask_config.get("enable_routing_middleware", True),
+            routing_header=flask_config.get("routing_header"),
+            primary_pin_cookie=flask_config.get("primary_pin_cookie"),
+            primary_pin_secret=flask_config.get("primary_pin_secret"),
+        )
 
         return FlaskConfigState(
             config=config,
@@ -459,10 +471,10 @@ class SQLSpecPlugin:
             ),
             routing_session_key=flask_config.get("routing_session_key"),
             default_routing_mode=flask_config.get("default_routing_mode", "auto"),
-            enable_routing_middleware=flask_config.get("enable_routing_middleware", True),
-            routing_header=flask_config.get("routing_header"),
-            primary_pin_cookie=flask_config.get("primary_pin_cookie"),
-            primary_pin_secret=flask_config.get("primary_pin_secret"),
+            enable_routing_middleware=enable_routing,
+            routing_header=routing_header,
+            primary_pin_cookie=primary_pin_cookie,
+            primary_pin_secret=primary_pin_secret,
         )
 
     def _ensure_unique_keys(self) -> None:

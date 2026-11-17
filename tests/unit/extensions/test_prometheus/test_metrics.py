@@ -290,6 +290,56 @@ def test_observer_handles_negative_duration(monkeypatch) -> None:
     observer(event)
 
 
+def test_observer_accumulates_per_label_set_and_exports_rows_only_when_reported(monkeypatch) -> None:
+    """Repeated events accumulate on one series per label set; row series appear once rows are reported."""
+    _force_dependency(monkeypatch, "prometheus_client")
+
+    from prometheus_client import CollectorRegistry
+
+    from sqlspec.extensions import prometheus
+
+    registry = CollectorRegistry()
+    observer = prometheus.PrometheusStatementObserver(registry=registry)
+
+    def _observe(operation: str, rows_affected: "int | None") -> None:
+        observer(
+            create_event(
+                sql="SELECT 1",
+                parameters=(),
+                driver="AsyncpgDriver",
+                adapter="AsyncpgConfig",
+                bind_key=None,
+                operation=operation,
+                execution_mode="async",
+                is_many=False,
+                is_script=False,
+                rows_affected=rows_affected,
+                duration_s=0.25,
+                correlation_id=None,
+                db_system="postgresql",
+            )
+        )
+
+    select_labels = {"db_system": "postgresql", "operation": "SELECT"}
+    insert_labels = {"db_system": "postgresql", "operation": "INSERT"}
+
+    _observe("SELECT", None)
+    _observe("SELECT", None)
+    assert registry.get_sample_value("sqlspec_driver_query_total", select_labels) == 2.0
+    assert registry.get_sample_value("sqlspec_driver_query_duration_seconds_sum", select_labels) == 0.5
+    assert registry.get_sample_value("sqlspec_driver_query_rows_count", select_labels) is None
+
+    _observe("SELECT", 3)
+    _observe("SELECT", 4)
+    _observe("INSERT", 1)
+    assert registry.get_sample_value("sqlspec_driver_query_total", select_labels) == 4.0
+    assert registry.get_sample_value("sqlspec_driver_query_duration_seconds_count", select_labels) == 4.0
+    assert registry.get_sample_value("sqlspec_driver_query_rows_count", select_labels) == 2.0
+    assert registry.get_sample_value("sqlspec_driver_query_rows_sum", select_labels) == 7.0
+    assert registry.get_sample_value("sqlspec_driver_query_total", insert_labels) == 1.0
+    assert registry.get_sample_value("sqlspec_driver_query_rows_sum", insert_labels) == 1.0
+
+
 def test_custom_namespace_and_subsystem(monkeypatch) -> None:
     """Verify custom namespace and subsystem are applied."""
     _force_dependency(monkeypatch, "prometheus_client")

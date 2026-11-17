@@ -25,10 +25,16 @@ from sqlspec.extensions.sanic._utils import (
     set_context_value,
     set_request_tenant,
 )
-from sqlspec.utils.config_tools import resolve_extension_commit_mode
+from sqlspec.utils.config_tools import normalize_extension_status_codes, resolve_extension_commit_mode
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, apply_request_routing_hints
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    RoutingEntry,
+    apply_request_routing_hints,
+    validate_routing_middleware_settings,
+)
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding, is_tenant_bypass_route
 from sqlspec.utils.type_guards import has_name
@@ -546,31 +552,37 @@ class SQLSpecPlugin:
         if settings["tenant_extractor"] is not None and not _has_tenant_strategy(config):
             msg = "tenant_extractor requires driver_features['tenant_strategy'] on the same configuration"
             raise ImproperConfigurationError(msg)
+        enable_routing, routing_header, primary_pin_cookie, primary_pin_secret = validate_routing_middleware_settings(
+            enable_routing_middleware=settings["enable_routing_middleware"],
+            routing_header=settings["routing_header"],
+            primary_pin_cookie=settings["primary_pin_cookie"],
+            primary_pin_secret=settings["primary_pin_secret"],
+        )
         return SanicConfigState(
             config=config,
             connection_key=settings["connection_key"],
             pool_key=settings["pool_key"],
             session_key=settings["session_key"],
             commit_mode=settings["commit_mode"],
-            extra_commit_statuses=settings["extra_commit_statuses"],
-            extra_rollback_statuses=settings["extra_rollback_statuses"],
-            disable_di=settings["disable_di"],
+            extra_commit_statuses=normalize_extension_status_codes(settings["extra_commit_statuses"]),
+            extra_rollback_statuses=normalize_extension_status_codes(settings["extra_rollback_statuses"]),
+            disable_di=bool(settings["disable_di"]),
             tenant_extractor=settings["tenant_extractor"],
-            enable_correlation_middleware=settings["enable_correlation_middleware"],
+            enable_correlation_middleware=bool(settings["enable_correlation_middleware"]),
             correlation_header=settings["correlation_header"],
             correlation_headers=settings["correlation_headers"],
-            auto_trace_headers=settings["auto_trace_headers"],
-            enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
+            auto_trace_headers=bool(settings["auto_trace_headers"]),
+            enable_sqlcommenter_middleware=bool(settings["enable_sqlcommenter_middleware"]),
             sqlcommenter_framework=settings["sqlcommenter_framework"],
             replica_session_key=settings["replica_session_key"],
             replica_connection_key=settings["replica_connection_key"],
             replica_pool_key=settings["replica_pool_key"],
             routing_session_key=settings["routing_session_key"],
             default_routing_mode=settings["default_routing_mode"],
-            enable_routing_middleware=settings["enable_routing_middleware"],
-            routing_header=settings["routing_header"],
-            primary_pin_cookie=settings["primary_pin_cookie"],
-            primary_pin_secret=settings["primary_pin_secret"],
+            enable_routing_middleware=enable_routing,
+            routing_header=routing_header,
+            primary_pin_cookie=primary_pin_cookie,
+            primary_pin_secret=primary_pin_secret,
         )
 
     def _tenant_state_for(self, key: Any) -> Any:

@@ -1893,7 +1893,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         bind_keys = [state.config.bind_key or "<unbound>" for state in candidates]
         msg = (
             f"Multiple database configurations use the type '{config_type.__name__}'. "
-            f"Look one up by its bind key instead. Candidate bind keys: {bind_keys}"
+            f"Pass the configuration instance instead. Candidate bind keys: {bind_keys}"
         )
         raise KeyError(msg)
 
