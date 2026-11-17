@@ -612,14 +612,14 @@ def normalize_extension_status_codes(value: Any) -> Any:
         value: The configured ``extra_commit_statuses`` or ``extra_rollback_statuses`` value.
 
     Returns:
-        ``None`` for unset or empty values, a ``set`` for any set-like value, and any other
-        value unchanged.
+        ``None`` for unset or empty values, a ``set`` for any set-like value, list, or tuple,
+        and any other value unchanged.
     """
     if value is None or isinstance(value, set):
         return value
     if not value:
         return None
-    if isinstance(value, AbstractSet):
+    if isinstance(value, (AbstractSet, list, tuple)):
         return set(value)
     return value
 

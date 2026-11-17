@@ -830,9 +830,10 @@ def _delete_fsspec_tree(fs: Any, path: str, options: "dict[str, Any]", literal_r
     if literal_rm or _GLOB_MAGIC.search(path) is None:
         fs.rm(path, recursive=True, **options)
         return
-    entries = fs.find(path, withdirs=True, detail=True)
-    if not entries:
+    found = fs.find(path, withdirs=True, detail=True)
+    if not found:
         raise FileNotFoundError(path)
+    entries: dict[str, Any] = found if isinstance(found, dict) else {member: {} for member in found}
     for member in sorted(entries, reverse=True):
         if entries[member].get("type") == "directory":
             with contextlib.suppress(FileNotFoundError, FileExistsError, NotImplementedError):

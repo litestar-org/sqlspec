@@ -1337,6 +1337,29 @@ async def test_fsspec_recursive_delete_treats_glob_characters_literally(
 
 
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_fsspec_recursive_delete_handles_find_returning_a_list(tmp_path: Path) -> None:
+    """Recursive delete of a literal key works on a filesystem whose ``find`` lists a single file as a list."""
+    from fsspec.implementations.memory import MemoryFileSystem
+
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    class _ListFindFileSystem(MemoryFileSystem):  # type: ignore[misc]
+        def find(self, path: str, *args: Any, **kwargs: Any) -> Any:
+            found = super().find(path, *args, **kwargs)
+            return list(found) if self.isfile(path) else found
+
+    store = FSSpecBackend("memory", base_path=f"/list_find_{tmp_path.name}")
+    store.fs = _ListFindFileSystem()
+    store.write_bytes_sync("exports/report[2026].parquet", b"report")
+    store.write_bytes_sync("exports/report2.parquet", b"sibling")
+
+    store.delete_sync("exports/report[2026].parquet", recursive=True)
+
+    assert not store.exists_sync("exports/report[2026].parquet")
+    assert store.read_bytes_sync("exports/report2.parquet") == b"sibling"
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 def test_fsspec_delete_and_move_fall_back_to_rm_without_rm_file(tmp_path: Path) -> None:
     """Delete and move work on a filesystem that implements ``rm`` but not ``rm_file``."""
     from fsspec.implementations.memory import MemoryFileSystem

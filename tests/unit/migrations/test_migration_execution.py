@@ -1259,18 +1259,18 @@ def test_find_project_root_refuses_foreign_marker_in_world_writable_parent(
     ],
     ids=["private-file", "world-writable-file", "hard-linked-file"],
 )
-def test_find_project_root_in_sticky_world_writable_parent_requires_private_marker(
+def test_find_project_root_in_root_owned_world_writable_parent_requires_private_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     marker_fields: "dict[str, int]",
     reason: "str | None",
 ) -> None:
-    """In a root-owned sticky directory, only a singly linked, non-world-writable marker is used."""
+    """In a root-owned world-writable directory, only a singly linked, non-world-writable marker is used."""
     project, migrations_dir = _build_project(tmp_path)
     marker = project / "pyproject.toml"
     _override_stat(
-        monkeypatch, {(project, False): {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o1777}, (marker, False): marker_fields}
+        monkeypatch, {(project, False): {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o777}, (marker, False): marker_fields}
     )
 
     if reason is None:
@@ -1280,6 +1280,23 @@ def test_find_project_root_in_sticky_world_writable_parent_requires_private_mark
         assert find_project_root(migrations_dir) == migrations_dir
         assert f"Refusing project marker {marker}" in caplog.text
         assert reason in caplog.text
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+@pytest.mark.parametrize("nested", [False, True], ids=["parent", "grandparent"])
+def test_find_project_root_never_uses_sticky_world_writable_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, nested: bool
+) -> None:
+    """A sticky world-writable directory holding a trusted marker is not used as the project root."""
+    shared, migrations_dir = _build_project(tmp_path)
+    expected = migrations_dir
+    if nested:
+        migrations_dir = migrations_dir / "versions"
+        migrations_dir.mkdir()
+    _override_stat(monkeypatch, {(shared, False): {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o1777}})
+
+    assert find_project_root(migrations_dir) == expected
+    assert f"Ignoring the project marker in {shared}" in caplog.text
 
 
 @pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")

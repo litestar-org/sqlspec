@@ -51,8 +51,10 @@ def find_project_root(start_path: Path) -> Path:
     marker counts only when the current user or root owns it and, for a symbolic link, its
     target. Inside a shared world-writable directory (sticky, or owned by a different user) a
     marker must also be singly linked unless it is a directory, and must not be world-writable;
-    such a directory is never used as the fallback root. Every refusal is logged at warning
-    level. Platforms without ``os.getuid`` skip the ownership and permission tests.
+    such a directory is never used as the fallback root. A sticky world-writable directory such
+    as ``/tmp`` is never used as the project root, even when it holds a trusted marker. Every
+    refusal is logged at warning level. Platforms without ``os.getuid`` skip the ownership and
+    permission tests.
 
     Args:
         start_path: Directory to start searching from.
@@ -69,12 +71,17 @@ def find_project_root(start_path: Path) -> Path:
         if not _is_trusted_root_dir(current_path, current_uid):
             untrusted_path = current_path
             break
-        for marker in PROJECT_ROOT_MARKERS:
-            marker_status = _is_trusted_marker(current_path / marker, current_uid)
-            if marker_status is True:
+        marker_status = _find_trusted_marker(current_path, current_uid)
+        if marker_status is False:
+            return resolved_start
+        if marker_status is True:
+            if current_uid is None or not _is_sticky_world_writable(current_path):
                 return current_path
-            if marker_status is False:
-                return resolved_start
+            logger.warning(
+                "Ignoring the project marker in %s: a sticky world-writable directory is not used as the project root",
+                current_path,
+            )
+            break
         current_path = current_path.parent
 
     fallback = resolved_start.parent
@@ -122,6 +129,24 @@ def _is_shared_directory(path: Path, current_uid: int) -> bool:
     if not mode & stat.S_IWOTH:
         return False
     return bool(mode & stat.S_ISVTX) or path_stat.st_uid != current_uid
+
+
+def _is_sticky_world_writable(path: Path) -> bool:
+    """Return True when ``path`` is a world-writable directory with the sticky bit set."""
+    try:
+        mode = getattr(path.stat(follow_symlinks=False), "st_mode", 0)
+    except OSError:
+        return True
+    return bool(mode & stat.S_IWOTH) and bool(mode & stat.S_ISVTX)
+
+
+def _find_trusted_marker(directory: Path, current_uid: "int | None") -> "bool | None":
+    """Return True for a trusted project marker in ``directory``, False for an untrusted one, None for none."""
+    for marker in PROJECT_ROOT_MARKERS:
+        marker_status = _is_trusted_marker(directory / marker, current_uid)
+        if marker_status is not None:
+            return marker_status
+    return None
 
 
 def _is_trusted_marker(path: Path, current_uid: "int | None") -> "bool | None":

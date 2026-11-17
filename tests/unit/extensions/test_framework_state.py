@@ -654,6 +654,16 @@ def test_framework_plugins_treat_empty_status_overrides_as_unset(framework: str,
 
 
 @pytest.mark.parametrize("framework", _STATE_FRAMEWORKS)
+@pytest.mark.parametrize("statuses", [[404, 409], (404, 409)], ids=["list", "tuple"])
+def test_framework_plugins_accept_status_overrides_as_sequences(framework: str, statuses: Any) -> None:
+    """List and tuple status overrides are stored as a ``set``."""
+    state = _build_framework_plugin(framework, {"extra_commit_statuses": statuses})._config_states[0]
+
+    assert (type(state.extra_commit_statuses), state.extra_commit_statuses) == (set, {404, 409})
+    assert state.should_commit(409)
+
+
+@pytest.mark.parametrize("framework", _STATE_FRAMEWORKS)
 def test_framework_plugins_reject_overlapping_set_like_statuses(framework: str) -> None:
     """Overlapping commit and rollback overrides are rejected for any set-like input."""
     from sqlspec.exceptions import ImproperConfigurationError

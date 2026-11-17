@@ -183,9 +183,8 @@ def test_prepared_stack_operation_holds_parameters_psycopg_accepts(
     driver, _ = _driver(driver_type)
     stack = StatementStack().push_execute(sql, *arguments, **keyword_arguments)
 
-    prepared = driver._prepare_pipeline_operations(stack)
+    prepared = driver._prepare_pipeline_operations(stack) or []
 
-    assert prepared is not None
     assert len(prepared) == 1
     assert prepared[0].operation_index == 0
     assert prepared[0].sql == expected_sql

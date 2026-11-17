@@ -49,6 +49,7 @@ def test_qmark_source_keeps_double_percent_literal(sql: str, expected: str) -> N
     ("raw_sql", "expected"),
     [
         ("SELECT %s", True),
+        ("SELECT %S", True),
         ("SELECT %(v)s", True),
         ("SELECT ?", False),
         ("SELECT :v", False),

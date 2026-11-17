@@ -842,7 +842,7 @@ def source_uses_pyformat(raw_sql: str, validator: "ParameterValidator") -> bool:
     Returns:
         ``True`` when the text contains a pyformat placeholder outside literals and comments.
     """
-    if "%s" not in raw_sql and "%(" not in raw_sql:
+    if "%s" not in raw_sql and "%S" not in raw_sql and "%(" not in raw_sql:
         return False
     return any(
         info.style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}
