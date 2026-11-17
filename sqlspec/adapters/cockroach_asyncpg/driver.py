@@ -321,7 +321,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             try:
                 await self.rollback()
             except Exception:
-                raise tx_error from tx_error
+                raise tx_error
             if not is_retryable_error(tx_error) or attempt >= self._retry_config.max_retries:
                 raise tx_error
             delay = calculate_backoff_seconds(attempt, self._retry_config)

@@ -321,7 +321,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "Sequence[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect PyMySQL rows for the direct execution path."""
         description = cursor.description or None
         row_plan = resolve_row_plan(description, PYMYSQL_JSON_TYPE_CODES)

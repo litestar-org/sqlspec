@@ -57,6 +57,7 @@ from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.text import normalize_identifier
 from sqlspec.utils.type_guards import is_readable, resolve_row_format
 
@@ -259,8 +260,9 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         if statement.returns_rows() or cursor.description is not None:
             fetched_data = cursor.fetchall()
             data = cast("list[Any] | None", fetched_data) or []
-            column_names = self._resolve_column_names(cursor.description)
-            column_types = _resolve_column_types(cursor.description)
+            description = cursor.description
+            column_names = self._resolve_column_names(description)
+            column_types = _resolve_column_types(description)
             row_format = resolve_row_format(data)
 
             return self.create_execution_result(
@@ -915,8 +917,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         if statement.returns_rows() or cursor.description is not None:
             fetched_data = await cursor.fetchall()
             data = cast("list[Any] | None", fetched_data) or []
-            column_names = self._resolve_column_names(cursor.description)
-            column_types = _resolve_column_types(cursor.description)
+            description = cursor.description
+            column_names = self._resolve_column_names(description)
+            column_types = _resolve_column_types(description)
             row_format = resolve_row_format(data)
 
             return self.create_execution_result(
@@ -1036,8 +1039,11 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
+        copy_error: BaseException | None = None
         if is_copy_from_operation(operation_type):
-            async with cursor.copy(sql) as copy_ctx:
+            copy_context = cursor.copy(sql)
+            copy_ctx = await copy_context.__aenter__()
+            try:
                 if is_readable(copy_data):
                     chunk_size = 65536
                     while chunk := copy_data.read(chunk_size):
@@ -1049,6 +1055,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                     if isinstance(data_to_write, str):
                         data_to_write = data_to_write.encode("utf-8")
                     await copy_ctx.write(data_to_write)
+            except BaseException as exc:
+                copy_error = exc
+            await exit_async_context(copy_context, copy_error)
 
             rows_affected = max(cursor.rowcount, 0)
 
@@ -1058,11 +1067,16 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
         if is_copy_to_operation(operation_type):
             output_data: list[str] = []
-            async with cursor.copy(sql) as copy_ctx:
+            copy_context = cursor.copy(sql)
+            copy_ctx = await copy_context.__aenter__()
+            try:
                 output_data.extend([
                     bytes(row).decode("utf-8") if isinstance(row, (bytes, bytearray, memoryview)) else str(row)
                     async for row in copy_ctx
                 ])
+            except BaseException as exc:
+                copy_error = exc
+            await exit_async_context(copy_context, copy_error)
 
             exported_data = "".join(output_data)
             rows_affected = max(cursor.rowcount, 0)
@@ -1339,21 +1353,35 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         metrics: dict[str, int],
         use_binary: bool,
     ) -> None:
-        async with self.with_cursor(self.connection) as cursor, cursor.copy(copy_sql) as copy_ctx:
-            if use_binary:
-                for chunk in self._iter_pgcopy_binary_chunks(batches, columns=columns, metrics=metrics):
-                    await copy_ctx.write(chunk)
-            else:
-                for batch in batches:
-                    metrics["rows_processed"] += int(batch.num_rows)
-                    metrics["bytes_processed"] += int(batch.nbytes)
-                    records = self._arrow_batch_to_rows(batch, columns)
-                    if self._arrow_rows_need_preparation(batch):
-                        records = cast(
-                            "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                        )
-                    for record in records:
-                        await copy_ctx.write_row(record)
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
+            copy_context = cursor.copy(copy_sql)
+            copy_ctx = await copy_context.__aenter__()
+            copy_error: BaseException | None = None
+            try:
+                if use_binary:
+                    for chunk in self._iter_pgcopy_binary_chunks(batches, columns=columns, metrics=metrics):
+                        await copy_ctx.write(chunk)
+                else:
+                    for batch in batches:
+                        metrics["rows_processed"] += int(batch.num_rows)
+                        metrics["bytes_processed"] += int(batch.nbytes)
+                        records = self._arrow_batch_to_rows(batch, columns)
+                        if self._arrow_rows_need_preparation(batch):
+                            records = cast(
+                                "list[Any]",
+                                self.prepare_driver_parameters(records, self.statement_config, is_many=True),
+                            )
+                        for record in records:
+                            await copy_ctx.write_row(record)
+            except BaseException as exc:
+                copy_error = exc
+            await exit_async_context(copy_context, copy_error)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psycopg async rows for the direct execution path."""
@@ -1397,7 +1425,10 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                     await self.begin()
                     started_transaction = True
 
-                async with AsyncExitStack() as resource_stack:
+                resource_stack = AsyncExitStack()
+                await resource_stack.__aenter__()
+                resource_error: BaseException | None = None
+                try:
                     pipeline = await resource_stack.enter_async_context(self.connection.pipeline())
                     pending: list[PipelineCursorEntry] = []
 
@@ -1423,6 +1454,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                         sync_error = exc
 
                     results = await self._collect_pipeline_results(pending, sync_error)
+                except BaseException as caught:
+                    resource_error = caught
+                await exit_async_context(resource_stack, resource_error)
 
                 if started_transaction:
                     await self.commit()

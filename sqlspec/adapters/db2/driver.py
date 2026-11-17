@@ -39,6 +39,7 @@ from sqlspec.driver._stream import AsyncRowStream, SyncRowStream, rows_to_dicts
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import MissingDependencyError, SQLSpecError
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -755,7 +756,10 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         Args:
             schema: Schema to make current. Unquoted all-lowercase names fold to uppercase.
         """
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             handler = self.handle_database_exceptions()
             if self._migration_schema_restore is None:
                 await self._run_with_exception_handler(handler, cursor.execute, "VALUES CURRENT SCHEMA")
@@ -764,6 +768,9 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
                 self._migration_schema_restore = str(row[0])
             await self._run_with_exception_handler(handler, cursor.execute, build_set_schema_sql(schema))
             self._check_pending_exception(handler)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     async def reset_migration_session_schema(self) -> None:
         """Restore the current schema captured by ``set_migration_session_schema``.
@@ -776,12 +783,18 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         if previous_schema is None:
             return
         self._migration_schema_restore = None
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             handler = self.handle_database_exceptions()
             await self._run_with_exception_handler(
                 handler, cursor.execute, build_set_schema_sql(quote_identifier(previous_schema))
             )
             self._check_pending_exception(handler)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether the schema exists in the catalog.
@@ -792,7 +805,11 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         Returns:
             True when ``SYSCAT.SCHEMATA`` lists the schema.
         """
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        schema_exists = False
+        try:
             handler = self.handle_database_exceptions()
             await self._run_with_exception_handler(
                 handler,
@@ -802,7 +819,11 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             )
             self._check_pending_exception(handler)
             row = await cursor.fetchone()
-            return row is not None
+            schema_exists = row is not None
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
+        return schema_exists
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         column_names = resolve_column_names(

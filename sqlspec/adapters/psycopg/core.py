@@ -104,7 +104,7 @@ class PreparedStackOperation(NamedTuple):
     operation: "StackOperation"
     statement: "SQL"
     sql: "LiteralString | PsycopgSQL | PsycopgComposed"
-    parameters: "tuple[Any, ...] | dict[str, Any] | None"
+    parameters: "tuple[Any, ...] | list[Any] | dict[str, Any] | None"
 
 
 class PipelineCursorEntry(NamedTuple):
@@ -667,11 +667,12 @@ def build_pipeline_execution_result(
 
     if statement.returns_rows() or cursor.description is not None:
         fetched_data = cast("list[Any] | None", cursor.fetchall()) or []
+        description = cursor.description
         if column_name_resolver is None:
-            fetched_data, column_names = collect_rows(fetched_data, cursor.description)
+            fetched_data, column_names = collect_rows(fetched_data, description)
         else:
-            column_names = column_name_resolver(cursor.description)
-        column_types = column_types_resolver(cursor.description) if column_types_resolver is not None else None
+            column_names = column_name_resolver(description)
+        column_types = column_types_resolver(description) if column_types_resolver is not None else None
         row_format = resolve_row_format(fetched_data)
         return ExecutionResult(
             cursor_result=cursor,
@@ -728,11 +729,12 @@ async def build_async_pipeline_execution_result(
 
     if statement.returns_rows() or cursor.description is not None:
         fetched_data = cast("list[Any] | None", await cursor.fetchall()) or []
+        description = cursor.description
         if column_name_resolver is None:
-            fetched_data, column_names = collect_rows(fetched_data, cursor.description)
+            fetched_data, column_names = collect_rows(fetched_data, description)
         else:
-            column_names = column_name_resolver(cursor.description)
-        column_types = column_types_resolver(cursor.description) if column_types_resolver is not None else None
+            column_names = column_name_resolver(description)
+        column_types = column_types_resolver(description) if column_types_resolver is not None else None
         row_format = resolve_row_format(fetched_data)
         return ExecutionResult(
             cursor_result=cursor,
@@ -840,6 +842,8 @@ def source_uses_pyformat(raw_sql: str, validator: "ParameterValidator") -> bool:
     Returns:
         ``True`` when the text contains a pyformat placeholder outside literals and comments.
     """
+    if "%s" not in raw_sql and "%(" not in raw_sql:
+        return False
     return any(
         info.style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}
         for info in validator.extract_parameters(raw_sql, dialect="postgres")
@@ -865,15 +869,22 @@ def escape_literal_percent(
         return sql
     keep = {info.position for info in validator.extract_parameters(sql, dialect="postgres")}
     segments: list[str] = []
-    index = 0
-    while index < len(sql):
-        if preserve_percent_escapes and sql[index : index + 2] == "%%":
-            segments.append("%%")
+    copied = 0
+    index = sql.find("%")
+    while index != -1:
+        if preserve_percent_escapes and sql.startswith("%%", index):
             index += 2
-            continue
-        char = sql[index]
-        segments.append("%%" if char == "%" and index not in keep else char)
-        index += 1
+        elif index in keep:
+            index += 1
+        else:
+            segments.append(sql[copied:index])
+            segments.append("%%")
+            index += 1
+            copied = index
+        index = sql.find("%", index)
+    if not segments:
+        return sql
+    segments.append(sql[copied:])
     return "".join(segments)
 
 

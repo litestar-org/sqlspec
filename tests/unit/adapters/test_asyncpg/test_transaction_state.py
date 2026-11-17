@@ -224,6 +224,55 @@ async def test_begin_resets_stale_transaction_and_maps_exceptions() -> None:
         await failing_driver.begin()
 
 
+class _ClaimingTransaction:
+    """Mirrors asyncpg claiming the connection before BEGIN and keeping the claim when BEGIN fails."""
+
+    def __init__(self, connection: "_ClaimedConnection") -> None:
+        self._connection = connection
+
+    async def start(self) -> None:
+        self._connection._top_xact = self
+        raise asyncpg.exceptions.DeadlockDetectedError("deadlock")
+
+
+class _ClaimedConnection:
+    __slots__ = ("_top_xact",)
+
+    def __init__(self) -> None:
+        self._top_xact: Any = None
+
+    def transaction(self) -> _ClaimingTransaction:
+        return _ClaimingTransaction(self)
+
+    def is_in_transaction(self) -> bool:
+        return False
+
+
+class _SlottedPoolProxy:
+    """Mirrors asyncpg's pool proxy: slotted, forwarding attribute reads to the wrapped connection."""
+
+    __slots__ = ("_con",)
+
+    def __init__(self, connection: _ClaimedConnection) -> None:
+        self._con = connection
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._con, name)
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["raw-connection", "pool-proxy"])
+async def test_failed_begin_releases_the_transaction_claim(pooled: bool) -> None:
+    """A failed BEGIN must not leave the connection claimed, or the next begin becomes a savepoint."""
+    raw_connection = _ClaimedConnection()
+    connection = _SlottedPoolProxy(raw_connection) if pooled else raw_connection
+    driver = AsyncpgDriver(cast("Any", connection))
+
+    with pytest.raises(DeadlockError):
+        await driver.begin()
+
+    assert raw_connection._top_xact is None
+
+
 async def test_commit_and_rollback_skip_raw_sql_when_not_in_transaction() -> None:
     """commit() and rollback() should not execute raw COMMIT/ROLLBACK when connection is not in transaction."""
     connection = _FakeConnection()

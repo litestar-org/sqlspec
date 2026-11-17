@@ -55,6 +55,7 @@ from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import ReadOnlyTransactionError, SQLConversionError
 from sqlspec.utils.serializers._json import from_json
+from sqlspec.utils.sync_tools import exit_async_context
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -1272,8 +1273,12 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         """Load Arrow data into Spanner table via batch mutations."""
         self._require_capability("arrow_import_enabled")
         if drop_indexes:
-            async with self.without_indexes(table, concurrent=concurrent_indexes):
-                return await self.load_from_arrow(
+            index_context = self.without_indexes(table, concurrent=concurrent_indexes)
+            await index_context.__aenter__()
+            index_error: BaseException | None = None
+            index_job: StorageBridgeJob | None = None
+            try:
+                index_job = await self.load_from_arrow(
                     table,
                     source,
                     partitioner=partitioner,
@@ -1288,6 +1293,11 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                     concurrent_indexes=concurrent_indexes,
                     type_casts=type_casts,
                 )
+            except BaseException as exc:
+                index_error = exc
+            await exit_async_context(index_context, index_error)
+            assert index_job is not None
+            return index_job
         if stage_table or (
             conflict_keys and on_conflict == "nothing" and not hasattr(self.connection, "insert_or_ignore")
         ):
@@ -1496,15 +1506,27 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     async def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
         """High-throughput async ingest via the Spanner Batch Write API (one mutation group per chunk)."""
         database = self._resolve_database()
-        async with database.mutation_groups() as mutation_groups:
-            for chunk in chunks:
-                group = mutation_groups.group()
-                group.insert_or_update(table, columns, chunk)
-            async for response in await mutation_groups.batch_write():
-                status = response.status
-                if status is not None and status.code:
-                    msg = f"Spanner batch_write group failed: {status.message}"
-                    raise SQLConversionError(msg)
+        groups_context = database.mutation_groups()
+        mutation_groups = await groups_context.__aenter__()
+        groups_error: BaseException | None = None
+        try:
+            await self._write_mutation_groups(mutation_groups, table, columns, chunks)
+        except BaseException as exc:
+            groups_error = exc
+        await exit_async_context(groups_context, groups_error)
+
+    async def _write_mutation_groups(
+        self, mutation_groups: Any, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]"
+    ) -> None:
+        """Queue one mutation group per chunk, send them, and raise on the first failed group."""
+        for chunk in chunks:
+            group = mutation_groups.group()
+            group.insert_or_update(table, columns, chunk)
+        async for response in await mutation_groups.batch_write():
+            status = response.status
+            if status is not None and status.code:
+                msg = f"Spanner batch_write group failed: {status.message}"
+                raise SQLConversionError(msg)
 
     async def _commit_before_ddl(self) -> None:
         """Commit a begun session transaction before a schema change, as DDL does on MySQL or Oracle."""

@@ -51,6 +51,7 @@ from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers._json import from_json
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
@@ -396,7 +397,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "Sequence[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect asyncmy rows for the direct execution path."""
         description = cursor.description or None
         row_plan = resolve_row_plan(description, ASYNCMY_JSON_TYPE_CODES)
@@ -424,20 +425,38 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         return await super()._execute_cache_hit(sql, params, cached)
 
     async def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             if parameters is None:
                 await cursor.execute(statement)
             else:
                 await cursor.execute(statement, parameters)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     async def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             await cursor.executemany(statement, parameters)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     async def _execute_local_infile_cursor(self, statement: str, filename: str) -> None:
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             with asyncmy_local_infile(self.connection, filename):
                 await cursor.execute(statement, {"sqlspec_infile_path": filename})
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     async def _load_from_arrow_via_local_infile(
         self, table: str, columns: "list[str]", records: "list[tuple[Any, ...]]"

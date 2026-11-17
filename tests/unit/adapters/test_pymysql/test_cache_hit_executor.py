@@ -43,7 +43,7 @@ def test_execute_cache_hit_returns_rows_with_json_decoded() -> None:
     """A row-returning statement yields decoded tuple rows, column names, and the row count."""
     cursor = MagicMock()
     cursor.description = [("id", 3), ("payload", JSON_TYPE_CODE)]
-    cursor.fetchall.return_value = [(1, '{"name": "alpha"}'), (2, None)]
+    cursor.fetchall.return_value = ((1, '{"name": "alpha"}'), (2, None))
     connection = _connection(cursor)
     sql = "SELECT id, payload FROM items WHERE id > %s"
     cached = _cached(sql, "SELECT", returns_rows=True, param_count=1)
@@ -122,7 +122,7 @@ def test_driver_runs_repeated_statement_through_executor() -> None:
     """A repeated raw statement on the driver returns the same rows on the cached execution."""
     cursor = MagicMock()
     cursor.description = [("value", 3)]
-    cursor.fetchall.return_value = [(1,)]
+    cursor.fetchall.return_value = ((1,),)
     connection = _connection(cursor)
     connection.server_status = 0
     driver = PyMysqlDriver(cast("Any", connection))
@@ -142,7 +142,7 @@ def test_execute_cache_hit_matches_driver_cache_hit_method() -> None:
     """The executor and the driver cache-hit method produce the same rows, columns, and count."""
     cursor = MagicMock()
     cursor.description = [("id", 3), ("payload", JSON_TYPE_CODE)]
-    cursor.fetchall.side_effect = [[(1, '{"name": "alpha"}')], [(1, '{"name": "alpha"}')]]
+    cursor.fetchall.side_effect = [((1, '{"name": "alpha"}'),), ((1, '{"name": "alpha"}'),)]
     connection = _connection(cursor)
     connection.server_status = 0
     driver = PyMysqlDriver(cast("Any", connection))

@@ -41,6 +41,7 @@ from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 from sqlspec.utils.uuids import uuid4
@@ -678,10 +679,17 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return {"timeout": timeout} if timeout is not None else {}
 
     def _release_failed_transaction_claim(self, transaction: Any) -> None:
-        """Clear the connection's transaction claim left by a failed start."""
+        """Clear the connection's transaction claim left by a failed start.
+
+        The claim is cleared on the connection that holds it, which is the
+        wrapped connection when the driver's connection is a pool proxy.
+        """
         with suppress(Exception):
-            if getattr(self.connection, "_top_xact", None) is transaction:
-                self.connection._top_xact = None
+            connection = getattr(self.connection, "_con", None)
+            if connection is None:
+                connection = self.connection
+            if getattr(connection, "_top_xact", None) is transaction:
+                connection._top_xact = None
 
     @staticmethod
     def _copy_target(table: str) -> "tuple[str, str | None, str]":
@@ -734,10 +742,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
             if transaction_cm is not None:
-                async with transaction_cm:
+                await transaction_cm.__aenter__()
+                transaction_error: BaseException | None = None
+                try:
                     await self._run_stack_operations(
                         stack, continue_on_error, observer, results, caller_in_tx=caller_in_tx
                     )
+                except BaseException as exc:
+                    transaction_error = exc
+                await exit_async_context(transaction_cm, transaction_error)
             else:
                 await self._run_stack_operations(stack, continue_on_error, observer, results, caller_in_tx=caller_in_tx)
 
@@ -761,7 +774,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             stack_result: StackResult | None = None
             try:
                 scope = self._stack_savepoint() if continue_on_error and caller_in_tx else nullcontext()
-                async with scope:
+                await scope.__aenter__()
+                scope_error: BaseException | None = None
+                try:
                     normalized: NormalizedStackOperation | None = None
                     if operation.method == "execute":
                         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
@@ -788,6 +803,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                     else:
                         result = await self._execute_stack_operation(operation)
                         stack_result = StackResult(result=result)
+                except BaseException as scope_exc:
+                    scope_error = scope_exc
+                await exit_async_context(scope, scope_error)
             except Exception as exc:
                 operation_error = exc
 

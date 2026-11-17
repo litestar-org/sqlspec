@@ -404,11 +404,15 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     """
     _ = logger
     if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
-        return QueryTimeoutError(str(error))
+        timeout_error = QueryTimeoutError(str(error))
+        timeout_error.__cause__ = error
+        return timeout_error
     if isinstance(error, OSError) or (
         asyncpg is not None and isinstance(error, getattr(asyncpg, "InterfaceError", ()))
     ):
-        return DatabaseConnectionError(str(error))
+        connection_error = DatabaseConnectionError(str(error))
+        connection_error.__cause__ = error if isinstance(error, BaseException) else None
+        return connection_error
 
     mapped_error = _EXCEPTION_MAPPING_DISPATCHER.get(error)
     if mapped_error is not None:

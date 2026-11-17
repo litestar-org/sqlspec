@@ -281,6 +281,13 @@ async def test_async_rollback_restores_changed_autocommit() -> None:
         ("SELECT %s AS value WHERE '100%' LIKE '100%'", (1,), "SELECT %s AS value WHERE '100%%' LIKE '100%%'"),
         ("SELECT %s AS value WHERE 'a%%b' LIKE 'a%%b'", (1,), "SELECT %s AS value WHERE 'a%%b' LIKE 'a%%b'"),
         ("SELECT ? AS value WHERE 'a%%b' LIKE 'a%%b'", (1,), "SELECT %s AS value WHERE 'a%%%%b' LIKE 'a%%%%b'"),
+        ("SELECT $1 AS value WHERE 'axb' LIKE '%x%'", (1,), "SELECT %s AS value WHERE 'axb' LIKE '%%x%%'"),
+        ("SELECT $1 AS value WHERE 10 % 3 = 1", (1,), "SELECT %s AS value WHERE 10 %% 3 = 1"),
+        (
+            "SELECT %s AS value WHERE 10 %% 3 = 1 AND 'a%' <> '%s'",
+            (1,),
+            "SELECT %s AS value WHERE 10 %% 3 = 1 AND 'a%%' <> '%%s'",
+        ),
     ],
 )
 async def test_cached_percent_sql_preserves_native_binding(
@@ -673,3 +680,40 @@ def test_sync_load_from_arrow_preserves_cause_on_failure() -> None:
         driver.load_from_arrow("test_table", table, overwrite=True)
 
     assert exc_info.value.__cause__ is not None
+
+
+class _CountingDescriptionCursor:
+    """Cursor whose description builds its column list on every read, as psycopg does."""
+
+    rowcount = 1
+
+    def __init__(self) -> None:
+        self.description_reads = 0
+
+    @property
+    def description(self) -> "list[SimpleNamespace]":
+        self.description_reads += 1
+        return [SimpleNamespace(name="id", type_code=23), SimpleNamespace(name="name", type_code=25)]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_select_dispatch_resolves_names_and_types_from_one_description_read(is_async: bool) -> None:
+    """A row-returning statement resolves column names and types from a single cursor description."""
+    cursor: Any = _CountingDescriptionCursor()
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchall = AsyncMock(return_value=[(1, "a")])
+    else:
+        cursor.execute = MagicMock()
+        cursor.fetchall = MagicMock(return_value=[(1, "a")])
+    driver = PsycopgAsyncDriver(MagicMock()) if is_async else PsycopgSyncDriver(MagicMock())
+    statement = SQL("SELECT id, name FROM users WHERE id = $1", 1, statement_config=driver.statement_config)
+    statement.compile()
+
+    result = driver.dispatch_execute(cursor, statement)
+    if inspect.isawaitable(result):
+        result = await result
+
+    assert result.column_names == ["id", "name"]
+    assert result.column_types == {"id": "int32", "name": "string"}
+    assert cursor.description_reads == 1

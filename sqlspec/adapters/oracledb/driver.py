@@ -94,6 +94,7 @@ from sqlspec.storage._utils import import_pyarrow
 from sqlspec.utils.arrow_helpers import coerce_oracle_df_to_arrow_table
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 from sqlspec.utils.uuids import uuid4
@@ -2432,8 +2433,12 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """Asynchronously load Arrow data into Oracle."""
         self._require_capability("arrow_import_enabled")
         if drop_indexes:
-            async with self.without_indexes(table, concurrent=concurrent_indexes):
-                return await self.load_from_arrow(
+            index_context = self.without_indexes(table, concurrent=concurrent_indexes)
+            await index_context.__aenter__()
+            index_error: BaseException | None = None
+            index_job: StorageBridgeJob | None = None
+            try:
+                index_job = await self.load_from_arrow(
                     table,
                     source,
                     partitioner=partitioner,
@@ -2448,6 +2453,11 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
                     concurrent_indexes=concurrent_indexes,
                     type_casts=type_casts,
                 )
+            except BaseException as exc:
+                index_error = exc
+            await exit_async_context(index_context, index_error)
+            assert index_job is not None
+            return index_job
         if stage_table or conflict_keys:
             return await self._execute_staged_load_async(
                 table,

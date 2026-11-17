@@ -30,8 +30,8 @@ class _FakeCursor:
     def executemany(self, statement: str, parameters: Any = None) -> None:
         self.connection.executed.append((statement, parameters))
 
-    def fetchall(self) -> "list[Any]":
-        return []
+    def fetchall(self) -> "tuple[Any, ...]":
+        return ()
 
 
 class _FakeConnection:

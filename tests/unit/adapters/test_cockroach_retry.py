@@ -61,11 +61,12 @@ async def test_async_retry_preserves_outcome_when_rollback_fails(
     outcome: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failed rollback leaves the transaction aborted, so the original error is raised at once."""
+    """A failed rollback raises the original error at once, with its cause kept and the rollback failure reported."""
     monkeypatch.setattr(driver_type, "_connection_in_transaction", lambda _self: False)
     begin = AsyncMock()
     commit = AsyncMock()
-    rollback = AsyncMock(side_effect=RuntimeError("secondary rollback failure"))
+    rollback_failure = RuntimeError("secondary rollback failure")
+    rollback = AsyncMock(side_effect=rollback_failure)
     monkeypatch.setattr(driver_type, "begin", begin)
     monkeypatch.setattr(driver_type, "commit", commit)
     monkeypatch.setattr(driver_type, "rollback", rollback)
@@ -73,13 +74,17 @@ async def test_async_retry_preserves_outcome_when_rollback_fails(
         connection=MagicMock(),
         driver_features={"max_retries": 1, "retry_delay_base_ms": 0, "enable_retry_logging": False},
     )
+    driver_error = LookupError("driver failure")
     original = ValueError("operation failed") if outcome == "nonretryable" else _RetryableError("restart transaction")
+    original.__cause__ = driver_error
     operation = AsyncMock(side_effect=original)
 
     with pytest.raises(type(original)) as caught:
         await driver.run_transaction_with_retry(operation)
 
     assert caught.value is original
+    assert caught.value.__cause__ is driver_error
+    assert caught.value.__context__ is rollback_failure
     assert operation.await_count == begin.await_count == 1
     assert rollback.await_count == 1
     assert commit.await_count == 0

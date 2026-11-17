@@ -759,8 +759,11 @@ def _build_mapped_exception(
         SQLSpecError: The mapped exception.
     """
     if sqlstate is not None:
-        return error_cls(f"Db2 SQLSTATE {sqlstate}: {description}. Original error: {error}")
-    return error_cls(f"Db2 SQLCODE {sqlcode}: {description}. Original error: {error}")
+        mapped = error_cls(f"Db2 SQLSTATE {sqlstate}: {description}. Original error: {error}")
+    else:
+        mapped = error_cls(f"Db2 SQLCODE {sqlcode}: {description}. Original error: {error}")
+    mapped.__cause__ = error
+    return mapped
 
 
 def _normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":

@@ -57,6 +57,7 @@ from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers._json import from_json
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
@@ -492,8 +493,14 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         try:
-            async with MysqlConnectorAsyncCursor(self.connection) as cursor:
+            cursor_context = MysqlConnectorAsyncCursor(self.connection)
+            cursor = await cursor_context.__aenter__()
+            cursor_error: BaseException | None = None
+            try:
                 await cursor.execute("BEGIN")
+            except BaseException as exc:
+                cursor_error = exc
+            await exit_async_context(cursor_context, cursor_error)
         except MysqlConnectorError as e:
             raise create_mapped_exception(e) from e
 
@@ -648,25 +655,43 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     async def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             if parameters is None:
                 await cursor.execute(statement)
             else:
                 await cursor.execute(statement, parameters)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     async def _execute_cursor_statement_unprepared(self, statement: str, parameters: Any = None) -> None:
         options = self._cursor_options
         if options and options.get("prepared"):
             options = {k: v for k, v in options.items() if k != "prepared"}
-        async with MysqlConnectorAsyncCursor(self.connection, options or None) as cursor:
+        cursor_context = MysqlConnectorAsyncCursor(self.connection, options or None)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             if parameters is None:
                 await cursor.execute(statement)
             else:
                 await cursor.execute(statement, parameters)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     async def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             await cursor.executemany(statement, parameters)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     def _connection_in_transaction(self) -> bool:
         """Report whether the connector has an open transaction."""
