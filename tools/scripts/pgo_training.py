@@ -163,12 +163,7 @@ def _train_serialization() -> None:
     """Exercise JSON encode/decode paths."""
     from datetime import datetime
 
-    from sqlspec.utils.serializers._json import (
-        convert_date_to_iso,
-        convert_datetime_to_gmt_iso,
-        decode_json,
-        encode_json,
-    )
+    from sqlspec.utils.serializers._json import convert_date_to_iso, convert_datetime_to_gmt_iso, from_json, to_json
 
     small_obj = {"key": "value", "num": 42}
     medium_obj = {f"field_{i}": i * 1.5 for i in range(20)}
@@ -177,12 +172,12 @@ def _train_serialization() -> None:
     today = datetime.now(tz=UTC).date()
 
     for _ in range(10000):
-        s1 = encode_json(small_obj)
-        decode_json(s1)
-        s2 = encode_json(medium_obj)
-        decode_json(s2)
-        s3 = encode_json(list_obj)
-        decode_json(s3)
+        s1 = to_json(small_obj)
+        from_json(s1)
+        s2 = to_json(medium_obj)
+        from_json(s2)
+        s3 = to_json(list_obj)
+        from_json(s3)
         convert_datetime_to_gmt_iso(now)
         convert_date_to_iso(today)
 
@@ -244,6 +239,14 @@ def _train_sqlite_sync() -> None:
                 session.execute(insert_sql, (f"val_{i}",))
             for i in range(50000):
                 session.fetch_one_or_none(select_by, (f"val_{i % 500}",))
+            for i in range(5000):
+                res = session.execute(select_by, (f"val_{i % 500}",))
+                _ = res.scalar()
+                _ = res.all()
+
+        for i in range(500):
+            with spec.provide_session(config2) as session:
+                _ = session.execute(select_by, (f"val_{i % 500}",)).scalar()
 
         config2.close_pool()
     finally:
@@ -300,6 +303,13 @@ def _train_aiosqlite_async() -> None:
                 await session.fetch(select_all)
                 for i in range(5000):
                     await session.fetch_one_or_none(select_by, (i % 100,))
+                for i in range(2000):
+                    res = await session.execute(select_by, (i % 100,))
+                    _ = res.scalar()
+                    _ = res.all()
+            for i in range(200):
+                async with spec.provide_session(config) as session:
+                    _ = (await session.execute(select_by, (i % 100,))).scalar()
             await config.close_pool()
         finally:
             await anyio.Path(tmp_name).unlink()

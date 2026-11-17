@@ -5,7 +5,6 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-import importlib
 from typing import TYPE_CHECKING, Any
 
 import mysql
@@ -18,15 +17,15 @@ from mysql.connector import pooling as _mysql_connector_pooling
 from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection
 from mysql.connector.aio import cursor as _mysql_connector_aio_cursor
 
+from sqlspec.driver._session import AsyncDriverSessionContext, SyncDriverSessionContext
+
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-    from types import TracebackType
+    from collections.abc import Awaitable
     from typing import ClassVar, Protocol, TypeAlias
 
     from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
 
     from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
-    from sqlspec.core import StatementConfig
 
     class MysqlConnectorAsyncRawCursorProtocol(Protocol):
         description: Any
@@ -117,9 +116,6 @@ __all__ = (
     "MysqlConnectorSyncSessionContext",
 )
 
-_resolved_sync_driver_type: "type[MysqlConnectorSyncDriver] | None" = None
-_resolved_async_driver_type: "type[MysqlConnectorAsyncDriver] | None" = None
-
 
 class MysqlConnectorSyncCursor:
     """Context manager for mysql-connector sync cursor operations."""
@@ -179,157 +175,23 @@ class MysqlConnectorAsyncCursor:
                 await self.cursor.close()
 
 
-class MysqlConnectorSyncSessionContext:
+class MysqlConnectorSyncSessionContext(SyncDriverSessionContext):
     """Sync context manager for mysql-connector sessions."""
 
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
+    __slots__ = ()
 
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], MysqlConnectorSyncConnection]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[MysqlConnectorSyncDriver], MysqlConnectorSyncDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: MysqlConnectorSyncConnection | None = None
-        self._driver: MysqlConnectorSyncDriver | None = None
+    def _resolve_driver_class(self) -> "type[MysqlConnectorSyncDriver]":
+        from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorSyncDriver
 
-    def __enter__(self) -> "MysqlConnectorSyncDriver":
-        driver_cls = _get_mysqlconnector_sync_driver_type()
-        self._connection = self._acquire_connection()
-        try:
-            self._driver = driver_cls(
-                connection=self._connection,
-                statement_config=self._statement_config,
-                driver_features=self._driver_features,
-            )
-            return self._prepare_driver(self._driver)
-        except BaseException as exc:
-            with contextlib.suppress(Exception):
-                self.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-
-    def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
-            try:
-                if self._connection is not None:
-                    self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
+        return MysqlConnectorSyncDriver
 
 
-class MysqlConnectorAsyncSessionContext:
+class MysqlConnectorAsyncSessionContext(AsyncDriverSessionContext):
     """Async context manager for mysql-connector sessions."""
 
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
+    __slots__ = ()
 
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Awaitable[MysqlConnectorAsyncConnection]]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[MysqlConnectorAsyncDriver], MysqlConnectorAsyncDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: MysqlConnectorAsyncConnection | None = None
-        self._driver: MysqlConnectorAsyncDriver | None = None
+    def _resolve_driver_class(self) -> "type[MysqlConnectorAsyncDriver]":
+        from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver
 
-    async def __aenter__(self) -> "MysqlConnectorAsyncDriver":
-        driver_cls = _get_mysqlconnector_async_driver_type()
-        self._connection = await self._acquire_connection()
-        try:
-            self._driver = driver_cls(
-                connection=self._connection,
-                statement_config=self._statement_config,
-                driver_features=self._driver_features,
-            )
-            return self._prepare_driver(self._driver)
-        except BaseException as exc:
-            with contextlib.suppress(Exception):
-                await self.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                await driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
-            try:
-                if self._connection is not None:
-                    await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
-
-
-def _get_mysqlconnector_sync_driver_type() -> "type[MysqlConnectorSyncDriver]":
-    """Resolve and cache MysqlConnectorSyncDriver lazily to avoid circular imports."""
-    global _resolved_sync_driver_type
-    driver_cls = _resolved_sync_driver_type
-    if driver_cls is None:
-        module = importlib.import_module("sqlspec.adapters.mysqlconnector.driver")
-        driver_cls = module.MysqlConnectorSyncDriver
-        _resolved_sync_driver_type = driver_cls
-    return driver_cls
-
-
-def _get_mysqlconnector_async_driver_type() -> "type[MysqlConnectorAsyncDriver]":
-    """Resolve and cache MysqlConnectorAsyncDriver lazily to avoid circular imports."""
-    global _resolved_async_driver_type
-    driver_cls = _resolved_async_driver_type
-    if driver_cls is None:
-        module = importlib.import_module("sqlspec.adapters.mysqlconnector.driver")
-        driver_cls = module.MysqlConnectorAsyncDriver
-        _resolved_async_driver_type = driver_cls
-    return driver_cls
+        return MysqlConnectorAsyncDriver

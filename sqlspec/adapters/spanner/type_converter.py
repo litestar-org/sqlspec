@@ -25,9 +25,9 @@ from uuid import UUID
 from sqlspec.adapters.spanner._typing import SpannerInterval as Interval
 from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
-from sqlspec.core import TypedParameter
+from sqlspec.core.parameters._types import TypedParameter
 from sqlspec.utils.module_loader import import_optional_attr
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
 from sqlspec.utils.uuids import uuid_from_bytes
 

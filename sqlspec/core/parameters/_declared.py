@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Final, TypeAlias
 from uuid import UUID
 
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers._json import to_json
 
 __all__ = (
     "ParamTypeMatcher",

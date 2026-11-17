@@ -20,14 +20,15 @@ from typing_extensions import TypeVar
 
 from sqlspec.core.statement import SQL, ProcessedState
 from sqlspec.exceptions import MultipleResultsFoundError
-from sqlspec.storage import (
+from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
     StorageDestination,
     StorageFormat,
     StorageTelemetry,
     SyncStoragePipeline,
+    close_async_arrow_result_resources,
+    close_sync_arrow_source,
 )
-from sqlspec.storage.pipeline import close_async_arrow_result_resources, close_sync_arrow_source
 from sqlspec.utils.arrow_helpers import (
     arrow_reader_to_return_format,
     arrow_table_column_names,

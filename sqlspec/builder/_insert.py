@@ -6,6 +6,7 @@ parameter binding and validation.
 
 from typing import TYPE_CHECKING, Any, Final, Self
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
@@ -14,7 +15,7 @@ from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import resolve_value_expression
 from sqlspec.core.query_modifiers import parse_column_for_condition
 from sqlspec.exceptions import SQLBuilderError, SQLSpecError
-from sqlspec.utils.serializers import schema_dump, serialize_collection
+from sqlspec.utils.serializers._schema import schema_dump, serialize_collection
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -27,6 +28,7 @@ ERR_MSG_INTERNAL_EXPRESSION_TYPE: Final[str] = "Internal error: expression is no
 ERR_MSG_EXPRESSION_NOT_INITIALIZED: Final[str] = "Internal error: base expression not initialized."
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Insert(
     QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin, ExplainMixin
 ):

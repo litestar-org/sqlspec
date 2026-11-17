@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Generator, Iterator
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -308,13 +308,15 @@ async def test_pipeline_backpressure_stops_generator() -> None:
             return file_format == "arrow-ipc" and overwrite
 
         @contextlib.contextmanager
-        def open_write_stream_sync(self, path: str, *, overwrite: bool = True, **kwargs: Any) -> Iterator[Any]:
+        def open_write_stream_sync(
+            self, path: str, *, overwrite: bool = True, **kwargs: Any
+        ) -> Generator[Any, None, None]:
             raise NotImplementedError
 
         @contextlib.asynccontextmanager
         async def open_write_stream_async(
             self, path: str, *, overwrite: bool = True, **kwargs: Any
-        ) -> AsyncIterator[AsyncWritableBytesSink]:
+        ) -> AsyncGenerator[AsyncWritableBytesSink, None]:
             yield gated_sink
 
     registry = cast("StorageRegistry", _MapRegistry({"gate": _GatedBackend()}))

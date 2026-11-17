@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import sqlspec.exceptions
 from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyleConfig
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

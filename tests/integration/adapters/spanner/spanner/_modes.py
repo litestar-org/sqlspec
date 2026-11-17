@@ -1,6 +1,6 @@
 """Helpers that run one Spanner test body against the sync and async adapters."""
 
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
 from inspect import isawaitable
 from typing import Any, Literal, TypeVar
@@ -27,7 +27,7 @@ async def invoke(result: "T | Awaitable[T]") -> T:
 @asynccontextmanager
 async def mode_session(
     config: SpannerModeConfig, kind: Literal["session", "read", "write"] = "session", **kwargs: Any
-) -> "AsyncIterator[Any]":
+) -> "AsyncGenerator[Any, None]":
     """Open a default, read, or write session on either adapter."""
     provider: Any = getattr(config, _PROVIDERS[kind])
     if isinstance(config, SpannerAsyncConfig):

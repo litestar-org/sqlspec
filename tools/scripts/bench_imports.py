@@ -27,7 +27,7 @@ from typing import Any
 SCHEMA_VERSION = 1
 CONFIG = "from sqlspec.adapters.sqlite import SqliteConfig; config = SqliteConfig(connection_config={'database': ':memory:'})"
 QUERY = "with config.provide_session() as session:\n    assert session.execute('SELECT 1 AS value').data[0][0] == 1"
-SERIALIZER = "from sqlspec.utils.serializers._json import encode_json"
+SERIALIZER = "from sqlspec.utils.serializers._json import to_json"
 SCENARIOS: dict[str, list[tuple[str, str]]] = {
     "bare": [("import", "import sqlspec")],
     "metadata": [("metadata", "import sqlspec; version = sqlspec.__version__")],
@@ -60,12 +60,12 @@ SCENARIOS: dict[str, list[tuple[str, str]]] = {
             "from sqlspec import sql\nstatement = sql.select('1 AS value')\nwith config.provide_session() as session:\n    assert session.execute(statement).data[0][0] == 1",
         ),
     ],
-    "primitive-json": [("import", SERIALIZER), ("first_encode", "encoded = encode_json({'value': 1})")],
+    "primitive-json": [("import", SERIALIZER), ("first_encode", "encoded = to_json({'value': 1})")],
     "asyncpg-uuid": [
         ("import", SERIALIZER),
         (
             "first_encode",
-            "from asyncpg.pgproto.pgproto import UUID\nencoded = encode_json(UUID('12345678-1234-5678-1234-567812345678'))",
+            "from asyncpg.pgproto.pgproto import UUID\nencoded = to_json(UUID('12345678-1234-5678-1234-567812345678'))",
         ),
     ],
     "migration-loader": [("config", CONFIG), ("first_loader", "loader = config.get_migration_loader()")],
@@ -105,7 +105,7 @@ SCENARIOS: dict[str, list[tuple[str, str]]] = {
     "migration-tracker-import": [("import", "from sqlspec.migrations.tracker import SyncMigrationTracker")],
     "event-hints-import": [("import", "from sqlspec.extensions.events import EventRuntimeHints")],
     "warm-query": [("config", CONFIG), ("first_query", QUERY)],
-    "warm-json": [("import", SERIALIZER), ("first_encode", "encoded = encode_json({'value': 1})")],
+    "warm-json": [("import", SERIALIZER), ("first_encode", "encoded = to_json({'value': 1})")],
 }
 OPTIONAL = {
     "aiosqlite-query": "aiosqlite",
@@ -163,7 +163,7 @@ def child(scenario: str, root: str | None) -> dict[str, Any]:
                 "preloaded_modules": sorted(before),
             }
             if scenario.startswith("warm-"):
-                code = compile(QUERY if scenario == "warm-query" else "encode_json({'value': 1})", "<warm>", "exec")
+                code = compile(QUERY if scenario == "warm-query" else "to_json({'value': 1})", "<warm>", "exec")
                 warm_start = time.perf_counter_ns()
                 for _ in range(1000):
                     exec(code, namespace)  # noqa: S102

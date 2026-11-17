@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Self, cast
 
 import sqlglot
-from mypy_extensions import trait
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 from sqlglot.errors import ParseError, TokenError
 
@@ -21,7 +21,7 @@ from sqlspec.builder._parsing_utils import (
 from sqlspec.core.query_modifiers import is_valid_parameter_name, parse_column_for_condition
 from sqlspec.exceptions import SQLBuilderError, SQLSpecError
 from sqlspec.protocols import SQLBuilderProtocol
-from sqlspec.utils.serializers import schema_dump
+from sqlspec.utils.serializers._schema import schema_dump
 from sqlspec.utils.type_guards import is_dict
 
 if TYPE_CHECKING:
@@ -48,6 +48,7 @@ _RETURNING_WORD_PART = r"[A-Za-z0-9_$]*[A-Za-z_$][A-Za-z0-9_$]*"
 _RETURNING_WORD_RE: Final["re.Pattern[str]"] = re.compile(rf"{_RETURNING_WORD_PART}(?:\.{_RETURNING_WORD_PART}){{0,2}}")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class DeleteFromClauseMixin:
     """Mixin providing FROM clause support for DELETE builders."""
@@ -74,6 +75,7 @@ class DeleteFromClauseMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class InsertIntoClauseMixin:
     __slots__ = ()
@@ -98,6 +100,7 @@ class InsertIntoClauseMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class InsertValuesMixin:
     __slots__ = ()
@@ -245,6 +248,7 @@ class InsertValuesMixin:
         raise SQLBuilderError(msg)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class InsertFromSelectMixin:
     __slots__ = ()
@@ -310,6 +314,7 @@ class InsertFromSelectMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class UpdateTableClauseMixin:
     __slots__ = ()
@@ -331,6 +336,7 @@ class UpdateTableClauseMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class UpdateSetClauseMixin:
     __slots__ = ()
@@ -411,6 +417,7 @@ class UpdateSetClauseMixin:
         return placeholder
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class UpdateFromClauseMixin:
     __slots__ = ()
@@ -532,6 +539,7 @@ class UpdateFromClauseMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class ReturningClauseMixin:
     """Mixin providing RETURNING clause support for DML builders."""

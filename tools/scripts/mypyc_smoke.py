@@ -45,8 +45,8 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("prometheus_observer", "sqlspec.extensions.prometheus._observer", "PrometheusStatementObserver", True),
     SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
     SmokeImport("core_routing", "sqlspec.core.routing", "ReplicaSpec", True),
-    SmokeImport("routing_context", "sqlspec.utils.routing", "RoutingContext"),
-    SmokeImport("driver_routing", "sqlspec.driver._routing", "SyncRoutingSession"),
+    SmokeImport("routing_context", "sqlspec.utils.routing", "RoutingContext", True),
+    SmokeImport("driver_routing", "sqlspec.driver._routing", "SyncRoutingSession", True),
     SmokeImport("deferred_session", "sqlspec.driver._deferred", "DeferredAsyncSession", True),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
@@ -111,6 +111,48 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
         for adapter in ("asyncpg", "oracledb", "psqlpy", "psycopg")
     ),
     SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "StoredSession", True, "google.adk"),
+    SmokeImport("adk_table_utils", "sqlspec.extensions.adk._table_utils", None, True),
+    SmokeImport("events_buffer", "sqlspec.extensions.events._buffer", None, True),
+    SmokeImport("starlette_state", "sqlspec.extensions.starlette._state", "SQLSpecConfigState", True),
+    SmokeImport("starlette_utils", "sqlspec.extensions.starlette._utils", "get_or_create_db_session", True),
+    SmokeImport("flask_state", "sqlspec.extensions.flask._state", "FlaskConfigState", True),
+    SmokeImport("flask_utils", "sqlspec.extensions.flask._utils", "get_or_create_db_session", True),
+    SmokeImport("flask_portal", "sqlspec.extensions.flask._portal", "PortalSession", True),
+    SmokeImport("litestar_utils", "sqlspec.extensions.litestar._utils", "request_session_scope", True),
+    SmokeImport("sanic_state", "sqlspec.extensions.sanic._state", "SanicConfigState", True),
+    SmokeImport("sanic_utils", "sqlspec.extensions.sanic._utils", "get_or_create_db_session", True),
+    SmokeImport("snowflake_migrations", "sqlspec.adapters.snowflake.migrations", "SnowflakeSyncMigrationTracker", True),
+    SmokeImport("teradata_migrations", "sqlspec.adapters.teradata.migrations", "TeradataSyncMigrationTracker", True),
+    SmokeImport("driver_session", "sqlspec.driver._session", "SyncDriverSessionContext", True),
+    *(
+        SmokeImport(f"{adapter}_driver", f"sqlspec.adapters.{adapter}.driver", None, True, dependency)
+        for adapter, dependency in (
+            ("adbc", "adbc_driver_manager"),
+            ("aiomysql", "aiomysql"),
+            ("aiosqlite", "aiosqlite"),
+            ("arrow_odbc", "arrow_odbc"),
+            ("asyncmy", "asyncmy"),
+            ("asyncpg", "asyncpg"),
+            ("bigquery", "google.cloud.bigquery"),
+            ("cockroach_asyncpg", "asyncpg"),
+            ("cockroach_psycopg", "psycopg"),
+            ("db2", "ibm_db"),
+            ("duckdb", "duckdb"),
+            ("mssql_python", "mssql_python"),
+            ("mysqlconnector", "mysql.connector"),
+            ("oracledb", "oracledb"),
+            ("psqlpy", "psqlpy"),
+            ("psycopg", "psycopg"),
+            ("pymssql", "pymssql"),
+            ("pymysql", "pymysql"),
+            ("snowflake", None),
+            ("spanner", "google.cloud.spanner"),
+            ("sqlanywhere", "sqlanydb"),
+            ("sqlite", None),
+            ("sybase", "pymssql"),
+            ("teradata", None),
+        )
+    ),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),
 )
@@ -1434,6 +1476,7 @@ def _check_public_import_order(order: str, *, require_compiled: bool) -> dict[st
         imports[order]
         + """
 import importlib
+import pickle
 import sqlspec
 import sqlspec.builder as builder
 
@@ -1450,6 +1493,13 @@ assert Select is sqlspec.Select is builder.Select is importlib.import_module("sq
 assert sql is sqlspec.sql is builder.sql is importlib.import_module("sqlspec.builder._factory").sql
 assert isinstance(sql.select("value"), QueryBuilder)
 assert isinstance(sql.select("value"), Select)
+
+class _AppSelect(Select):
+    pass
+
+assert issubclass(_AppSelect, Select)
+assert isinstance(_AppSelect().select("1"), Select)
+assert pickle.loads(pickle.dumps(Select)) is Select
 
 from typing import get_type_hints
 from sqlspec.extensions.events import BaseEventQueueStore
@@ -2113,8 +2163,9 @@ def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[s
         if require_compiled:
             assert is_compiled_module(core)
             assert is_compiled_module(errors)
-            for module_name in ("sqlspec.utils.routing", "sqlspec.driver._routing", "sqlspec.service._base"):
-                assert not is_compiled_module(importlib.import_module(module_name)), module_name
+            assert is_compiled_module(context)
+            assert is_compiled_module(importlib.import_module("sqlspec.driver._routing"))
+            assert not is_compiled_module(importlib.import_module("sqlspec.service._base")), "sqlspec.service._base"
         assert statements.SQL("SELECT 1").is_read_only()
         assert not statements.SQL("SELECT nextval('sequence')", dialect="postgres").is_read_only()
         with tempfile.TemporaryDirectory() as directory:

@@ -5,7 +5,7 @@ import gc
 import sqlite3
 import threading
 from collections import UserDict
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from decimal import Decimal
@@ -658,7 +658,7 @@ def cached_async_cursor(
     cursor.fetchall = raw_cursor.fetchall
 
     @asynccontextmanager
-    async def with_cursor(_connection: Any) -> AsyncIterator[Any]:
+    async def with_cursor(_connection: Any) -> AsyncGenerator[Any, None]:
         yield cursor
 
     async def dispatch(_cursor: Any, statement: SQL) -> Any:
@@ -2074,7 +2074,9 @@ def test_run_cached_execution_hits_fast_path_for_numeric_positional_params(
         operation_type="SELECT",
         operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
         param_count=1,
-        processed_state=ProcessedState(compiled_sql="SELECT $1 AS val", execution_parameters=[1], operation_type="SELECT"),
+        processed_state=ProcessedState(
+            compiled_sql="SELECT $1 AS val", execution_parameters=[1], operation_type="SELECT"
+        ),
         simple_wire_fast_path=True,
     )
     sqlite_sync_driver._stmt_cache_enabled = True
@@ -2105,7 +2107,7 @@ def test_run_cached_execution_hits_fast_path_for_numeric_positional_params(
     monkeypatch.setattr(sqlite_sync_driver, "stmt_cache_rebind", fake_rebind)
 
     result_pos = run_cached_execution(sqlite_sync_driver, "SELECT $1 AS val", (7,))
-    assert result_pos is not None
+    assert isinstance(result_pos, SQLResult)
     assert result_pos.scalar() == 7
     assert fast_calls == [("SELECT $1 AS val", (7,))]
     assert rebind_calls == []
@@ -2117,7 +2119,7 @@ def test_run_cached_execution_hits_fast_path_for_numeric_positional_params(
         lambda prepared: SQLResult(statement=prepared, data=[{"val": 9}], rows_affected=1),
     )
     result_map = run_cached_execution(sqlite_sync_driver, "SELECT $1 AS val", {"1": 9})
-    assert result_map is not None
+    assert isinstance(result_map, SQLResult)
     assert result_map.scalar() == 9
     assert rebind_calls == [{"1": 9}]
 

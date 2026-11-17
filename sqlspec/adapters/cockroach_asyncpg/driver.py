@@ -5,6 +5,8 @@ import sys
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgInterfaceError,
@@ -27,9 +29,10 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
     validate_follower_read_staleness,
 )
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
-from sqlspec.core import SQL, register_driver_profile
-from sqlspec.driver import AsyncRowStream
-from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.statement import SQL
+from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_load_from_storage_kwargs
+from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.exceptions import ReadOnlyTransactionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
@@ -37,11 +40,15 @@ from sqlspec.utils.type_guards import has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgConnection
-    from sqlspec.core import SQLResult, StatementConfig
-    from sqlspec.driver import CachedQuery, ExecutionResult
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import SQLResult
+    from sqlspec.core.statement import StatementConfig
+    from sqlspec.driver._common import ExecutionResult
     from sqlspec.driver._stream import AsyncRowSource
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
     "CockroachAsyncpgDriver",
@@ -70,35 +77,39 @@ class CockroachAsyncpgStreamSource:
         self._connection = self._driver.connection
         if self._driver._wants_follower_read(self._statement):
             self._auto_started = await self._driver._begin_follower_read_transaction()
+        start_error: BaseException | None = None
         try:
             await self._underlying.start()
-        except BaseException:
+        except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             if self._auto_started and self._driver._connection_in_transaction():
                 with suppress(Exception):
                     await self._driver.rollback()
-            raise
+            raise start_error
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         return await self._underlying.fetch_chunk()
 
     async def close(self, error: bool = False) -> None:
+        close_error: BaseException | None = None
         try:
             await self._underlying.close(error=error)
-        finally:
-            connection = self._connection
-            self._connection = None
-            if (
-                self._auto_started
-                and self._driver.connection is connection
-                and self._driver._connection_in_transaction()
-            ):
-                if error:
-                    with suppress(Exception):
-                        await self._driver.rollback()
-                else:
-                    await self._driver.commit()
+        except BaseException as exc:
+            close_error = exc
+        connection = self._connection
+        self._connection = None
+        if self._auto_started and self._driver.connection is connection and self._driver._connection_in_transaction():
+            if error:
+                with suppress(Exception):
+                    await self._driver.rollback()
+            else:
+                await self._driver.commit()
+        if close_error is not None:
+            raise close_error
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CockroachAsyncpgExceptionHandler(AsyncpgExceptionHandler):
     """Async context manager for CockroachDB AsyncPG exceptions."""
 
@@ -114,11 +125,12 @@ class CockroachAsyncpgExceptionHandler(AsyncpgExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CockroachAsyncpgDriver(AsyncpgDriver):
     """CockroachDB AsyncPG driver with retry support."""
 
     __slots__ = ("_enable_retry", "_follower_staleness", "_retry_config")
-    dialect = "postgres"
+    dialect: "DialectType | None" = "postgres"
 
     def __init__(
         self,
@@ -134,7 +146,6 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             self.driver_features.get("default_staleness")
             or (DEFAULT_FOLLOWER_READ_STALENESS if self.driver_features.get("enable_follower_reads") else None),
         )
-        self._data_dictionary = None
         self._cache_hit_executor = (
             execute_cache_hit if cache_hit_hooks_unchanged(type(self), CockroachAsyncpgDriver) else None
         )
@@ -143,7 +154,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
     @property
     def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":
         if self._data_dictionary is None:
-            object.__setattr__(self, "_data_dictionary", CockroachAsyncpgDataDictionary())
+            self._data_dictionary = CockroachAsyncpgDataDictionary()
         return cast("CockroachAsyncpgDataDictionary", self._data_dictionary)
 
     async def select_to_storage(
@@ -236,8 +247,27 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             produced = native_import_telemetry(rows, table, resolved.protocol, file_format)
             self._attach_partition_telemetry(produced, partitioner)
             return self._storage_job(produced)
+        validate_load_from_storage_kwargs(kwargs)
         return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+            table,
+            source,
+            file_format=file_format,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            storage_options=kwargs.get("storage_options"),
+            stage_table=kwargs.get("stage_table"),
+            conflict_keys=kwargs.get("conflict_keys"),
+            on_conflict=kwargs.get("on_conflict", "update"),
+            exclude_update_columns=kwargs.get("exclude_update_columns"),
+            drop_stage_table=kwargs.get("drop_stage_table", True),
+            drop_indexes=kwargs.get("drop_indexes", False),
+            concurrent_indexes=kwargs.get("concurrent_indexes", False),
+            checkpoint_table=kwargs.get("checkpoint_table"),
+            checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+            max_workers=kwargs.get("max_workers", 1),
+            executor=kwargs.get("executor", "thread"),
+            arrow_schema=kwargs.get("arrow_schema"),
+            type_casts=kwargs.get("type_casts"),
         )
 
     async def dispatch_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
@@ -256,12 +286,15 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             await super().begin()
             return
         await super().begin()
+        begin_error: Exception | None = None
         try:
             await self._apply_follower_reads()
         except Exception as exc:
+            begin_error = exc
+        if begin_error is not None:
             with suppress(Exception):
                 await self.rollback()
-            raise create_mapped_exception(exc) from exc
+            raise create_mapped_exception(begin_error) from begin_error
 
     async def run_transaction_with_retry(self, operation: "Callable[[], Awaitable[_T]]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries.
@@ -276,19 +309,21 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
 
         attempt = 0
         while True:
+            tx_error: Exception | None = None
             try:
                 await self.begin()
                 result = await operation()
                 await self.commit()
             except Exception as exc:
-                try:
-                    await self.rollback()
-                except Exception:
-                    raise exc
-                if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
-                    raise
+                tx_error = exc
             else:
                 return result
+            try:
+                await self.rollback()
+            except Exception:
+                raise tx_error from tx_error
+            if not is_retryable_error(tx_error) or attempt >= self._retry_config.max_retries:
+                raise tx_error
             delay = calculate_backoff_seconds(attempt, self._retry_config)
             if self._retry_config.enable_logging:
                 logger.debug("CockroachDB retry %s/%s after %.3fs", attempt + 1, self._retry_config.max_retries, delay)
@@ -297,15 +332,20 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
 
     async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         auto_started = await self._begin_follower_read_transaction() if self._wants_follower_read(statement) else False
+        exec_error: BaseException | None = None
+        result: ExecutionResult | None = None
         try:
             result = await super().dispatch_execute(cursor, statement)
-        except BaseException:
+        except BaseException as exc:
+            exec_error = exc
+        if exec_error is not None:
             if auto_started and self._connection_in_transaction():
                 with suppress(Exception):
                     await self.rollback()
-            raise
+            raise exec_error
         if auto_started and self._connection_in_transaction():
             await self.commit()
+        assert result is not None
         return result
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
@@ -336,15 +376,20 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         auto_started = (
             await self._begin_follower_read_transaction() if (cached.operation_profile.is_read_only) else False
         )
+        exec_error: BaseException | None = None
+        result: SQLResult | None = None
         try:
             result = await super()._execute_cache_hit(sql, params, cached)
-        except BaseException:
+        except BaseException as exc:
+            exec_error = exc
+        if exec_error is not None:
             if auto_started and self._connection_in_transaction():
                 with suppress(Exception):
                     await self.rollback()
-            raise
+            raise exec_error
         if auto_started and self._connection_in_transaction():
             await self.commit()
+        assert result is not None
         return result
 
     def _native_storage_ready(self) -> bool:

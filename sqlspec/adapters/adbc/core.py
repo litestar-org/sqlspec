@@ -22,16 +22,13 @@ from sqlglot.errors import ParseError
 
 from sqlspec.adapters.adbc._typing import AdbcNativeError, AdbcStatusCode
 from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter, get_adbc_type_converter
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
-    StatementConfig,
-    build_null_pruning_transform,
-    build_statement_config_from_profile,
-)
-from sqlspec.core.parameters import type_coercion_dispatcher
+from sqlspec.core.parameters._processor import type_coercion_dispatcher
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._transformers import build_null_pruning_transform
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
-from sqlspec.data_dictionary import normalize_dialect_name
+from sqlspec.core.statement import StatementConfig
+from sqlspec.data_dictionary._registry import normalize_dialect_name
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -58,7 +55,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import import_optional, import_string
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate, resolve_row_format
@@ -67,8 +64,8 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlspec.core import SQL
     from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.statement import SQL
     from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = (

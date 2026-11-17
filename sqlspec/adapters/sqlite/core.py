@@ -13,9 +13,10 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 from sqlglot import exp
 
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
-from sqlspec.driver import rows_to_dicts
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -33,7 +34,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_sqlite_error, resolve_row_format
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.core.cache import CachedQuery
     from sqlspec.core.compiler import OperationType
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = (
     "JULIAN_EPOCH",

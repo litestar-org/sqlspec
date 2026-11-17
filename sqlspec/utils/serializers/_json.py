@@ -32,9 +32,9 @@ __all__ = (
     "TypeEncodersMap",
     "convert_date_to_iso",
     "convert_datetime_to_gmt_iso",
-    "decode_json",
-    "encode_json",
+    "from_json",
     "get_default_serializer",
+    "to_json",
 )
 
 
@@ -346,19 +346,19 @@ def get_default_serializer() -> JSONSerializer:
 
 
 @overload
-def encode_json(data: Any, *, as_bytes: Literal[False] = ...) -> str: ...
+def to_json(data: Any, *, as_bytes: Literal[False] = ...) -> str: ...
 
 
 @overload
-def encode_json(data: Any, *, as_bytes: Literal[True]) -> bytes: ...
+def to_json(data: Any, *, as_bytes: Literal[True]) -> bytes: ...
 
 
-def encode_json(data: Any, *, as_bytes: bool = False) -> "str | bytes":
+def to_json(data: Any, *, as_bytes: bool = False) -> "str | bytes":
     """Encode Python data into JSON."""
     return get_default_serializer().encode(data, as_bytes=as_bytes)
 
 
-def decode_json(data: "str | bytes", *, decode_bytes: bool = True) -> Any:
+def from_json(data: "str | bytes", *, decode_bytes: bool = True) -> Any:
     """Decode JSON input into Python data."""
     return get_default_serializer().decode(data, decode_bytes=decode_bytes)
 

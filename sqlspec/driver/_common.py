@@ -38,36 +38,29 @@ from sqlglot import exp
 from sqlglot.errors import ParseError, SqlglotError
 from sqlglot.tokenizer_core import TokenType
 
-from sqlspec.builder import QueryBuilder
+from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._ddl import compile_table_ddl_results
 from sqlspec.builder._parsing_utils import _normalize_dialect
-from sqlspec.core import (
-    SQL,
-    CachedStatement,
-    OperationProfile,
-    ParameterDeclaration,
-    ParameterStyle,
-    SQLResult,
-    Statement,
-    StatementConfig,
-    TypedParameter,
-    get_cache,
-    get_cache_config,
-    matches_param_type,
-    split_sql_script,
-)
 from sqlspec.core._pool import ObjectPool, get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import (
     _POSITIONAL_NUMBERED_STYLES,
     CachedQuery,
+    CachedStatement,
     QueryCache,
     StatementCacheHolder,
+    get_cache,
+    get_cache_config,
     resolve_statement_cache_size,
 )
-from sqlspec.core.compiler import _split_leading_keyword  # pyright: ignore[reportPrivateUsage]
+from sqlspec.core.compiler import (
+    OperationProfile,
+    _split_leading_keyword,  # pyright: ignore[reportPrivateUsage]
+)
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import (
+from sqlspec.core.parameters._converter import ambiguous_index_message
+from sqlspec.core.parameters._declared import ParameterDeclaration, matches_param_type
+from sqlspec.core.parameters._processor import (
     ParameterProcessor,
     apply_type_coercion,
     structural_fingerprint,
@@ -75,17 +68,25 @@ from sqlspec.core.parameters import (
     type_coercion_fallbacks,
     value_fingerprint,
 )
-from sqlspec.core.parameters._converter import ambiguous_index_message
-from sqlspec.core.result._base import RowFormat
+from sqlspec.core.parameters._types import ParameterStyle, TypedParameter
+from sqlspec.core.result._base import RowFormat, SQLResult
+from sqlspec.core.splitter import split_sql_script
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
-from sqlspec.core.statement import ProcessedState, _is_uncacheable_callable
-from sqlspec.data_dictionary import (
-    DDL_PARENT_TABLE_CONTEXT_KEY,
-    ColumnProfileMetadata,
-    DDLResult,
+from sqlspec.core.statement import SQL, ProcessedState, Statement, StatementConfig, _is_uncacheable_callable
+from sqlspec.data_dictionary._dependencies import (
     DependencyEdge,
     DependencyEdgeKind,
     DependencyStrength,
+    dependency_edges_from_foreign_keys,
+    sort_ddl_results,
+    sort_dependencies,
+)
+from sqlspec.data_dictionary._loader import get_data_dictionary_loader
+from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.data_dictionary._types import (
+    DDL_PARENT_TABLE_CONTEXT_KEY,
+    ColumnProfileMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     MetadataCapability,
     MetadataFidelity,
@@ -95,12 +96,7 @@ from sqlspec.data_dictionary import (
     ObjectIdentity,
     VersionCacheResult,
     VersionInfo,
-    dependency_edges_from_foreign_keys,
-    get_data_dictionary_loader,
-    sort_ddl_results,
-    sort_dependencies,
 )
-from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, SyncRowStream
 from sqlspec.exceptions import (
     ImproperConfigurationError,
@@ -110,8 +106,8 @@ from sqlspec.exceptions import (
     StorageCapabilityError,
     TransactionError,
 )
-from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
-from sqlspec.observability._common import redact_sql_literals
+from sqlspec.observability._common import get_trace_context, redact_sql_literals, resolve_db_system
+from sqlspec.observability._runtime import ObservabilityRuntime
 from sqlspec.protocols import StatementProtocol
 from sqlspec.storage._ingest import (
     execute_load_from_storage_async,
@@ -139,7 +135,7 @@ from sqlspec.utils.arrow_helpers import (
 )
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
-from sqlspec.utils.serializers import from_json as decode_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import (
     has_asdict_method,
@@ -155,11 +151,13 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from types import TracebackType
 
-    from sqlspec.core import ArrowResult, FilterTypeT, OperationType, StatementFilter
+    from sqlspec.core.compiler import OperationType
+    from sqlspec.core.filters import FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
+    from sqlspec.core.result._base import ArrowResult
     from sqlspec.core.stack import StatementStack
-    from sqlspec.data_dictionary import DialectConfig
-    from sqlspec.storage import (
+    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.storage.pipeline import (
         AsyncStoragePipeline,
         StorageBridgeJob,
         StorageCapabilities,
@@ -188,6 +186,7 @@ __all__ = (
     "parameter_value_needs_processing",
     "parameter_values_need_processing",
     "type_coercion_fallbacks",
+    "validate_load_from_storage_kwargs",
     "validate_savepoint_name",
 )
 
@@ -4701,6 +4700,34 @@ def _is_valid_profile_datetime(value: Any) -> bool:
     return True
 
 
+_LOAD_FROM_STORAGE_KWARGS: Final[frozenset[str]] = frozenset({
+    "arrow_schema",
+    "checkpoint_phase",
+    "checkpoint_table",
+    "concurrent_indexes",
+    "conflict_keys",
+    "drop_indexes",
+    "drop_stage_table",
+    "exclude_update_columns",
+    "executor",
+    "max_workers",
+    "on_conflict",
+    "stage_table",
+    "storage_options",
+    "type_casts",
+})
+
+
+def validate_load_from_storage_kwargs(kwargs: "dict[str, Any]") -> None:
+    """Validate optional keyword arguments forwarded to ``load_from_storage``."""
+    if not kwargs:
+        return
+    unknown = sorted(set(kwargs) - _LOAD_FROM_STORAGE_KWARGS)
+    if unknown:
+        msg = f"load_from_storage() got unexpected keyword argument '{unknown[0]}'"
+        raise TypeError(msg)
+
+
 def _is_valid_profile_json(value: Any) -> bool:
     if isinstance(value, (Mapping, list)):
         return True
@@ -4712,7 +4739,7 @@ def _is_valid_profile_json(value: Any) -> bool:
     ):
         return False
     try:
-        parsed = decode_json(stripped)
+        parsed = from_json(stripped)
     except ValueError:
         return False
     return isinstance(parsed, (Mapping, list))

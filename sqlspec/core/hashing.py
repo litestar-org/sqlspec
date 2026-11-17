@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 from sqlglot import exp
 
 from sqlspec.core._ordering import has_default_nulls, has_explicit_nulls
-from sqlspec.core.parameters import TypedParameter
+from sqlspec.core.parameters._types import TypedParameter
 from sqlspec.utils.type_guards import is_expression
 
 if TYPE_CHECKING:

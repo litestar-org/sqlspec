@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for SyncTableEventQueue and AsyncTableEventQueue."""
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -481,7 +481,7 @@ async def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false(
             return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
 
         @contextmanager
-        def provide_session(self, **_kwargs: Any) -> Iterator[Any]:
+        def provide_session(self, **_kwargs: Any) -> Generator[Any, None, None]:
             yield FakeSyncSessionDriver()
 
     sync_queue = SyncTableEventQueue(cast("Any", SyncConfigStub()), cleanup_on_ack=False)
@@ -513,7 +513,7 @@ async def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false(
             return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
 
         @asynccontextmanager
-        async def provide_session(self, **_kwargs: Any) -> AsyncIterator[Any]:
+        async def provide_session(self, **_kwargs: Any) -> AsyncGenerator[Any, None]:
             yield FakeAsyncSessionDriver()
 
     async_queue = AsyncTableEventQueue(cast("Any", AsyncConfigStub()), cleanup_on_ack=False)
@@ -535,7 +535,7 @@ async def test_fetch_candidate_and_fetch_by_event_id_use_read_only_session_when_
             return None
 
     @contextmanager
-    def _provide_sync_session(*_args: Any, **kwargs: Any) -> Iterator[Any]:
+    def _provide_sync_session(*_args: Any, **kwargs: Any) -> Generator[Any, None, None]:
         sync_session_calls.append(kwargs)
         yield FakeSyncDriver()
 
@@ -559,7 +559,7 @@ async def test_fetch_candidate_and_fetch_by_event_id_use_read_only_session_when_
             return None
 
     @asynccontextmanager
-    async def _provide_async_session(*_args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+    async def _provide_async_session(*_args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
         async_session_calls.append(kwargs)
         yield FakeAsyncDriver()
 
@@ -599,7 +599,7 @@ async def test_execute_and_publish_many_route_through_driver_run_in_transaction_
             return fn(FakeSyncTxDriver())
 
     @contextmanager
-    def _provide_sync_tx_session(*_args: Any, **kwargs: Any) -> Iterator[Any]:
+    def _provide_sync_tx_session(*_args: Any, **kwargs: Any) -> Generator[Any, None, None]:
         sync_session_kwargs.append(kwargs)
         yield FakeSyncOuterDriver()
 
@@ -628,7 +628,7 @@ async def test_execute_and_publish_many_route_through_driver_run_in_transaction_
             return await fn(FakeAsyncTxDriver())
 
     @asynccontextmanager
-    async def _provide_async_tx_session(*_args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+    async def _provide_async_tx_session(*_args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
         async_session_kwargs.append(kwargs)
         yield FakeAsyncOuterDriver()
 

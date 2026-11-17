@@ -30,19 +30,13 @@ from sqlspec.adapters.db2.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.db2.data_dictionary import Db2AsyncDataDictionary, Db2SyncDataDictionary
-from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.driver import (
-    AsyncDriverAdapterBase,
-    AsyncRowStream,
-    BaseAsyncExceptionHandler,
-    BaseSyncExceptionHandler,
-    ExecutionResult,
-    SyncDriverAdapterBase,
-    SyncRowStream,
-    rows_to_dicts,
-    validate_savepoint_name,
-)
-from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._common import ExecutionResult, cache_hit_hooks_unchanged, validate_savepoint_name
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream, SyncRowStream, rows_to_dicts
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import MissingDependencyError, SQLSpecError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
@@ -50,10 +44,14 @@ from sqlspec.utils.text import normalize_identifier, quote_identifier
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQLResult, Statement, StatementFilter
+    from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import SQLResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
     from sqlspec.driver._common import CachedQuery
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 
 __all__ = (
@@ -70,7 +68,7 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.db2")
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Db2SyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager that maps ``ibm_db_dbi`` errors to SQLSpec exceptions.
 
@@ -152,7 +150,7 @@ class Db2SyncStreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Db2SyncDriver(SyncDriverAdapterBase):
     """IBM Db2 database driver."""
 
@@ -164,7 +162,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         "_restore_autocommit",
         "_transaction_active",
     )
-    dialect = "db2"
+    dialect: "DialectType | None" = "db2"
 
     def __init__(
         self,
@@ -275,7 +273,9 @@ class Db2SyncDriver(SyncDriverAdapterBase):
                 self.connection.set_autocommit(False)
         except Db2Error as exc:
             msg = f"Failed to begin Db2 transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            error = SQLSpecError(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._restore_autocommit = enabled
         self._transaction_active = True
 
@@ -289,7 +289,9 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             self.connection.commit()
         except Db2Error as exc:
             msg = f"Failed to commit Db2 transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            error = SQLSpecError(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._transaction_active = False
         self._restore_connection_autocommit()
 
@@ -303,7 +305,9 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             self.connection.rollback()
         except Db2Error as exc:
             msg = f"Failed to rollback Db2 transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            error = SQLSpecError(msg)
+            error.__cause__ = exc
+            raise error from exc
         finally:
             self._transaction_active = False
             self._restore_connection_autocommit()
@@ -445,7 +449,9 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             self.connection.set_autocommit(True)
         except Db2Error as exc:
             msg = f"Failed to restore Db2 autocommit: {exc}"
-            raise SQLSpecError(msg) from exc
+            error = SQLSpecError(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._restore_autocommit = False
 
     def _connection_in_transaction(self) -> bool:
@@ -460,7 +466,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             return False
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Db2AsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager that maps ``ibm_db_dbi`` errors to SQLSpec exceptions.
 
@@ -494,6 +500,7 @@ class Db2AsyncStreamSource:
 
     async def start(self) -> None:
         cursor_manager = self._driver.with_cursor(self._driver.connection)
+        start_error: BaseException | None = None
         try:
             cursor = await cursor_manager.__aenter__()
             handler = self._driver.handle_database_exceptions()
@@ -501,10 +508,12 @@ class Db2AsyncStreamSource:
                 handler, cursor.execute, self._sql, normalize_execute_parameters(self._parameters)
             )
             self._driver._check_pending_exception(handler)
-        except BaseException:
+        except BaseException as exc:
+            start_error = exc
+        if start_error is not None:
             with contextlib.suppress(Exception):
                 await cursor_manager.__aexit__(None, None, None)
-            raise
+            raise start_error
         self._cursor_manager = cursor_manager
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -533,7 +542,7 @@ class Db2AsyncStreamSource:
                 await cursor_manager.__aexit__(None, None, None)
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Db2AsyncDriver(AsyncDriverAdapterBase):
     """IBM Db2 async database driver over ``ibm_db_dbi.AsyncConnection``."""
 
@@ -545,7 +554,7 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         "_restore_autocommit",
         "_transaction_active",
     )
-    dialect = "db2"
+    dialect: "DialectType | None" = "db2"
 
     def __init__(
         self,
@@ -658,7 +667,9 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
                 await self.connection.set_autocommit(False)
         except Db2Error as exc:
             msg = f"Failed to begin Db2 transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            error = SQLSpecError(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._restore_autocommit = enabled
         self._transaction_active = True
 
@@ -672,7 +683,9 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             await self.connection.commit()
         except Db2Error as exc:
             msg = f"Failed to commit Db2 transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            error = SQLSpecError(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._transaction_active = False
         await self._restore_connection_autocommit()
 
@@ -682,14 +695,18 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         Raises:
             SQLSpecError: When the driver reports an error.
         """
+        rollback_error: Db2Error | None = None
         try:
             await self.connection.rollback()
         except Db2Error as exc:
-            msg = f"Failed to rollback Db2 transaction: {exc}"
-            raise SQLSpecError(msg) from exc
-        finally:
-            self._transaction_active = False
-            await self._restore_connection_autocommit()
+            rollback_error = exc
+        self._transaction_active = False
+        await self._restore_connection_autocommit()
+        if rollback_error is not None:
+            msg = f"Failed to rollback Db2 transaction: {rollback_error}"
+            error = SQLSpecError(msg)
+            error.__cause__ = rollback_error
+            raise error from rollback_error
 
     def with_cursor(self, connection: Any) -> "Db2AsyncCursor":
         return Db2AsyncCursor(connection)
@@ -818,10 +835,13 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         """
         if not self._transaction_active and autocommit_baseline:
             return
+        release_error: SQLSpecError | None = None
         try:
             await self.rollback()
         except SQLSpecError as exc:
-            log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
+            release_error = exc
+        if release_error is not None:
+            log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(release_error))
             with contextlib.suppress(Exception):
                 await self.connection.close()
 
@@ -837,7 +857,9 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             await self.connection.set_autocommit(True)
         except Db2Error as exc:
             msg = f"Failed to restore Db2 autocommit: {exc}"
-            raise SQLSpecError(msg) from exc
+            error = SQLSpecError(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._restore_autocommit = False
 
     def _connection_in_transaction(self) -> bool:

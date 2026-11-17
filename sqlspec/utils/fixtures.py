@@ -23,20 +23,20 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple
 from sqlglot import Dialect, exp
 
 from sqlspec import dialects as _dialects
-from sqlspec.core.parameters import TypedParameter
+from sqlspec.core.parameters._types import TypedParameter
 from sqlspec.core.query_modifiers import sanitize_parameter_name
 from sqlspec.core.type_converter import convert_iso_date, convert_iso_datetime, convert_uuid
-from sqlspec.storage import storage_registry
+from sqlspec.storage.registry import storage_registry
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json as decode_json
-from sqlspec.utils.serializers import schema_dump
-from sqlspec.utils.serializers import to_json as encode_json
+from sqlspec.utils.serializers._json import from_json, to_json
+from sqlspec.utils.serializers._schema import schema_dump
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
     from sqlspec.typing import SupportedSchemaModel
 
 _ = _dialects
@@ -169,7 +169,7 @@ def open_fixture_sync(fixtures_path: Any, fixture_name: str) -> Any:
         with fixture_path.open(mode="r", encoding="utf-8") as f:
             f_data = f.read()
 
-    return decode_json(f_data)
+    return from_json(f_data)
 
 
 async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
@@ -197,7 +197,7 @@ async def open_fixture_async(fixtures_path: Any, fixture_name: str) -> Any:
     else:
         f_data = await _async_read_text(fixture_path)
 
-    return decode_json(f_data)
+    return from_json(f_data)
 
 
 def write_fixture_sync(
@@ -875,11 +875,11 @@ def _serialize_data(data: Any) -> str:
             else:
                 serialized_items.append(schema_dump(item))
 
-        return encode_json(serialized_items)
+        return to_json(serialized_items)
     if isinstance(data, (str, int, float, bool, type(None))):
-        return encode_json(data)
+        return to_json(data)
 
-    return encode_json(schema_dump(data))
+    return to_json(schema_dump(data))
 
 
 def _validated_fixture_name(name: str) -> str:
@@ -1157,9 +1157,9 @@ def _table_fixture_rows(file_path: Path, content: str) -> "list[dict[str, Any]]"
     """
     decoded: Any
     if file_path.name.endswith((".jsonl", ".jsonl.gz")):
-        decoded = [decode_json(line) for line in content.splitlines() if line.strip()]
+        decoded = [from_json(line) for line in content.splitlines() if line.strip()]
     else:
-        decoded = decode_json(content)
+        decoded = from_json(content)
         if not isinstance(decoded, list):
             msg = f"Table fixture {file_path} must contain a JSON array of row objects"
             raise TypeError(msg)
@@ -1383,7 +1383,7 @@ def _decode_exported_json_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
     try:
-        return decode_json(value)
+        return from_json(value)
     except (ValueError, TypeError):
         return value
 
@@ -1644,7 +1644,7 @@ def _decode_sqlite_vector(data_type: str) -> "Callable[[Any], Any]":
             return value
         if is_blob:
             return struct.pack(f"<{len(items)}f", *items)
-        return encode_json(items)
+        return to_json(items)
 
     return _sqlite_vector_converter
 
@@ -1664,7 +1664,7 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
     """
     normalized_type = data_type.lower()
     if family == "snowflake" and normalized_type in {"variant", "object", "array"}:
-        return encode_json
+        return to_json
     if _is_vector_column(normalized_type):
         if family == "postgres":
             return _pg_vector_decoder(normalized_type)
@@ -1684,7 +1684,7 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
     if _is_binary_type_info(data_type):
         return _decode_bytes
     if data_type in _JSON_TYPE_NAMES:
-        return encode_json if family in _JSON_VALUE_FAMILIES else None
+        return to_json if family in _JSON_VALUE_FAMILIES else None
     if family == "sqlite":
         return None
     if data_type.startswith(("timestamp", "datetime", "bigdatetime", "smalldatetime", "datetimetz")):
@@ -1873,14 +1873,7 @@ def _insert_table_rows_sync(
     inserted_columns = list(rows[0])
     param_map = _fixture_placeholder_map(inserted_columns)
     statement = _table_insert_statement(
-        dialect,
-        family,
-        table,
-        inserted_columns,
-        conflict_keys,
-        columns,
-        excluded_updates,
-        placeholder_names=param_map,
+        dialect, family, table, inserted_columns, conflict_keys, columns, excluded_updates, placeholder_names=param_map
     )
     bound_rows = (
         [{param_map.get(key, key): value for key, value in row.items()} for row in rows]
@@ -1922,14 +1915,7 @@ async def _insert_table_rows_async(
     inserted_columns = list(rows[0])
     param_map = _fixture_placeholder_map(inserted_columns)
     statement = _table_insert_statement(
-        dialect,
-        family,
-        table,
-        inserted_columns,
-        conflict_keys,
-        columns,
-        excluded_updates,
-        placeholder_names=param_map,
+        dialect, family, table, inserted_columns, conflict_keys, columns, excluded_updates, placeholder_names=param_map
     )
     bound_rows = (
         [{param_map.get(key, key): value for key, value in row.items()} for row in rows]
@@ -2355,8 +2341,8 @@ def _table_fixture_text(rows: "list[dict[str, Any]]", jsonl: bool) -> str:
     """Serialize table rows as a JSON array or as JSON lines, encoding bytes as base64 text."""
     exportable = [{key: _exportable_value(value) for key, value in row.items()} for row in rows]
     if not jsonl:
-        return encode_json(exportable)
-    return "".join(f"{encode_json(row)}\n" for row in exportable)
+        return to_json(exportable)
+    return "".join(f"{to_json(row)}\n" for row in exportable)
 
 
 def _partition_table_fixture_shards(
@@ -2378,7 +2364,7 @@ def _partition_table_fixture_shards(
         current_lines: list[str] = []
         current_bytes = 0
         for row in exportable:
-            line = f"{encode_json(row)}\n"
+            line = f"{to_json(row)}\n"
             line_bytes = len(line.encode("utf-8"))
             if current_lines and (
                 (max_rows_per_shard is not None and len(current_lines) >= max_rows_per_shard)
@@ -2396,7 +2382,7 @@ def _partition_table_fixture_shards(
         current_rows: list[str] = []
         current_bytes = 2
         for row in exportable:
-            row_json = encode_json(row)
+            row_json = to_json(row)
             row_bytes = len(row_json.encode("utf-8"))
             row_cost = row_bytes if not current_rows else (1 + row_bytes)
             if current_rows and (

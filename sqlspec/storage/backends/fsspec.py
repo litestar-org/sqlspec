@@ -229,14 +229,15 @@ class FSSpecBackend:
         """Read bytes from an object synchronously."""
         resolved_path = self._resolve_path(path)
         read_fn = getattr(self.fs, "cat_file", None)
-        reader = partial(read_fn, resolved_path, **kwargs) if callable(read_fn) else partial(self.fs.cat, resolved_path, **kwargs)
+        reader = (
+            partial(read_fn, resolved_path, **kwargs)
+            if callable(read_fn)
+            else partial(self.fs.cat, resolved_path, **kwargs)
+        )
         result = cast(
             "bytes",
             execute_sync_storage_operation(
-                reader,
-                backend=self.backend_type,
-                operation="read_bytes",
-                path=resolved_path,
+                reader, backend=self.backend_type, operation="read_bytes", path=resolved_path
             ),
         )
         log_storage_event(
@@ -319,12 +320,7 @@ class FSSpecBackend:
             if callable(rm_file_fn)
             else partial(self.fs.rm, resolved_path, recursive=recursive, **kwargs)
         )
-        execute_sync_storage_operation(
-            delete_fn,
-            backend=self.backend_type,
-            operation="delete",
-            path=resolved_path,
-        )
+        execute_sync_storage_operation(delete_fn, backend=self.backend_type, operation="delete", path=resolved_path)
         log_storage_event(
             "storage.write",
             backend_type=self.backend_type,

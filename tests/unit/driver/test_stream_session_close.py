@@ -2,7 +2,7 @@
 
 import inspect
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -60,7 +60,7 @@ async def drain(stream: Any) -> "list[Any]":
 
 
 @asynccontextmanager
-async def open_session(mode: str, database: str) -> "AsyncIterator[Any]":
+async def open_session(mode: str, database: str) -> "AsyncGenerator[Any, None]":
     if mode == "sync":
         config = SqliteConfig(connection_config={"database": database})
         try:

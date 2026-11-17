@@ -45,7 +45,7 @@ from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
     from contextlib import AbstractAsyncContextManager
     from uuid import UUID
 
@@ -558,7 +558,7 @@ class CockroachAsyncpgConfig(
     @asynccontextmanager
     async def _replica_connection(
         self, context: "AbstractAsyncContextManager[CockroachAsyncpgDriver]"
-    ) -> "AsyncIterator[Any]":
+    ) -> "AsyncGenerator[Any, None]":
         async with context as session:
             await session.begin()
             failed = False

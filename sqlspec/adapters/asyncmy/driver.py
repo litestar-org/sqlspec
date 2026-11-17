@@ -10,6 +10,8 @@ import tempfile
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.asyncmy._typing import (
     ASYNCMY_INSERT_VALUES_PATTERN,
     AsyncmyCursor,
@@ -41,20 +43,27 @@ from sqlspec.adapters.asyncmy.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
-from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
-    from sqlspec.core import SQL, SQLResult, StatementConfig
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler")
 
@@ -66,6 +75,7 @@ json_type_value = (
 ASYNCMY_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncmyExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling asyncmy (MySQL) database exceptions.
 
@@ -84,6 +94,7 @@ class AsyncmyExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncmyDriver(AsyncDriverAdapterBase):
     """MySQL/MariaDB database driver using AsyncMy client library.
 
@@ -93,7 +104,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_json_deserializer")
-    dialect = "mysql"
+    dialect: "DialectType | None" = "mysql"
 
     def __init__(
         self,
@@ -446,23 +457,28 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             if pending_cancellation is not None:
                 raise pending_cancellation
             raise
-        try:
-            if pending_cancellation is not None:
-                raise pending_cancellation
-            statement = build_load_data_statement(table, columns)
-            exc_handler = self.handle_database_exceptions()
-            await self._run_with_exception_handler(exc_handler, self._execute_local_infile_cursor, statement, filename)
-            self._check_pending_exception(exc_handler)
-        finally:
-            cleanup = asyncio.create_task(asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True))
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError as exc:
-                    pending_cancellation = exc
-            cleanup.result()
-            if pending_cancellation is not None:
-                raise pending_cancellation
+        load_error: BaseException | None = None
+        if pending_cancellation is None:
+            try:
+                statement = build_load_data_statement(table, columns)
+                exc_handler = self.handle_database_exceptions()
+                await self._run_with_exception_handler(
+                    exc_handler, self._execute_local_infile_cursor, statement, filename
+                )
+                self._check_pending_exception(exc_handler)
+            except BaseException as exc:
+                load_error = exc
+        cleanup = asyncio.create_task(asyncio.to_thread(shutil.rmtree, directory, ignore_errors=True))
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError as exc:
+                pending_cancellation = exc
+        cleanup.result()
+        if pending_cancellation is not None:
+            raise pending_cancellation
+        if load_error is not None:
+            raise load_error
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

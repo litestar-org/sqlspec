@@ -14,7 +14,7 @@ from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.driver import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.sanic._state import SanicConfigState
+from sqlspec.extensions.sanic._state import CommitMode, SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
     get_or_create_db_session,
@@ -60,7 +60,7 @@ _TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
 _REQUEST_EXCEPTION_KEY: Final = "sqlspec_request_exception"
 _ACTIVE_REQUEST_KEY: Final = "_sqlspec_active_request"
 _CURRENT_REQUEST: ContextVar[Any | None] = ContextVar("_sqlspec_sanic_active_request", default=None)
-DEFAULT_COMMIT_MODE = "autocommit"
+DEFAULT_COMMIT_MODE: CommitMode = "autocommit"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"

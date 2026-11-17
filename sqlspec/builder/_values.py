@@ -7,6 +7,7 @@ parameter binding and optional table aliasing.
 from collections.abc import Mapping, Sequence
 from typing import Any, Self
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
@@ -16,6 +17,7 @@ from sqlspec.exceptions import SQLBuilderError
 __all__ = ("Values",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Values(QueryBuilder):
     """Builder for SQL VALUES clauses.
 

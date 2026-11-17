@@ -40,21 +40,16 @@ from sqlspec.builder._parsing_utils import (
     _resolve_dialect,
 )
 from sqlspec.builder._vector_distance import has_vector_distance_ancestor, register_vector_distance_generator
-from sqlspec.core import (
-    SQL,
-    ParameterStyle,
-    ParameterStyleConfig,
-    ParameterValidator,
-    StatementConfig,
-    get_cache,
-    get_cache_config,
-    hash_optimized_expression,
-)
+from sqlspec.core.cache import get_cache, get_cache_config
 from sqlspec.core.compiler import validate_placeholder_names
 from sqlspec.core.filters import StatementFilter
-from sqlspec.core.hashing import _expression_cache_fingerprint
+from sqlspec.core.hashing import _expression_cache_fingerprint, hash_optimized_expression
+from sqlspec.core.parameters._types import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.core.query_modifiers import is_valid_parameter_name, sanitize_parameter_name
-from sqlspec.data_dictionary import DialectConfig, get_dialect_config
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.data_dictionary._types import DialectConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, is_expression
@@ -104,6 +99,7 @@ class BuiltQuery:
         return hash((self.sql, frozenset(self.parameters.items()), self.dialect))
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class QueryBuilder:
     """Abstract base class for SQL query builders.
 
@@ -1395,6 +1391,7 @@ class QueryBuilder:
         return str(dialect).lower() not in _UPPER_FOLDING_DIALECTS
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ExpressionBuilder(QueryBuilder):
     """Builder wrapper for a pre-parsed SQLGlot expression."""
 

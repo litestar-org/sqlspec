@@ -15,6 +15,7 @@ from sqlspec.adapters.asyncmy._typing import (
     AsyncmyMySQLError,
     AsyncmyPool,
     AsyncmyRawCursor,
+    AsyncmySessionContext,
 )
 from sqlspec.adapters.asyncmy.core import (
     apply_driver_features,
@@ -309,76 +310,6 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
             if ctx is not None:
                 exit_result = cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
         return exit_result
-
-
-class AsyncmySessionContext:
-    """Async context manager for AsyncMy sessions.
-
-    Acquires a connection from the config, builds the driver, and releases the
-    connection when the session ends.
-    """
-
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
-
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Awaitable[AsyncmyConnection]]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[AsyncmyDriver], AsyncmyDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: AsyncmyConnection | None = None
-        self._driver: AsyncmyDriver | None = None
-
-    async def __aenter__(self) -> "AsyncmyDriver":
-        self._connection = await self._acquire_connection()
-        try:
-            self._driver = AsyncmyDriver(
-                connection=self._connection,
-                statement_config=self._statement_config,
-                driver_features=self._driver_features,
-            )
-            return self._prepare_driver(self._driver)
-        except BaseException as exc:
-            with contextlib.suppress(Exception):
-                await self.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                await driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
-            try:
-                if self._connection is not None:
-                    await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
 
 
 @mypyc_attr(native_class=False)

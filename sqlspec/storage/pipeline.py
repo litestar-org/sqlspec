@@ -26,7 +26,8 @@ from sqlspec.storage._utils import import_pyarrow
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
-from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
+from sqlspec.utils.serializers._json import to_json
+from sqlspec.utils.serializers._schema import get_serializer_metrics, serialize_collection
 from sqlspec.utils.sync_tools import async_, exit_async_context
 from sqlspec.utils.type_guards import (
     supports_async_read_bytes,

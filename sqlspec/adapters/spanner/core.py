@@ -17,15 +17,11 @@ from sqlspec.adapters.spanner._typing import SpannerTypeCode as TypeCode
 from sqlspec.adapters.spanner._typing import spanner_exceptions as api_exceptions
 from sqlspec.adapters.spanner._typing import spanner_param_types
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
-    StatementConfig,
-    TypedParameter,
-    build_statement_config_from_profile,
-)
-from sqlspec.driver import rows_to_dicts
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle, TypedParameter
+from sqlspec.core.statement import StatementConfig
 from sqlspec.driver._exception_handler import _run_with_async_exception_handler, _run_with_sync_exception_handler
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     DataError,
     DeadlockError,
@@ -43,7 +39,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.routing import RoutingContext
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.sync_tools import exit_async_context
 
 if TYPE_CHECKING:
@@ -1046,7 +1042,11 @@ def resolve_snapshot_kwargs(
     if not supplied and default_staleness is not None and apply_default_staleness:
         supplied = dict(default_staleness)
         if multi_use is None:
-            multi_use = supplied.pop("multi_use", None)
+            raw_multi_use: Any = supplied.pop("multi_use", None)
+            if raw_multi_use is not None and not isinstance(raw_multi_use, bool):
+                msg = "Spanner multi_use must be a boolean"
+                raise ImproperConfigurationError(msg)
+            multi_use = raw_multi_use
         else:
             supplied.pop("multi_use", None)
         if len(supplied) > 1:

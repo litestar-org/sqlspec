@@ -23,7 +23,8 @@ from sqlspec.core._pipeline import (
     get_statement_pipeline_metrics,
     reset_statement_pipeline_cache,
 )
-from sqlspec.core.parameters import ParameterProcessor, ParameterStyle
+from sqlspec.core.parameters._processor import ParameterProcessor
+from sqlspec.core.parameters._types import ParameterStyle
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_field_name, has_filter_attributes
 
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
     import sqlglot.expressions as exp
 
     from sqlspec.core.compiler import OperationProfile, OperationType
-    from sqlspec.core.parameters import ParameterProfile
+    from sqlspec.core.parameters._types import ParameterProfile
     from sqlspec.core.statement import SQL, ProcessedState, StatementConfig
 
 

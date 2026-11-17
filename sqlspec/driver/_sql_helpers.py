@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING, Final, NoReturn
 
 from sqlglot import exp, parse_one
 
-from sqlspec.core import SQL
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLConversionError
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.core import Statement
+    from sqlspec.core.statement import Statement
 
 
 __all__ = (

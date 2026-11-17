@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlspec.extensions.starlette._state import tenant_receipt_key
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.deprecation import deprecated
-from sqlspec.utils.tenant import TenantContextPayload
+from sqlspec.utils.tenant._context import TenantContextPayload
 
 if TYPE_CHECKING:
     from starlette.requests import Request
@@ -52,7 +52,9 @@ def get_state_value(state: Any, key: str, default: Any = _MISSING) -> Any:
             return data[key]
         except KeyError as exc:
             msg = f"'{state.__class__.__name__}' object has no attribute '{key}'"
-            raise AttributeError(msg) from exc
+            error = AttributeError(msg)
+            error.__cause__ = exc
+            raise error from exc
     return data.get(key, default)
 
 

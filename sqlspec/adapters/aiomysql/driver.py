@@ -14,6 +14,8 @@ from collections.abc import Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.aiomysql._typing import (
     AIOMYSQL_INSERT_VALUES_PATTERN,
     AiomysqlCursor,
@@ -44,20 +46,27 @@ from sqlspec.adapters.aiomysql.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
-from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.aiomysql._typing import AiomysqlConnection
-    from sqlspec.core import SQL, SQLResult, StatementConfig
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("AiomysqlCursor", "AiomysqlDriver", "AiomysqlExceptionHandler", "AiomysqlSessionContext")
 
@@ -69,6 +78,7 @@ json_type_value = (
 AIOMYSQL_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiomysql (MySQL) database exceptions.
 
@@ -87,6 +97,7 @@ class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AiomysqlDriver(AsyncDriverAdapterBase):
     """MySQL/MariaDB database driver using aiomysql client library.
 
@@ -96,7 +107,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_json_deserializer")
-    dialect = "mysql"
+    dialect: "DialectType | None" = "mysql"
 
     def __init__(
         self,
@@ -365,6 +376,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             if use_infile:
                 payload = encode_records_for_local_infile(records)
                 tmp_name = await asyncio.to_thread(_write_local_infile_tempfile, payload)
+                load_error: BaseException | None = None
                 try:
                     load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
@@ -372,8 +384,11 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
                         exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,)
                     )
                     self._check_pending_exception(exc_handler)
-                finally:
-                    await asyncio.to_thread(Path(tmp_name).unlink, True)
+                except BaseException as exc:
+                    load_error = exc
+                await asyncio.to_thread(Path(tmp_name).unlink, True)
+                if load_error is not None:
+                    raise load_error
             else:
                 insert_sql = build_insert_statement(table, columns)
                 prepared_records = (

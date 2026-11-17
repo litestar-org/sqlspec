@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast, final
 
-from sqlspec.core import SQL, StatementConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
@@ -17,7 +17,7 @@ from sqlspec.extensions.events._names import normalize_queue_table_name
 from sqlspec.extensions.events._payload import coerce_dict, coerce_optional_dict, parse_event_timestamp
 from sqlspec.extensions.events.primitives import claim_verified, lock_clause, row_limit_clause, select_limit_prefix
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.uuids import uuid4
 
@@ -27,7 +27,8 @@ if TYPE_CHECKING:
     from threading import Event
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
 
 __all__ = ("AsyncTableEventQueue", "SyncTableEventQueue", "build_queue_backend")
 

@@ -38,8 +38,10 @@ from sqlspec.builder._parsing_utils import (
     to_expression,
     unwrap_expression_source,
 )
-from sqlspec.core import SQL, ParameterStyle, apply_direction, ordered
+from sqlspec.core._ordering import apply_direction, ordered
+from sqlspec.core.parameters._types import ParameterStyle
 from sqlspec.core.query_modifiers import expr_eq, expr_gt, expr_gte, expr_lt, expr_lte, expr_neq, expr_not_like
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_parameter_builder, is_iterable_parameters
 
@@ -216,6 +218,7 @@ class WindowFunctionBuilder:
         return exp.Anonymous(this=self._function_name, expressions=expressions)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class SelectClauseMixin:
     """Mixin providing SELECT clause methods."""
@@ -365,6 +368,7 @@ class SelectClauseMixin:
         return self.group_by(_grouping_sets_expression(*column_sets))
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class OrderByClauseMixin:
     __slots__ = ()
@@ -395,6 +399,7 @@ class OrderByClauseMixin:
         return cast("Self", builder)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class LimitOffsetClauseMixin:
     __slots__ = ()
@@ -421,6 +426,7 @@ class LimitOffsetClauseMixin:
         return cast("Self", builder)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class WhereClauseMixin:
     __slots__ = ()
@@ -992,6 +998,7 @@ class WhereClauseMixin:
         return exp.Not(this=self._build_exists_condition(subquery))
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class HavingClauseMixin:
     __slots__ = ()
@@ -1014,6 +1021,7 @@ class HavingClauseMixin:
         return cast("Self", builder)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class PivotClauseMixin:
     __slots__ = ()
@@ -1064,6 +1072,7 @@ class PivotClauseMixin:
         return cast("Select", self)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class UnpivotClauseMixin:
     __slots__ = ()
@@ -1110,6 +1119,7 @@ class UnpivotClauseMixin:
         return cast("Select", self)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class CommonTableExpressionMixin:
     """Mixin for Common Table Expression (CTE) support.
@@ -1121,6 +1131,7 @@ class CommonTableExpressionMixin:
     __slots__ = ()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class SetOperationMixin:
     __slots__ = ()
@@ -1189,6 +1200,7 @@ class SetOperationMixin:
 TABLE_HINT_PATTERN: Final[str] = r"\b{}\b(\s+AS\s+\w+)?"
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Select(
     QueryBuilder,
     WhereClauseMixin,

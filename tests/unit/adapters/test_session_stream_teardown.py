@@ -4,7 +4,7 @@ import asyncio
 import importlib
 import inspect
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -132,7 +132,7 @@ def embedded(request: pytest.FixtureRequest, tmp_path: Path) -> "tuple[str, Any,
 
 
 @asynccontextmanager
-async def session_scope(config: Any) -> "AsyncIterator[Any]":
+async def session_scope(config: Any) -> "AsyncGenerator[Any, None]":
     if config.is_async:
         async with config.provide_session() as session:
             yield session

@@ -7,7 +7,7 @@ MySQL, BigQuery, Snowflake).
 
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers._json import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable

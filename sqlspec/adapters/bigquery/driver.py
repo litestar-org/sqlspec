@@ -12,6 +12,7 @@ from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.adapters.bigquery._typing import BIGQUERY_POLLING_DEFAULT_VALUE as POLLING_DEFAULT_VALUE
@@ -52,34 +53,37 @@ from sqlspec.adapters.bigquery.core import (
     uses_local_bigquery_endpoint,
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
-from sqlspec.core import (
-    SQL,
-    StatementConfig,
-    build_arrow_result_from_reader,
-    build_arrow_result_from_table,
-    build_literal_inlining_transform,
-    get_cache_config,
-    register_driver_profile,
-)
-from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.parameters._transformers import build_literal_inlining_transform
+from sqlspec.core.result._base import build_arrow_result_from_reader, build_arrow_result_from_table
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.driver._common import ExecutionResult, validate_load_from_storage_kwargs
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, StorageOperationFailedError
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers._json import to_json
 from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
+
+    from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.bigquery._typing import BigQueryQueryJob as QueryJob
     from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
     from sqlspec.adapters.bigquery._typing import BigQueryRetry as Retry
     from sqlspec.adapters.bigquery._typing import bigquery_storage_read_module as bigquery_storage
     from sqlspec.adapters.bigquery.core import BigQueryLoadFormat
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement, StatementFilter
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult
+    from sqlspec.core.statement import Statement
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
@@ -89,6 +93,7 @@ _DATASET_TABLE_PARTS = 2
 _PROJECT_DATASET_TABLE_PARTS = 3
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling BigQuery API exceptions.
 
@@ -107,6 +112,7 @@ class BigQueryExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class BigQueryDriver(SyncDriverAdapterBase):
     """BigQuery driver implementation.
 
@@ -130,7 +136,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_request_timeout",
         "_session_id",
     )
-    dialect = "bigquery"
+    dialect: "DialectType | None" = "bigquery"
     native_arrow_export: ClassVar[bool] = True
 
     def __init__(
@@ -548,7 +554,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
                         "3. Grant permissions: roles/bigquery.dataViewer\n"
                         "4. Use a real BigQuery endpoint instead of the local emulator"
                     )
-                    raise ImproperConfigurationError(msg) from RuntimeError(msg)
+                    cause = RuntimeError(msg)
+                    error = ImproperConfigurationError(msg)
+                    error.__cause__ = cause
+                    raise error from cause
 
                 return super().select_to_arrow(
                     statement,
@@ -609,7 +618,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     "3. Grant permissions: roles/bigquery.dataViewer\n"
                     "4. Use a real BigQuery endpoint instead of the local emulator"
                 )
-                raise ImproperConfigurationError(msg) from RuntimeError(msg)
+                cause = RuntimeError(msg)
+                error = ImproperConfigurationError(msg)
+                error.__cause__ = cause
+                raise error from cause
 
             result: ArrowResult = super().select_to_arrow(
                 statement,
@@ -888,13 +900,27 @@ class BigQueryDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into BigQuery."""
         if kwargs or not isinstance(source, (str, Path)):
+            validate_load_from_storage_kwargs(kwargs)
             return super().load_from_storage(
                 table,
                 source,
                 file_format=cast("StorageFormat", file_format),
                 partitioner=partitioner,
                 overwrite=overwrite,
-                **kwargs,
+                storage_options=kwargs.get("storage_options"),
+                stage_table=kwargs.get("stage_table"),
+                conflict_keys=kwargs.get("conflict_keys"),
+                on_conflict=kwargs.get("on_conflict", "update"),
+                exclude_update_columns=kwargs.get("exclude_update_columns"),
+                drop_stage_table=kwargs.get("drop_stage_table", True),
+                drop_indexes=kwargs.get("drop_indexes", False),
+                concurrent_indexes=kwargs.get("concurrent_indexes", False),
+                checkpoint_table=kwargs.get("checkpoint_table"),
+                checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+                max_workers=kwargs.get("max_workers", 1),
+                executor=kwargs.get("executor", "thread"),
+                arrow_schema=kwargs.get("arrow_schema"),
+                type_casts=kwargs.get("type_casts"),
             )
 
         job_config = build_load_job_config(file_format, overwrite)

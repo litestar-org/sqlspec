@@ -13,7 +13,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
-from sqlspec.core import SQL
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
@@ -27,17 +27,18 @@ from sqlspec.migrations.loaders import (
 from sqlspec.migrations.templates import TemplateDescriptionHints
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
 from sqlspec.migrations.version import extract_migration_version, parse_extension_stem, parse_version
-from sqlspec.observability import resolve_db_system
+from sqlspec.observability._common import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterator
+    from collections.abc import Awaitable, Callable, Generator
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
     from sqlspec.migrations.base import ExtensionReconcilerDescriptor, LoadedMigrationMetadata
-    from sqlspec.observability import ObservabilityRuntime
+    from sqlspec.observability._runtime import ObservabilityRuntime
 
 __all__ = (
     "AsyncMigrationRunner",
@@ -233,7 +234,7 @@ class BaseMigrationRunner:
             self.context.driver = driver
 
     @contextlib.contextmanager
-    def use_step_savepoints(self, driver: Any) -> "Iterator[None]":
+    def use_step_savepoints(self, driver: Any) -> "Generator[None, None, None]":
         """Isolate transactional migration steps in savepoints when an outer transaction lock is held.
 
         Yields:

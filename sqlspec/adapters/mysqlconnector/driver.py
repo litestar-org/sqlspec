@@ -11,6 +11,8 @@ from collections.abc import Callable, Mapping, Sequence, Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncCursor,
     MysqlConnectorAsyncSessionContext,
@@ -46,25 +48,25 @@ from sqlspec.adapters.mysqlconnector.data_dictionary import (
     MysqlConnectorAsyncDataDictionary,
     MysqlConnectorSyncDataDictionary,
 )
-from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import (
-    AsyncDriverAdapterBase,
-    AsyncRowStream,
-    BaseAsyncExceptionHandler,
-    BaseSyncExceptionHandler,
-    SyncDriverAdapterBase,
-    SyncRowStream,
-)
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorAsyncConnection, MysqlConnectorSyncConnection
-    from sqlspec.core import SQL, StatementConfig
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.result._base import ArrowResult
+    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
     "MysqlConnectorAsyncCursor",
@@ -83,6 +85,7 @@ json_type_value = MysqlConnectorFieldType.JSON if supports_json_type(MysqlConnec
 MYSQLCONNECTOR_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling mysql-connector sync exceptions."""
 
@@ -97,11 +100,12 @@ class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     """MySQL/MariaDB database driver using mysql-connector sync library."""
 
     __slots__ = ("_cursor_options", "_data_dictionary", "_json_deserializer")
-    dialect = "mysql"
+    dialect: "DialectType | None" = "mysql"
 
     def __init__(
         self,
@@ -372,6 +376,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return bool(self.connection.in_transaction)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling mysql-connector exceptions."""
 
@@ -386,11 +391,12 @@ class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     """MySQL/MariaDB database driver using mysql-connector async library."""
 
     __slots__ = ("_cursor_options", "_data_dictionary", "_json_deserializer")
-    dialect = "mysql"
+    dialect: "DialectType | None" = "mysql"
 
     def __init__(
         self,
@@ -596,6 +602,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             if use_infile:
                 payload = encode_records_for_local_infile(records)
                 fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
+                load_error: BaseException | None = None
                 try:
                     with os.fdopen(fd, "wb") as tmp:
                         tmp.write(payload)
@@ -605,8 +612,11 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                         exc_handler, self._execute_cursor_statement_unprepared, load_sql, (tmp_name,)
                     )
                     self._check_pending_exception(exc_handler)
-                finally:
-                    await asyncio.to_thread(Path(tmp_name).unlink, True)
+                except BaseException as exc:
+                    load_error = exc
+                await asyncio.to_thread(Path(tmp_name).unlink, True)
+                if load_error is not None:
+                    raise load_error
             else:
                 insert_sql = build_insert_statement(table, columns)
                 prepared_records = (

@@ -20,7 +20,10 @@ from urllib.parse import unquote, urlparse
 
 from sqlglot import exp
 
-from sqlspec.core import SQL, ParameterDeclaration, ParameterValidator, get_cache, get_cache_config
+from sqlspec.core.cache import get_cache, get_cache_config
+from sqlspec.core.parameters._declared import ParameterDeclaration
+from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import (
     FileNotFoundInStorageError,
     SQLFileNotFoundError,
@@ -38,7 +41,7 @@ from sqlspec.utils.text import slugify
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.observability import ObservabilityRuntime
+    from sqlspec.observability._runtime import ObservabilityRuntime
     from sqlspec.storage.registry import StorageRegistry
 
 __all__ = (

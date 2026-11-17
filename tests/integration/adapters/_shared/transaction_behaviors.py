@@ -1,7 +1,7 @@
 """Nested transaction block behaviors shared by adapter contract tests."""
 
 import contextlib
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Generator
 from typing import Any, cast
 
 import pytest
@@ -30,7 +30,7 @@ class _SyncSessionConfig:
         self.sessions = 0
 
     @contextlib.contextmanager
-    def provide_session(self) -> Iterator[Any]:
+    def provide_session(self) -> Generator[Any, None, None]:
         self.sessions += 1
         yield self.driver
 
@@ -46,7 +46,7 @@ class _AsyncSessionConfig:
         self.sessions = 0
 
     @contextlib.asynccontextmanager
-    async def provide_session(self) -> AsyncIterator[Any]:
+    async def provide_session(self) -> AsyncGenerator[Any, None]:
         self.sessions += 1
         yield self.driver
 

@@ -122,7 +122,7 @@ _DETACH_SESSION_CONTEXTS: tuple[tuple[str, str, bool], ...] = (
     ("sqlspec.adapters.aiomysql._typing", "AiomysqlSessionContext", True),
     ("sqlspec.adapters.mysqlconnector._typing", "MysqlConnectorSyncSessionContext", False),
     ("sqlspec.adapters.mysqlconnector._typing", "MysqlConnectorAsyncSessionContext", True),
-    ("sqlspec.adapters.asyncmy.config", "AsyncmySessionContext", True),
+    ("sqlspec.adapters.asyncmy._typing", "AsyncmySessionContext", True),
     ("sqlspec.adapters.mssql_python._typing", "MssqlPythonSessionContext", False),
     ("sqlspec.adapters.pymssql._typing", "PymssqlSessionContext", False),
     ("sqlspec.adapters.sybase._typing", "SybaseSessionContext", False),
@@ -199,12 +199,9 @@ def test_detach_contract_covers_every_session_context() -> None:
     """Every adapter SessionContext class across all 24 adapters is registered in _DETACH_SESSION_CONTEXTS."""
     adapters_root = Path(sqlspec.adapters.__file__).resolve().parent
     candidate_modules = [
-        *(
-            (f"sqlspec.adapters.{pkg.name}._typing", adapters_root / pkg.name / "_typing.py")
-            for pkg in pkgutil.iter_modules(sqlspec.adapters.__path__)
-            if (adapters_root / pkg.name / "_typing.py").is_file()
-        ),
-        ("sqlspec.adapters.asyncmy.config", adapters_root / "asyncmy" / "config.py"),
+        (f"sqlspec.adapters.{pkg.name}._typing", adapters_root / pkg.name / "_typing.py")
+        for pkg in pkgutil.iter_modules(sqlspec.adapters.__path__)
+        if (adapters_root / pkg.name / "_typing.py").is_file()
     ]
     discovered = {
         pair

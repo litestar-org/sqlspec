@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from sqlspec.adapters.db2._typing import Db2Error
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
+from sqlspec.core.statement import StatementConfig
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -27,7 +29,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
@@ -243,7 +245,9 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
 
     if logger is not None and (sqlstate or sqlcode):
         logger.debug("Unmapped Db2 SQLSTATE: %s, SQLCODE: %s", sqlstate, sqlcode)
-    return SQLSpecError(f"Db2 database error. Original error: {error}")
+    mapped_error = SQLSpecError(f"Db2 database error. Original error: {error}")
+    mapped_error.__cause__ = error
+    return mapped_error
 
 
 def utc_now() -> datetime:

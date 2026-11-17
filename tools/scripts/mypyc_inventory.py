@@ -28,16 +28,16 @@ SURFACE_ORDER = ("compiled", "candidate", "hard_block", "keep_interpreted", "int
 
 HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/driver/_routing.py": {
-        "classification": "keep_interpreted",
-        "reason": "Generic routing facades retain typed Python context and streaming boundaries.",
+        "classification": "compile_now",
+        "reason": "SyncRoutingSession and AsyncRoutingSession compile natively with slotted async context helpers and allow_interpreted_subclasses=True.",
     },
     "sqlspec/core/routing.py": {
         "classification": "compile_now",
         "reason": "Weighted selectors and passive health breaker compile with core.",
     },
     "sqlspec/utils/routing.py": {
-        "classification": "keep_interpreted",
-        "reason": "Pure ASGI middleware and request routing contexts preserve Python callable boundaries.",
+        "classification": "compile_now",
+        "reason": "Pure stdlib routing directives, ASGI middleware, and HMAC cookie verification compile without framework imports.",
     },
     "sqlspec/driver/_deferred.py": {
         "classification": "compile_now",
@@ -68,8 +68,20 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Teradata output and parameter coercion helpers.",
     },
     "sqlspec/adapters/teradata/driver.py": {
-        "classification": "prove_separately",
-        "reason": "Public DB-API driver remains interpreted alongside sibling adapters.",
+        "classification": "compile_now",
+        "reason": "Public DB-API driver compiles cleanly with allow_interpreted_subclasses=True and direct submodule imports.",
+    },
+    "sqlspec/adapters/sybase/driver.py": {
+        "classification": "compile_now",
+        "reason": "Sybase driver compiles cleanly with allow_interpreted_subclasses=True and direct submodule imports.",
+    },
+    "sqlspec/adapters/sqlanywhere/driver.py": {
+        "classification": "compile_now",
+        "reason": "SQL Anywhere driver compiles cleanly with allow_interpreted_subclasses=True and direct submodule imports.",
+    },
+    "sqlspec/driver/_session.py": {
+        "classification": "compile_now",
+        "reason": "Shared sync/async driver session lifecycle context managers compile natively with allow_interpreted_subclasses=True.",
     },
     "sqlspec/service/_base.py": {
         "classification": "keep_interpreted",
@@ -241,6 +253,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Sybase and SQL Anywhere render helper functions.",
     },
+    "sqlspec/extensions/events/_buffer.py": {
+        "classification": "compile_now",
+        "reason": "Typed event message buffer helper has no optional runtime imports.",
+    },
     "sqlspec/extensions/events/_models.py": {
         "classification": "compile_now",
         "reason": "EventMessage has concrete datetime annotations and slot dataclass layout compatible with mypyc.",
@@ -269,6 +285,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "keep_interpreted",
         "reason": "Base event queue store remains interpreted because adapter-specific event stores subclass it.",
     },
+    "sqlspec/extensions/adk/_table_utils.py": {
+        "classification": "compile_now",
+        "reason": "Pure ADK table schema validation helper has no optional ADK runtime import.",
+    },
     "sqlspec/extensions/adk/_types.py": {
         "classification": "compile_now",
         "reason": "ADK session/event record TypedDict definitions have no optional ADK runtime import.",
@@ -284,6 +304,38 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/extensions/adk/converters.py": {
         "classification": "keep_interpreted",
         "reason": "Imports Google ADK models at module import time and keeps Pydantic model reconstruction interpreted.",
+    },
+    "sqlspec/extensions/starlette/_state.py": {
+        "classification": "compile_now",
+        "reason": "Unquoted Starlette extension state dataclass compiles without framework imports.",
+    },
+    "sqlspec/extensions/starlette/_utils.py": {
+        "classification": "compile_now",
+        "reason": "Per-request Starlette session and tenant helpers compile without top-level framework imports.",
+    },
+    "sqlspec/extensions/flask/_state.py": {
+        "classification": "compile_now",
+        "reason": "Unquoted Flask extension state dataclass compiles without framework imports.",
+    },
+    "sqlspec/extensions/flask/_utils.py": {
+        "classification": "compile_now",
+        "reason": "Per-request Flask session and tenant helpers compile without top-level framework imports.",
+    },
+    "sqlspec/extensions/flask/_portal.py": {
+        "classification": "compile_now",
+        "reason": "Slotted blocking portal session view compiles without top-level Flask imports.",
+    },
+    "sqlspec/extensions/litestar/_utils.py": {
+        "classification": "compile_now",
+        "reason": "Per-request Litestar ASGI scope state and session lease helpers compile without runtime framework imports.",
+    },
+    "sqlspec/extensions/sanic/_state.py": {
+        "classification": "compile_now",
+        "reason": "Unquoted Sanic extension state dataclass compiles without framework imports.",
+    },
+    "sqlspec/extensions/sanic/_utils.py": {
+        "classification": "compile_now",
+        "reason": "Per-request Sanic session and tenant helpers compile without top-level framework imports.",
     },
     "sqlspec/extensions/fastapi/providers.py": {
         "classification": "compile_now",
@@ -344,8 +396,8 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Snowflake parameter and result conversion helpers.",
     },
     "sqlspec/adapters/snowflake/driver.py": {
-        "classification": "prove_separately",
-        "reason": "Optional Snowflake driver subclasses and deferred exception handler stay interpreted.",
+        "classification": "compile_now",
+        "reason": "Snowflake driver compiles cleanly with allow_interpreted_subclasses=True and deferred pyarrow helpers.",
     },
     "sqlspec/adapters/snowflake/config.py": {
         "classification": "helper_split_first",
@@ -356,8 +408,12 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Cross-module data dictionary inheritance stays interpreted.",
     },
     "sqlspec/adapters/snowflake/migrations.py": {
-        "classification": "keep_interpreted",
-        "reason": "Snowflake migration tracker extends the interpreted migration tracker facade.",
+        "classification": "compile_now",
+        "reason": "Snowflake single-inheritance migration tracker compiles with allow_interpreted_subclasses=True.",
+    },
+    "sqlspec/adapters/teradata/migrations.py": {
+        "classification": "compile_now",
+        "reason": "Teradata single-inheritance migration tracker compiles with allow_interpreted_subclasses=True.",
     },
     "sqlspec/adapters/sqlanywhere/pool.py": {
         "classification": "compile_now",
@@ -376,16 +432,16 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Async pool runtime compiles without adapter driver exception-handler subclasses.",
     },
     "sqlspec/adapters/sqlite/driver.py": {
-        "classification": "prove_separately",
-        "reason": "Native Arrow ingestion bypasses interpreted parameter-conversion overrides and breaks rollback on rejected batches.",
+        "classification": "compile_now",
+        "reason": "SQLite driver compiles cleanly with allow_interpreted_subclasses=True and interpreted subclass overrides.",
     },
     "sqlspec/adapters/aiosqlite/driver.py": {
-        "classification": "prove_separately",
-        "reason": "Grouped code generation cannot resolve the inherited pending_exception slot through the interpreted driver facade.",
+        "classification": "compile_now",
+        "reason": "AIOSQLite driver compiles cleanly with direct submodule imports and awaited exception cleanup outside handlers.",
     },
     "sqlspec/adapters/asyncpg/driver.py": {
-        "classification": "prove_separately",
-        "reason": "Grouped code generation cannot resolve the inherited pending_exception slot through the interpreted driver facade.",
+        "classification": "compile_now",
+        "reason": "AsyncPG driver compiles cleanly with direct submodule imports, slotted savepoints, and awaited cleanup outside handlers.",
     },
     **{
         f"sqlspec/adapters/{adapter}/tenant.py": {
@@ -509,7 +565,6 @@ PRESERVED_EXCLUSIONS: frozenset[str] = frozenset({
     "sqlspec/extensions/adk/converters.py",
     "sqlspec/config.py",
     "sqlspec/core/_pagination.py",
-    "sqlspec/driver/_routing.py",
 })
 
 
@@ -619,9 +674,9 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
         "adapter_driver_shells": {
             "count": len(adapter_drivers),
             "modules": adapter_drivers,
-            "status": "blocked",
-            "classification": "prove_separately",
-            "reason": "Driver shells need separate layout and dispatch verification: grouped builds lose inherited fields, and compiled SQLite bypasses an interpreted Arrow conversion override.",
+            "status": "compiled",
+            "classification": "compile_now",
+            "reason": "All 24 adapter driver shells compile directly with single inheritance, allow_interpreted_subclasses=True, and direct submodule imports.",
         },
         "adapter_pool_runtimes": {
             "count": len(adapter_pools),

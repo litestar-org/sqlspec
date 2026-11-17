@@ -30,7 +30,7 @@ from sqlspec.migrations.utils import (
     resolve_tracker_schema,
 )
 from sqlspec.migrations.version import parse_version
-from sqlspec.observability import resolve_db_system
+from sqlspec.observability._common import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import module_to_os_path
 from sqlspec.utils.text import split_qualified_identifier
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import Set as AbstractSet
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.observability import ObservabilityRuntime
+    from sqlspec.observability._runtime import ObservabilityRuntime
 
 __all__ = (
     "AppliedMigrationRecord",

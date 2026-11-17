@@ -6,7 +6,9 @@ from logging import Logger
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
+from sqlspec.core.statement import StatementConfig
 from sqlspec.dialects.teradata import Vantage as _VantageDialect
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -25,7 +27,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 

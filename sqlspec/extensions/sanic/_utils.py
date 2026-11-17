@@ -8,7 +8,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic._state import tenant_receipt_key
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.deprecation import deprecated
-from sqlspec.utils.tenant import TenantContextPayload
+from sqlspec.utils.tenant._context import TenantContextPayload
 
 if TYPE_CHECKING:
     from sqlspec.extensions.sanic._state import SanicConfigState
@@ -118,7 +118,9 @@ def get_connection_from_request(request: Any, config_state: "SanicConfigState") 
             f"Sanic request context does not contain SQLSpec connection '{config_state.connection_key}'. "
             "Ensure SQLSpecPlugin is initialized and its request middleware runs before accessing sessions."
         )
-        raise ImproperConfigurationError(msg) from exc
+        error = ImproperConfigurationError(msg)
+        error.__cause__ = exc
+        raise error from exc
 
 
 def get_or_create_db_session(request: Any, config_state: "SanicConfigState") -> Any:

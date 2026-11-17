@@ -1,7 +1,7 @@
 """Shared provisioning helpers for Oracle events-backend integration tests."""
 
 import contextlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 
 import pytest
 from pytest_databases.docker.oracle import OracleService
@@ -32,7 +32,7 @@ def classic_aq_queue(
     queue_table: str = DEFAULT_QUEUE_TABLE,
     queue_name: str = DEFAULT_QUEUE_NAME,
     payload_type: str = "JSON",
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Provision and tear down a classic Advanced Queuing queue as the app user."""
 
     config = _app_config(oracle_service)
@@ -94,7 +94,7 @@ def provision_classic_aq(
 @contextlib.contextmanager
 def transactional_event_queue(
     oracle_service: OracleService, *, queue_name: str = DEFAULT_TXEVENTQ_NAME, payload_type: str = "JSON"
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Provision and tear down a Transactional Event Queue as the app user."""
 
     config = _app_config(oracle_service)

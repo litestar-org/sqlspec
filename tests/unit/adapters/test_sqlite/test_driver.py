@@ -234,26 +234,29 @@ def test_execute_many_closes_cursor() -> None:
         connection.close()
 
 
-def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails() -> None:
     import pyarrow as pa
+
+    batches_prepared = 0
+
+    class _FailingPrepareSqliteDriver(SqliteDriver):
+        @staticmethod
+        def _arrow_rows_need_preparation(table: Any) -> bool:
+            return True
+
+        def prepare_driver_parameters(
+            self, parameters: Any, statement_config: Any, is_many: bool = False, prepared_statement: Any = None
+        ) -> Any:
+            nonlocal batches_prepared
+            batches_prepared += 1
+            if batches_prepared == 2:
+                raise ValueError("conversion failed")
+            return parameters
 
     connection = sqlite3.connect(":memory:")
     connection.execute("CREATE TABLE target (value INTEGER)")
-    driver = SqliteDriver(
+    driver = _FailingPrepareSqliteDriver(
         connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
-    )
-    batches_prepared = 0
-
-    def prepare(parameters: Any, *args: Any, **kwargs: Any) -> Any:
-        nonlocal batches_prepared
-        batches_prepared += 1
-        if batches_prepared == 2:
-            raise ValueError("conversion failed")
-        return parameters
-
-    monkeypatch.setattr(SqliteDriver, "_arrow_rows_need_preparation", lambda *args: True)
-    monkeypatch.setattr(
-        SqliteDriver, "prepare_driver_parameters", lambda self, *args, **kwargs: prepare(*args, **kwargs)
     )
     try:
         with pytest.raises(ValueError, match="conversion failed"):

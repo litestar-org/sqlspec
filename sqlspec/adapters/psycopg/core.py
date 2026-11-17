@@ -8,16 +8,11 @@ from typing import TYPE_CHECKING, Any, Final, LiteralString, NamedTuple, cast
 from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
 from sqlspec.adapters.psycopg._typing import psycopg_errors as pg_errors
 from sqlspec.adapters.psycopg._typing import psycopg_module as psycopg
-from sqlspec.core import (
-    SQL,
-    DriverParameterProfile,
-    ParameterStyle,
-    ParameterValidator,
-    StatementConfig,
-    build_statement_config_from_profile,
-)
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
-from sqlspec.driver import ExecutionResult, rows_to_dicts
+from sqlspec.driver._common import ExecutionResult
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -42,7 +37,7 @@ from sqlspec.exceptions import (
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate, resolve_row_format
@@ -51,8 +46,11 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import ParameterStyleConfig, StackOperation
     from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.parameters._types import ParameterStyleConfig
+    from sqlspec.core.parameters._validator import ParameterValidator
+    from sqlspec.core.stack import StackOperation
+    from sqlspec.core.statement import SQL, StatementConfig
 
 __all__ = (
     "OPEN_TRANSACTION_STATUSES",

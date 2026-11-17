@@ -446,7 +446,9 @@ class AiosqliteConnectionPool:
             raise
         except TimeoutError as e:
             msg = f"Connection acquisition timed out after {self._connect_timeout}s"
-            raise AiosqliteConnectTimeoutError(msg) from e
+            error = AiosqliteConnectTimeoutError(msg)
+            error.__cause__ = e
+            raise error from e
 
         return connection
 

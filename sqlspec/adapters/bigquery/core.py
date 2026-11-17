@@ -21,15 +21,10 @@ from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJob
 from sqlspec.adapters.bigquery._typing import BigQueryRetry as Retry
 from sqlspec.adapters.bigquery._typing import bigquery_exceptions as api_exceptions
 from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterProfile,
-    ParameterStyle,
-    StatementConfig,
-    TypedParameter,
-    build_null_pruning_transform,
-    build_statement_config_from_profile,
-)
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._transformers import build_null_pruning_transform
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterProfile, ParameterStyle, TypedParameter
+from sqlspec.core.statement import StatementConfig
 from sqlspec.exceptions import (
     DataError,
     ImproperConfigurationError,
@@ -48,7 +43,7 @@ from sqlspec.exceptions import (
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_errors
 
@@ -56,8 +51,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
     from typing import Literal
 
-    from sqlspec.driver import SyncExceptionHandler
-    from sqlspec.storage import StorageFormat, StorageTelemetry
+    from sqlspec.driver._common import SyncExceptionHandler
+    from sqlspec.storage.pipeline import StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 
     BigQueryLoadFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv", "avro", "orc"]

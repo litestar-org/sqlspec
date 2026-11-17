@@ -4,7 +4,7 @@ import contextlib
 import hashlib
 import os
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -97,8 +97,16 @@ class StatementPipelineRegistry:
         if config._cached_pipeline_epoch == self._epoch:
             cached_pipeline = config._cached_pipeline
             if cached_pipeline is not None and (cached_pipeline._metrics is not None) == record_metrics:
-                return cached_pipeline.compile(
-                    sql, parameters, is_many, record_metrics, expression=expression, param_fingerprint=param_fingerprint
+                return cast(
+                    "CompiledSQL",
+                    cached_pipeline.compile(
+                        sql,
+                        parameters,
+                        is_many,
+                        record_metrics,
+                        expression=expression,
+                        param_fingerprint=param_fingerprint,
+                    ),
                 )
 
         if not getattr(config, "_is_frozen", False):

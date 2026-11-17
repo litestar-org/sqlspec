@@ -38,24 +38,32 @@ from sqlspec.adapters.psqlpy.core import (
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
-from sqlspec.core import SQL, DMLResult, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.result._base import DMLResult
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
-from sqlspec.utils.serializers import from_json
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
-    from sqlspec.core import ArrowResult, SQLResult
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling psqlpy database exceptions.
 
@@ -75,7 +83,7 @@ class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PsqlpyDriver(AsyncDriverAdapterBase):
     """PostgreSQL driver implementation using psqlpy.
 
@@ -84,7 +92,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_pooler_unprepared", "_transaction_active")
-    dialect = "postgres"
+    dialect: "DialectType | None" = "postgres"
 
     def __init__(
         self,
@@ -220,7 +228,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             await cursor.execute(stmt, stmt_params, prepared=use_prepared)
             if has_observers:
                 stmt_duration = perf_counter() - stmt_started
-                stmt_profile = self._pending_statement_profile
+                stmt_profile: dict[str, Any] | None = self._pending_statement_profile
                 self._pending_statement_profile = None
                 self._emit_script_statement_event(
                     sql=stmt,
@@ -249,13 +257,16 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             await self.connection.execute("BEGIN")
         except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError, Exception) as e:
             raise create_mapped_exception(e) from e
+        columnar_error: Exception | None = None
         try:
             if self._should_set_local_columnar():
                 await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except Exception as e:
+            columnar_error = e
+        if columnar_error is not None:
             with suppress(Exception):
                 await self.connection.execute("ROLLBACK")
-            raise create_mapped_exception(e) from e
+            raise create_mapped_exception(columnar_error) from columnar_error
         self._transaction_active = True
 
     async def commit(self) -> None:
@@ -453,22 +464,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
-
-    async def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts from storage using the storage bridge pipeline."""
-
-        return await super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
 
     def prepare_driver_parameters(
         self,

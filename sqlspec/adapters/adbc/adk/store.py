@@ -3,7 +3,7 @@
 import contextlib
 import re
 import struct
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
@@ -3925,7 +3925,7 @@ class _AdbcNativeTransactionConnection:
 
 
 @contextlib.contextmanager
-def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
+def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Generator[Any, None, None]:
     """Require transaction support before compound Teradata and DuckDB mutations.
 
     Yields:
@@ -4031,7 +4031,7 @@ def _is_error_matching(exc: Exception, patterns: "tuple[str, ...]") -> bool:
 
 
 @contextlib.contextmanager
-def _provide_state_transaction(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
+def _provide_state_transaction(config: "AdbcConfig", dialect: str) -> Generator[Any, None, None]:
     """Open a transaction for scoped-state merges with SQLite immediate write locking.
 
     Yields:

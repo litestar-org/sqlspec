@@ -10,7 +10,7 @@ from starlette.middleware import Middleware
 from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.core._cursor import resolve_plugin_cursor_settings
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.starlette._state import SQLSpecConfigState
+from sqlspec.extensions.starlette._state import CommitMode, SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import (
     get_or_create_db_session,
     get_or_create_db_session_async,
@@ -53,7 +53,7 @@ __all__ = ("SQLSpecPlugin",)
 
 logger = get_logger("sqlspec.extensions.starlette")
 
-DEFAULT_COMMIT_MODE = "autocommit"
+DEFAULT_COMMIT_MODE: CommitMode = "autocommit"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"

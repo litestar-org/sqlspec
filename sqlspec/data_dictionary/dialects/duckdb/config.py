@@ -2,7 +2,8 @@
 
 import re
 
-from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo, register_dialect
+from sqlspec.data_dictionary._registry import register_dialect
+from sqlspec.data_dictionary._types import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo
 
 __all__ = (
     "DUCKDB_CONFIG",

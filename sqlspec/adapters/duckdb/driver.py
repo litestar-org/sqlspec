@@ -32,19 +32,17 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
-from sqlspec.core import (
-    SQL,
-    ParameterStyle,
-    StatementConfig,
-    build_arrow_result_from_reader,
-    build_arrow_result_from_table,
-    get_cache_config,
-    register_driver_profile,
-)
-from sqlspec.core.result import DMLResult
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
-from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.parameters._types import ParameterStyle
+from sqlspec.core.result._base import DMLResult, build_arrow_result_from_reader, build_arrow_result_from_table
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_load_from_storage_kwargs
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.storage._utils import import_pyarrow
 from sqlspec.typing import PYARROW_INSTALLED, ArrowReturnFormat, StatementParameters
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
@@ -56,19 +54,23 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, CachedQuery, SQLResult, Statement, StatementFilter
-    from sqlspec.core.result._base import RowFormat
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult, RowFormat, SQLResult
+    from sqlspec.core.statement import Statement
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
 logger = get_logger("sqlspec.adapters.duckdb")
 
 
-@mypyc_attr(allow_interpreted_subclasses=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling DuckDB database exceptions.
 
@@ -87,6 +89,7 @@ class DuckDBExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class DuckDBDriver(SyncDriverAdapterBase):
     """Synchronous DuckDB database driver.
 
@@ -99,7 +102,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     """
 
     __slots__ = ("_created_profile_path", "_data_dictionary", "_migration_schema_restore", "_transaction_active")
-    dialect = "duckdb"
+    dialect: "DialectType | None" = "duckdb"
     native_arrow_export: ClassVar[bool] = True
 
     def __init__(
@@ -746,8 +749,27 @@ class DuckDBDriver(SyncDriverAdapterBase):
                         operation="read",
                         partitioner=partitioner,
                     )
+        validate_load_from_storage_kwargs(kwargs)
         return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+            table,
+            source,
+            file_format=file_format,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            storage_options=kwargs.get("storage_options"),
+            stage_table=kwargs.get("stage_table"),
+            conflict_keys=kwargs.get("conflict_keys"),
+            on_conflict=kwargs.get("on_conflict", "update"),
+            exclude_update_columns=kwargs.get("exclude_update_columns"),
+            drop_stage_table=kwargs.get("drop_stage_table", True),
+            drop_indexes=kwargs.get("drop_indexes", False),
+            concurrent_indexes=kwargs.get("concurrent_indexes", False),
+            checkpoint_table=kwargs.get("checkpoint_table"),
+            checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+            max_workers=kwargs.get("max_workers", 1),
+            executor=kwargs.get("executor", "thread"),
+            arrow_schema=kwargs.get("arrow_schema"),
+            type_casts=kwargs.get("type_casts"),
         )
 
     def collect_rows(self, cursor: "DuckDBConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
@@ -997,7 +1019,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             if any(not isinstance(row, (list, tuple)) or len(row) != len(column_names) for row in rows):
                 return None
             try:
-                import pyarrow as pa
+                pa = import_pyarrow()
 
                 return pa.Table.from_arrays([pa.array(col) for col in zip(*rows, strict=True)], names=column_names)
             except Exception:

@@ -1482,7 +1482,7 @@ def _create_pg_column_encoder(
 
 def _encode_json_bytes(val: Any) -> bytes:
     """Encode value to JSON bytes using msgspec or stdlib json without circular imports."""
-    encoder = import_optional_attr("sqlspec.utils.serializers._json", "encode_json")
+    encoder = import_optional_attr("sqlspec.utils.serializers._json", "to_json")
     if encoder is not None:
         return cast("bytes", encoder(val, as_bytes=True))
     import json

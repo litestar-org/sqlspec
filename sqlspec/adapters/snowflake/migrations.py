@@ -1,12 +1,16 @@
 """Snowflake migration tracking and reversible session schema switches."""
 
-from sqlspec.builder import CreateTable, Select
+from mypy_extensions import mypyc_attr
+
+from sqlspec.builder._ddl import CreateTable
+from sqlspec.builder._select import Select
 from sqlspec.migrations.tracker import SyncMigrationTracker
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 
 __all__ = ("SnowflakeSyncMigrationTracker",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SnowflakeSyncMigrationTracker(SyncMigrationTracker):
     """Track migrations with Snowflake types and explicit lowercase result aliases."""
 

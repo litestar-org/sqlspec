@@ -4,7 +4,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
-from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, ForeignKeyMetadata, register_dialect
+from sqlspec.data_dictionary._registry import register_dialect
+from sqlspec.data_dictionary._types import DialectConfig, FeatureFlags, FeatureVersions, ForeignKeyMetadata
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.text import quote_identifier, resolve_catalog_identifier
 

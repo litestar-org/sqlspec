@@ -233,7 +233,6 @@ exclude = [
   "sqlspec/config.py",                      # Main config
   "sqlspec/**/__init__.py",                 # Init files (usually just imports)
   "sqlspec/protocols.py",                   # Protocol definitions
-  "sqlspec/driver/_routing.py",             # interpreted: generic routing facades retain typed Python context and streaming boundaries
   "sqlspec/migrations/commands.py",         # interpreted: inspect.signature/functools.wraps on coroutines
   "sqlspec/dialects/postgres/_pgvector.py", # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/postgres/_paradedb.py", # interpreted: Dialect subclass needs sqlglot's metaclass
@@ -288,6 +287,7 @@ include = [
   "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter provider helpers
   "sqlspec/extensions/litestar/providers.py",      # Litestar filter provider helpers
   "sqlspec/extensions/litestar/_tenant_resolution.py", # Litestar tenant resolution over verified auth values
+  "sqlspec/extensions/events/_buffer.py",          # Event message buffer helpers
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults
   "sqlspec/extensions/events/_models.py",          # Event message value object
   "sqlspec/extensions/events/_names.py",           # Event channel/table name validators
@@ -295,12 +295,24 @@ include = [
   "sqlspec/extensions/events/_channel.py",         # Event channel runtime and iterator shell
   "sqlspec/extensions/events/_queue.py",           # Table-backed event queue
   "sqlspec/extensions/events/primitives.py",       # Table-queue SQL and claim primitives
+  "sqlspec/extensions/adk/_table_utils.py",        # ADK table schema validation helpers
   "sqlspec/extensions/adk/_types.py",              # ADK session/event record types
   "sqlspec/extensions/adk/memory/_types.py",       # ADK memory record types
   "sqlspec/extensions/adk/artifact/_types.py",     # ADK artifact record types
+  "sqlspec/extensions/starlette/_state.py",        # Starlette extension config state model
+  "sqlspec/extensions/starlette/_utils.py",        # Starlette per-request session and tenant state helpers
+  "sqlspec/extensions/flask/_state.py",            # Flask extension config state model
+  "sqlspec/extensions/flask/_utils.py",            # Flask per-request session and tenant state helpers
+  "sqlspec/extensions/flask/_portal.py",           # Flask blocking portal session view
+  "sqlspec/extensions/litestar/_utils.py",         # Litestar per-request scope and session lease helpers
+  "sqlspec/extensions/sanic/_state.py",            # Sanic extension config state model
+  "sqlspec/extensions/sanic/_utils.py",            # Sanic per-request session and tenant state helpers
   "sqlspec/adapters/**/core.py",                   # Adapter compiled helpers
+  "sqlspec/adapters/**/driver.py",                 # Adapter compiled drivers
   "sqlspec/adapters/**/type_converter.py",         # All adapters type converters
   "sqlspec/adapters/**/tenant.py",                 # Adapter tenant strategies and leases
+  "sqlspec/adapters/snowflake/migrations.py",      # Snowflake compiled migration tracker
+  "sqlspec/adapters/teradata/migrations.py",       # Teradata compiled migration tracker
   "sqlspec/adapters/asyncpg/events/_hub.py",       # Native event listener runtimes
   "sqlspec/adapters/oracledb/events/_hub.py",
   "sqlspec/adapters/psqlpy/events/_hub.py",
@@ -326,6 +338,7 @@ include = [
   "sqlspec/utils/correlation.py",                  # Correlation context helpers
   "sqlspec/utils/tenant/**/*.py",                  # Tenant context, scopes, and shared session-setting helpers
   "sqlspec/utils/portal.py",                       # Thread portal utilities
+  "sqlspec/utils/routing.py",                      # Request routing directives and HMAC pin helpers
   "sqlspec/utils/schema.py",                       # Schema transformation (refactored for mypyc)
   "sqlspec/utils/uuids.py",                        # UUID utilities
 ]

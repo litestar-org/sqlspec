@@ -28,7 +28,7 @@ from sqlspec.utils.serializers._json import (
     OrjsonSerializer,
     StandardLibSerializer,
     _enc_hook,
-    encode_json,
+    to_json,
 )
 
 
@@ -369,7 +369,7 @@ def test_offset_pagination_round_trip_via_dataclass_branch() -> None:
     from sqlspec.core import OffsetPagination
 
     page: OffsetPagination[int] = OffsetPagination(items=[1, 2, 3], limit=10, offset=0, total=3)
-    assert json.loads(encode_json(page)) == {"items": [1, 2, 3], "limit": 10, "offset": 0, "total": 3}
+    assert json.loads(to_json(page)) == {"items": [1, 2, 3], "limit": 10, "offset": 0, "total": 3}
 
 
 def test_purepath_subclass_resolves_via_mro() -> None:

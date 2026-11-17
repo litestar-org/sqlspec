@@ -2,11 +2,12 @@
 
 import re
 from collections.abc import Mapping
-from contextlib import asynccontextmanager, nullcontext, suppress
+from contextlib import nullcontext, suppress
 from io import BytesIO
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError
 
@@ -24,25 +25,20 @@ from sqlspec.adapters.asyncpg.core import (
     resolve_many_rowcount,
 )
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
-from sqlspec.core import (
-    SQL,
-    DMLResult,
-    StackResult,
-    StatementStack,
-    get_cache_config,
-    is_copy_from_operation,
-    is_copy_operation,
-    register_driver_profile,
-)
-from sqlspec.driver import (
-    AsyncDriverAdapterBase,
-    AsyncRowStream,
-    BaseAsyncExceptionHandler,
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.compiler import is_copy_from_operation, is_copy_operation
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.result._base import DMLResult, StackResult
+from sqlspec.core.stack import StatementStack
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._common import (
     StackExecutionObserver,
+    cache_hit_hooks_unchanged,
     describe_stack_statement,
     validate_savepoint_name,
 )
-from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
@@ -50,12 +46,17 @@ from sqlspec.utils.type_guards import has_sqlstate
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import Sequence
+    from types import TracebackType
+
+    from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection
-    from sqlspec.core import ArrowResult, SQLResult, StatementConfig
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 
 __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "AsyncpgSessionContext")
@@ -68,6 +69,34 @@ _COPY_FROM_STDIN_RE: re.Pattern[str] = re.compile(
 logger = get_logger("sqlspec.adapters.asyncpg")
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _AsyncpgStackSavepoint:
+    """Async savepoint context manager compiled without async generators."""
+
+    __slots__ = ("_connection", "_name")
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+        self._name = validate_savepoint_name(f"sqlspec_stack_{uuid4().hex}")
+
+    async def __aenter__(self) -> None:
+        await self._connection.execute(f"SAVEPOINT {self._name}")
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        rollback_error: BaseException | None = None
+        if exc_type is not None:
+            try:
+                await self._connection.execute(f"ROLLBACK TO SAVEPOINT {self._name}")
+            except BaseException as exc:
+                rollback_error = exc
+        await self._connection.execute(f"RELEASE SAVEPOINT {self._name}")
+        if rollback_error is not None:
+            raise rollback_error
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling AsyncPG database exceptions.
 
@@ -90,6 +119,7 @@ class AsyncpgExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncpgDriver(AsyncDriverAdapterBase):
     """AsyncPG PostgreSQL driver for async database operations.
 
@@ -99,7 +129,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_transaction")
-    dialect = "postgres"
+    dialect: "DialectType | None" = "postgres"
 
     def __init__(
         self,
@@ -279,13 +309,16 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         except Exception as e:
             self._release_failed_transaction_claim(transaction)
             raise create_mapped_exception(e) from e
+        columnar_error: Exception | None = None
         try:
             if self._should_set_local_columnar():
                 await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except Exception as e:
+            columnar_error = e
+        if columnar_error is not None:
             with suppress(Exception):
                 await transaction.rollback()
-            raise create_mapped_exception(e) from e
+            raise create_mapped_exception(columnar_error) from columnar_error
         self._transaction = transaction
 
     async def commit(self) -> None:
@@ -474,7 +507,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             except Exception as exc:
                 mapped = create_mapped_exception(exc)
                 msg = f"Failed to truncate table '{table}': {exc}"
-                raise type(mapped)(msg) from exc
+                error = type(mapped)(msg)
+                error.__cause__ = exc
+                raise error from exc
         columns, batch_iter = self._coerce_arrow_batches(source)
         first_batch = next((b for b in batch_iter if b.num_rows > 0), None)
         metrics: dict[str, int] = {"rows_processed": 0, "bytes_processed": 0}
@@ -549,7 +584,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 except Exception as exc:
                     mapped = create_mapped_exception(exc)
                     msg = f"Failed to truncate table '{table}': {exc}"
-                    raise type(mapped)(msg) from exc
+                    error = type(mapped)(msg)
+                    error.__cause__ = exc
+                    raise error from exc
                 empty_telemetry: StorageTelemetry = {
                     "bytes_processed": 0,
                     "destination": table,
@@ -598,7 +635,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             except Exception as exc:
                 mapped = create_mapped_exception(exc)
                 msg = f"Failed to truncate table '{table}': {exc}"
-                raise type(mapped)(msg) from exc
+                error = type(mapped)(msg)
+                error.__cause__ = exc
+                raise error from exc
         try:
             await self.connection.copy_records_to_table(
                 table_name, records=copy_rows, columns=resolved_columns, schema_name=schema_name
@@ -638,7 +677,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             parsed = parse_one(table, read="postgres", into=exp.Table)
         except ParseError as exc:
             msg = "AsyncPG COPY targets must be unqualified or schema-qualified table names."
-            raise ImproperConfigurationError(msg) from exc
+            error = ImproperConfigurationError(msg)
+            error.__cause__ = exc
+            raise error from exc
         schema_expression = parsed.args.get("db")
         schema_identifier = schema_expression if isinstance(schema_expression, exp.Identifier) else None
         if (
@@ -704,6 +745,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         Extracted from _execute_stack_native to avoid closure compilation issues.
         """
         for index, operation in enumerate(stack.operations):
+            operation_error: Exception | None = None
+            stack_result: StackResult | None = None
             try:
                 scope = self._stack_savepoint() if continue_on_error and caller_in_tx else nullcontext()
                 async with scope:
@@ -718,7 +761,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                         )
                         if not sql_statement.is_script and not sql_statement.is_many:
                             sql_text, prepared_parameters = self._compiled_sql(sql_statement, config)
-                            prepared_parameters = cast("tuple[Any, ...] | dict[str, Any] | None", prepared_parameters)
+                            prepared_parameters = cast(
+                                "tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters
+                            )
                             normalized = NormalizedStackOperation(
                                 operation=operation,
                                 statement=sql_statement,
@@ -732,10 +777,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                         result = await self._execute_stack_operation(operation)
                         stack_result = StackResult(result=result)
             except Exception as exc:
+                operation_error = exc
+
+            if operation_error is not None:
                 stack_error = StackExecutionError(
                     index,
                     describe_stack_statement(operation.statement),
-                    exc,
+                    operation_error,
                     adapter=type(self).__name__,
                     mode="continue-on-error" if continue_on_error else "fail-fast",
                 )
@@ -745,23 +793,16 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                     observer.record_operation_error(stack_error)
                     results.append(StackResult.from_error(stack_error))
                     continue
-                raise stack_error from exc
+                stack_error.__cause__ = operation_error
+                raise stack_error from operation_error
 
+            assert stack_result is not None
             results.append(stack_result)
             if continue_on_error and not caller_in_tx:
                 await self._commit_stack_success()
 
-    @asynccontextmanager
-    async def _stack_savepoint(self) -> "AsyncIterator[None]":
-        name = validate_savepoint_name(f"sqlspec_stack_{uuid4().hex}")
-        await self.connection.execute(f"SAVEPOINT {name}")
-        try:
-            yield
-        except BaseException:
-            await self.connection.execute(f"ROLLBACK TO SAVEPOINT {name}")
-            raise
-        finally:
-            await self.connection.execute(f"RELEASE SAVEPOINT {name}")
+    def _stack_savepoint(self) -> "_AsyncpgStackSavepoint":
+        return _AsyncpgStackSavepoint(self.connection)
 
     async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
         result = await self._execute_cached_statement(normalized.statement)

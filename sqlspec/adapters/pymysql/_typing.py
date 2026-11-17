@@ -17,17 +17,15 @@ from pymysql.cursors import Cursor as PyMysqlRawCursor
 from pymysql.cursors import DictCursor as PyMysqlDictCursor
 from pymysql.cursors import SSCursor as PyMysqlSSCursor
 
+from sqlspec.driver._session import SyncDriverSessionContext
 from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from types import TracebackType
     from typing import Protocol, TypeAlias
 
     from google.cloud.sql.connector import Connector as PyMysqlCloudSqlConnector
 
     from sqlspec.adapters.pymysql.driver import PyMysqlDriver
-    from sqlspec.core import StatementConfig
 
     class PyMysqlFieldTypeProtocol(Protocol):
         JSON: int
@@ -69,9 +67,6 @@ __all__ = (
 )
 
 
-_resolved_driver_type: "type[PyMysqlDriver] | None" = None
-
-
 class PyMysqlCursor:
     """Context manager for PyMySQL cursor operations."""
 
@@ -95,78 +90,12 @@ class PyMysqlCursor:
                 self.cursor.close()
 
 
-class PyMysqlSessionContext:
+class PyMysqlSessionContext(SyncDriverSessionContext):
     """Sync context manager for PyMySQL sessions."""
 
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
+    __slots__ = ()
 
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], PyMysqlConnection]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[PyMysqlDriver], PyMysqlDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: PyMysqlConnection | None = None
-        self._driver: PyMysqlDriver | None = None
+    def _resolve_driver_class(self) -> "type[PyMysqlDriver]":
+        from sqlspec.adapters.pymysql.driver import PyMysqlDriver
 
-    def __enter__(self) -> "PyMysqlDriver":
-        driver_cls = _get_pymysql_driver_type()
-        self._connection = self._acquire_connection()
-        try:
-            driver = driver_cls(
-                connection=self._connection,
-                statement_config=self._statement_config,
-                driver_features=self._driver_features,
-            )
-            self._driver = driver
-            return self._prepare_driver(driver)
-        except BaseException as exc:
-            with contextlib.suppress(Exception):
-                self.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-
-    def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
-            try:
-                if self._connection is not None:
-                    self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
-
-
-def _get_pymysql_driver_type() -> "type[PyMysqlDriver]":
-    global _resolved_driver_type
-    driver_cls = _resolved_driver_type
-    if driver_cls is None:
-        driver_cls = import_optional_attr("sqlspec.adapters.pymysql.driver", "PyMysqlDriver")
-        _resolved_driver_type = driver_cls
-    return driver_cls
+        return PyMysqlDriver

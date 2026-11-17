@@ -5,6 +5,8 @@ import sys
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sybase._typing import SybaseConnection, SybaseCursor, SybaseRawCursor, SybaseSessionContext
 from sqlspec.adapters.sybase.core import (
     build_insert_statement,
@@ -22,27 +24,32 @@ from sqlspec.adapters.sybase.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.sybase.data_dictionary import SybaseSyncDataDictionary
-from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.driver import (
-    BaseSyncExceptionHandler,
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.driver._common import (
     ExecutionResult,
-    SyncDriverAdapterBase,
-    SyncRowStream,
-    rows_to_dicts,
+    cache_hit_hooks_unchanged,
+    validate_load_from_storage_kwargs,
     validate_savepoint_name,
 )
-from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream, rows_to_dicts
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.sybase._typing import SybaseQueryParams as QueryParams
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
-    from sqlspec.driver import CachedQuery
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 
 __all__ = ("SybaseCursor", "SybaseDriver", "SybaseExceptionHandler", "SybaseSessionContext", "SybaseStreamSource")
@@ -50,6 +57,7 @@ __all__ = ("SybaseCursor", "SybaseDriver", "SybaseExceptionHandler", "SybaseSess
 logger = get_logger("sqlspec.adapters.sybase")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SybaseExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling Sybase pymssql exceptions."""
 
@@ -128,11 +136,12 @@ class SybaseStreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SybaseDriver(SyncDriverAdapterBase):
     """Sybase Adaptive Server Enterprise database driver using pymssql over FreeTDS TDS 5.0."""
 
     __slots__ = ("_column_name_cache", "_data_dictionary", "_explicit_transaction", "_transaction_active")
-    dialect = "sybase"
+    dialect: "DialectType | None" = "sybase"
 
     def __init__(
         self,
@@ -221,7 +230,9 @@ class SybaseDriver(SyncDriverAdapterBase):
         except Exception as exc:
             mapped = create_mapped_exception(exc, logger=logger)
             msg = f"Failed to begin Sybase ASE transaction: {exc}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
 
     def commit(self) -> None:
         try:
@@ -235,7 +246,9 @@ class SybaseDriver(SyncDriverAdapterBase):
         except Exception as exc:
             mapped = create_mapped_exception(exc, logger=logger)
             msg = f"Failed to commit Sybase ASE transaction: {exc}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
 
     def rollback(self) -> None:
         try:
@@ -247,7 +260,9 @@ class SybaseDriver(SyncDriverAdapterBase):
         except Exception as exc:
             mapped = create_mapped_exception(exc, logger=logger)
             msg = f"Failed to rollback Sybase ASE transaction: {exc}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
         finally:
             self._explicit_transaction = False
             self._transaction_active = False
@@ -420,8 +435,27 @@ class SybaseDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into the target Sybase ASE table."""
         if kwargs:
+            validate_load_from_storage_kwargs(kwargs)
             return super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+                table,
+                source,
+                file_format=file_format,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                storage_options=kwargs.get("storage_options"),
+                stage_table=kwargs.get("stage_table"),
+                conflict_keys=kwargs.get("conflict_keys"),
+                on_conflict=kwargs.get("on_conflict", "update"),
+                exclude_update_columns=kwargs.get("exclude_update_columns"),
+                drop_stage_table=kwargs.get("drop_stage_table", True),
+                drop_indexes=kwargs.get("drop_indexes", False),
+                concurrent_indexes=kwargs.get("concurrent_indexes", False),
+                checkpoint_table=kwargs.get("checkpoint_table"),
+                checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+                max_workers=kwargs.get("max_workers", 1),
+                executor=kwargs.get("executor", "thread"),
+                arrow_schema=kwargs.get("arrow_schema"),
+                type_casts=kwargs.get("type_casts"),
             )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)

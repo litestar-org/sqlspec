@@ -1,7 +1,7 @@
 """Framework test apps that expose SQLSpec request accessors through one neutral interface."""
 
 import json
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -25,7 +25,9 @@ Body = Callable[[Access, int], Awaitable[Any]]
 
 
 @contextmanager
-def serve(framework: str, config: Any, bodies: "dict[str, Body]") -> Iterator[Callable[[str, int], tuple[int, Any]]]:
+def serve(
+    framework: str, config: Any, bodies: "dict[str, Body]"
+) -> Generator[Callable[[str, int], tuple[int, Any]], None, None]:
     """Serve ``/<name>/<status>`` routes that run ``bodies[name]`` with the framework's accessors.
 
     Yields:

@@ -22,7 +22,7 @@ from sqlspec.utils.type_guards import has_span_attribute
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from sqlspec.storage import StorageTelemetry
+    from sqlspec.storage.pipeline import StorageTelemetry
 
 __all__ = ("ObservabilityRuntime", "compute_sql_hash")
 

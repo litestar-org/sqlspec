@@ -6,6 +6,8 @@ from collections.abc import Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.pymysql._typing import (
     PYMYSQL_INSERT_VALUES_PATTERN,
     PyMysqlCursor,
@@ -37,20 +39,27 @@ from sqlspec.adapters.pymysql.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
-from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
 from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.pymysql._typing import PyMysqlConnection
-    from sqlspec.core import SQL, SQLResult, StatementConfig
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PyMysqlCursor", "PyMysqlDriver", "PyMysqlExceptionHandler", "PyMysqlSessionContext")
 
@@ -60,6 +69,7 @@ json_type_value = PyMysqlFieldType.JSON if supports_json_type(PyMysqlFieldType) 
 PYMYSQL_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PyMysqlExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling PyMySQL exceptions."""
 
@@ -74,11 +84,12 @@ class PyMysqlExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PyMysqlDriver(SyncDriverAdapterBase):
     """MySQL/MariaDB database driver using PyMySQL."""
 
     __slots__ = ("_data_dictionary", "_json_deserializer")
-    dialect = "mysql"
+    dialect: "DialectType | None" = "mysql"
 
     def __init__(
         self,

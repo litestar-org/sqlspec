@@ -12,8 +12,9 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgPostgresError
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -39,15 +40,17 @@ from sqlspec.typing import PGVECTOR_INSTALLED
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import SQL, ParameterStyleConfig, StackOperation
     from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.parameters._types import ParameterStyleConfig
+    from sqlspec.core.stack import StackOperation
+    from sqlspec.core.statement import SQL, StatementConfig
 
 __all__ = (
     "AsyncpgStreamSource",
@@ -84,7 +87,7 @@ class NormalizedStackOperation(NamedTuple):
     operation: "StackOperation"
     statement: "SQL"
     sql: str
-    parameters: "tuple[Any, ...] | dict[str, Any] | None"
+    parameters: "tuple[Any, ...] | list[Any] | dict[str, Any] | None"
 
 
 _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()

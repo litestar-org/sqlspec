@@ -3,7 +3,7 @@
 
 import contextlib
 import sqlite3
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -964,13 +964,13 @@ class _OptInDirectBackend:
     @contextlib.contextmanager
     def open_write_stream_sync(
         self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
-    ) -> Iterator[WritableBytesSink]:
+    ) -> Generator[WritableBytesSink, None, None]:
         yield _SyncBufSink()
 
     @contextlib.asynccontextmanager
     async def open_write_stream_async(
         self, path: "str | Path", *, overwrite: bool = True, **kwargs: Any
-    ) -> AsyncIterator[AsyncWritableBytesSink]:
+    ) -> AsyncGenerator[AsyncWritableBytesSink, None]:
         yield _AsyncBufSink()
 
 

@@ -30,21 +30,28 @@ from sqlspec.adapters.aiosqlite.core import (
     run_on_worker_thread,
 )
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
-from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.core.result import DMLResult
-from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.result._base import ArrowResult, DMLResult
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.exceptions import DeadlockError
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
-    from sqlspec.core import SQL, CachedQuery, SQLResult, StatementConfig
+    from sqlspec.core.cache import CachedQuery
     from sqlspec.core.compiler import OperationType
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.result._base import SQLResult
+    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
     "AiosqliteCursor",
@@ -82,7 +89,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     """AIOSQLite driver for async SQLite database operations."""
 
     __slots__ = ("_data_dictionary", "_rowid_target_cache")
-    dialect = "sqlite"
+    dialect: "DialectType | None" = "sqlite"
     export_integers_may_widen: ClassVar[bool] = True
 
     def __init__(
@@ -189,6 +196,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         if transaction_mode is not None and transaction_mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
             msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
             raise ValueError(msg)
+        begin_error: aiosqlite.Error | sqlite3.Error | None = None
         try:
             if not await _check_in_transaction(self.connection):
                 cursor = await self.connection.execute(stmt)
@@ -198,7 +206,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                         if inspect.isawaitable(close_result):
                             await close_result
         except (aiosqlite.Error, sqlite3.Error) as e:
-            await _retry_begin_with_backoff(self.connection, e, statement=stmt)
+            begin_error = e
+        if begin_error is not None:
+            await _retry_begin_with_backoff(self.connection, begin_error, statement=stmt)
 
     async def commit(self) -> None:
         """Commit the current transaction."""
@@ -302,6 +312,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         needs_prep = self._arrow_rows_need_preparation(arrow_table)
 
         owns_transaction = not await _check_in_transaction(self.connection)
+        load_error: BaseException | None = None
         try:
             if owns_transaction:
                 await self.begin()
@@ -322,11 +333,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             if owns_transaction:
                 await self.commit()
         except BaseException as exc:
+            load_error = exc
+        if load_error is not None:
             if owns_transaction:
                 await self.rollback()
-            if isinstance(exc, (aiosqlite.Error, sqlite3.Error)):
-                raise create_mapped_exception(exc) from exc
-            raise
+            if isinstance(load_error, (aiosqlite.Error, sqlite3.Error)):
+                raise create_mapped_exception(load_error) from load_error
+            raise load_error
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -460,7 +473,9 @@ async def _retry_begin_with_backoff(
         else:
             return
     msg = f"Failed to begin transaction after retries: {initial_error}"
-    raise DeadlockError(msg) from initial_error
+    error = DeadlockError(msg)
+    error.__cause__ = initial_error
+    raise error from initial_error
 
 
 register_driver_profile("aiosqlite", driver_profile)

@@ -584,12 +584,7 @@ async def test_aiomysql_disables_multi_statements_once_and_after_reset() -> None
     """Default AiomysqlConfig sends COM_SET_OPTION off once per connection and again after reset."""
     from sqlspec.adapters.aiomysql.config import _COM_SET_OPTION, _MYSQL_OPTION_MULTI_STATEMENTS_OFF, _reset_session
 
-    conn = MagicMock(
-        closed=False,
-        _execute_command=AsyncMock(),
-        _read_packet=AsyncMock(),
-        _read_ok_packet=AsyncMock(),
-    )
+    conn = MagicMock(closed=False, _execute_command=AsyncMock(), _read_packet=AsyncMock(), _read_ok_packet=AsyncMock())
     config = AiomysqlConfig(connection_config={"host": "localhost", "db": "test"})
 
     await config._ensure_connection(conn)

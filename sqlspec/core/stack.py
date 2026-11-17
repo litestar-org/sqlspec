@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final
 from mypy_extensions import mypyc_attr
 
 if TYPE_CHECKING:  # pragma: no cover
-    from sqlspec.builder import QueryBuilder
+    from sqlspec.builder._base import QueryBuilder
     from sqlspec.core.filters import StatementFilter
     from sqlspec.core.statement import Statement, StatementConfig
     from sqlspec.typing import StatementParameters

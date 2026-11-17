@@ -20,7 +20,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
-from sqlspec.core import (
+from sqlspec.core.cache import (
     CacheConfig,
     get_cache_config,
     get_cache_statistics,
@@ -30,9 +30,10 @@ from sqlspec.core import (
 )
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
+from sqlspec.extensions.events._channel import AsyncEventChannel, SyncEventChannel
 from sqlspec.loader import SQLFileLoader
-from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
+from sqlspec.observability._diagnostics import TelemetryDiagnostics
+from sqlspec.observability._runtime import ObservabilityRuntime
 from sqlspec.typing import ConnectionT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_name
@@ -42,10 +43,12 @@ if TYPE_CHECKING:
     from types import TracebackType
     from uuid import UUID
 
-    from sqlspec.core import SQL, ParameterDeclaration, StatementConfig
+    from sqlspec.core.parameters._declared import ParameterDeclaration
+    from sqlspec.core.statement import SQL, StatementConfig
     from sqlspec.driver._routing import AsyncDriverT, AsyncRoutingSession, SyncDriverT, SyncRoutingSession
+    from sqlspec.observability._config import ObservabilityConfig
     from sqlspec.typing import PoolT
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 
 __all__ = ("SQLSpec", "coerce_sqlspec")

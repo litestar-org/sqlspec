@@ -3,7 +3,7 @@
 import logging
 import sqlite3
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -163,7 +163,7 @@ class _NoRowcountDuckDBDriver(DuckDBDriver):
 
 
 @contextmanager
-def _no_rowcount_driver(db_path: Path) -> "Iterator[_NoRowcountDuckDBDriver]":
+def _no_rowcount_driver(db_path: Path) -> "Generator[_NoRowcountDuckDBDriver, None, None]":
     config = _duckdb_config(db_path)
     try:
         with config.provide_connection() as connection:
@@ -332,7 +332,7 @@ async def test_async_lease_lock_acquires_renews_and_releases(async_lease_driver:
 
 
 @asynccontextmanager
-async def _held_lease(tmp_path: Path, is_async: bool, error: "BaseException | None") -> "AsyncIterator[None]":
+async def _held_lease(tmp_path: Path, is_async: bool, error: "BaseException | None") -> "AsyncGenerator[None, None]":
     """Acquire the migration lease, delete it as another migrator would, then raise ``error`` if given."""
     if is_async:
         async_config = AiosqliteConfig(connection_config={"database": str(tmp_path / "lost.db")})

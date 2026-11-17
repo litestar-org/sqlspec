@@ -6,6 +6,8 @@ from itertools import chain
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, LiteralString, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
     PsycopgAsyncCursor,
@@ -43,29 +45,16 @@ from sqlspec.adapters.psycopg.core import (
     source_uses_pyformat,
 )
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
-from sqlspec.core import (
-    SQL,
-    SQLResult,
-    StackResult,
-    StatementConfig,
-    StatementStack,
-    get_cache_config,
-    is_copy_from_operation,
-    is_copy_operation,
-    is_copy_to_operation,
-    register_driver_profile,
-)
-from sqlspec.driver import (
-    AsyncDriverAdapterBase,
-    AsyncRowStream,
-    BaseAsyncExceptionHandler,
-    BaseSyncExceptionHandler,
-    StackExecutionObserver,
-    SyncDriverAdapterBase,
-    SyncRowStream,
-    describe_stack_statement,
-)
-from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.compiler import is_copy_from_operation, is_copy_operation, is_copy_to_operation
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.result._base import SQLResult, StackResult
+from sqlspec.core.stack import StatementStack
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._common import StackExecutionObserver, cache_hit_hooks_unchanged, describe_stack_statement
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier
@@ -74,10 +63,14 @@ from sqlspec.utils.type_guards import is_readable, resolve_row_format
 if TYPE_CHECKING:
     from collections import abc
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
-    from sqlspec.core import ArrowResult
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import ArrowResult
+    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch
 
 
@@ -132,59 +125,54 @@ def pipeline_operation_failed(cursor: Any, statement: "SQL") -> bool:
     return isinstance(rowcount, int) and rowcount < 0
 
 
-class PsycopgPipelineMixin:
-    """Shared helpers for psycopg sync/async pipeline execution."""
+def _psycopg_prepare_records_for_arrow(
+    driver: "PsycopgPipelineDriver", records: "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]"
+) -> "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]":
+    return cast(
+        "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]",
+        driver.prepare_driver_parameters(records, driver.statement_config, is_many=True),
+    )
 
-    __slots__ = ()
 
-    def _prepare_records_for_arrow(
-        self, records: "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]"
-    ) -> "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]":
-        driver = cast("PsycopgPipelineDriver", self)
-        return cast(
-            "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]",
-            driver.prepare_driver_parameters(records, driver.statement_config, is_many=True),
+def _psycopg_prepare_pipeline_operations(
+    driver: "PsycopgPipelineDriver", stack: "StatementStack"
+) -> "list[PreparedStackOperation] | None":
+    prepared: list[PreparedStackOperation] = []
+    for index, operation in enumerate(stack.operations):
+        if operation.method != "execute":
+            return None
+
+        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+        statement_config = kwargs.pop("statement_config", None)
+        config = statement_config or driver.statement_config
+
+        sql_statement = driver.prepare_statement(
+            operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
         )
 
-    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[PreparedStackOperation] | None":
-        prepared: list[PreparedStackOperation] = []
-        for index, operation in enumerate(stack.operations):
-            if operation.method != "execute":
-                return None
+        if sql_statement.is_script or sql_statement.is_many:
+            return None
 
-            kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
-            statement_config = kwargs.pop("statement_config", None)
-            driver = cast("PsycopgPipelineDriver", self)
-            config = statement_config or driver.statement_config
-
-            sql_statement = driver.prepare_statement(
-                operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
+        sql_text, prepared_parameters = driver._compiled_sql(sql_statement, config)
+        sql_text = escape_literal_percent(
+            sql_text,
+            prepared_parameters,
+            config.parameter_validator,
+            preserve_percent_escapes=source_uses_pyformat(sql_statement.raw_sql, config.parameter_validator),
+        )
+        prepared.append(
+            PreparedStackOperation(
+                operation_index=index,
+                operation=operation,
+                statement=sql_statement,
+                sql=cast("LiteralString | PsycopgSQL | PsycopgComposed", sql_text),
+                parameters=prepared_parameters,
             )
-
-            if sql_statement.is_script or sql_statement.is_many:
-                return None
-
-            sql_text, prepared_parameters = driver._compiled_sql(  # pyright: ignore[reportPrivateUsage]
-                sql_statement, config
-            )
-            sql_text = escape_literal_percent(
-                sql_text,
-                prepared_parameters,
-                config.parameter_validator,
-                preserve_percent_escapes=source_uses_pyformat(sql_statement.raw_sql, config.parameter_validator),
-            )
-            prepared.append(
-                PreparedStackOperation(
-                    operation_index=index,
-                    operation=operation,
-                    statement=sql_statement,
-                    sql=cast("LiteralString | PsycopgSQL | PsycopgComposed", sql_text),
-                    parameters=prepared_parameters,
-                )
-            )
-        return prepared
+        )
+    return prepared
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling PostgreSQL psycopg database exceptions.
 
@@ -203,7 +191,8 @@ class PsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
-class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
+@mypyc_attr(allow_interpreted_subclasses=True)
+class PsycopgSyncDriver(SyncDriverAdapterBase):
     """PostgreSQL psycopg synchronous driver.
 
     Provides synchronous database operations for PostgreSQL using psycopg3.
@@ -214,7 +203,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_restore_autocommit", "_transaction_active")
-    dialect = "postgres"
+    dialect: "DialectType | None" = "postgres"
     cache_hit_function: "ClassVar[Any]" = staticmethod(execute_cache_hit)
 
     def __init__(
@@ -351,7 +340,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             execute_with_optional_parameters(cursor, stmt_sql, prepared_parameters)
             if has_observers:
                 stmt_duration = perf_counter() - stmt_started
-                stmt_profile = self._pending_statement_profile
+                stmt_profile: dict[str, Any] | None = self._pending_statement_profile
                 self._pending_statement_profile = None
                 self._emit_script_statement_event(
                     sql=stmt,
@@ -456,7 +445,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
             msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
+            error = SQLSpecError(msg)
+            error.__cause__ = e
+            raise error from e
         self._restore_autocommit = restore_autocommit
         self._transaction_active = True
 
@@ -469,7 +460,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
             msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
+            error = SQLSpecError(msg)
+            error.__cause__ = e
+            raise error from e
         self._transaction_active = False
         self._restore_original_autocommit()
 
@@ -482,7 +475,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
             msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
+            error = SQLSpecError(msg)
+            error.__cause__ = e
+            raise error from e
         self._transaction_active = False
         self._restore_original_autocommit()
 
@@ -565,6 +560,14 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgSyncExceptionHandler()
+
+    def _prepare_records_for_arrow(
+        self, records: "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]"
+    ) -> "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]":
+        return _psycopg_prepare_records_for_arrow(self, records)
+
+    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[PreparedStackOperation] | None":
+        return _psycopg_prepare_pipeline_operations(self, stack)
 
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack using psycopg pipeline mode when supported."""
@@ -813,7 +816,9 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
             msg = f"Failed to restore autocommit: {e}"
-            raise SQLSpecError(msg) from e
+            error = SQLSpecError(msg)
+            error.__cause__ = e
+            raise error from e
 
     def _should_set_local_columnar(self) -> bool:
         """Return True when AlloyDB columnar GUC must be set transaction-locally."""
@@ -822,6 +827,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         return self.driver_features.get("pooler_mode") in {"transaction", "statement"}
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling PostgreSQL psycopg database exceptions.
 
@@ -840,7 +846,8 @@ class PsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
-class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
+@mypyc_attr(allow_interpreted_subclasses=True)
+class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     """PostgreSQL psycopg asynchronous driver.
 
     Provides asynchronous database operations for PostgreSQL using psycopg3.
@@ -852,7 +859,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_restore_autocommit", "_transaction_active")
-    dialect = "postgres"
+    dialect: "DialectType | None" = "postgres"
     cache_hit_function: "ClassVar[Any]" = staticmethod(execute_cache_hit_async)
 
     def __init__(
@@ -989,7 +996,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             await execute_with_optional_parameters_async(cursor, stmt_sql, prepared_parameters)
             if has_observers:
                 stmt_duration = perf_counter() - stmt_started
-                stmt_profile = self._pending_statement_profile
+                stmt_profile: dict[str, Any] | None = self._pending_statement_profile
                 self._pending_statement_profile = None
                 self._emit_script_statement_event(
                     sql=stmt,
@@ -1081,6 +1088,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         if self._connection_in_transaction():
             return
         restore_autocommit = False
+        begin_error: psycopg.Error | None = None
         try:
             restore_autocommit = self.connection.autocommit
             if restore_autocommit:
@@ -1088,14 +1096,18 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             if self._should_set_local_columnar():
                 await self.connection.execute("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
         except psycopg.Error as e:
+            begin_error = e
+        if begin_error is not None:
             if restore_autocommit:
                 with suppress(Exception):
                     await self.connection.set_autocommit(True)
-            mapped = create_mapped_exception(e)
+            mapped = create_mapped_exception(begin_error)
             if type(mapped) is not SQLSpecError:
-                raise mapped from e
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
+                raise mapped from begin_error
+            msg = f"Failed to begin transaction: {begin_error}"
+            error = SQLSpecError(msg)
+            error.__cause__ = begin_error
+            raise error from begin_error
         self._restore_autocommit = restore_autocommit
         self._transaction_active = True
 
@@ -1108,7 +1120,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
             msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
+            error = SQLSpecError(msg)
+            error.__cause__ = e
+            raise error from e
         self._transaction_active = False
         await self._restore_original_autocommit()
 
@@ -1121,7 +1135,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
             msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
+            error = SQLSpecError(msg)
+            error.__cause__ = e
+            raise error from e
         self._transaction_active = False
         await self._restore_original_autocommit()
 
@@ -1360,6 +1376,14 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             return await self._execute_cached_statement(statement)
         return await super()._execute_cache_hit(sql, params, cached)
 
+    def _prepare_records_for_arrow(
+        self, records: "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]"
+    ) -> "abc.Sequence[abc.Mapping[str, Any]] | abc.Sequence[abc.Sequence[Any]]":
+        return _psycopg_prepare_records_for_arrow(self, records)
+
+    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[PreparedStackOperation] | None":
+        return _psycopg_prepare_pipeline_operations(self, stack)
+
     async def _execute_stack_pipeline(
         self, stack: "StatementStack", prepared_ops: "list[PreparedStackOperation]"
     ) -> "tuple[StackResult, ...]":
@@ -1367,6 +1391,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         started_transaction = False
 
         with StackExecutionObserver(self, stack, continue_on_error=False, native_pipeline=True):
+            pipeline_error: Exception | None = None
             try:
                 if not self._connection_in_transaction():
                     await self.begin()
@@ -1401,13 +1426,15 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
                 if started_transaction:
                     await self.commit()
-            except Exception:
+            except Exception as exc:
+                pipeline_error = exc
+            if pipeline_error is not None:
                 if started_transaction:
                     try:
                         await self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover
+                    except Exception as rollback_error:
                         logger.debug("Rollback after psycopg pipeline failure failed: %s", rollback_error)
-                raise
+                raise pipeline_error
 
         return tuple(results)
 
@@ -1461,7 +1488,9 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             if type(mapped) is not SQLSpecError:
                 raise mapped from e
             msg = f"Failed to restore autocommit: {e}"
-            raise SQLSpecError(msg) from e
+            error = SQLSpecError(msg)
+            error.__cause__ = e
+            raise error from e
 
     def _should_set_local_columnar(self) -> bool:
         """Return True when AlloyDB columnar GUC must be set transaction-locally."""
@@ -1492,7 +1521,7 @@ def _stack_operation_error(
 ) -> "StackExecutionError":
     """Build a fail-fast StackExecutionError attributed to a specific pipeline operation."""
     mapped_cause = create_mapped_exception(cause) if isinstance(cause, psycopg.Error) else cause
-    return StackExecutionError(
+    wrapped = StackExecutionError(
         prepared.operation_index,
         describe_stack_statement(prepared.operation.statement),
         mapped_cause,
@@ -1500,14 +1529,18 @@ def _stack_operation_error(
         mode="fail-fast",
         native_pipeline=True,
     )
+    wrapped.__cause__ = cause
+    return wrapped
 
 
 def _stack_pipeline_sync_error(adapter: str, cause: "Exception") -> "StackExecutionError":
     """Build a fail-fast StackExecutionError for an unattributed pipeline sync failure."""
     mapped_cause = create_mapped_exception(cause) if isinstance(cause, psycopg.Error) else cause
-    return StackExecutionError(
+    wrapped = StackExecutionError(
         -1, "psycopg pipeline sync failed", mapped_cause, adapter=adapter, mode="fail-fast", native_pipeline=True
     )
+    wrapped.__cause__ = cause
+    return wrapped
 
 
 register_driver_profile("psycopg", driver_profile)

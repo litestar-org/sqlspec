@@ -17,10 +17,10 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
-from sqlspec.core import SQL
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.extensions.events._buffer import enqueue_with_capacity, resolve_listener_queue_capacity
+from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import is_notification

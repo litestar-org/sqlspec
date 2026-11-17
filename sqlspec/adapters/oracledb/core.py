@@ -23,22 +23,17 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
-    StackResult,
-    StatementConfig,
-    build_statement_config_from_profile,
-    create_sql_result,
-)
-from sqlspec.core.result._base import DMLResult, SQLResult
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
+from sqlspec.core.result._base import DMLResult, SQLResult, StackResult, create_sql_result
 from sqlspec.core.sqlcommenter import SQLCommenterContext, format_wire_sqlcomment, strip_sqlcomment
-from sqlspec.data_dictionary.dialects.oracle import (
+from sqlspec.core.statement import StatementConfig
+from sqlspec.data_dictionary.dialects.oracle.config import (
     ORACLE_JSON_STORAGE_NATIVE,
     parse_oracle_version_components,
     resolve_oracle_json_storage,
 )
-from sqlspec.driver import rows_to_dicts
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -61,11 +56,11 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
-from sqlspec.observability import get_trace_context, get_w3c_trace_context
+from sqlspec.observability._common import get_trace_context, get_w3c_trace_context
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import import_optional
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
@@ -79,9 +74,9 @@ if TYPE_CHECKING:
         OracleSyncConnection,
         OracleSyncRawCursor,
     )
-    from sqlspec.core import SQL
     from sqlspec.core.cache import CachedQuery
-    from sqlspec.driver import AsyncExceptionHandler, SyncExceptionHandler
+    from sqlspec.core.statement import SQL
+    from sqlspec.driver._common import AsyncExceptionHandler, SyncExceptionHandler
 
 
 __all__ = (
@@ -3042,7 +3037,9 @@ def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") 
     if resolved.retry_delay is not None:
         desc_parts.append(f"(RETRY_DELAY={resolved.retry_delay})")
     if resolved.transport_connect_timeout is not None:
-        desc_parts.append(f"(TRANSPORT_CONNECT_TIMEOUT={resolved.transport_connect_timeout})")
+        timeout = resolved.transport_connect_timeout
+        formatted_timeout = str(int(timeout)) if isinstance(timeout, float) and timeout.is_integer() else str(timeout)
+        desc_parts.append(f"(TRANSPORT_CONNECT_TIMEOUT={formatted_timeout})")
 
     for endpoints in resolved.address_lists or (resolved.endpoints,):
         addr_parts: list[str] = []

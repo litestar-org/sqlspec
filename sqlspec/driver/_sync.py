@@ -15,23 +15,26 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, Self, 
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core import SQL, CachedQuery, StackResult, create_arrow_result
-from sqlspec.core.result import DMLResult
+from sqlspec.core.cache import CachedQuery
+from sqlspec.core.result._base import DMLResult, StackResult, create_arrow_result
 from sqlspec.core.stack import StackOperation, StatementStack
-from sqlspec.data_dictionary import (
+from sqlspec.core.statement import SQL
+from sqlspec.data_dictionary._capabilities import (
     DEFAULT_SYSTEM_METADATA_DOMAINS,
-    ColumnProfileMetadata,
-    DDLResult,
-    MetadataCapabilityProfile,
-    MetadataResult,
-    MetadataSupport,
-    ObjectIdentity,
     ensure_system_metadata_request,
     system_metadata_capabilities_from_domains,
     system_metadata_gated_result,
     unsupported_system_metadata_capability,
 )
 from sqlspec.data_dictionary._index_ddl import SyncWithoutIndexesContext
+from sqlspec.data_dictionary._types import (
+    ColumnProfileMetadata,
+    DDLResult,
+    MetadataCapabilityProfile,
+    MetadataResult,
+    MetadataSupport,
+    ObjectIdentity,
+)
 from sqlspec.driver._common import (
     _CLOSED_CONNECTION,
     CommonDriverAttributesMixin,
@@ -77,9 +80,12 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, OperationType, SQLResult, Statement, StatementConfig, StatementFilter
-    from sqlspec.data_dictionary import (
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.compiler import OperationType
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import Statement, StatementConfig
+    from sqlspec.data_dictionary._types import (
         ColumnMetadata,
         ForeignKeyMetadata,
         IndexMetadata,

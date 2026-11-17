@@ -6,13 +6,13 @@ import threading
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from sqlspec.core.cache import StatementCacheHolder, resolve_statement_cache_size
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters._types import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from sqlspec.storage import StorageCapabilities
+    from sqlspec.storage.pipeline import StorageCapabilities
 
 
 __all__ = (

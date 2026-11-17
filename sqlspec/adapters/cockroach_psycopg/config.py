@@ -64,7 +64,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from types import TracebackType
     from uuid import UUID
@@ -612,7 +612,9 @@ class CockroachPsycopgSyncConfig(
         return super()._build_replica_spec_overrides(spec_input)
 
     @contextmanager
-    def _replica_connection(self, context: "AbstractContextManager[CockroachPsycopgSyncDriver]") -> "Iterator[Any]":
+    def _replica_connection(
+        self, context: "AbstractContextManager[CockroachPsycopgSyncDriver]"
+    ) -> "Generator[Any, None, None]":
         with context as session:
             session.begin()
             failed = False
@@ -1036,7 +1038,7 @@ class CockroachPsycopgAsyncConfig(
     @asynccontextmanager
     async def _replica_connection(
         self, context: "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]"
-    ) -> "AsyncIterator[Any]":
+    ) -> "AsyncGenerator[Any, None]":
         async with context as session:
             await session.begin()
             failed = False

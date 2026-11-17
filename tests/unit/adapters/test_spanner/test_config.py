@@ -1,5 +1,5 @@
 from asyncio import CancelledError
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
@@ -84,7 +84,7 @@ def _hook_checkout(is_async: bool, hook: Callable[[Any], Any], *, replicas: bool
 
 
 @asynccontextmanager
-async def _hook_session(config: Any, **kwargs: Any) -> AsyncIterator[Any]:
+async def _hook_session(config: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
     if isinstance(config, SpannerAsyncConfig):
         async with config.provide_session(**kwargs) as session:
             yield session

@@ -59,6 +59,7 @@ _COLUMN_SEGMENT_RE: Final["re.Pattern[str]"] = re.compile(r"\A[\w$-]+\Z", re.UNI
 def _is_valid_column_segment(segment: str) -> bool:
     return "--" not in segment and _COLUMN_SEGMENT_RE.fullmatch(segment) is not None
 
+
 _TABLE_QUALIFIED_PARTS: Final[int] = 2
 _DATABASE_QUALIFIED_PARTS: Final[int] = 3
 _CATALOG_QUALIFIED_PARTS: Final[int] = 4

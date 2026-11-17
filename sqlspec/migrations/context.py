@@ -12,7 +12,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_statement_config_factory
 
 if TYPE_CHECKING:
-    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
 
 __all__ = ("MigrationContext",)
 

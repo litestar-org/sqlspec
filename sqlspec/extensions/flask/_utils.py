@@ -8,7 +8,7 @@ from sqlspec.extensions.flask._portal import PortalSession, call_portal_with_con
 from sqlspec.extensions.flask._state import tenant_receipt_key
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.deprecation import deprecated
-from sqlspec.utils.tenant import TenantContextPayload
+from sqlspec.utils.tenant._context import TenantContextPayload
 
 if TYPE_CHECKING:
     from sqlspec.extensions.flask._state import FlaskConfigState

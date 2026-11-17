@@ -466,7 +466,9 @@ def validate_routing_middleware_settings(
             routing_header.encode("ascii")
         except UnicodeEncodeError as exc:
             msg = "routing_header must be None or a non-empty printable ASCII header name"
-            raise ImproperConfigurationError(msg) from exc
+            error = ImproperConfigurationError(msg)
+            error.__cause__ = exc
+            raise error from exc
     if primary_pin_cookie is not None and (
         not isinstance(primary_pin_cookie, str)
         or not primary_pin_cookie.strip()

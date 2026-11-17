@@ -38,8 +38,10 @@ from sqlspec.adapters.duckdb._typing import (
     DuckDBTypeMismatchException,
     duckdb_module,
 )
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
+from sqlspec.core.statement import StatementConfig
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -58,12 +60,12 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-from sqlspec.storage import ResolvedStorageTarget
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.storage.backends.obstore import ObStoreBackend
+from sqlspec.storage.pipeline import ResolvedStorageTarget
 from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_rowcount
@@ -74,7 +76,7 @@ if TYPE_CHECKING:
 
     from sqlspec.core.cache import CachedQuery, StatementCacheHolder
     from sqlspec.core.result._base import RowFormat
-    from sqlspec.storage import StorageDestination, SyncStoragePipeline
+    from sqlspec.storage.pipeline import StorageDestination, SyncStoragePipeline
 
 
 __all__ = (

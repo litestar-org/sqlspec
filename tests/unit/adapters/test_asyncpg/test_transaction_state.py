@@ -2,7 +2,7 @@
 
 import inspect
 from asyncio import CancelledError
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -299,7 +299,7 @@ async def test_events_backends_manage_transactions_correctly() -> None:
     driver.rollback = AsyncMock(side_effect=lambda: calls.append("rollback"))
 
     @asynccontextmanager
-    async def fake_session(*_a: Any, **_k: Any) -> AsyncIterator[Any]:
+    async def fake_session(*_a: Any, **_k: Any) -> AsyncGenerator[Any, None]:
         yield driver
 
     config = MagicMock()

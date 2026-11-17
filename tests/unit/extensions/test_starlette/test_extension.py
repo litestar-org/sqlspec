@@ -39,7 +39,7 @@ from sqlspec.utils.tenant import TenantContext
 from tests.unit.extensions._tenant_configs import AsyncRecordingStrategy, TenantAiosqliteConfig
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from starlette.types import Message
 
@@ -332,7 +332,7 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
     connection = SimpleNamespace(commit=commit, rollback=rollback)
 
     @asynccontextmanager
-    async def provide_connection(pool: object) -> "AsyncIterator[SimpleNamespace]":
+    async def provide_connection(pool: object) -> "AsyncGenerator[SimpleNamespace, None]":
         nonlocal active
         active = True
         events.append("acquire")
@@ -448,7 +448,7 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
     connection = _Connection()
 
     @asynccontextmanager
-    async def provide_connection(pool: object) -> "AsyncIterator[_Connection]":
+    async def provide_connection(pool: object) -> "AsyncGenerator[_Connection, None]":
         yield connection
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
@@ -505,7 +505,7 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
         raise RuntimeError("cleanup failed")
 
     @asynccontextmanager
-    async def provide_connection(pool: object) -> "AsyncIterator[SimpleNamespace]":
+    async def provide_connection(pool: object) -> "AsyncGenerator[SimpleNamespace, None]":
         try:
             yield SimpleNamespace(rollback=rollback)
         except ValueError as exc:
@@ -574,7 +574,7 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
             return None
 
         @asynccontextmanager
-        async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncIterator[Any]":
+        async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[Any, None]":
             payload = TenantContext.get()
             if payload is None:
                 raise TenantContextError("Tenant context required")

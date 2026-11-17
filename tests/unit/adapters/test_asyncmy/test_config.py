@@ -636,12 +636,7 @@ async def test_asyncmy_disables_multi_statements_once_and_after_reset() -> None:
     """Default AsyncmyConfig sends COM_SET_OPTION off once per connection and again after reset."""
     from sqlspec.adapters.asyncmy.config import _COM_SET_OPTION, _MYSQL_OPTION_MULTI_STATEMENTS_OFF, _reset_session
 
-    conn = MagicMock(
-        closed=False,
-        _execute_command=AsyncMock(),
-        read_packet=AsyncMock(),
-        _read_ok_packet=AsyncMock(),
-    )
+    conn = MagicMock(closed=False, _execute_command=AsyncMock(), read_packet=AsyncMock(), _read_ok_packet=AsyncMock())
     config = AsyncmyConfig(connection_config={"host": "localhost", "db": "test"})
 
     await config._ensure_connection(conn)

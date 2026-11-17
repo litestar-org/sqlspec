@@ -1,6 +1,6 @@
 """Unit tests for DuckDB Arrow streaming paths."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 from uuid import UUID
@@ -16,7 +16,7 @@ from sqlspec.exceptions import MissingDependencyError, NotFoundError
 
 
 @contextmanager
-def _seed_driver(*, enable_uuid_conversion: bool = True) -> Iterator[DuckDBDriver]:
+def _seed_driver(*, enable_uuid_conversion: bool = True) -> Generator[DuckDBDriver, None, None]:
     config = DuckDBConfig(
         connection_config={"database": ":memory:"}, driver_features={"enable_uuid_conversion": enable_uuid_conversion}
     )

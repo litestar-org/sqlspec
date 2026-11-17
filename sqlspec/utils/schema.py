@@ -16,7 +16,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import CATTRS_INSTALLED, NUMPY_INSTALLED, MsgspecValidationError, SchemaT, convert, get_type_adapter
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_optional_attr
-from sqlspec.utils.serializers._json import decode_json as from_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.type_guards import (
     is_attrs_instance,
     is_attrs_schema,

@@ -21,17 +21,10 @@ from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.hashing import hash_filters
-from sqlspec.core.parameters import (
-    ParameterConverter,
-    ParameterDeclaration,
-    ParameterProcessor,
-    ParameterProfile,
-    ParameterStyle,
-    ParameterStyleConfig,
-    ParameterValidator,
-    structural_fingerprint,
-    unescape_qmark_operator,
-)
+from sqlspec.core.parameters._converter import ParameterConverter
+from sqlspec.core.parameters._processor import ParameterProcessor, structural_fingerprint
+from sqlspec.core.parameters._types import ParameterProfile, ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters._validator import ParameterValidator, unescape_qmark_operator
 from sqlspec.core.query_modifiers import (
     ConditionFactory,
     apply_column_pruning,
@@ -71,8 +64,9 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.builder import QueryBuilder
+    from sqlspec.builder._base import QueryBuilder
     from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.parameters._declared import ParameterDeclaration
 
 
 __all__ = (
@@ -1099,7 +1093,7 @@ class SQL:
         Returns:
             New SQL instance containing the EXPLAIN statement
         """
-        from sqlspec.builder import Explain
+        from sqlspec.builder._explain import Explain
 
         fmt = None
         if format is not None:
@@ -1133,7 +1127,12 @@ class SQL:
             msg = "QueryBuilder does not support execute_many SQL statements."
             raise sqlspec.exceptions.SQLBuilderError(msg)
 
-        from sqlspec.builder import Delete, ExpressionBuilder, Insert, Merge, Select, Update
+        from sqlspec.builder._base import ExpressionBuilder
+        from sqlspec.builder._delete import Delete
+        from sqlspec.builder._insert import Insert
+        from sqlspec.builder._merge import Merge
+        from sqlspec.builder._select import Select
+        from sqlspec.builder._update import Update
 
         builder_dialect = dialect or self._dialect
         lexical_dialect = self._normalize_dialect(builder_dialect)

@@ -1,6 +1,6 @@
 """Unit tests for Spanner ADK store behavior."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from inspect import isawaitable
@@ -523,7 +523,7 @@ def _normalized(sql: str) -> str:
 
 
 @contextmanager
-def _capture_session_list(config: Any) -> "Iterator[list[tuple[str, dict[str, Any], dict[str, Any]]]]":
+def _capture_session_list(config: Any) -> "Generator[list[tuple[str, dict[str, Any], dict[str, Any]]], None, None]":
     calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
     def capture(

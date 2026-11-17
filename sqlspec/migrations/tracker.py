@@ -24,7 +24,7 @@ from sqlspec.migrations.base import (
 )
 from sqlspec.migrations.runner import _driver_in_transaction_async, _driver_in_transaction_sync
 from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
-from sqlspec.observability import resolve_db_system
+from sqlspec.observability._common import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -34,7 +34,8 @@ if TYPE_CHECKING:
 
     from rich.console import Console
 
-    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
     from sqlspec.migrations.base import AppliedMigrationRecord
 
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")

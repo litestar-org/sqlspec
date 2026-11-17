@@ -4,7 +4,7 @@ import asyncio
 import json
 import sqlite3
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -452,11 +452,11 @@ async def test_asyncpg_store_write_after_failed_release_runs_in_rolled_back_tran
 
     class FakeAsyncpgConfig(AsyncpgConfig):
         @asynccontextmanager
-        async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
             yield connection
 
         @asynccontextmanager
-        async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
+        async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
             yield AsyncpgDriver(cast("Any", connection))
 
     config = FakeAsyncpgConfig(extension_config={"litestar": {"session_table": TABLE}})

@@ -3,7 +3,9 @@
 from collections.abc import Iterable
 from typing import Any
 
-from sqlspec.observability import ObservabilityConfig, StatementEvent, StatementObserver, resolve_db_system
+from sqlspec.observability._common import resolve_db_system
+from sqlspec.observability._config import ObservabilityConfig, StatementObserver
+from sqlspec.observability._observer import StatementEvent
 from sqlspec.typing import Counter, Histogram
 from sqlspec.utils.module_loader import ensure_prometheus
 

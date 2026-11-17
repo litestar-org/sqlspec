@@ -6,19 +6,19 @@ compilation to avoid ABI boundary issues.
 
 import contextlib
 import sqlite3 as aiosqlite_sqlite_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import aiosqlite as aiosqlite_module
+
+from sqlspec.driver._session import AsyncDriverSessionContext
 
 _AiosqliteConnection = aiosqlite_module.Connection
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
-    from sqlspec.core import StatementConfig
 
     AiosqliteConnection: TypeAlias = _AiosqliteConnection
     AiosqliteConnectionFactory: TypeAlias = type[aiosqlite_sqlite_module.Connection]
@@ -60,76 +60,12 @@ class AiosqliteCursor:
                 await self.cursor.close()
 
 
-class AiosqliteSessionContext:
-    """Async context manager for AIOSQLite sessions.
+class AiosqliteSessionContext(AsyncDriverSessionContext):
+    """Async context manager for AIOSQLite sessions."""
 
-    This class is intentionally excluded from mypyc compilation to avoid ABI
-    boundary issues. It receives callables from uncompiled config classes and
-    instantiates compiled Driver objects, acting as a bridge between compiled
-    and uncompiled code.
+    __slots__ = ()
 
-    Uses callable-based connection management to decouple from config implementation.
-    """
-
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
-
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[AiosqliteDriver], AiosqliteDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: Any = None
-        self._driver: AiosqliteDriver | None = None
-
-    async def __aenter__(self) -> "AiosqliteDriver":
+    def _resolve_driver_class(self) -> "type[AiosqliteDriver]":
         from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 
-        self._connection = await self._acquire_connection()
-        try:
-            self._driver = AiosqliteDriver(
-                connection=self._connection,
-                statement_config=self._statement_config,
-                driver_features=self._driver_features,
-            )
-            return self._prepare_driver(self._driver)
-        except BaseException as exc:
-            await self.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                await driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
-            try:
-                if self._connection is not None:
-                    await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
+        return AiosqliteDriver

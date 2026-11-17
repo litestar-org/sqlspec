@@ -19,9 +19,12 @@ from sqlglot.tokens import Tokenizer
 
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
-from sqlspec.core import SQL, ParameterStyle, ParameterValidator, default_nulls, ordered
+from sqlspec.core._ordering import default_nulls, ordered
+from sqlspec.core.parameters._types import ParameterStyle
+from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.core.query_modifiers import is_valid_parameter_name, parse_column_for_condition
 from sqlspec.core.splitter import contains_statement_terminator
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError, SQLSpecError
 from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
 

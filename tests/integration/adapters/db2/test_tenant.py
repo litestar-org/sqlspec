@@ -1,6 +1,6 @@
 """Db2 RCAC row isolation through verified session global variables."""
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from inspect import isawaitable
 from typing import Any
@@ -28,7 +28,7 @@ async def _invoke(function: Any, *args: Any) -> Any:
 
 
 @asynccontextmanager
-async def _session(config: Any) -> AsyncIterator[Any]:
+async def _session(config: Any) -> AsyncGenerator[Any, None]:
     if isinstance(config, Db2AsyncConfig):
         async with config.provide_session() as session:
             yield session

@@ -7,11 +7,11 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
-from sqlspec.data_dictionary import (
+from sqlspec.data_dictionary._dependencies import DependencyEdge, DependencyEdgeKind
+from sqlspec.data_dictionary._registry import register_dialect
+from sqlspec.data_dictionary._types import (
     DDL_PARENT_TABLE_CONTEXT_KEY,
     DDLResult,
-    DependencyEdge,
-    DependencyEdgeKind,
     DialectConfig,
     FeatureFlags,
     FeatureVersions,
@@ -20,7 +20,6 @@ from sqlspec.data_dictionary import (
     MetadataSupport,
     ObjectIdentity,
     VersionInfo,
-    register_dialect,
 )
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.text import quote_identifier

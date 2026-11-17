@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from itertools import chain
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
@@ -19,31 +20,35 @@ from sqlspec.adapters.arrow_odbc.core import (
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
-from sqlspec.core import (
-    SQL,
-    build_arrow_result_from_reader,
-    build_arrow_result_from_table,
-    get_cache_config,
-    register_driver_profile,
-)
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
 from sqlspec.core.parameters._validator import ParameterValidator
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
+from sqlspec.core.result._base import build_arrow_result_from_reader, build_arrow_result_from_table
+from sqlspec.driver._common import validate_savepoint_name
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import DataError, ImproperConfigurationError, SQLSpecError
+from sqlspec.storage._utils import import_pyarrow
 from sqlspec.typing import ArrowException
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, ParameterProfile, Statement, StatementConfig, StatementFilter
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.parameters._types import ParameterProfile
+    from sqlspec.core.result._base import ArrowResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 __all__ = ("ArrowOdbcCursor", "ArrowOdbcDriver", "ArrowOdbcExceptionHandler", "resolve_dialect_from_dbms_name")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
     """Sync context manager handling arrow-odbc exceptions."""
 
@@ -125,6 +130,7 @@ class ArrowOdbcStreamSource:
                     close()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ArrowOdbcDriver(SyncDriverAdapterBase):
     """Sync driver for generic ODBC connections with Arrow-native transfer."""
 
@@ -315,7 +321,9 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         except ArrowOdbcError as exc:
             mapped = create_mapped_exception(exc)
             msg = f"Failed to begin transaction: {mapped}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._transaction_active = True
 
     def commit(self) -> None:
@@ -329,7 +337,9 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         except ArrowOdbcError as exc:
             mapped = create_mapped_exception(exc)
             msg = f"Failed to commit transaction: {mapped}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._transaction_active = False
 
     def rollback(self) -> None:
@@ -343,7 +353,9 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         except ArrowOdbcError as exc:
             mapped = create_mapped_exception(exc)
             msg = f"Failed to rollback transaction: {mapped}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
         finally:
             self._transaction_active = False
 
@@ -576,21 +588,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts from storage into a table via arrow-odbc bulk insert."""
-        return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
-
     def _connection_in_transaction(self) -> bool:
         """Return whether SQLSpec holds an explicit transaction on the connection.
 
@@ -681,8 +678,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         renamed = schema
         for index, name in enumerate(names):
             renamed = renamed.set(index, renamed.field(index).with_name(name))
-        ensure_pyarrow()
-        import pyarrow as pa
+        pa = import_pyarrow()
 
         return arrow_reader_with_deferred_close(
             pa.RecordBatchReader.from_batches(
@@ -836,8 +832,7 @@ def _odbc_parameters(parameters: Any, *, naive_utc_datetimes: bool = False) -> "
 
 
 def _reader_to_table(reader: Any) -> Any:
-    ensure_pyarrow()
-    import pyarrow as pa
+    pa = import_pyarrow()
 
     if isinstance(reader, pa.Table):
         return reader
@@ -855,31 +850,34 @@ def _reader_to_table(reader: Any) -> Any:
     return pa.Table.from_batches(batches)
 
 
-def _to_pyarrow_reader(reader: object) -> "ArrowRecordBatchReader":
-    ensure_pyarrow()
-    import pyarrow as pa
+def _to_pyarrow_reader(reader: Any) -> "ArrowRecordBatchReader":
+    pa = import_pyarrow()
 
     if isinstance(reader, pa.RecordBatchReader):
-        return reader
+        return cast("ArrowRecordBatchReader", reader)
     if isinstance(reader, pa.Table):
-        return pa.RecordBatchReader.from_batches(reader.schema, reader.to_batches())
+        return cast("ArrowRecordBatchReader", pa.RecordBatchReader.from_batches(reader.schema, reader.to_batches()))
     into_reader = getattr(reader, "into_pyarrow_record_batch_reader", None)
     if callable(into_reader):
         return cast("ArrowRecordBatchReader", into_reader())
     schema = getattr(reader, "schema", None)
     if isinstance(schema, pa.Schema):
-        return pa.RecordBatchReader.from_batches(schema, cast("Iterable[ArrowRecordBatch]", reader))
+        return cast(
+            "ArrowRecordBatchReader",
+            pa.RecordBatchReader.from_batches(schema, cast("Iterable[ArrowRecordBatch]", reader)),
+        )
     iterator = iter(cast("Iterable[ArrowRecordBatch]", reader))
     try:
         first_batch = next(iterator)
     except StopIteration:
-        return pa.RecordBatchReader.from_batches(pa.schema([]), [])
-    return pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator))
+        return cast("ArrowRecordBatchReader", pa.RecordBatchReader.from_batches(pa.schema([]), []))
+    return cast(
+        "ArrowRecordBatchReader", pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator))
+    )
 
 
 def _table_to_reader(table: Any, chunk_size: int) -> Any:
-    ensure_pyarrow()
-    import pyarrow as pa
+    pa = import_pyarrow()
 
     return pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=chunk_size))
 

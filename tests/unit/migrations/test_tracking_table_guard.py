@@ -259,16 +259,11 @@ async def test_schema_pin_is_re_resolved_per_locked_command(is_async: bool) -> N
 
 @pytest.mark.parametrize(
     ("extra_row", "pattern"),
-    [
-        ({"has_rules": True}, "rewrite rules"),
-        ({"has_row_security": True}, "row-level security"),
-    ],
+    [({"has_rules": True}, "rewrite rules"), ({"has_row_security": True}, "row-level security")],
     ids=["rules", "row-level-security"],
 )
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
-async def test_guard_rejects_rules_and_row_security(
-    is_async: bool, extra_row: dict[str, Any], pattern: str
-) -> None:
+async def test_guard_rejects_rules_and_row_security(is_async: bool, extra_row: dict[str, Any], pattern: str) -> None:
     """Tracking table guard rejects pre-existing PostgreSQL relations with rewrite rules or RLS."""
     row = {**OWNED_ROW, **extra_row}
     harness = _Harness(is_async=is_async, relation_rows=[row])

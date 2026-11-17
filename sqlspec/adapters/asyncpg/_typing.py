@@ -4,7 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import asyncpg as asyncpg_module
 from asyncpg import Connection as AsyncpgRawConnection
@@ -21,11 +21,10 @@ from asyncpg.pool import PoolConnectionProxy as AsyncpgNativePoolConnectionProxy
 from asyncpg.pool import PoolConnectionProxyMeta as AsyncpgPoolConnectionProxyMeta
 from asyncpg.prepared_stmt import PreparedStatement
 
+from sqlspec.driver._session import AsyncDriverSessionContext
 from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from types import TracebackType
     from typing import TypeAlias
 
     from asyncpg import Connection, Record
@@ -33,7 +32,6 @@ if TYPE_CHECKING:
     from google.cloud.sql.connector import Connector as AsyncpgCloudSqlConnector
 
     from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
-    from sqlspec.core import StatementConfig
 
     AsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
     AsyncpgPool: TypeAlias = Pool[Record]
@@ -80,94 +78,21 @@ class AsyncpgCursor:
     async def __aexit__(self, *_: Any) -> None: ...
 
 
-class AsyncpgSessionContext:
-    """Async context manager for AsyncPG sessions.
+class AsyncpgSessionContext(AsyncDriverSessionContext):
+    """Async context manager for AsyncPG sessions."""
 
-    This class is intentionally excluded from mypyc compilation to avoid ABI
-    boundary issues. It receives callables from uncompiled config classes and
-    instantiates compiled Driver objects, acting as a bridge between compiled
-    and uncompiled code.
+    __slots__ = ()
 
-    Uses callable-based connection management to decouple from config implementation.
-    """
+    def _resolve_driver_class(self) -> "type[AsyncpgDriver]":
+        from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
-
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig | Callable[[], StatementConfig]",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[AsyncpgDriver], AsyncpgDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: Any = None
-        self._driver: AsyncpgDriver | None = None
-
-    async def __aenter__(self) -> "AsyncpgDriver":
-        driver_cls = _resolve_asyncpg_driver()
-        self._connection = await self._acquire_connection()
-        try:
-            statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-            self._driver = driver_cls(
-                connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
-            )
-            return self._prepare_driver(self._driver)
-        except BaseException as exc:
-            driver, self._driver = self._driver, None
-            connection, self._connection = self._connection, None
-            try:
-                if connection is not None:
-                    await self._release_connection(
-                        connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__
-                    )
-            finally:
-                if driver is not None:
-                    driver._mark_closed()
-            raise
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                await driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
-            try:
-                if self._connection is not None:
-                    await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
+        return AsyncpgDriver
 
 
 _LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
     "AsyncpgAlloydbAsyncConnector": ("google.cloud.alloydb.connector", "AsyncConnector"),
     "AsyncpgCloudSqlConnector": ("google.cloud.sql.connector", "Connector"),
 }
-
-_ASYNCPG_DRIVER_CLS: "type[AsyncpgDriver] | None" = None
 
 
 def __getattr__(name: str) -> Any:
@@ -182,16 +107,3 @@ def __getattr__(name: str) -> Any:
         msg = f"Cannot import {attribute!r} from {module_name!r}"
         raise ImportError(msg)
     return value
-
-
-def _resolve_asyncpg_driver() -> "type[AsyncpgDriver]":
-    global _ASYNCPG_DRIVER_CLS
-    driver_cls = _ASYNCPG_DRIVER_CLS
-    if driver_cls is None:
-        resolved = import_optional_attr("sqlspec.adapters.asyncpg.driver", "AsyncpgDriver")
-        if resolved is None:
-            msg = "Cannot import 'AsyncpgDriver' from 'sqlspec.adapters.asyncpg.driver'"
-            raise ImportError(msg)
-        driver_cls = cast("type[AsyncpgDriver]", resolved)
-        _ASYNCPG_DRIVER_CLS = driver_cls
-    return driver_cls

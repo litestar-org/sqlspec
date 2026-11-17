@@ -5,7 +5,8 @@ from collections.abc import Callable, Mapping, Sized
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.dialects.sybase import SQLAnywhere as _SQLAnywhereDialect
 from sqlspec.exceptions import (
@@ -27,7 +28,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from logging import Logger
 
     from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = (
     "DEFAULT_SQLANYWHERE_PORT",

@@ -24,7 +24,7 @@ from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 from tests.unit.extensions._tenant_configs import SyncRecordingStrategy, TenantSqliteConfig
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncGenerator, Generator, Iterator
 
     from sqlspec.config import DatabaseConfigProtocol, LifecycleConfig
 
@@ -211,7 +211,7 @@ def test_flask_defers_tenant_connection_and_supports_set_request_tenant(
     seen: list[tuple[str, TenantContextPayload | None]] = []
 
     @contextmanager
-    def sync_conn(self: Any, pool: Any = None) -> "Iterator[object]":
+    def sync_conn(self: Any, pool: Any = None) -> "Generator[object, None, None]":
         seen.append(("enter", TenantContext.get()))
         try:
             yield self.create_connection()
@@ -219,7 +219,7 @@ def test_flask_defers_tenant_connection_and_supports_set_request_tenant(
             seen.append(("exit", TenantContext.get()))
 
     @asynccontextmanager
-    async def async_conn(self: Any, pool: Any = None) -> "AsyncIterator[object]":
+    async def async_conn(self: Any, pool: Any = None) -> "AsyncGenerator[object, None]":
         seen.append(("enter", TenantContext.get()))
         conn = await self.create_connection()
         try:
@@ -281,7 +281,7 @@ def test_flask_supports_multi_config_auth_and_deferred_tenant_db(monkeypatch: py
     original_provide = SqliteConfig.provide_connection
 
     @contextmanager
-    def tracked_provide(self: SqliteConfig, *args: Any, **kwargs: Any) -> "Iterator[Any]":
+    def tracked_provide(self: SqliteConfig, *args: Any, **kwargs: Any) -> "Generator[Any, None, None]":
         if self is tenant_cfg:
             seen_tenant.append(TenantContext.get_tenant_id())
             conn = self.create_connection()
@@ -567,7 +567,7 @@ def test_flask_prepares_session_arms_lazy_begin_emits_events_and_detaches(
     original_provide = config.provide_connection
 
     @contextmanager
-    def _proxy_provide(*args: Any, **kwargs: Any) -> "Iterator[Any]":
+    def _proxy_provide(*args: Any, **kwargs: Any) -> "Generator[Any, None, None]":
         with original_provide(*args, **kwargs) as raw_conn:
             proxy = _ConnProxy(raw_conn)
             proxies.append(proxy)
@@ -623,7 +623,7 @@ def test_flask_streamed_response_defers_finalization_and_release_to_close(
         original_provide = SqliteConfig.provide_connection
 
         @contextmanager
-        def _tracking_provide(self: SqliteConfig, *args: Any, **kwargs: Any) -> "Iterator[Any]":
+        def _tracking_provide(self: SqliteConfig, *args: Any, **kwargs: Any) -> "Generator[Any, None, None]":
             nonlocal active_connections
             with original_provide(self, *args, **kwargs) as conn:
                 active_connections += 1

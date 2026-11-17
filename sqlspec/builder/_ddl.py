@@ -29,9 +29,9 @@ from sqlspec.builder._parsing_utils import (
     _truthy_metadata_flag,
     parse_order_expression,
 )
-from sqlspec.core import SQL
 from sqlspec.core.splitter import contains_statement_terminator
-from sqlspec.data_dictionary import (
+from sqlspec.core.statement import SQL
+from sqlspec.data_dictionary._types import (
     DDLResult,
     ForeignKeyMetadata,
     MetadataFidelity,
@@ -468,6 +468,7 @@ def build_constraint_expression(
     return None
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class DDLBuilder(QueryBuilder):
     """Base class for DDL builders (CREATE, DROP, ALTER, etc)."""
 
@@ -542,6 +543,7 @@ class DDLBuilder(QueryBuilder):
         return select_expr
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class _IfExistsDDLMixin:
     __slots__ = ()
@@ -553,6 +555,7 @@ class _IfExistsDDLMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class _CascadeRestrictDDLMixin:
     __slots__ = ()
@@ -568,6 +571,7 @@ class _CascadeRestrictDDLMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class _IfNotExistsDDLMixin:
     __slots__ = ()

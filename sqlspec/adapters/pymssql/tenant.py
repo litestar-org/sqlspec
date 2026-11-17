@@ -12,7 +12,7 @@ from sqlspec.utils.tenant._mssql import MssqlTenantSettings, read_batch_result
 
 if TYPE_CHECKING:
     from sqlspec.core.tenant.base import SyncTenantStrategy
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 __all__ = ("PymssqlSessionContextStrategy", "PymssqlTenantLease")
 

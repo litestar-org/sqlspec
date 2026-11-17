@@ -29,23 +29,18 @@ from sqlspec.adapters.psqlpy._typing import (
     TargetSessionAttrs,
 )
 from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
-    ParameterStyleConfig,
-    StatementConfig,
-    build_statement_config_from_profile,
-)
+from sqlspec.core.cache import CachedQuery
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
     is_postgres_extension_active,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.core.parameters import type_coercion_dispatcher, type_coercion_fallbacks
+from sqlspec.core.parameters._processor import type_coercion_dispatcher, type_coercion_fallbacks
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle, ParameterStyleConfig
 from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.core.sqlcommenter import split_sqlcomment
-from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -67,7 +62,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
 from sqlspec.utils.type_guards import has_query_result_metadata
@@ -76,7 +71,7 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlspec.core import SQL
+    from sqlspec.core.statement import SQL, StatementConfig
 
 __all__ = (
     "PsqlpyStreamSource",

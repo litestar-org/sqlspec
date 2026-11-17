@@ -11,7 +11,7 @@ import io
 import json
 import sys
 import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from time import perf_counter
@@ -154,7 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     local = urlparse(args.endpoint).hostname in {"localhost", "127.0.0.1", "::1"}
 
     @contextmanager
-    def factory(native: bool) -> Iterator[BigQueryDriver]:
+    def factory(native: bool) -> Generator[BigQueryDriver, None, None]:
         with Client(
             project=args.project,
             client_options={"api_endpoint": args.endpoint},

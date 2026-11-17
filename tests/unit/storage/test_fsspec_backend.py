@@ -1260,8 +1260,4 @@ def test_fsspec_prefers_cat_file_and_rm_file_for_glob_chars() -> None:
     backend.delete_sync("dir/[meta].bin")
     backend.delete_sync("dir", recursive=True)
 
-    assert calls == [
-        ("cat_file", "dir/[meta].bin"),
-        ("rm_file", "dir/[meta].bin"),
-        ("rm:True", "dir"),
-    ]
+    assert calls == [("cat_file", "dir/[meta].bin"), ("rm_file", "dir/[meta].bin"), ("rm:True", "dir")]

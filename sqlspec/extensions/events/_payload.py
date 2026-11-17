@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events._models import EventMessage
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.uuids import uuid4
 
 __all__ = (

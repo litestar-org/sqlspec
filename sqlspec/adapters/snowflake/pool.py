@@ -17,7 +17,7 @@ from sqlspec.typing import import_optional
 
 if TYPE_CHECKING:
     from sqlspec.adapters.snowflake._typing import SnowflakeConnection
-    from sqlspec.observability import ObservabilityRuntime
+    from sqlspec.observability._runtime import ObservabilityRuntime
 
 __all__ = ("SnowflakeConnectionPool",)
 

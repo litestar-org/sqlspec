@@ -26,7 +26,7 @@ from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import has_extension_config
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator
+    from collections.abc import AsyncGenerator, Callable, Generator
 
 __all__ = ("BaseSQLSpecStore", "CompanionIndex")
 
@@ -123,7 +123,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         self._validate_table_name(self._table_name)
 
     @asynccontextmanager
-    async def _store_connection(self) -> "AsyncIterator[_StoreConnection]":
+    async def _store_connection(self) -> "AsyncGenerator[_StoreConnection, None]":
         """Yield the connection a store operation runs on for the current task.
 
         Yields:
@@ -142,7 +142,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             yield _StoreConnection(connection, True)
 
     @contextmanager
-    def _store_connection_sync(self) -> "Iterator[_StoreConnection]":
+    def _store_connection_sync(self) -> "Generator[_StoreConnection, None, None]":
         """Yield the connection a store operation runs on for the current task.
 
         Yields:
@@ -161,7 +161,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             yield _StoreConnection(connection, True)
 
     @asynccontextmanager
-    async def _store_session(self) -> "AsyncIterator[_StoreSession]":
+    async def _store_session(self) -> "AsyncGenerator[_StoreSession, None]":
         """Yield the database session a store operation runs on for the current task.
 
         Yields:
@@ -180,7 +180,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             yield _StoreSession(owned_session, True)
 
     @contextmanager
-    def _store_session_sync(self) -> "Iterator[_StoreSession]":
+    def _store_session_sync(self) -> "Generator[_StoreSession, None, None]":
         """Yield the database session a store operation runs on for the current task.
 
         Yields:
@@ -199,7 +199,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             yield _StoreSession(owned_session, True)
 
     @asynccontextmanager
-    async def _discarding_session_async(self) -> "AsyncIterator[Any]":
+    async def _discarding_session_async(self) -> "AsyncGenerator[Any, None]":
         """Yield an owned session inside a transaction that is always rolled back.
 
         Yields:
@@ -213,7 +213,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
                 await session.rollback()
 
     @contextmanager
-    def _discarding_session_sync(self) -> "Iterator[Any]":
+    def _discarding_session_sync(self) -> "Generator[Any, None, None]":
         """Yield an owned session inside a transaction that is always rolled back.
 
         Yields:
@@ -562,7 +562,7 @@ def _current_lease(config: Any) -> StoreLease:
 
 
 @asynccontextmanager
-async def _borrowed_session_async(lease: StoreLease) -> "AsyncIterator[Any]":
+async def _borrowed_session_async(lease: StoreLease) -> "AsyncGenerator[Any, None]":
     """Yield the borrowed request session inside a transaction.
 
     The store joins an open request transaction. When none is open it begins one; in
@@ -588,7 +588,7 @@ async def _borrowed_session_async(lease: StoreLease) -> "AsyncIterator[Any]":
 
 
 @contextmanager
-def _borrowed_session_sync(lease: StoreLease) -> "Iterator[Any]":
+def _borrowed_session_sync(lease: StoreLease) -> "Generator[Any, None, None]":
     """Yield the borrowed request session inside a transaction.
 
     The store joins an open request transaction. When none is open it begins one; in

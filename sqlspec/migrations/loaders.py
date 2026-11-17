@@ -11,7 +11,7 @@ import os
 import stat
 import sys
 import types
-from collections.abc import Awaitable, Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Generator, Iterable
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Final, cast
@@ -110,7 +110,7 @@ def _is_trusted_marker(path: Path, allowed_uids: "set[int] | None") -> "bool | N
 
 
 @contextmanager
-def temporary_project_path(project_root: Path) -> Iterator[None]:
+def temporary_project_path(project_root: Path) -> Generator[None, None, None]:
     """Temporarily add project_root to sys.path for imports.
 
     Args:
@@ -487,7 +487,7 @@ class PythonFileLoader(BaseMigrationLoader):
         return find_project_root(start_path)
 
     @contextmanager
-    def _temporary_project_path(self) -> Iterator[None]:
+    def _temporary_project_path(self) -> Generator[None, None, None]:
         """Temporarily add project root to sys.path for imports."""
         with temporary_project_path(self.project_root):
             yield

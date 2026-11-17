@@ -67,8 +67,8 @@ from sqlspec.builder._parsing_utils import (
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.builder._update import Update
 from sqlspec.builder._values import Values
-from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 

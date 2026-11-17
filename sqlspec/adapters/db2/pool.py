@@ -680,7 +680,9 @@ class Db2AsyncConnectionPool:
             await asyncio.wait_for(semaphore.acquire(), self._acquire_timeout)
         except TimeoutError as exc:
             msg = f"Timed out after {self._acquire_timeout}s waiting for a Db2 connection"
-            raise ConnectionTimeoutError(msg) from exc
+            error = ConnectionTimeoutError(msg)
+            error.__cause__ = exc
+            raise error from exc
         if self._closed:
             semaphore.release()
             msg = "Db2 async connection pool is closed"

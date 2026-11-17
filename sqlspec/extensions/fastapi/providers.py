@@ -22,7 +22,8 @@ from fastapi import Depends, Query, Request
 from fastapi.exceptions import RequestValidationError
 from typing_extensions import TypedDict
 
-from sqlspec.core import (
+from sqlspec.core._cursor import resolve_env_pagination_cursor_secret
+from sqlspec.core.filters import (
     BeforeAfterFilter,
     BooleanFilter,
     ChoicesFilter,
@@ -39,9 +40,8 @@ from sqlspec.core import (
     SearchFilter,
     normalize_cursor_keys,
 )
-from sqlspec.core._cursor import resolve_env_pagination_cursor_secret
 from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
-from sqlspec.utils.tenant import resolve_cursor_tenant_identity
+from sqlspec.utils.tenant._cursor import resolve_cursor_tenant_identity
 from sqlspec.utils.text import camelize
 
 if TYPE_CHECKING:

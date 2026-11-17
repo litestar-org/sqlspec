@@ -36,12 +36,12 @@ class SQLSpecConfigState:
     pool_key: str
     session_key: str
     commit_mode: CommitMode
-    extra_commit_statuses: "set[int] | None"
-    extra_rollback_statuses: "set[int] | None"
+    extra_commit_statuses: set[int] | None
+    extra_rollback_statuses: set[int] | None
     disable_di: bool
     enable_correlation_middleware: bool = True
     correlation_header: str = "x-request-id"
-    correlation_headers: "tuple[str, ...] | None" = None
+    correlation_headers: tuple[str, ...] | None = None
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
     sqlcommenter_framework: str = "starlette"

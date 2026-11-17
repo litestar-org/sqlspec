@@ -4,6 +4,7 @@ import contextvars
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, overload
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp as _sqlglot_exp
 
 from sqlspec.adapters.spanner._typing import (
@@ -46,18 +47,14 @@ from sqlspec.adapters.spanner.core import (
     supports_write,
 )
 from sqlspec.adapters.spanner.data_dictionary import SpannerAsyncDataDictionary, SpannerSyncDataDictionary
-from sqlspec.core import StatementConfig, register_driver_profile
-from sqlspec.driver import (
-    AsyncDriverAdapterBase,
-    AsyncRowStream,
-    BaseAsyncExceptionHandler,
-    BaseSyncExceptionHandler,
-    ExecutionResult,
-    SyncDriverAdapterBase,
-    SyncRowStream,
-)
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._common import ExecutionResult, validate_load_from_storage_kwargs
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import ReadOnlyTransactionError, SQLConversionError
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -65,10 +62,11 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.spanner._typing import SpannerSyncConnection
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
-    from sqlspec.core.statement import SQL
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import SchemaT, StatementParameters
 
 __all__ = (
@@ -110,6 +108,7 @@ _READ_ONLY_ASYNC_SNAPSHOT_DDL_ERROR_MESSAGE = (
 )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SpannerSyncExceptionHandler(BaseSyncExceptionHandler):
     """Map Spanner client exceptions to SQLSpec exceptions stored on ``pending_exception``."""
 
@@ -125,6 +124,7 @@ class SpannerSyncExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SpannerAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Map async Spanner client exceptions to SQLSpec exceptions stored on ``pending_exception``."""
 
@@ -140,10 +140,11 @@ class SpannerAsyncExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
-    dialect: "DialectType" = "spanner"
+    dialect: "DialectType | None" = "spanner"
     __slots__ = (
         "_data_dictionary",
         "_owns_transaction",
@@ -188,9 +189,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             return self.create_execution_result(cursor, rowcount_override=0)
         if statement.is_modifying_operation() and not supports_write(cursor):
             raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
-        params = cast("dict[str, Any] | None", params)
-        param_types_map = self._infer_param_types(params)
-        coerced_params = self._coerce_params(params)
+        dict_params = cast("dict[str, Any]", params) if isinstance(params, dict) else None
+        param_types_map = self._infer_param_types(dict_params)
+        coerced_params = self._coerce_params(dict_params)
 
         if statement.returns_rows():
             reader = cast("_SpannerReadProtocol", cursor)
@@ -229,9 +230,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, params = self._compiled_sql(statement, self.statement_config)
-        params = cast("dict[str, Any] | None", params)
-        param_types_map = self._infer_param_types(params)
-        coerced_params = self._coerce_params(params)
+        dict_params = cast("dict[str, Any]", params) if isinstance(params, dict) else None
+        param_types_map = self._infer_param_types(dict_params)
+        coerced_params = self._coerce_params(dict_params)
         return SyncRowStream(
             SpannerSyncStreamSource(
                 self, sql, coerced_params, param_types_map, chunk_size, self._execute_kwargs(for_read=True)
@@ -311,7 +312,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 pending_ddl = []
                 cursor = self.connection
                 reader = cast("_SpannerReadProtocol", cursor)
-            script_params = cast("dict[str, Any] | None", params)
+            script_params = cast("dict[str, Any]", params) if isinstance(params, dict) else None
             param_types_map = self._infer_param_types(script_params)
             coerced_params = self._coerce_params(script_params)
             is_select = is_query_statement(stmt, dialect_str)
@@ -646,8 +647,27 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into Spanner table."""
         if kwargs:
+            validate_load_from_storage_kwargs(kwargs)
             return super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+                table,
+                source,
+                file_format=file_format,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                storage_options=kwargs.get("storage_options"),
+                stage_table=kwargs.get("stage_table"),
+                conflict_keys=kwargs.get("conflict_keys"),
+                on_conflict=kwargs.get("on_conflict", "update"),
+                exclude_update_columns=kwargs.get("exclude_update_columns"),
+                drop_stage_table=kwargs.get("drop_stage_table", True),
+                drop_indexes=kwargs.get("drop_indexes", False),
+                concurrent_indexes=kwargs.get("concurrent_indexes", False),
+                checkpoint_table=kwargs.get("checkpoint_table"),
+                checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+                max_workers=kwargs.get("max_workers", 1),
+                executor=kwargs.get("executor", "thread"),
+                arrow_schema=kwargs.get("arrow_schema"),
+                type_casts=kwargs.get("type_casts"),
             )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
@@ -822,10 +842,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return resolve_row_plan(fields, self._row_plan_cache, json_deserializer=json_deserializer)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SpannerAsyncDriver(AsyncDriverAdapterBase):
     """Asynchronous Spanner driver operating on AsyncSnapshot or AsyncTransaction contexts."""
 
-    dialect: "DialectType" = "spanner"
+    dialect: "DialectType | None" = "spanner"
     __slots__ = (
         "_data_dictionary",
         "_owns_transaction",
@@ -870,9 +891,9 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             return self.create_execution_result(cursor, rowcount_override=0)
         if statement.is_modifying_operation() and not supports_write(cursor):
             raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
-        params = cast("dict[str, Any] | None", params)
-        param_types_map = self._infer_param_types(params)
-        coerced_params = self._coerce_params(params)
+        dict_params = cast("dict[str, Any]", params) if isinstance(params, dict) else None
+        param_types_map = self._infer_param_types(dict_params)
+        coerced_params = self._coerce_params(dict_params)
 
         if statement.returns_rows():
             reader = cast("_SpannerAsyncReadProtocol", cursor)
@@ -915,9 +936,9 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, params = self._compiled_sql(statement, self.statement_config)
-        params = cast("dict[str, Any] | None", params)
-        param_types_map = self._infer_param_types(params)
-        coerced_params = self._coerce_params(params)
+        dict_params = cast("dict[str, Any]", params) if isinstance(params, dict) else None
+        param_types_map = self._infer_param_types(dict_params)
+        coerced_params = self._coerce_params(dict_params)
         return AsyncRowStream(
             SpannerAsyncStreamSource(
                 self, sql, coerced_params, param_types_map, chunk_size, self._execute_kwargs(for_read=True)
@@ -997,7 +1018,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 pending_ddl = []
                 cursor = self.connection
                 reader = cast("_SpannerAsyncReadProtocol", cursor)
-            script_params = cast("dict[str, Any] | None", params)
+            script_params = cast("dict[str, Any]", params) if isinstance(params, dict) else None
             param_types_map = self._infer_param_types(script_params)
             coerced_params = self._coerce_params(script_params)
             is_select = is_query_statement(stmt, dialect_str)
@@ -1340,8 +1361,27 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load artifacts from storage into Spanner table asynchronously."""
         if kwargs:
+            validate_load_from_storage_kwargs(kwargs)
             return await super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+                table,
+                source,
+                file_format=file_format,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                storage_options=kwargs.get("storage_options"),
+                stage_table=kwargs.get("stage_table"),
+                conflict_keys=kwargs.get("conflict_keys"),
+                on_conflict=kwargs.get("on_conflict", "update"),
+                exclude_update_columns=kwargs.get("exclude_update_columns"),
+                drop_stage_table=kwargs.get("drop_stage_table", True),
+                drop_indexes=kwargs.get("drop_indexes", False),
+                concurrent_indexes=kwargs.get("concurrent_indexes", False),
+                checkpoint_table=kwargs.get("checkpoint_table"),
+                checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+                max_workers=kwargs.get("max_workers", 1),
+                executor=kwargs.get("executor", "thread"),
+                arrow_schema=kwargs.get("arrow_schema"),
+                type_casts=kwargs.get("type_casts"),
             )
         arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(

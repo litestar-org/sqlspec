@@ -2,13 +2,16 @@
 
 from typing import TYPE_CHECKING
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.teradata.core import TABLE_EXISTS_SQL, format_identifier, format_table_ref, split_schema_and_table
-from sqlspec.builder import CreateTable, sql
+from sqlspec.builder._ddl import CreateTable
+from sqlspec.builder._factory import sql
 from sqlspec.migrations.schema import DropStatement
 from sqlspec.migrations.tracker import SyncMigrationTracker
 
 if TYPE_CHECKING:
-    from sqlspec.driver import SyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
 
 __all__ = ("TeradataSyncMigrationTracker", "build_guarded_drop_table")
 
@@ -30,6 +33,7 @@ def build_guarded_drop_table(table_name: str, statement: str | None = None) -> D
     )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class TeradataSyncMigrationTracker(SyncMigrationTracker):
     """Track migrations using bounded Teradata metadata columns."""
 

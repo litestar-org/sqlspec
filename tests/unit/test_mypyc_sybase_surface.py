@@ -55,8 +55,10 @@ def test_mypyc_inventory_includes_sybase_and_sqlanywhere_hot_surfaces() -> None:
         "sqlspec/data_dictionary/dialects/sybase/config.py",
         "sqlspec/data_dictionary/dialects/sqlanywhere/config.py",
         "sqlspec/adapters/sybase/core.py",
+        "sqlspec/adapters/sybase/driver.py",
         "sqlspec/adapters/sybase/pool.py",
         "sqlspec/adapters/sqlanywhere/core.py",
+        "sqlspec/adapters/sqlanywhere/driver.py",
         "sqlspec/adapters/sqlanywhere/pool.py",
     }
     for module_path in expected_compiled:
@@ -69,11 +71,9 @@ def test_mypyc_inventory_includes_sybase_and_sqlanywhere_hot_surfaces() -> None:
         "sqlspec/adapters/sybase/_typing.py",
         "sqlspec/adapters/sybase/config.py",
         "sqlspec/adapters/sybase/data_dictionary.py",
-        "sqlspec/adapters/sybase/driver.py",
         "sqlspec/adapters/sqlanywhere/_typing.py",
         "sqlspec/adapters/sqlanywhere/config.py",
         "sqlspec/adapters/sqlanywhere/data_dictionary.py",
-        "sqlspec/adapters/sqlanywhere/driver.py",
     }
     for module_path in expected_interpreted:
         assert module_path in interpreted, f"Expected interpreted module: {module_path}"

@@ -2,7 +2,8 @@
 
 import re
 
-from sqlspec.data_dictionary import (
+from sqlspec.data_dictionary._registry import register_dialect
+from sqlspec.data_dictionary._types import (
     DDLResult,
     DialectConfig,
     FeatureFlags,
@@ -16,7 +17,6 @@ from sqlspec.data_dictionary import (
     ObjectIdentity,
     SystemMetadataCapability,
     VersionInfo,
-    register_dialect,
 )
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 
