@@ -387,7 +387,7 @@ jobs:
         shell: bash
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
-        run: uv run --no-project --python "$PYTHON_VERSION" python tools/scripts/export_hashed_requirements.py --profile runtime --profile smoke --profile drivers --output-dir .build-requirements
+        run: uv run --no-project --python "$PYTHON_VERSION" python tools/scripts/export_hashed_requirements.py --profile runtime --profile smoke --profile drivers --profile drivers-db2 --profile drivers-sqlanywhere --profile drivers-sqlanywhere-build --output-dir .build-requirements
 
       - name: Download standard wheel artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -431,7 +431,17 @@ jobs:
           smoke_args=(--require-compiled)
           if [ "$RUNNER_OS" = "Linux" ]; then
             uv pip install --no-config --python test-mypyc --require-hashes --only-binary :all: -r .build-requirements/drivers.txt
+            uv pip install --no-config --python test-mypyc --require-hashes --build-constraints .build-requirements/drivers-sqlanywhere-build.txt -r .build-requirements/drivers-sqlanywhere.txt
             smoke_args+=(--require-sdk-profile)
+            if [ "$RUNNER_ARCH" = "X64" ]; then
+              grep -v '^[[:space:]]*--hash=' .build-requirements/drivers-db2.txt | sed -e 's/[[:space:]]*\\$//' > .build-requirements/drivers-db2-specs.txt
+              if uv pip install --no-config --python test-mypyc --dry-run --only-binary :all: -r .build-requirements/drivers-db2-specs.txt; then
+                uv pip install --no-config --python test-mypyc --require-hashes --only-binary :all: -r .build-requirements/drivers-db2.txt
+                smoke_args+=(--require-sdk ibm_db --require-sdk ibm_db_dbi)
+              else
+                echo "::warning::ibm_db binary wheel unavailable for Python ${PYTHON_VERSION}; the Db2 driver smoke check will be skipped"
+              fi
+            fi
           fi
           uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py "${smoke_args[@]}"
 

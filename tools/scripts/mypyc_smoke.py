@@ -7,6 +7,7 @@ import importlib.machinery
 import importlib.util
 import inspect
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,9 @@ SDK_PROFILE_DEPENDENCIES: tuple[str, ...] = (
     "asyncmy",
     "asyncpg",
     "duckdb",
+    "google.cloud.bigquery",
+    "google.cloud.spanner_v1",
+    "mssql_python",
     "mysql.connector",
     "oracledb",
     "psqlpy",
@@ -42,8 +46,13 @@ SDK_PROFILE_DEPENDENCIES: tuple[str, ...] = (
     "pyarrow",
     "pymssql",
     "pymysql",
+    "sqlanydb",
 )
-"""Importable SDKs installed by the ``drivers`` requirement profile on the Linux wheel-test job."""
+"""Importable SDKs installed by the ``drivers`` and ``drivers-sqlanywhere`` requirement profiles.
+
+Every Linux wheel-test job installs these. SDKs without a wheel for every Linux target, such as
+``ibm_db``, are required per job through ``--require-sdk``.
+"""
 
 _BEHAVIOUR_PROBE_TIMEOUT_SECONDS = 30
 
@@ -279,14 +288,18 @@ def is_compiled_module(module: Any) -> bool:
     return module_file.endswith(COMPILED_SUFFIXES)
 
 
-def run_smoke(*, require_compiled: bool = False, require_sdk_profile: bool = False) -> list[dict[str, Any]]:
+def run_smoke(
+    *, require_compiled: bool = False, require_sdk_profile: bool = False, required_sdks: Sequence[str] = ()
+) -> list[dict[str, Any]]:
     """Import the compiled-wheel smoke matrix and return per-entry results.
 
     Args:
         require_compiled: Fail when a compiled-surface module imports from Python source.
         require_sdk_profile: Fail instead of skipping when a missing dependency is one of
             ``SDK_PROFILE_DEPENDENCIES``.
+        required_sdks: Further SDK modules whose absence fails instead of skipping.
     """
+    required = _required_sdks(require_sdk_profile=require_sdk_profile, required_sdks=required_sdks)
     results: list[dict[str, Any]] = []
     for entry in SMOKE_IMPORTS:
         result: dict[str, Any] = {
@@ -314,7 +327,7 @@ def run_smoke(*, require_compiled: bool = False, require_sdk_profile: bool = Fal
             if _is_missing_optional_dependency(missing_name, optional_dependency):
                 if require_compiled and entry.require_compiled and not _has_compiled_module_file(entry.module):
                     result["error"] = "compiled extension is missing from the installed package"
-                elif require_sdk_profile and optional_dependency in SDK_PROFILE_DEPENDENCIES:
+                elif _is_required_sdk(optional_dependency, required):
                     result["error"] = f"required SDK profile dependency is missing: {missing_name}"
                 else:
                     result["skipped"] = True
@@ -327,8 +340,18 @@ def run_smoke(*, require_compiled: bool = False, require_sdk_profile: bool = Fal
     return results
 
 
-def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
-    """Run construction-time smoke checks for provider classes."""
+def run_construction_checks(
+    *, require_compiled: bool = False, require_sdk_profile: bool = False, required_sdks: Sequence[str] = ()
+) -> list[dict[str, Any]]:
+    """Run construction-time smoke checks for provider classes.
+
+    Args:
+        require_compiled: Fail when a compiled-surface module imports from Python source.
+        require_sdk_profile: Fail instead of skipping an adapter whose missing dependency is one of
+            ``SDK_PROFILE_DEPENDENCIES``.
+        required_sdks: Further SDK modules whose absence fails instead of skipping.
+    """
+    required = _required_sdks(require_sdk_profile=require_sdk_profile, required_sdks=required_sdks)
     return [
         *[
             _check_public_import_order(order, require_compiled=require_compiled)
@@ -343,9 +366,11 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_tenant_lease_boundary(require_compiled=require_compiled),
         _check_session_routing_boundary(require_compiled=require_compiled),
         _check_oracle_26ai_boundary(require_compiled=require_compiled),
-        _check_adapter_config_construction(),
+        _check_adapter_config_construction(required_sdks=required),
+        _check_adapter_driver_construction(require_compiled=require_compiled, required_sdks=required),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
+        _check_exception_causes(require_compiled=require_compiled),
         _check_obstore_arrow_reads(require_compiled=require_compiled),
         _check_pipeline_arrow_streaming(require_compiled=require_compiled),
         _check_service_subclasses(require_compiled=require_compiled),
@@ -381,13 +406,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Fail when an SDK installed by the Linux wheel-test driver profile is missing instead of skipping.",
     )
+    parser.add_argument(
+        "--require-sdk",
+        action="append",
+        default=[],
+        metavar="MODULE",
+        help="Fail when this SDK module is missing instead of skipping (repeatable).",
+    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
     args = parser.parse_args(argv)
 
-    results = run_smoke(require_compiled=args.require_compiled, require_sdk_profile=args.require_sdk_profile)
-    if args.require_sdk_profile:
-        results.append(_check_sdk_profile())
-    results.extend(run_construction_checks(require_compiled=args.require_compiled))
+    required = _required_sdks(require_sdk_profile=args.require_sdk_profile, required_sdks=args.require_sdk)
+    results = run_smoke(
+        require_compiled=args.require_compiled,
+        require_sdk_profile=args.require_sdk_profile,
+        required_sdks=args.require_sdk,
+    )
+    if required:
+        results.append(_check_sdk_profile(required))
+    results.extend(
+        run_construction_checks(
+            require_compiled=args.require_compiled,
+            require_sdk_profile=args.require_sdk_profile,
+            required_sdks=args.require_sdk,
+        )
+    )
     if args.json:
         json.dump({"results": results}, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
@@ -430,6 +473,19 @@ _OPTIONAL_COMPANIONS: dict[str, tuple[str, ...]] = {
     "ibm_db": ("ibm_db_dbi",),
     "psycopg": ("psycopg_pool",),
 }
+
+
+def _required_sdks(*, require_sdk_profile: bool, required_sdks: Sequence[str]) -> tuple[str, ...]:
+    """Return every SDK module whose absence is a failure for this run."""
+    profile = SDK_PROFILE_DEPENDENCIES if require_sdk_profile else ()
+    return tuple(dict.fromkeys((*profile, *required_sdks)))
+
+
+def _is_required_sdk(dependency: str | None, required: Sequence[str]) -> bool:
+    """Return whether a dependency, or a submodule of it, is a required SDK module."""
+    if not dependency:
+        return False
+    return any(sdk == dependency or sdk.startswith(f"{dependency}.") for sdk in required)
 
 
 def _is_missing_optional_dependency(missing_name: str, optional_dependency: str | None) -> bool:
@@ -499,6 +555,57 @@ def _check_statement_sentinel_identity(*, require_compiled: bool = False) -> dic
         assert statement_module.Empty is private_typing.Empty is public_typing.Empty
     except AssertionError as exc:
         result["error"] = f"{type(exc).__name__}: Empty sentinel identity mismatch"
+    return result
+
+
+def _check_exception_causes(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Check that an error raised while handling another keeps its cause, or its suppression."""
+    result = _new_smoke_result(
+        name="exception_causes",
+        module="sqlspec.utils.module_loader",
+        attribute="module_to_os_path",
+        compiled_required=require_compiled,
+    )
+    try:
+        module_loader = importlib.import_module("sqlspec.utils.module_loader")
+        env_module = importlib.import_module("sqlspec.utils.env")
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(module_loader) and is_compiled_module(env_module)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
+
+    failures: list[str] = []
+    try:
+        module_loader.module_to_os_path("sqlspec_smoke_missing_package.child")
+    except ModuleNotFoundError as exc:
+        if not isinstance(exc.__cause__, ModuleNotFoundError):
+            failures.append("ModuleNotFoundError for a missing parent package has no direct cause")
+    else:
+        failures.append("resolving a module in a missing package did not raise")
+
+    variable = "SQLSPEC_SMOKE_EXCEPTION_CAUSE"
+    previous = os.environ.get(variable)
+    os.environ[variable] = "not-a-number"
+    try:
+        env_module.get_env(variable, 0)()
+    except ValueError as exc:
+        if exc.__cause__ is not None or not exc.__suppress_context__:
+            failures.append("ValueError for an unparsable environment value still chains the conversion error")
+    else:
+        failures.append("an unparsable integer environment value did not raise")
+    finally:
+        if previous is None:
+            os.environ.pop(variable, None)
+        else:
+            os.environ[variable] = previous
+
+    if failures:
+        result["error"] = "; ".join(failures)
     return result
 
 
@@ -1335,12 +1442,18 @@ def _check_fastapi_filter_construction(*, require_compiled: bool = False) -> dic
     return result
 
 
-def _discover_adapter_config_classes(*, skipped: "list[str] | None" = None) -> "list[tuple[str, type[Any]]]":
+def _discover_adapter_config_classes(
+    *, skipped: "list[str] | None" = None, required_sdks: Sequence[str] = ()
+) -> "list[tuple[str, type[Any]]]":
     """Return every database config class defined by an adapter ``config`` module.
 
     A class qualifies when it is defined in ``sqlspec.adapters.<name>.config`` and
     carries ``migration_tracker_type``, which excludes the pool, connection and
     extension helper classes that share those modules.
+
+    Args:
+        skipped: Collects adapters whose optional SDK is missing; without it a missing SDK raises.
+        required_sdks: SDK modules whose absence raises instead of being collected.
     """
     adapters_package = importlib.import_module("sqlspec.adapters")
     package_root = Path(next(iter(adapters_package.__path__)))
@@ -1350,7 +1463,10 @@ def _discover_adapter_config_classes(*, skipped: "list[str] | None" = None) -> "
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError as exc:
-            if skipped is None or (exc.name or "").split(".")[0] not in {
+            missing_root = (exc.name or "").split(".")[0]
+            if _is_required_sdk(missing_root, required_sdks):
+                raise
+            if skipped is None or missing_root not in {
                 "adbc_driver_manager",
                 "aiomysql",
                 "aiosqlite",
@@ -1394,14 +1510,14 @@ def _adapter_config_construction_failure(qualified_name: str, config_cls: "type[
     return None
 
 
-def _check_adapter_config_construction() -> dict[str, Any]:
+def _check_adapter_config_construction(*, required_sdks: Sequence[str] = ()) -> dict[str, Any]:
     """Construct every adapter database config with no arguments."""
     result = _new_smoke_result(
         name="adapter_config_construction", module="sqlspec.adapters", attribute="migration_tracker_type"
     )
     try:
         skipped: list[str] = []
-        discovered = _discover_adapter_config_classes(skipped=skipped)
+        discovered = _discover_adapter_config_classes(skipped=skipped, required_sdks=required_sdks)
         result["skipped_adapters"] = skipped
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
@@ -1418,6 +1534,84 @@ def _check_adapter_config_construction() -> dict[str, Any]:
     ]
     if failures:
         result["error"] = "; ".join(failures)
+    return result
+
+
+class _PlaceholderConnection:
+    """Connection stand-in for constructing adapter drivers without a database."""
+
+    def adbc_get_info(self) -> dict[str, str]:
+        """Return driver metadata that resolves the ADBC dialect."""
+        return {"vendor_name": "sqlite", "driver_name": "placeholder"}
+
+
+def _adapter_driver_construction_failures(module: Any, driver_bases: "tuple[type[Any], ...]") -> list[str]:
+    """Return a failure description for each driver class in a module that cannot be constructed."""
+    module_name = module.__name__
+    driver_classes: list[type[Any]] = [
+        candidate
+        for candidate in vars(module).values()
+        if inspect.isclass(candidate) and candidate.__module__ == module_name and issubclass(candidate, driver_bases)
+    ]
+    if not driver_classes:
+        return [f"{module_name}: no driver class found"]
+    failures: list[str] = []
+    for driver_cls in driver_classes:
+        connection = _PlaceholderConnection()
+        try:
+            driver = driver_cls(connection=connection)
+        except Exception as exc:
+            failures.append(f"{module_name}.{driver_cls.__name__}: {exc!r}")
+            continue
+        if driver.connection is not connection:
+            failures.append(f"{module_name}.{driver_cls.__name__}: constructed driver lost its connection")
+    return failures
+
+
+def _check_adapter_driver_construction(
+    *, require_compiled: bool = False, required_sdks: Sequence[str] = ()
+) -> dict[str, Any]:
+    """Construct every adapter driver class around a placeholder connection."""
+    result = _new_smoke_result(
+        name="adapter_driver_construction",
+        module="sqlspec.adapters",
+        attribute="driver",
+        compiled_required=require_compiled,
+    )
+    skipped: list[str] = []
+    failures: list[str] = []
+    compiled = True
+    try:
+        driver_bases = (
+            importlib.import_module("sqlspec.driver._sync").SyncDriverAdapterBase,
+            importlib.import_module("sqlspec.driver._async").AsyncDriverAdapterBase,
+        )
+        for entry in SMOKE_IMPORTS:
+            if not (entry.module.startswith("sqlspec.adapters.") and entry.module.endswith(".driver")):
+                continue
+            try:
+                module = importlib.import_module(entry.module)
+            except ModuleNotFoundError as exc:
+                optional_dependency = entry.optional_dependency
+                if not _is_missing_optional_dependency(exc.name or "", optional_dependency) or _is_required_sdk(
+                    optional_dependency, required_sdks
+                ):
+                    raise
+                skipped.append(f"{entry.module}: optional dependency missing: {optional_dependency}")
+                continue
+            compiled = compiled and is_compiled_module(module)
+            failures.extend(_adapter_driver_construction_failures(module, driver_bases))
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = compiled
+    result["skipped_adapters"] = skipped
+    if failures:
+        result["error"] = "; ".join(failures)
+    elif require_compiled and not compiled:
+        result["error"] = "module was imported from Python source, not a compiled extension"
     return result
 
 
@@ -2417,12 +2611,12 @@ def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[s
     return result
 
 
-def _check_sdk_profile() -> dict[str, Any]:
-    """Import every SDK the Linux wheel-test driver profile guarantees."""
+def _check_sdk_profile(required_sdks: Sequence[str]) -> dict[str, Any]:
+    """Import every SDK module this run requires."""
     result = _new_smoke_result(name="sdk_profile", module="sqlspec.adapters", attribute=None)
     result["imported"] = True
     missing: list[str] = []
-    for dependency in SDK_PROFILE_DEPENDENCIES:
+    for dependency in required_sdks:
         try:
             importlib.import_module(dependency)
         except Exception as exc:

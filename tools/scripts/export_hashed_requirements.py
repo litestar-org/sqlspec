@@ -45,6 +45,9 @@ REQUIREMENT_PROFILES: dict[str, tuple[str, ...]] = {
         "asyncmy",
         "asyncpg",
         "duckdb",
+        "google-cloud-bigquery",
+        "google-cloud-spanner",
+        "mssql-python",
         "mysql-connector-python",
         "oracledb",
         "psqlpy",
@@ -55,7 +58,16 @@ REQUIREMENT_PROFILES: dict[str, tuple[str, ...]] = {
         "pymssql",
         "pymysql",
     ),
+    "drivers-db2": ("ibm-db",),
+    "drivers-sqlanywhere": ("sqlanydb",),
+    "drivers-sqlanywhere-build": ("setuptools",),
 }
+"""Root distributions exported per requirement profile.
+
+``drivers`` holds SDKs with a binary wheel for every Linux wheel-test target. ``ibm-db`` ships Linux
+wheels for x86_64 only, so it has its own profile. ``sqlanydb`` ships as a source distribution, so it
+has its own profile and ``drivers-sqlanywhere-build`` pins the backend that builds it.
+"""
 
 
 @dataclass(frozen=True, slots=True)
