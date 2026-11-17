@@ -946,6 +946,23 @@ def test_lru_cache_size_method_removed() -> None:
     assert "size" not in LRUCache.__dict__
 
 
+def test_statement_cache_holder_keeps_shared_parameter_validator_cache() -> None:
+    """Building a holder leaves the statement config's shared parameter validator cache enabled."""
+    statement_config = StatementConfig()
+    validator = statement_config.parameter_validator
+    validator.extract_parameters("SELECT :value")
+    configured_size = validator.cache_stats()["max_size"]
+
+    cache_module.StatementCacheHolder(statement_config, max_size=2)
+    validator.extract_parameters("SELECT :value")
+
+    stats = validator.cache_stats()
+    assert configured_size > 0
+    assert stats["max_size"] == configured_size
+    assert stats["size"] == 1
+    assert stats["hits"] == 1
+
+
 def test_l1_statement_cache_holder_lifecycle_and_statistics_coordination() -> None:
     """L1 StatementCacheHolder and QueryCache coordinate with global cache lifecycle functions."""
     holder = cache_module.StatementCacheHolder(StatementConfig(), max_size=2)

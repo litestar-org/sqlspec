@@ -1434,6 +1434,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                             results.append(StackResult.from_error(stack_error))
                             continue
 
+                        stack_error.__cause__ = exc
                         raise stack_error from exc
 
                     results.append(StackResult(result=result))
@@ -1981,6 +1982,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                     if returns_rows:
                         assert fetchall is not None
                         fetched_data = fetchall()
+                        if isinstance(fetched_data, tuple):
+                            fetched_data = list(fetched_data)
                         data, column_names, row_count = self.collect_rows(cursor, fetched_data)
                         result = self.build_cached_select_result(
                             sql,

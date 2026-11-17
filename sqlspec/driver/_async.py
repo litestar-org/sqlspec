@@ -2126,6 +2126,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         fetched_data = fetchall()
                         if isawaitable(fetched_data):
                             fetched_data = await fetched_data
+                        if isinstance(fetched_data, tuple):
+                            fetched_data = list(fetched_data)
                         data, column_names, row_count = self.collect_rows(cursor, fetched_data)
                         result = self.build_cached_select_result(
                             sql,

@@ -2142,3 +2142,19 @@ def test_compile_statement_rejects_mismatched_source_guard_on_cache_hit(sqlite_s
     assert "999" not in compiled_stmt.compiled_sql
     assert "1" in compiled_stmt.compiled_sql
     clear_all_caches()
+
+
+def test_open_session_cached_statements_see_query_hooks_registered_later() -> None:
+    """A query hook registered while a session is open fires for that session's cached statements."""
+    spec = SQLSpec()
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+    seen: list[str] = []
+
+    with spec.provide_session(config) as session:
+        for _ in range(2):
+            session.execute("SELECT ?", (1,))
+        config.get_observability_runtime().register_lifecycle_hook("on_query_start", lambda _context: seen.append("q"))
+        for _ in range(3):
+            session.execute("SELECT ?", (1,))
+
+    assert seen == ["q", "q", "q"]

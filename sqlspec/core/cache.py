@@ -1355,7 +1355,6 @@ class StatementCacheHolder:
             converter=statement_config.parameter_converter,
             validator=statement_config.parameter_validator,
             cache_max_size=0,
-            validator_cache_max_size=0,
         )
         self.passthrough_types = _seed_passthrough_types(statement_config.parameter_config.type_coercion_map)
         self._statement_cache = OrderedDict()

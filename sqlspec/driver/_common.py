@@ -317,7 +317,9 @@ def handle_single_row_error(error: ValueError) -> "NoReturn":
     message = str(error)
     if message.startswith("No result found"):
         msg = "No rows found"
-        raise NotFoundError(msg) from error
+        not_found = NotFoundError(msg)
+        not_found.__cause__ = error
+        raise not_found from error
     raise error
 
 
@@ -1835,7 +1837,6 @@ class CommonDriverAttributesMixin:
         "_cache_hit_executor",
         "_cache_hit_state",
         "_cache_holder",
-        "_has_active_observability",
         "_observability",
         "_open_streams",
         "_pending_statement_profile",
@@ -1902,7 +1903,6 @@ class CommonDriverAttributesMixin:
             | None
         ) = None
         self._cache_hit_state: Any = None
-        self._has_active_observability = False
         self._statement_pool: ObjectPool[SQL] | None = None
         self._processed_state_pool: ObjectPool[ProcessedState] | None = None
         self._refresh_statement_cache_state()
@@ -2361,7 +2361,6 @@ class CommonDriverAttributesMixin:
         return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
-        self._has_active_observability = self._observability is not None and not self._observability.is_idle
         self._stmt_cache_enabled = bool(
             self.connection is not _CLOSED_CONNECTION
             and self._stmt_cache_max_size > 0
@@ -3759,7 +3758,8 @@ def run_cached_execution(
                     param_values, param_config.type_coercion_map, passthrough_types=passthrough
                 )
             if not needs_rebind:
-                if driver._has_active_observability and driver._observability is not None:
+                runtime = driver._observability
+                if runtime is not None and not runtime.is_idle:
                     return driver._execute_cache_hit_observed(statement, params, cached)
                 executor = driver._cache_hit_executor
                 if executor is None:
@@ -3799,7 +3799,8 @@ def run_cached_execution(
                     positional_passthrough=cached.positional_passthrough,
                     simple_wire_fast_path=False,
                 )
-        if driver._has_active_observability and driver._observability is not None:
+        runtime = driver._observability
+        if runtime is not None and not runtime.is_idle:
             return driver._execute_cache_hit_observed(statement, params, effective_cached)
         executor = driver._cache_hit_executor
         if executor is None:
@@ -3825,7 +3826,8 @@ def run_cached_execution(
     prepared = driver._cached_statement(
         statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
     )
-    if driver._has_active_observability and driver._observability is not None:
+    runtime = driver._observability
+    if runtime is not None and not runtime.is_idle:
         return driver._execute_cached_statement_observed(prepared, compiled_sql, rebound_params, cached.operation_type)
     return driver._execute_cached_statement(prepared)
 
@@ -3931,6 +3933,7 @@ def _raise_database_exception(
     pending_exception = exc_handler.pending_exception
     if pending_exception is not None:
         if exc is not None:
+            pending_exception.__cause__ = exc
             raise pending_exception from exc
         if pending_exception.__cause__ is not None:
             raise pending_exception
