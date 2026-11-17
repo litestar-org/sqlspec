@@ -58,6 +58,7 @@ _MAX_LOCK_NAME_LENGTH: Final[int] = 64
 _LOCK_NAME_HASH_BYTES: Final[int] = 6
 _LOCK_NAME_PREFIX_LENGTH: Final[int] = _MAX_LOCK_NAME_LENGTH - 1 - (_LOCK_NAME_HASH_BYTES * 2)
 _BRIDGE_DRIVER_CLASS_NAMES: Final[frozenset[str]] = frozenset({"AdbcDriver", "ArrowOdbcDriver"})
+_DRIVER_BASE_CLASS_NAMES: Final[frozenset[str]] = frozenset({"SyncDriverAdapterBase", "AsyncDriverAdapterBase"})
 _LEASE_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({
     "oracle",
     "duckdb",
@@ -78,8 +79,7 @@ _PG_RELATION_GUARD_SQL: Final[str] = (
     "(COUNT(t.tgrelid) > 0) AS has_user_triggers, "
     "EXISTS (SELECT 1 FROM pg_catalog.pg_rewrite rw WHERE rw.ev_class = c.oid AND rw.rulename <> '_RETURN') "
     "AS has_rules, "
-    "(c.relrowsecurity OR c.relforcerowsecurity "
-    "OR EXISTS (SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid)) AS has_row_security, "
+    "pg_catalog.row_security_active(c.oid) AS has_row_security, "
     "(c.relowner = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = current_user) "
     "OR EXISTS (SELECT 1 FROM pg_catalog.pg_roles r WHERE r.oid = c.relowner AND r.rolsuper) "
     "OR (NOT COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = current_user), false) "
@@ -89,7 +89,7 @@ _PG_RELATION_GUARD_SQL: Final[str] = (
     "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
     "LEFT JOIN pg_catalog.pg_trigger t ON t.tgrelid = c.oid AND NOT t.tgisinternal "
     "WHERE n.nspname = :schema_name AND c.relname = :table_name "
-    "GROUP BY c.oid, c.relkind, c.relowner, c.relrowsecurity, c.relforcerowsecurity"
+    "GROUP BY c.oid, c.relkind, c.relowner"
 )
 _PG_RLS_SCHEMA_CHECK_SQL: Final[str] = (
     "SELECT n.nspname::text AS schema_name, c.relname::text AS table_name "
@@ -800,14 +800,22 @@ class BaseMigrationTracker(Generic[DriverT]):
     def _resolve_lock_backend(cls, driver: Any) -> str:
         """Classify ``driver`` into its migration lock backend family.
 
+        The dialect is the driver class value, or the instance value for driver adapters whose
+        dialect is stored per instance.
+
         Returns:
             ``"postgres"``, ``"mysql"``, ``"mssql"``, ``"sqlite"``, ``"lease"`` for backends locking
             through a lease row, ``"unsupported"`` for backends that cannot be serialized, or an empty
             string for an unknown dialect.
         """
         driver_type = type(driver)
-        is_bridge_driver = any(base.__name__ in _BRIDGE_DRIVER_CLASS_NAMES for base in driver_type.__mro__)
-        raw_dialect = getattr(driver, "dialect", None) if is_bridge_driver else getattr(driver_type, "dialect", None)
+        base_names = {base.__name__ for base in driver_type.__mro__}
+        is_bridge_driver = not base_names.isdisjoint(_BRIDGE_DRIVER_CLASS_NAMES)
+        raw_dialect = getattr(driver_type, "dialect", None)
+        if is_bridge_driver or (
+            not isinstance(raw_dialect, str) and not base_names.isdisjoint(_DRIVER_BASE_CLASS_NAMES)
+        ):
+            raw_dialect = getattr(driver, "dialect", None)
         dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
         if _is_cockroach_driver(driver):
             return "lease"

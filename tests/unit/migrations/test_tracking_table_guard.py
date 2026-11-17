@@ -279,6 +279,6 @@ async def test_pg_relation_guard_and_omissions_sql_contract() -> None:
     assert "WHERE r.oid = c.relowner AND r.rolsuper" in _PG_RELATION_GUARD_SQL
     assert "pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER')" in _PG_RELATION_GUARD_SQL
     assert "pg_catalog.pg_rewrite" in _PG_RELATION_GUARD_SQL
-    assert "c.relrowsecurity" in _PG_RELATION_GUARD_SQL
+    assert "pg_catalog.row_security_active(c.oid)" in _PG_RELATION_GUARD_SQL
     assert "'materialized_view'" in _PG_SCHEMA_OMISSIONS_SQL
     assert "attacl IS NOT NULL" in _PG_SCHEMA_OMISSIONS_SQL

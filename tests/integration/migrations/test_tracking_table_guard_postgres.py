@@ -71,6 +71,17 @@ async def _close(config: Any) -> None:
         await result
 
 
+async def _applied_versions(config: Any, table: str) -> list[str]:
+    session_context = config.provide_session()
+    if hasattr(session_context, "__aenter__"):
+        async with session_context as session:
+            rows = await session.select(f"SELECT version_num FROM public.{table} ORDER BY version_num")
+    else:
+        with session_context as session:
+            rows = session.select(f"SELECT version_num FROM public.{table} ORDER BY version_num")
+    return [row["version_num"] for row in rows]
+
+
 @pytest.mark.parametrize("mode", ["asyncpg", "psycopg"])
 async def test_upgrade_refuses_tracking_table_owned_by_foreign_role(
     tmp_path: Path, postgres_service: PostgresService, mode: str
@@ -106,6 +117,42 @@ async def test_upgrade_refuses_tracking_table_owned_by_foreign_role(
                 f"DROP ROLE {migrator}",
                 f"DROP ROLE {owner}",
             ],
+        )
+
+
+@pytest.mark.parametrize("forced", [False, True], ids=["owner-exempt", "forced"])
+@pytest.mark.parametrize("mode", ["asyncpg", "psycopg"])
+async def test_upgrade_refuses_tracking_table_only_when_row_security_applies_to_migrator(
+    tmp_path: Path, postgres_service: PostgresService, mode: str, forced: bool
+) -> None:
+    suffix = uuid4().hex[:8]
+    migrator, table = f"guard_rls_{suffix}", f"ddl_guard_{suffix}"
+    statements = [
+        f"CREATE ROLE {migrator} LOGIN PASSWORD 'pw' NOSUPERUSER",
+        f"GRANT CREATE, USAGE ON SCHEMA public TO {migrator}",
+        f"CREATE TABLE public.{table} (version_num VARCHAR(32) PRIMARY KEY)",
+        f"ALTER TABLE public.{table} OWNER TO {migrator}",
+        f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY",
+    ]
+    if forced:
+        statements.append(f"ALTER TABLE public.{table} FORCE ROW LEVEL SECURITY")
+    _admin_statements(postgres_service, statements)
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_noop.py").write_text(TEMP_SHADOW_MIGRATION, encoding="utf-8")
+    config, commands = _build(mode, postgres_service, migrator, "pw", migrations_dir, table)
+    try:
+        if forced:
+            with pytest.raises(MigrationError, match="row-level security"):
+                await _upgrade(commands)
+        else:
+            await _upgrade(commands)
+            assert await _applied_versions(config, table) == ["0001"]
+    finally:
+        await _close(config)
+        _admin_statements(
+            postgres_service,
+            [f"DROP TABLE IF EXISTS public.{table}", f"DROP OWNED BY {migrator}", f"DROP ROLE {migrator}"],
         )
 
 

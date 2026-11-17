@@ -29,6 +29,8 @@ class DeferredAsyncSession:
       ``async with session.transaction():`` all work.
     - Plain class attributes such as ``dialect``, static helpers, and the configuration's
       ``statement_config`` and ``driver_features`` are served without opening a connection.
+      When the driver stores ``dialect`` per instance, it is read from the configuration's
+      statement config.
     - Attributes that need a live connection, such as ``connection``, raise
       :class:`~sqlspec.exceptions.ImproperConfigurationError`.
 
@@ -99,6 +101,10 @@ class DeferredAsyncSession:
             return getattr(driver_type, name)
         if callable(static):
             return _MethodProxy(self, name)
+        if name == "dialect" and not isinstance(static, str):
+            dialect = getattr(getattr(self._config, "statement_config", None), "dialect", None)
+            if dialect is not None:
+                return dialect
         if hasattr(type(static), "__get__"):
             self._raise_not_open(name)
         return static

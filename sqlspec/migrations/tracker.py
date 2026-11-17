@@ -1068,7 +1068,9 @@ def _validate_pg_relation_rows(rows: "Sequence[Mapping[str, Any]]", version_tabl
             raise MigrationError(msg)
         has_rls = row.get("has_row_security")
         if has_rls is True or (isinstance(has_rls, int) and has_rls > 0):
-            msg = f"Migration tracking table '{version_table}' cannot have row-level security enabled"
+            msg = (
+                f"Migration tracking table '{version_table}' cannot have row-level security active for the current role"
+            )
             raise MigrationError(msg)
 
 

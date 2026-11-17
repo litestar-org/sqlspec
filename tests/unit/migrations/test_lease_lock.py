@@ -81,6 +81,39 @@ def test_lock_backend_kind_cockroach_and_bridge_sqlite() -> None:
     assert SyncMigrationTracker._resolve_lock_backend(bridge_sqlite) == "lease"  # pyright: ignore[reportPrivateUsage]
 
 
+class _InstanceDialectDuckDBDriver(DuckDBDriver):
+    """DuckDB driver that stores its dialect on the instance instead of the class."""
+
+    __slots__ = ("dialect",)
+
+    def __init__(self, connection: Any) -> None:
+        super().__init__(connection)
+        self.dialect = "duckdb"
+
+
+class _InstanceDialectAiosqliteDriver(AiosqliteDriver):
+    """aiosqlite driver that stores its dialect on the instance instead of the class."""
+
+    __slots__ = ("dialect",)
+
+    def __init__(self, connection: Any) -> None:
+        super().__init__(connection)
+        self.dialect = "sqlite"
+
+
+@pytest.mark.parametrize(
+    ("driver_type", "expected"),
+    [(_InstanceDialectDuckDBDriver, "lease"), (_InstanceDialectAiosqliteDriver, "sqlite")],
+    ids=["duckdb", "aiosqlite"],
+)
+def test_lock_backend_kind_reads_instance_dialect_of_driver_adapters(driver_type: Any, expected: str) -> None:
+    """Driver adapters whose dialect lives on the instance still resolve their lock backend."""
+    driver = driver_type(MagicMock())
+
+    assert not isinstance(driver_type.__dict__["dialect"], str)
+    assert SyncMigrationTracker._resolve_lock_backend(driver) == expected  # pyright: ignore[reportPrivateUsage]
+
+
 def test_lease_lock_blocks_second_migrator_duckdb(tmp_path: Path) -> None:
     db_path = tmp_path / "lease.duckdb"
     first_config, second_config = _duckdb_config(db_path), _duckdb_config(db_path)
