@@ -52,9 +52,9 @@ def find_project_root(start_path: Path) -> Path:
     target. Inside a shared world-writable directory (sticky, or owned by a different user) a
     marker must also be singly linked unless it is a directory, and must not be world-writable;
     such a directory is never used as the fallback root. A sticky world-writable directory such
-    as ``/tmp`` is never used as the project root, even when it holds a trusted marker. Every
-    refusal is logged at warning level. Platforms without ``os.getuid`` skip the ownership and
-    permission tests.
+    as ``/tmp`` is never used as the project root, even when it holds a trusted marker. A
+    refused marker or root is logged at warning level, and the directory that ends the search
+    at debug level. Platforms without ``os.getuid`` skip the ownership and permission tests.
 
     Args:
         start_path: Directory to start searching from.
@@ -104,13 +104,13 @@ def _is_trusted_root_dir(path: Path, current_uid: "int | None", *, allow_missing
     except FileNotFoundError:
         return allow_missing
     except OSError as exc:
-        logger.warning("Stopping project root discovery at %s: directory cannot be inspected (%s)", path, exc)
+        logger.debug("Stopping project root discovery at %s: directory cannot be inspected (%s)", path, exc)
         return False
     if stat.S_ISLNK(getattr(path_stat, "st_mode", 0)):
-        logger.warning("Stopping project root discovery at %s: directory is a symbolic link", path)
+        logger.debug("Stopping project root discovery at %s: directory is a symbolic link", path)
         return False
     if current_uid is not None and path_stat.st_uid not in {current_uid, 0}:
-        logger.warning(
+        logger.debug(
             "Stopping project root discovery at %s: directory is owned by another user (uid %s)", path, path_stat.st_uid
         )
         return False

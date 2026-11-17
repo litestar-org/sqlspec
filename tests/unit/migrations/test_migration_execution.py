@@ -1309,3 +1309,21 @@ def test_find_project_root_never_falls_back_to_shared_world_writable_parent(
 
     assert find_project_root(migrations_dir) == migrations_dir
     assert f"parent directory {project} is a shared world-writable directory" in caplog.text
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+def test_find_project_root_falls_back_without_warning_in_a_tree_owned_by_another_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A source tree mounted from another user, as in a container, ends the search without a warning."""
+    project, migrations_dir = _build_project(tmp_path)
+    foreign_uid = os.getuid() + 1000
+    _override_stat(
+        monkeypatch, {(project, False): {"st_uid": foreign_uid}, (migrations_dir, False): {"st_uid": foreign_uid}}
+    )
+
+    with caplog.at_level("DEBUG", logger="sqlspec.migrations.loaders"):
+        assert find_project_root(migrations_dir) == migrations_dir
+
+    assert {record.levelname for record in caplog.records} == {"DEBUG"}
+    assert f"directory is owned by another user (uid {foreign_uid})" in caplog.text

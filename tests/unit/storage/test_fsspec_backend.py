@@ -1310,7 +1310,7 @@ async def test_fsspec_copy_move_delete_treat_glob_characters_literally(
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("protocol_kind", ["file", "memory"])
-@pytest.mark.parametrize("prefix", ["tenants/*", "tenants/[ot]??", "tenants/?ne"], ids=["star", "brackets", "question"])
+@pytest.mark.parametrize("prefix", ["tenants/*", "tenants/[to]??", "tenants/?ne"], ids=["star", "brackets", "question"])
 async def test_fsspec_recursive_delete_treats_glob_characters_literally(
     tmp_path: Path, protocol_kind: str, prefix: str, use_async: bool
 ) -> None:
