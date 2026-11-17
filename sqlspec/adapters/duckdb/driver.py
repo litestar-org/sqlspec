@@ -233,7 +233,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
                         special_data={"dml_result": bulk_result},
                         is_many_result=True,
                     )
-            parameter_sets = cast("list[Any]", prepared_parameters)
+            parameter_sets = (
+                prepared_parameters
+                if isinstance(prepared_parameters, list)
+                else list(cast("Sequence[Any]", prepared_parameters))
+            )
             cursor.executemany(sql, parameter_sets)
 
             row_count = len(parameter_sets) if statement.is_modifying_operation() else resolve_rowcount(cursor)

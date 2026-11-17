@@ -171,14 +171,20 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
+        args = (
+            prepared_parameters
+            if isinstance(prepared_parameters, (tuple, list))
+            else tuple(prepared_parameters.values())
+            if isinstance(prepared_parameters, dict)
+            else ()
+        )
 
         timeout = self._timeout_value(statement.statement_config)
         if statement.returns_rows():
             records = (
-                await cursor.fetch(sql, *params, timeout=timeout)
+                await cursor.fetch(sql, *args, timeout=timeout)
                 if timeout is not None
-                else await cursor.fetch(sql, *params)
+                else await cursor.fetch(sql, *args)
             )
             data, column_names = collect_rows(records)
 
@@ -192,9 +198,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             )
 
         result = (
-            await cursor.execute(sql, *params, timeout=timeout)
+            await cursor.execute(sql, *args, timeout=timeout)
             if timeout is not None
-            else await cursor.execute(sql, *params)
+            else await cursor.execute(sql, *args)
         )
         affected_rows = parse_status(result)
 
@@ -214,7 +220,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         timeout = self._timeout_value(statement.statement_config)
 
         if prepared_parameters:
-            parameter_sets = cast("list[Sequence[object]]", prepared_parameters)
+            parameter_sets = (
+                cast("list[Sequence[object]]", prepared_parameters)
+                if isinstance(prepared_parameters, list)
+                else list(cast("Sequence[Sequence[object]]", prepared_parameters))
+            )
             if timeout is not None:
                 await cursor.executemany(sql, parameter_sets, timeout=timeout)
             else:
@@ -379,13 +389,15 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        params: tuple[Any, ...] = ()
-        if prepared_parameters:
-            params = (
-                tuple(prepared_parameters)
-                if isinstance(prepared_parameters, list)
-                else cast("tuple[Any, ...]", prepared_parameters)
-            )
+        params: tuple[Any, ...] = (
+            prepared_parameters
+            if isinstance(prepared_parameters, tuple)
+            else tuple(prepared_parameters)
+            if isinstance(prepared_parameters, list)
+            else tuple(prepared_parameters.values())
+            if isinstance(prepared_parameters, dict)
+            else ()
+        )
         timeout = self._timeout_value(statement.statement_config)
         return AsyncRowStream(AsyncpgStreamSource(self, sql, params, chunk_size, timeout))
 

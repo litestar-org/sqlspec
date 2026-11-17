@@ -2225,6 +2225,42 @@ def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[s
                         await config.close_pool()
 
                 asyncio.run(run_async())
+            if importlib.util.find_spec("asyncpg") is not None:
+                asyncpg_driver_module = importlib.import_module("sqlspec.adapters.asyncpg.driver")
+
+                class _FakeAsyncpgConn:
+                    async def fetch(self, sql: str, *args: Any) -> list[Any]:
+                        return []
+
+                    async def execute(self, sql: str, *args: Any) -> str:
+                        return "UPDATE 1"
+
+                    async def executemany(self, sql: str, sets: Any) -> None:
+                        return None
+
+                    def is_in_transaction(self) -> bool:
+                        return False
+
+                async def run_asyncpg_param_check() -> None:
+                    drv = asyncpg_driver_module.AsyncpgDriver(connection=_FakeAsyncpgConn())
+                    assert await drv.select("SELECT $1::int", 1) == []
+                    exec_res = await drv.execute("UPDATE t SET x = $1", (1,))
+                    assert exec_res.num_rows == 1
+                    many_res = await drv.execute_many("INSERT INTO t VALUES ($1)", ((1,), (2,)))
+                    assert many_res.num_rows == expected_count
+
+                asyncio.run(run_asyncpg_param_check())
+            if importlib.util.find_spec("duckdb") is not None:
+                duckdb_module = importlib.import_module("sqlspec.adapters.duckdb")
+                duck_cfg = duckdb_module.DuckDBConfig()
+                try:
+                    with duck_cfg.provide_session() as duck_session:
+                        duck_session.execute("CREATE TABLE items (id INTEGER)")
+                        duck_res = duck_session.execute_many("INSERT INTO items VALUES (?)", ((1,), (2,)))
+                        assert duck_res.num_rows == expected_count
+                        assert duck_session.select_value("SELECT COUNT(*) FROM items") == expected_count
+                finally:
+                    duck_cfg.close_pool()
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
     return result

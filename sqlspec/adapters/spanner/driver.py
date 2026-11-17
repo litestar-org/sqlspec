@@ -261,7 +261,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
         append_batch_arg = batch_args.append
         for params in prepared_parameters:
-            raw_params = cast("dict[str, Any] | None", params)
+            raw_params = cast("dict[str, Any]", params) if isinstance(params, dict) else None
             coerced_params = _coerce(raw_params)
             if not coerced_params:
                 append_batch_arg((sql, {}, empty_param_types))
@@ -967,7 +967,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
         append_batch_arg = batch_args.append
         for params in prepared_parameters:
-            raw_params = cast("dict[str, Any] | None", params)
+            raw_params = cast("dict[str, Any]", params) if isinstance(params, dict) else None
             coerced_params = _coerce(raw_params)
             if not coerced_params:
                 append_batch_arg((sql, {}, empty_param_types))
