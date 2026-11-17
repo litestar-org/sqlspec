@@ -25,8 +25,9 @@ from sqlspec.storage._paths import FILE_PROTOCOL, FILE_SCHEME_PREFIX, parse_file
 from sqlspec.storage._utils import import_pyarrow
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
-from sqlspec.storage.registry import StorageRegistry, storage_registry
-from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
+from sqlspec.storage.registry import _CLOUD_OBJECT_STORE_SCHEMES, StorageRegistry, storage_registry
+from sqlspec.utils.serializers._json import to_json
+from sqlspec.utils.serializers._schema import get_serializer_metrics, serialize_collection
 from sqlspec.utils.sync_tools import async_, exit_async_context
 from sqlspec.utils.type_guards import (
     supports_async_read_bytes,
@@ -209,7 +210,6 @@ _RECENT_STORAGE_EVENTS: "deque[StorageTelemetry]" = deque(maxlen=25)
 _EMPTY_STORAGE_OPTIONS: dict[str, Any] = {}
 _ARROW_WRITE_FORMATS = frozenset({"parquet", "arrow-ipc", "csv"})
 _ROW_WRITE_FORMATS = frozenset({"json", "jsonl"})
-_CLOUD_OBJECT_STORE_SCHEMES = frozenset({"s3", "gs", "gcs", "az", "azure"})
 
 
 def _strip_write_options(options: "dict[str, Any] | None") -> "dict[str, Any]":

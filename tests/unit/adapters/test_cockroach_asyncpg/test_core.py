@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import asyncpg
 import pytest
 
+from sqlspec.adapters.asyncpg.core import create_mapped_exception as asyncpg_create_mapped_exception
 from sqlspec.adapters.asyncpg.core import default_statement_config, register_json_codecs
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgRetryConfig
@@ -219,6 +220,26 @@ def test_create_mapped_exception_signature_parity() -> None:
     err = TimeoutError("timed out")
     mapped = create_mapped_exception(err, logger=mock_logger)
     assert isinstance(mapped, QueryTimeoutError)
+
+
+@pytest.mark.parametrize(
+    "mapper", [asyncpg_create_mapped_exception, create_mapped_exception], ids=["asyncpg", "cockroach_asyncpg"]
+)
+@pytest.mark.parametrize(
+    ("error", "expected_cls"),
+    [
+        (TimeoutError("connect timed out"), QueryTimeoutError),
+        (OSError("connection reset by peer"), DatabaseConnectionError),
+        (asyncpg.InterfaceError("connection is closed"), DatabaseConnectionError),
+    ],
+)
+def test_timeout_and_connection_errors_keep_the_driver_error_as_cause(
+    mapper: Any, error: BaseException, expected_cls: type[Exception]
+) -> None:
+    mapped = mapper(error)
+
+    assert isinstance(mapped, expected_cls)
+    assert mapped.__cause__ is error
 
 
 @pytest.mark.anyio

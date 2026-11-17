@@ -5,13 +5,14 @@ import inspect
 import threading
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.cache import StatementCacheHolder, resolve_statement_cache_size
+from sqlspec.core.parameters._types import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from sqlspec.storage import StorageCapabilities
+    from sqlspec.storage.pipeline import StorageCapabilities
 
 
 __all__ = (
@@ -93,6 +94,7 @@ def resolve_postgres_extension_state(
     if driver_features is not None:
         driver_features["active_extensions"] = active_extensions
 
+    original_statement_config = statement_config
     if statement_config.dialect == "postgres":
         if paradedb_available:
             statement_config = statement_config.replace(dialect="paradedb")
@@ -100,6 +102,13 @@ def resolve_postgres_extension_state(
             statement_config = statement_config.replace(dialect="pg_textsearch")
         elif pgvector_available:
             statement_config = statement_config.replace(dialect="pgvector")
+
+    if statement_config is not original_statement_config and driver_features is not None:
+        existing_holder = driver_features.get("_statement_cache_holder")
+        if isinstance(existing_holder, StatementCacheHolder):
+            driver_features["_statement_cache_holder"] = StatementCacheHolder(
+                statement_config, resolve_statement_cache_size(driver_features)
+            )
 
     return statement_config, pgvector_available, paradedb_available
 

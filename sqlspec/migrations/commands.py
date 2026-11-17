@@ -50,7 +50,7 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncGenerator, Generator
     from collections.abc import Set as AbstractSet
 
     from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, SyncConfigT
@@ -2197,7 +2197,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             self.tracker.remove_migration(driver, version_num)
 
     @contextmanager
-    def _hold_migration_lock(self, driver: Any, *, dry_run: bool = False) -> "Iterator[None]":
+    def _hold_migration_lock(self, driver: Any, *, dry_run: bool = False) -> "Generator[None, None, None]":
         """Validate the configured schema, then hold the tracker lock for the command.
 
         Outer SQLite transactions are preserved across step commits.
@@ -3502,7 +3502,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             await self.tracker.remove_migration(driver, version_num)
 
     @asynccontextmanager
-    async def _hold_migration_lock(self, driver: Any, *, dry_run: bool = False) -> "AsyncIterator[None]":
+    async def _hold_migration_lock(self, driver: Any, *, dry_run: bool = False) -> "AsyncGenerator[None, None]":
         """Validate the configured schema, then hold the async tracker lock for the command.
 
         Outer SQLite transactions are preserved across step commits.

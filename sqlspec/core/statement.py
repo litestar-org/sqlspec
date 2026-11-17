@@ -3,7 +3,8 @@
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
-from types import BuiltinFunctionType, FunctionType
+from functools import partial
+from types import BuiltinFunctionType, FunctionType, MethodType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import sqlglot
@@ -20,17 +21,10 @@ from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.core.hashing import hash_filters
-from sqlspec.core.parameters import (
-    ParameterConverter,
-    ParameterDeclaration,
-    ParameterProcessor,
-    ParameterProfile,
-    ParameterStyle,
-    ParameterStyleConfig,
-    ParameterValidator,
-    structural_fingerprint,
-    unescape_qmark_operator,
-)
+from sqlspec.core.parameters._converter import ParameterConverter
+from sqlspec.core.parameters._processor import ParameterProcessor, structural_fingerprint
+from sqlspec.core.parameters._types import ParameterProfile, ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters._validator import ParameterValidator, unescape_qmark_operator
 from sqlspec.core.query_modifiers import (
     ConditionFactory,
     apply_column_pruning,
@@ -59,6 +53,7 @@ from sqlspec.core.query_modifiers import (
 )
 from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer, format_wire_sqlcomment
+from sqlspec.exceptions import with_cause
 from sqlspec.observability._common import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
@@ -70,8 +65,9 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.builder import QueryBuilder
+    from sqlspec.builder._base import QueryBuilder
     from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.parameters._declared import ParameterDeclaration
 
 
 __all__ = (
@@ -687,7 +683,7 @@ class SQL:
             raise
         except RecursionError as e:
             msg = "Statement nesting exceeds the supported depth"
-            raise sqlspec.exceptions.SQLParsingError(msg) from e
+            raise with_cause(sqlspec.exceptions.SQLParsingError(msg), e) from e
         except Exception as e:
             new_state = self._handle_compile_failure(e)
 
@@ -1098,7 +1094,7 @@ class SQL:
         Returns:
             New SQL instance containing the EXPLAIN statement
         """
-        from sqlspec.builder import Explain
+        from sqlspec.builder._explain import Explain
 
         fmt = None
         if format is not None:
@@ -1132,7 +1128,12 @@ class SQL:
             msg = "QueryBuilder does not support execute_many SQL statements."
             raise sqlspec.exceptions.SQLBuilderError(msg)
 
-        from sqlspec.builder import Delete, ExpressionBuilder, Insert, Merge, Select, Update
+        from sqlspec.builder._base import ExpressionBuilder
+        from sqlspec.builder._delete import Delete
+        from sqlspec.builder._insert import Insert
+        from sqlspec.builder._merge import Merge
+        from sqlspec.builder._select import Select
+        from sqlspec.builder._update import Update
 
         builder_dialect = dialect or self._dialect
         lexical_dialect = self._normalize_dialect(builder_dialect)
@@ -1164,7 +1165,7 @@ class SQL:
                 expression = sqlglot.parse_one(converted_sql, dialect=builder_dialect)
             except ParseError as exc:
                 msg = f"Failed to parse SQL for builder: {exc}"
-                raise sqlspec.exceptions.SQLBuilderError(msg) from exc
+                raise with_cause(sqlspec.exceptions.SQLBuilderError(msg), exc) from exc
 
         base_expression = expression
         ctes: list[exp.CTE] | None = None
@@ -1684,7 +1685,7 @@ class SQL:
             )
         except ParseError as exc:
             msg = f"Failed to parse SQL statement: {exc}"
-            raise sqlspec.exceptions.SQLParsingError(msg) from exc
+            raise with_cause(sqlspec.exceptions.SQLParsingError(msg), exc) from exc
 
     def _filter_expression(self) -> exp.Expr:
         """Return a mutable expression copy for statement filters.
@@ -1779,6 +1780,8 @@ class StatementConfig:
 
     __slots__ = (
         *SQL_CONFIG_SLOTS,
+        "_cached_pipeline",
+        "_cached_pipeline_epoch",
         "_dialect_variants",
         "_has_output_transformer",
         "_has_transformers",
@@ -1886,6 +1889,8 @@ class StatementConfig:
         self._fingerprint_cache: str | None = None
         self._hash_cache: int | None = None
         self._is_frozen = False
+        self._cached_pipeline: Any | None = None
+        self._cached_pipeline_epoch: int = 0
         self._dialect_variants: dict[str, StatementConfig] | None = None
         self._script_variant: StatementConfig | None = None
         self._has_transformers = bool(self._user_statement_transformers)
@@ -2208,15 +2213,34 @@ def _raw_condition(condition: str, dialect: "str | None" = None) -> exp.Expr:
 
 
 def _is_uncacheable_callable(func: Any) -> bool:
-    if func is None:
-        return False
-    if isinstance(func, (FunctionType, BuiltinFunctionType)):
-        qualname = getattr(func, "__qualname__", "") or ""
-        return "<locals>" in qualname or getattr(func, "__closure__", None) is not None
-    func_type = type(func)
-    return (
-        getattr(func_type, "__hash__", None) is object.__hash__ or getattr(func_type, "__eq__", None) is object.__eq__
-    )
+    pending: list[Any] = [func]
+    seen_ids: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current is None:
+            continue
+        obj_id = id(current)
+        if obj_id in seen_ids:
+            continue
+        seen_ids.add(obj_id)
+        if isinstance(current, (FunctionType, BuiltinFunctionType)):
+            qualname = getattr(current, "__qualname__", "") or ""
+            if "<locals>" in qualname or getattr(current, "__closure__", None) is not None:
+                return True
+            continue
+        if isinstance(current, MethodType):
+            pending.append(current.__self__)
+            pending.append(current.__func__)
+            continue
+        if isinstance(current, partial):
+            return True
+        current_type = type(current)
+        if (
+            getattr(current_type, "__hash__", None) is object.__hash__
+            or getattr(current_type, "__eq__", None) is object.__eq__
+        ):
+            return True
+    return False
 
 
 def _config_has_uncacheable_transformers(

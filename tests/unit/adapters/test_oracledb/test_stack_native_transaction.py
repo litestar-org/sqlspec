@@ -204,5 +204,5 @@ def test_sync_stack_executes_and_commits_without_a_storage_capability_flag() -> 
     )
     results = driver.execute_stack(stack)
     assert [result.rows_affected for result in results] == [1, 1]
-    assert connection.executed == [("INSERT INTO items VALUES (:1)", [1]), ("INSERT INTO items VALUES (:1)", [2])]
+    assert connection.executed == [("INSERT INTO items VALUES (:1)", [1]), ("INSERT INTO items VALUES (:1)", (2,))]
     assert connection.commits == 1

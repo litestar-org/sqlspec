@@ -113,7 +113,7 @@ async def test_aiomysql_execute_cache_hit_invokes_collect_rows_on_clean_query(mo
 
     cursor = MagicMock()
     cursor.description = [("id", 3, None, None, None, None, None)]
-    cursor.fetchall = AsyncMock(return_value=[(1,)])
+    cursor.fetchall = AsyncMock(return_value=((1,),))
     cursor.execute = AsyncMock(return_value=None)
 
     conn = MagicMock()
@@ -158,7 +158,7 @@ async def test_aiomysql_dispatch_execute_uses_statement_statement_config() -> No
     cursor = MagicMock()
     cursor.description = [("1", 3, None, None, None, None, None)]
     cursor.execute = AsyncMock()
-    cursor.fetchall = AsyncMock(return_value=[(1,)])
+    cursor.fetchall = AsyncMock(return_value=((1,),))
     cursor.rowcount = 1
     cursor.lastrowid = None
 
@@ -309,3 +309,30 @@ def test_aiomysql_maps_1040_and_bare_connection_error_classes() -> None:
     assert mapped_iface.__cause__ is iface_err
     assert type(mapped_op) is OperationalError
     assert mapped_op.__cause__ is op_err
+
+
+async def test_aiomysql_maps_client_bind_type_error_to_data_error() -> None:
+    """A TypeError raised by the client while binding parameters maps to DataError."""
+    from pymysql.converters import escape_item
+
+    from sqlspec.adapters.aiomysql.driver import AiomysqlExceptionHandler
+    from sqlspec.exceptions import DataError
+
+    handler = AiomysqlExceptionHandler()
+    async with handler:
+        escape_item({"nested": 1}, "utf8mb4")
+
+    assert type(handler.pending_exception) is DataError
+    assert isinstance(handler.pending_exception.__cause__, TypeError)
+
+
+async def test_aiomysql_does_not_map_type_error_raised_outside_the_client() -> None:
+    """A TypeError that does not originate in the client propagates unchanged."""
+    from sqlspec.adapters.aiomysql.driver import AiomysqlExceptionHandler
+
+    handler = AiomysqlExceptionHandler()
+    with pytest.raises(TypeError, match="list object expected; got tuple"):
+        async with handler:
+            raise TypeError("list object expected; got tuple")
+
+    assert handler.pending_exception is None

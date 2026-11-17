@@ -817,3 +817,27 @@ def test_asyncpg_replica_dsn_and_direct_dsn_clear_inherited_endpoints() -> None:
     assert addrs == [("direct", 5439)]
     assert params.database == "direct_db"
     assert params.user == "du"
+
+
+def test_resolve_postgres_extension_state_syncs_statement_cache_holder() -> None:
+    """Promoting dialect during extension detection refreshes _statement_cache_holder to match statement_config."""
+    from sqlspec.core.cache import StatementCacheHolder
+    from sqlspec.core.config_runtime import resolve_postgres_extension_state
+
+    cfg = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/db"}, driver_features={"enable_pgvector": True}
+    )
+    holder = StatementCacheHolder(cfg.statement_config, 64)
+    cfg.driver_features["_statement_cache_holder"] = holder
+    cfg.driver_features["statement_cache_size"] = 64
+
+    promoted, has_pgvector, has_paradedb = resolve_postgres_extension_state(
+        cfg.statement_config, cfg.driver_features, {"vector"}
+    )
+
+    assert has_pgvector is True
+    assert has_paradedb is False
+    assert promoted.dialect == "pgvector"
+    refreshed_holder = cfg.driver_features["_statement_cache_holder"]
+    assert refreshed_holder is not holder
+    assert refreshed_holder.statement_config is promoted

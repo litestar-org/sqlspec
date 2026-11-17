@@ -5,7 +5,7 @@ import inspect
 import json
 import math
 import sqlite3
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import NAMESPACE_DNS, UUID, uuid1, uuid4, uuid5
@@ -51,6 +51,8 @@ from tests.integration.adapters._shared._schema import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from sqlspec.protocols import AsyncDataDictionaryProtocol, SyncDataDictionaryProtocol
     from sqlspec.typing import ArrowRecordBatch
 
@@ -4553,7 +4555,7 @@ def _oracle_lob_select_sql(table: str) -> str:
 
 
 @contextlib.contextmanager
-def _oracle_driver_feature(driver: object, key: str, value: object) -> "Iterator[None]":
+def _oracle_driver_feature(driver: object, key: str, value: object) -> "Generator[None, None, None]":
     features = cast("Any", driver).driver_features
     missing = object()
     previous = features.get(key, missing)

@@ -25,7 +25,7 @@ from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgConnection
     from sqlspec.core.tenant.base import AsyncTenantStrategy
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 __all__ = (
     "CockroachAsyncpgRLSStrategy",

@@ -27,7 +27,7 @@ jobs:
           enable-cache: false
 
       - name: Export hashed requirements from uv.lock
-        run: python tools/scripts/export_hashed_requirements.py --profile cli --profile runtime --profile build --profile pgo-validate --output-dir .build-requirements
+        run: python tools/scripts/export_hashed_requirements.py --profile cli --profile runtime --profile build --profile pgo --profile test --output-dir .build-requirements
 
       - name: Install cibuildwheel
         run: python -m pip install --require-hashes -r .build-requirements/cli.txt
@@ -46,23 +46,23 @@ jobs:
             PGO_DIR=/tmp/sqlspec-pgo &&
             BUILD_DIR=/tmp/sqlspec-mypyc-build &&
             mkdir -p "$PGO_DIR" "$BUILD_DIR" &&
-            CFLAGS="-fprofile-generate=$PGO_DIR"
+            CFLAGS="-DNDEBUG -fno-strict-overflow -fno-semantic-interposition -fprofile-generate=$PGO_DIR"
+            LDFLAGS="-Wl,-Bsymbolic-functions"
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
             pip install --no-build-isolation --no-deps "{package}" &&
-            pip install --require-hashes -r "{project}/.build-requirements/pgo-validate.txt" &&
-            python "{project}/tools/scripts/pgo_training.py" &&
+            pip install --require-hashes -r "{project}/.build-requirements/pgo.txt" &&
+            PYTHONSAFEPATH=1 python "{project}/tools/scripts/pgo_training.py" --strict &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 
           CIBW_ENVIRONMENT_LINUX: >-
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR=/tmp/sqlspec-mypyc-build
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
-            CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+            CFLAGS="-DNDEBUG -fno-strict-overflow -fno-semantic-interposition -flto=auto -fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+            LDFLAGS="-Wl,-Bsymbolic-functions -flto=auto"
 
-          CIBW_BEFORE_TEST: 'pip install --require-hashes -r "{project}/.build-requirements/runtime.txt"'
+          CIBW_BEFORE_TEST: 'pip install --require-hashes -r "{project}/.build-requirements/runtime.txt" -r "{project}/.build-requirements/test.txt"'
           CIBW_TEST_COMMAND: 'python "{project}/tools/scripts/mypyc_smoke.py" --require-compiled'
 
       - name: List built wheels

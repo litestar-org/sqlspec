@@ -24,7 +24,8 @@ from litestar.exceptions import ValidationException
 from litestar.params import QueryParameter, SkipValidation
 from litestar.utils.signature import ParsedSignature
 
-from sqlspec.core import (
+from sqlspec.core._cursor import resolve_env_pagination_cursor_secret
+from sqlspec.core.filters import (
     BeforeAfterFilter,
     BooleanFilter,
     ChoicesFilter,
@@ -41,9 +42,8 @@ from sqlspec.core import (
     SearchFilter,
     normalize_cursor_keys,
 )
-from sqlspec.core._cursor import resolve_env_pagination_cursor_secret
-from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
-from sqlspec.utils.tenant import resolve_cursor_tenant_identity
+from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError, with_cause
+from sqlspec.utils.tenant._cursor import resolve_cursor_tenant_identity
 from sqlspec.utils.text import camelize
 
 if TYPE_CHECKING:
@@ -940,7 +940,7 @@ async def _provide_cursor_filter(
             keys, resolved_page_size, cursor, derived_secret, ttl=resolved_ttl, encrypted=resolved_encrypted
         )
     except InvalidCursorError as exc:
-        raise ValidationException(detail="Invalid pagination cursor") from exc
+        raise with_cause(ValidationException(detail="Invalid pagination cursor"), exc) from exc
 
 
 class _SearchFilterProvider:

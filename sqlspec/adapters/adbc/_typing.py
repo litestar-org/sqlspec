@@ -68,6 +68,9 @@ class AdbcCursor:
                 self.cursor.close()
 
 
+_resolved_dialect_resolver: Any = None
+
+
 class AdbcSessionContext:
     """Sync context manager for ADBC sessions.
 
@@ -109,12 +112,17 @@ class AdbcSessionContext:
         self._driver: AdbcDriver | None = None
 
     def __enter__(self) -> "AdbcDriver":
+        global _resolved_dialect_resolver
         driver_class = self._driver_class
         if driver_class is None:
             from sqlspec.adapters.adbc.driver import AdbcDriver
 
             driver_class = AdbcDriver
-        from sqlspec.adapters.adbc.core import resolve_dialect_name
+        resolve_dialect_name = _resolved_dialect_resolver
+        if resolve_dialect_name is None:
+            from sqlspec.adapters.adbc.core import resolve_dialect_name
+
+            _resolved_dialect_resolver = resolve_dialect_name
 
         self._connection = self._acquire_connection()
         try:

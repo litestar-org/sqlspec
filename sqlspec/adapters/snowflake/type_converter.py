@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Any, Final
 
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
 
 SNOWFLAKE_VARIANT_TYPE_CODES: Final[frozenset[int]] = frozenset({5, 9, 10})
 

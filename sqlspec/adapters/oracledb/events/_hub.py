@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
 from sqlspec.exceptions import EventChannelError
-from sqlspec.extensions.events import normalize_event_channel_name
+from sqlspec.extensions.events._store import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:

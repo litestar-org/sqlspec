@@ -14,9 +14,10 @@ from sqlglot import exp
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
-from sqlspec.driver import rows_to_dicts
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -33,8 +34,9 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error, resolve_row_format
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core.cache import CachedQuery
     from sqlspec.core.compiler import OperationType
+    from sqlspec.core.statement import StatementConfig
 
 _T = TypeVar("_T")
 
@@ -177,6 +180,14 @@ async def end_transaction(
             "commit" in conn_dict or "rollback" in conn_dict or "execute" in conn_dict
         )
         if not has_method_override:
+            if commit:
+                worker_queue = getattr(connection, "_tx", None)
+                if worker_queue is not None and worker_queue.empty():
+                    try:
+                        if not raw_conn.in_transaction:
+                            return
+                    except (ValueError, sqlite3.ProgrammingError):
+                        return
             await run_on_worker_thread(
                 connection, _end_transaction_on_worker, raw_conn, commit=commit, supports_autocommit=supports_autocommit
             )
@@ -234,7 +245,7 @@ async def execute_cache_hit(
     params: Any,
     cached: "CachedQuery",
     statement_config: "StatementConfig",
-    rowid_target_cache: "dict[tuple[str | None, str], bool]",
+    rowid_target_cache: "dict[Any, bool]",
 ) -> "SQLResult":
     """Execute a cached statement on the aiosqlite worker thread and build its result.
 
@@ -266,6 +277,7 @@ async def execute_cache_hit(
                 operation_type,
                 cached.processed_state.parsed_expression,
                 rowid_target_cache,
+                cached.compiled_sql,
             )
             return DMLResult(operation_type, affected_rows, dml_last_inserted_id)
         fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
@@ -277,6 +289,7 @@ async def execute_cache_hit(
             operation_type,
             cached.processed_state.parsed_expression,
             rowid_target_cache,
+            cached.compiled_sql,
         )
     except (aiosqlite.Error, sqlite3.Error) as exc:
         mapped_error = create_mapped_exception(exc)
@@ -320,7 +333,8 @@ def resolve_lastrowid(
     operation_type: "OperationType",
     rowcount: int,
     expression: Any,
-    eligibility_cache: "dict[tuple[str | None, str], bool]",
+    eligibility_cache: "dict[Any, bool]",
+    compiled_sql: "str | None" = None,
 ) -> "int | None":
     """Resolve lastrowid only when compiled target metadata proves rowid eligibility.
 
@@ -334,23 +348,45 @@ def resolve_lastrowid(
         operation_type: Compiled statement operation type.
         rowcount: Normalized affected-row count.
         expression: Compiled SQLGlot expression.
-        eligibility_cache: Driver-local target eligibility cache.
+        eligibility_cache: Driver-local eligibility cache, keyed by ``(schema, table)`` target and
+            by compiled SQL text.
+        compiled_sql: Optional compiled SQL text used to key eligibility lookups without AST walks.
+            Text that ends with a comment is resolved by target and never stored, so per-request
+            comments do not add entries.
 
     Returns:
         Integer lastrowid when the current target is a rowid table, otherwise None.
     """
     if operation_type != "INSERT" or rowcount <= 0:
         return None
+    if compiled_sql is not None:
+        supports_rowid = eligibility_cache.get(compiled_sql)
+        if supports_rowid is None:
+            supports_rowid = _target_rowid_eligibility(connection, expression, eligibility_cache)
+            if supports_rowid is not None and not compiled_sql.endswith("*/"):
+                if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
+                    eligibility_cache.clear()
+                eligibility_cache[compiled_sql] = supports_rowid
+        if not supports_rowid:
+            return None
+        return normalize_lastrowid(cursor, operation_type, rowcount)
+    if not _target_rowid_eligibility(connection, expression, eligibility_cache):
+        return None
+    return normalize_lastrowid(cursor, operation_type, rowcount)
+
+
+def _target_rowid_eligibility(connection: Any, expression: Any, eligibility_cache: "dict[Any, bool]") -> "bool | None":
+    """Return whether the INSERT target of ``expression`` is a rowid table, or None without a target."""
     target = _resolve_insert_target(expression)
     if target is None:
         return None
     supports_rowid = eligibility_cache.get(target)
     if supports_rowid is None:
         supports_rowid = _target_supports_rowid(connection, target)
+        if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
+            eligibility_cache.clear()
         eligibility_cache[target] = supports_rowid
-    if not supports_rowid:
-        return None
-    return normalize_lastrowid(cursor, operation_type, rowcount)
+    return supports_rowid
 
 
 def format_identifier(identifier: str) -> str:
@@ -486,6 +522,7 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
 
 
 _INSERT_TARGET_CACHE_SIZE: Final[int] = 512
+_ROWID_ELIGIBILITY_CACHE_SIZE: Final[int] = 512
 _INSERT_TARGET_CACHE: "dict[int, tuple[Any, tuple[str | None, str] | None]]" = {}
 _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
     "query_only",
@@ -741,7 +778,7 @@ def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str,
         msg = str(exc).replace(
             "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
         )
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
     return tuple(statements)
 
 
@@ -821,7 +858,8 @@ def _execute_fetchall_with_metadata(
     parameters: Any,
     operation_type: "OperationType",
     expression: Any,
-    eligibility_cache: "dict[tuple[str | None, str], bool]",
+    eligibility_cache: "dict[Any, bool]",
+    cache_key: "str | None" = None,
 ) -> "tuple[list[Any], Any, int, int | None]":
     """Execute a query and return rows plus execution metadata on the worker thread."""
     raw_connection = connection._conn
@@ -831,7 +869,7 @@ def _execute_fetchall_with_metadata(
         rowcount = cursor.rowcount if isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
         effective_rowcount = rowcount or (len(fetched_data) if operation_type == "INSERT" else 0)
         last_inserted_id = resolve_lastrowid(
-            raw_connection, cursor, operation_type, effective_rowcount, expression, eligibility_cache
+            raw_connection, cursor, operation_type, effective_rowcount, expression, eligibility_cache, cache_key
         )
         return fetched_data, cursor.description, rowcount, last_inserted_id
     finally:
@@ -845,7 +883,8 @@ def _execute_and_resolve_metadata(
     parameters: Any,
     operation_type: "OperationType",
     expression: Any,
-    eligibility_cache: "dict[tuple[str | None, str], bool]",
+    eligibility_cache: "dict[Any, bool]",
+    cache_key: "str | None" = None,
 ) -> "tuple[int, int | None]":
     """Execute a statement and resolve rowcount and lastrowid on the worker thread."""
     raw_connection = connection._conn
@@ -855,7 +894,7 @@ def _execute_and_resolve_metadata(
             cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
         )
         return rowcount, resolve_lastrowid(
-            raw_connection, cursor, operation_type, rowcount, expression, eligibility_cache
+            raw_connection, cursor, operation_type, rowcount, expression, eligibility_cache, cache_key
         )
     finally:
         with contextlib.suppress(Exception):

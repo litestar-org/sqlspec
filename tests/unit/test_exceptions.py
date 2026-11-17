@@ -3,6 +3,7 @@
 import sqlite3
 
 import asyncpg
+import pytest
 from google.api_core import exceptions as api_exceptions
 from psycopg import errors as pg_errors
 
@@ -18,6 +19,7 @@ from sqlspec.exceptions import (
     QueryTimeoutError,
     StackExecutionError,
     map_sqlstate_to_exception,
+    with_cause,
 )
 
 
@@ -84,3 +86,25 @@ def test_stack_execution_error_redacts_sql_literals_in_message_while_preserving_
     assert "private" not in str(err)
     assert "'***'" in str(err)
     assert "top-secret-token" not in err.args[0]
+
+
+def test_with_cause_sets_the_direct_cause_and_returns_the_same_error() -> None:
+    cause = ValueError("driver failure")
+    error = OperationalError("mapped failure")
+
+    assert with_cause(error, cause) is error
+    assert error.__cause__ is cause
+    assert error.__suppress_context__ is True
+
+
+def test_with_cause_none_suppresses_the_error_being_handled() -> None:
+    handled = KeyError("lookup")
+    with pytest.raises(OperationalError) as raised:
+        try:
+            raise handled
+        except KeyError:
+            raise with_cause(OperationalError("replacement"), None)
+
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is handled
+    assert raised.value.__suppress_context__ is True

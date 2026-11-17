@@ -1,6 +1,6 @@
 """Unit tests for DuckDB Arrow streaming paths."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 from uuid import UUID
@@ -16,7 +16,7 @@ from sqlspec.exceptions import MissingDependencyError, NotFoundError
 
 
 @contextmanager
-def _seed_driver(*, enable_uuid_conversion: bool = True) -> Iterator[DuckDBDriver]:
+def _seed_driver(*, enable_uuid_conversion: bool = True) -> Generator[DuckDBDriver, None, None]:
     config = DuckDBConfig(
         connection_config={"database": ":memory:"}, driver_features={"enable_uuid_conversion": enable_uuid_conversion}
     )
@@ -242,3 +242,45 @@ def test_load_from_arrow_overwrite_rolls_back_truncate_on_insert_failure() -> No
 
         rows = driver.execute("SELECT id FROM atomic_target ORDER BY id").get_data()
         assert rows == [{"id": 1}, {"id": 2}]
+
+
+def test_load_from_arrow_maps_columns_by_name_not_position() -> None:
+    """DuckDB load_from_arrow inserts by explicit column names when Arrow column order differs from target table."""
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE reordered_target (id INTEGER, email VARCHAR, name VARCHAR)")
+        table = pa.table({"id": [1], "name": ["Ada"], "email": ["ada@example.com"]})
+
+        driver.load_from_arrow("reordered_target", table)
+
+        rows = driver.execute("SELECT id, email, name FROM reordered_target").get_data()
+        assert rows == [{"id": 1, "email": "ada@example.com", "name": "Ada"}]
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize(
+    ("arrow_columns", "expected_row"),
+    [
+        pytest.param(
+            {"ident": [1], "label": ["Ada"], "contact": ["ada@example.com"]},
+            {"id": 1, "email": "Ada", "name": "ada@example.com"},
+            id="mismatched-names-load-by-position",
+        ),
+        pytest.param(
+            {"name": ["Ada"], "id": [1], "email": ["ada@example.com"]},
+            {"id": 1, "email": "ada@example.com", "name": "Ada"},
+            id="reordered-names-load-by-name",
+        ),
+    ],
+)
+def test_load_from_arrow_column_mapping_is_the_same_with_and_without_overwrite(
+    overwrite: bool, arrow_columns: "dict[str, list[Any]]", expected_row: "dict[str, Any]"
+) -> None:
+    seeded_row = {"id": 0, "email": "seed@example.com", "name": "Seed"}
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE mapped_target (id INTEGER, email VARCHAR, name VARCHAR)")
+        driver.execute("INSERT INTO mapped_target VALUES (0, 'seed@example.com', 'Seed')")
+
+        driver.load_from_arrow("mapped_target", pa.table(arrow_columns), overwrite=overwrite)
+
+        rows = driver.execute("SELECT id, email, name FROM mapped_target ORDER BY id").get_data()
+        assert rows == ([expected_row] if overwrite else [seeded_row, expected_row])

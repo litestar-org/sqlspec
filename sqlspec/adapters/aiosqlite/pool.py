@@ -19,7 +19,7 @@ from sqlspec.adapters.aiosqlite.core import (
     is_read_only_sqlite_config,
     run_on_worker_thread,
 )
-from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError, SQLSpecError, with_cause
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.uuids import uuid4
@@ -352,7 +352,7 @@ class AiosqliteConnectionPool:
                 sqlite3.SQLITE_CANTOPEN,
                 26,
             ):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
 
         pragma_lines: list[str] = []
@@ -446,7 +446,9 @@ class AiosqliteConnectionPool:
             raise
         except TimeoutError as e:
             msg = f"Connection acquisition timed out after {self._connect_timeout}s"
-            raise AiosqliteConnectTimeoutError(msg) from e
+            error = AiosqliteConnectTimeoutError(msg)
+            error.__cause__ = e
+            raise error from e
 
         return connection
 
@@ -480,7 +482,8 @@ class AiosqliteConnectionPool:
         reset_error: BaseException | None = None
         try:
             await end_transaction(raw_conn, commit=False)
-            await self._reset_connection(raw_conn)
+            if self._reset_session_on_release:
+                await self._reset_connection(raw_conn)
             connection.idle_since = time.time()
             self._queue.put_nowait(connection)
         except BaseException as e:
@@ -584,24 +587,25 @@ class AiosqliteConnectionPool:
             connection.mark_unhealthy()
             await self._retire_connection(connection, reason="unhealthy")
             return
-        reset_error: Exception | None = None
-        try:
-            await self._reset_connection(connection.connection)
-        except Exception as e:
-            reset_error = e
-        if reset_error is not None:
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "pool.connection.reset.error",
-                adapter=_ADAPTER_NAME,
-                pool_id=self._pool_id,
-                connection_id=connection.id,
-                error_type=type(reset_error).__name__,
-            )
-            connection.mark_unhealthy()
-            await self._retire_connection(connection, reason="reset_failed")
-            return
+        if self._reset_session_on_release:
+            reset_error: Exception | None = None
+            try:
+                await self._reset_connection(connection.connection)
+            except Exception as e:
+                reset_error = e
+            if reset_error is not None:
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "pool.connection.reset.error",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    connection_id=connection.id,
+                    error_type=type(reset_error).__name__,
+                )
+                connection.mark_unhealthy()
+                await self._retire_connection(connection, reason="reset_failed")
+                return
         connection.idle_since = time.time()
         self._queue.put_nowait(connection)
 

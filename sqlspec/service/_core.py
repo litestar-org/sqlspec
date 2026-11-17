@@ -9,10 +9,12 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, cast
 
 from typing_extensions import TypeVar
 
-from sqlspec.core import SQL, CursorFilter, CursorPagination, LimitOffsetFilter, OffsetPagination, OrderByFilter
-from sqlspec.core.filters import find_filter
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.exceptions import DataError, ImproperConfigurationError, InvalidCursorError, NotFoundError
+from sqlspec.core._pagination import CursorPagination, OffsetPagination
+from sqlspec.core.filters import CursorFilter, LimitOffsetFilter, OrderByFilter, find_filter
+from sqlspec.core.statement import SQL
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import DataError, ImproperConfigurationError, InvalidCursorError, NotFoundError, with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.sync_tools import exit_async_context
@@ -20,10 +22,10 @@ from sqlspec.utils.sync_tools import exit_async_context
 if TYPE_CHECKING:
     from types import TracebackType
 
-    from sqlspec.builder import QueryBuilder
+    from sqlspec.builder._base import QueryBuilder
     from sqlspec.core.filters import StatementFilter
     from sqlspec.core.statement import Statement
-    from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+    from sqlspec.service._base import SQLSpecAsyncService, SQLSpecSyncService
     from sqlspec.typing import SchemaT, StatementParameters
 
 _INVALID_CURSOR_VALUE_MESSAGE = "Invalid pagination cursor: value does not match the ordering column"
@@ -293,7 +295,7 @@ def _sync_paginate_cursor(
         except DataError as exc:
             if cursor_filter.values is None:
                 raise
-            raise InvalidCursorError(_INVALID_CURSOR_VALUE_MESSAGE) from exc
+            raise with_cause(InvalidCursorError(_INVALID_CURSOR_VALUE_MESSAGE), exc) from exc
         page = cursor_filter.build_page(items)
         if schema_type is None:
             return page

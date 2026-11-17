@@ -3,6 +3,7 @@
 import re
 from bisect import bisect_left
 from collections import OrderedDict
+from contextlib import suppress
 from typing import TYPE_CHECKING, Final
 
 from mypy_extensions import mypyc_attr
@@ -349,14 +350,18 @@ class ParameterValidator:
         cache_key = (sql, normalized_dialect)
         cached_result = self._parameter_cache.get(cache_key)
         if cached_result is not None:
-            self._parameter_cache.move_to_end(cache_key)
             self._cache_hits += 1
+            try:
+                self._parameter_cache.move_to_end(cache_key)
+            except KeyError:
+                return cached_result
             return cached_result
         self._cache_misses += 1
 
         parameters = self._extract_parameters_uncached(sql, normalized_dialect)
         if len(self._parameter_cache) >= self._cache_max_size:
-            self._parameter_cache.popitem(last=False)
+            with suppress(KeyError):
+                self._parameter_cache.popitem(last=False)
         self._parameter_cache[cache_key] = parameters
         return parameters
 

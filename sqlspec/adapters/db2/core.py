@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from sqlspec.adapters.db2._typing import Db2Error
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
+from sqlspec.core.statement import StatementConfig
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -27,7 +29,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
@@ -243,7 +245,9 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
 
     if logger is not None and (sqlstate or sqlcode):
         logger.debug("Unmapped Db2 SQLSTATE: %s, SQLCODE: %s", sqlstate, sqlcode)
-    return SQLSpecError(f"Db2 database error. Original error: {error}")
+    mapped_error = SQLSpecError(f"Db2 database error. Original error: {error}")
+    mapped_error.__cause__ = error
+    return mapped_error
 
 
 def utc_now() -> datetime:
@@ -383,6 +387,7 @@ def execute_cache_hit(
     cached: "CachedQuery",
     statement_config: "StatementConfig",
     state: "tuple[dict[int, tuple[Any, list[str]]], bool]",
+    wire_sql: "str | None" = None,
 ) -> "SQLResult":
     """Execute a cached statement on an ``ibm_db_dbi`` connection and build its result.
 
@@ -393,6 +398,7 @@ def execute_cache_hit(
         cached: Cached compilation of ``sql``.
         statement_config: Statement configuration the result uses to rebuild its statement.
         state: Session-local column name cache and whether uppercase column names are lowercased.
+        wire_sql: Optional wire SQL override with sqlcommenter formatting applied.
 
     Returns:
         The statement result.
@@ -401,7 +407,7 @@ def execute_cache_hit(
         SQLSpecError: Mapped from any ``ibm_db_dbi`` error the statement raises.
     """
     parameters = normalize_execute_parameters(params) or ()
-    compiled_sql = cached.compiled_sql
+    compiled_sql = cached.compiled_sql if wire_sql is None else wire_sql
     try:
         cursor = connection.cursor()
         try:
@@ -439,6 +445,7 @@ async def execute_cache_hit_async(
     cached: "CachedQuery",
     statement_config: "StatementConfig",
     state: "tuple[dict[int, tuple[Any, list[str]]], bool]",
+    wire_sql: "str | None" = None,
 ) -> "SQLResult":
     """Execute a cached statement on an ``ibm_db_dbi`` async connection and build its result.
 
@@ -449,6 +456,7 @@ async def execute_cache_hit_async(
         cached: Cached compilation of ``sql``.
         statement_config: Statement configuration the result uses to rebuild its statement.
         state: Session-local column name cache and whether uppercase column names are lowercased.
+        wire_sql: Optional wire SQL override with sqlcommenter formatting applied.
 
     Returns:
         The statement result.
@@ -457,7 +465,7 @@ async def execute_cache_hit_async(
         SQLSpecError: Mapped from any ``ibm_db_dbi`` error the statement raises.
     """
     parameters = normalize_execute_parameters(params) or ()
-    compiled_sql = cached.compiled_sql
+    compiled_sql = cached.compiled_sql if wire_sql is None else wire_sql
     try:
         cursor = await connection.cursor()
         error: BaseException | None = None
@@ -751,8 +759,11 @@ def _build_mapped_exception(
         SQLSpecError: The mapped exception.
     """
     if sqlstate is not None:
-        return error_cls(f"Db2 SQLSTATE {sqlstate}: {description}. Original error: {error}")
-    return error_cls(f"Db2 SQLCODE {sqlcode}: {description}. Original error: {error}")
+        mapped = error_cls(f"Db2 SQLSTATE {sqlstate}: {description}. Original error: {error}")
+    else:
+        mapped = error_cls(f"Db2 SQLCODE {sqlcode}: {description}. Original error: {error}")
+    mapped.__cause__ = error
+    return mapped
 
 
 def _normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":

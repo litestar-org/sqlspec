@@ -6,7 +6,7 @@ request. Resolution is lazy, memoized per configuration, and finished before the
 """
 
 import json
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Annotated, Any, cast
@@ -82,7 +82,7 @@ def _ambient_extractor(scope: Any) -> str | None:
 
 
 @contextmanager
-def _litestar(tenant: bool, asynchronous: bool) -> Iterator[Harness]:
+def _litestar(tenant: bool, asynchronous: bool) -> Generator[Harness, None, None]:
     from litestar import Litestar, get
     from litestar.background_tasks import BackgroundTask
     from litestar.middleware import DefineMiddleware
@@ -170,7 +170,7 @@ def _litestar(tenant: bool, asynchronous: bool) -> Iterator[Harness]:
 
 def _starlette_family(framework: str, tenant: bool, asynchronous: bool) -> Any:
     @contextmanager
-    def build() -> Iterator[Harness]:
+    def build() -> Generator[Harness, None, None]:
         from starlette.background import BackgroundTask
         from starlette.middleware import Middleware
         from starlette.requests import Request
@@ -283,7 +283,7 @@ def _starlette_family(framework: str, tenant: bool, asynchronous: bool) -> Any:
 
 
 @contextmanager
-def _flask(tenant: bool) -> Iterator[Harness]:
+def _flask(tenant: bool) -> Generator[Harness, None, None]:
     from flask import Flask, Response, g, request, stream_with_context
 
     from sqlspec.extensions.flask import SQLSpecPlugin, set_request_tenant
@@ -374,7 +374,7 @@ def _flask(tenant: bool) -> Iterator[Harness]:
 
 
 @contextmanager
-def _sanic(tenant: bool, asynchronous: bool) -> Iterator[Harness]:
+def _sanic(tenant: bool, asynchronous: bool) -> Generator[Harness, None, None]:
     from sanic import Sanic, response
 
     from sqlspec.extensions.sanic import SQLSpecPlugin, set_request_tenant

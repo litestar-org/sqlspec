@@ -4,7 +4,7 @@ import contextlib
 import hashlib
 import os
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -49,9 +49,26 @@ _METRIC_KEYS: Final[tuple[str, ...]] = (
 )
 
 
+_NEXT_PIPELINE_EPOCH: int = 1
+
+
+def _allocate_pipeline_epoch() -> int:
+    global _NEXT_PIPELINE_EPOCH
+    epoch = _NEXT_PIPELINE_EPOCH
+    _NEXT_PIPELINE_EPOCH += 1
+    return epoch
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class StatementPipelineRegistry:
-    __slots__ = ("_cache_enabled", "_max_pipelines", "_pipeline_cache_size", "_pipeline_parse_cache_size", "_pipelines")
+    __slots__ = (
+        "_cache_enabled",
+        "_epoch",
+        "_max_pipelines",
+        "_pipeline_cache_size",
+        "_pipeline_parse_cache_size",
+        "_pipelines",
+    )
 
     def __init__(
         self,
@@ -65,6 +82,7 @@ class StatementPipelineRegistry:
         self._pipeline_cache_size = cache_size
         self._pipeline_parse_cache_size = parse_cache_size
         self._cache_enabled = cache_enabled
+        self._epoch = _allocate_pipeline_epoch()
 
     def compile(
         self,
@@ -75,11 +93,26 @@ class StatementPipelineRegistry:
         expression: "exp.Expr | None" = None,
         param_fingerprint: "Any | None" = None,
     ) -> "CompiledSQL":
+        record_metrics = _RECORD_PIPELINE_METRICS
+        if config._cached_pipeline_epoch == self._epoch:
+            cached_pipeline = config._cached_pipeline
+            if cached_pipeline is not None and (cached_pipeline._metrics is not None) == record_metrics:
+                return cast(
+                    "CompiledSQL",
+                    cached_pipeline.compile(
+                        sql,
+                        parameters,
+                        is_many,
+                        record_metrics,
+                        expression=expression,
+                        param_fingerprint=param_fingerprint,
+                    ),
+                )
+
         if not getattr(config, "_is_frozen", False):
             config.freeze()
         base_key = self._fingerprint_config(config)
         pipeline = self._pipelines.get(base_key)
-        record_metrics = _RECORD_PIPELINE_METRICS
 
         if pipeline is not None and _matches_pipeline_config(pipeline.config, config):
             self._pipelines.move_to_end(base_key)
@@ -90,8 +123,13 @@ class StatementPipelineRegistry:
                 config, self._pipeline_cache_size, self._pipeline_parse_cache_size, self._cache_enabled, record_metrics
             )
             if len(self._pipelines) >= self._max_pipelines:
-                self._pipelines.popitem(last=False)
+                _, evicted = self._pipelines.popitem(last=False)
+                evicted.config._cached_pipeline = None
+                evicted.config._cached_pipeline_epoch = 0
             self._pipelines[base_key] = pipeline
+
+        config._cached_pipeline = pipeline
+        config._cached_pipeline_epoch = self._epoch
 
         return pipeline.compile(
             sql, parameters, is_many, record_metrics, expression=expression, param_fingerprint=param_fingerprint
@@ -99,8 +137,11 @@ class StatementPipelineRegistry:
 
     def reset(self) -> None:
         for pipeline in self._pipelines.values():
+            pipeline.config._cached_pipeline = None
+            pipeline.config._cached_pipeline_epoch = 0
             pipeline.reset()
         self._pipelines.clear()
+        self._epoch = _allocate_pipeline_epoch()
 
     def configure_cache(self, cache_size: int, parse_cache_size: int, cache_enabled: bool) -> None:
         self._pipeline_cache_size = max(cache_size, 0)
@@ -143,7 +184,9 @@ class StatementPipelineRegistry:
             config, self._pipeline_cache_size, self._pipeline_parse_cache_size, self._cache_enabled, record_metrics
         )
         if len(self._pipelines) >= self._max_pipelines:
-            self._pipelines.popitem(last=False)
+            _, evicted = self._pipelines.popitem(last=False)
+            evicted.config._cached_pipeline = None
+            evicted.config._cached_pipeline_epoch = 0
         self._pipelines[slot_key] = pipeline
         return pipeline
 

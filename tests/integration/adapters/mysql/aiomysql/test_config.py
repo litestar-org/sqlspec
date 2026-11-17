@@ -11,6 +11,7 @@ from sqlspec.adapters.aiomysql import (
     AiomysqlPoolParams,
 )
 from sqlspec.core import StatementConfig
+from sqlspec.exceptions import SQLSpecError
 
 pytestmark = pytest.mark.xdist_group("mysql")
 
@@ -221,3 +222,30 @@ def test_aiomysql_config_driver_features_as_plain_dict() -> None:
     )
 
     assert config.driver_features["json_serializer"] is custom_serializer
+
+
+async def test_aiomysql_multi_statement_disabled_by_default(mysql_service: MySQLService) -> None:
+    """Default AiomysqlConfig rejects stacked SQL via COM_SET_OPTION across checkouts while allowing execute_script."""
+    config = AiomysqlConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "db": mysql_service.db,
+            "minsize": 1,
+            "maxsize": 1,
+        }
+    )
+    try:
+        async with config.provide_session() as session:
+            with pytest.raises(SQLSpecError):
+                await session.execute("SELECT 1; SELECT 2")
+            script_result = await session.execute_script("SELECT 1; SELECT 2")
+            assert script_result is not None
+        async with config.provide_session() as session:
+            with pytest.raises(SQLSpecError):
+                await session.execute("SELECT 1; SELECT 2")
+            assert await session.select_value("SELECT 42") == 42
+    finally:
+        await config.close_pool()

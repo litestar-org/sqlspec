@@ -11,6 +11,7 @@ Tests migration execution including:
 
 import ast
 import os
+import stat
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -1148,3 +1149,181 @@ def test_find_project_root_stops_before_foreign_uid_ancestor(tmp_path: Path, mon
 
     monkeypatch.setattr(Path, "stat", _mock_stat_root)
     assert find_project_root(child_dir) == resolved_root_ws
+
+
+def _override_stat(monkeypatch: pytest.MonkeyPatch, overrides: "dict[tuple[Path, bool], dict[str, int]]") -> None:
+    """Replace selected ``os.stat`` fields, keyed by ``(path, follow_symlinks)``."""
+    real_stat = os.stat
+
+    def _fake_stat(path: Any, *args: Any, **kwargs: Any) -> Any:
+        result = real_stat(path, *args, **kwargs)
+        if not isinstance(path, (str, os.PathLike)):
+            return result
+        fields = overrides.get((Path(path), kwargs.get("follow_symlinks", True)))
+        if fields is None:
+            return result
+        base = {"st_uid": result.st_uid, "st_mode": result.st_mode, "st_nlink": result.st_nlink}
+        return SimpleNamespace(**{**base, **fields})
+
+    monkeypatch.setattr(os, "stat", _fake_stat)
+
+
+def _build_project(tmp_path: Path, *, marker: "str | None" = "pyproject.toml") -> "tuple[Path, Path]":
+    """Create ``project/migrations`` under ``tmp_path`` and return the resolved project and migrations paths."""
+    project = (tmp_path / "project").resolve()
+    migrations_dir = project / "migrations"
+    migrations_dir.mkdir(parents=True)
+    if marker is not None:
+        (project / marker).write_text("[project]\nname = 'app'\n", encoding="utf-8")
+    return project, migrations_dir
+
+
+def test_find_project_root_accepts_symlinked_marker_owned_by_user(tmp_path: Path) -> None:
+    """A symlinked project marker counts when the link and its target belong to the current user."""
+    project, migrations_dir = _build_project(tmp_path, marker=None)
+    outside = tmp_path / "outside.toml"
+    outside.write_text("[project]\nname = 'outside'\n", encoding="utf-8")
+    (project / "pyproject.toml").symlink_to(outside)
+
+    assert find_project_root(migrations_dir) == project
+
+
+@pytest.mark.parametrize("marker_mode", [0o644, 0o666], ids=["private-file", "world-writable-file"])
+def test_find_project_root_discovers_marker_in_user_owned_world_writable_tree(tmp_path: Path, marker_mode: int) -> None:
+    """The project root is found from the migrations directory when the user's own tree is mode 0777."""
+    project, migrations_dir = _build_project(tmp_path)
+    os.chmod(project / "pyproject.toml", marker_mode)
+    os.chmod(migrations_dir, 0o777)
+    os.chmod(project, 0o777)
+
+    try:
+        assert find_project_root(migrations_dir) == project
+    finally:
+        os.chmod(migrations_dir, 0o755)
+        os.chmod(project, 0o755)
+
+
+def test_find_project_root_falls_back_to_user_owned_world_writable_parent(tmp_path: Path) -> None:
+    """Without any marker, a mode 0777 parent owned by the current user is the fallback root."""
+    project, migrations_dir = _build_project(tmp_path, marker=None)
+    os.chmod(project, 0o777)
+
+    try:
+        assert find_project_root(migrations_dir) == project
+    finally:
+        os.chmod(project, 0o755)
+
+
+def test_find_project_root_discovers_marker_without_posix_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without os.getuid, mode bits are ignored and the marker in a 0777 parent is found."""
+    project, migrations_dir = _build_project(tmp_path)
+    monkeypatch.delattr(os, "getuid", raising=False)
+    world_writable_dir = {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o777}
+    _override_stat(
+        monkeypatch,
+        {
+            (migrations_dir, False): world_writable_dir,
+            (project, False): world_writable_dir,
+            (project / "pyproject.toml", False): {"st_uid": 0, "st_mode": stat.S_IFREG | 0o666},
+        },
+    )
+
+    assert find_project_root(migrations_dir) == project
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+def test_find_project_root_refuses_foreign_marker_in_world_writable_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A marker planted by another user in a world-writable parent is refused and logged."""
+    project, migrations_dir = _build_project(tmp_path)
+    marker = project / "pyproject.toml"
+    foreign_uid = os.getuid() + 1000
+    _override_stat(
+        monkeypatch, {(project, False): {"st_mode": stat.S_IFDIR | 0o777}, (marker, False): {"st_uid": foreign_uid}}
+    )
+
+    assert find_project_root(migrations_dir) == migrations_dir
+    assert f"Refusing project marker {marker}: it is owned by another user (uid {foreign_uid})" in caplog.text
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+@pytest.mark.parametrize(
+    ("marker_fields", "reason"),
+    [
+        ({}, None),
+        ({"st_mode": stat.S_IFREG | 0o666}, "world-writable inside a shared world-writable directory"),
+        ({"st_nlink": 2}, "several hard links inside a shared world-writable directory"),
+    ],
+    ids=["private-file", "world-writable-file", "hard-linked-file"],
+)
+def test_find_project_root_in_root_owned_world_writable_parent_requires_private_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    marker_fields: "dict[str, int]",
+    reason: "str | None",
+) -> None:
+    """In a root-owned world-writable directory, only a singly linked, non-world-writable marker is used."""
+    project, migrations_dir = _build_project(tmp_path)
+    marker = project / "pyproject.toml"
+    _override_stat(
+        monkeypatch, {(project, False): {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o777}, (marker, False): marker_fields}
+    )
+
+    if reason is None:
+        assert find_project_root(migrations_dir) == project
+        assert caplog.text == ""
+    else:
+        assert find_project_root(migrations_dir) == migrations_dir
+        assert f"Refusing project marker {marker}" in caplog.text
+        assert reason in caplog.text
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+@pytest.mark.parametrize("nested", [False, True], ids=["parent", "grandparent"])
+def test_find_project_root_never_uses_sticky_world_writable_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, nested: bool
+) -> None:
+    """A sticky world-writable directory holding a trusted marker is not used as the project root."""
+    shared, migrations_dir = _build_project(tmp_path)
+    expected = migrations_dir
+    if nested:
+        migrations_dir = migrations_dir / "versions"
+        migrations_dir.mkdir()
+    _override_stat(monkeypatch, {(shared, False): {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o1777}})
+
+    assert find_project_root(migrations_dir) == expected
+    assert f"Ignoring the project marker in {shared}" in caplog.text
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+def test_find_project_root_never_falls_back_to_shared_world_writable_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Without any marker, a sticky world-writable parent is not used as the project root."""
+    project, migrations_dir = _build_project(tmp_path, marker=None)
+    _override_stat(monkeypatch, {(project, False): {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o1777}})
+
+    assert find_project_root(migrations_dir) == migrations_dir
+    assert f"parent directory {project} is a shared world-writable directory" in caplog.text
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+def test_find_project_root_falls_back_without_warning_in_a_tree_owned_by_another_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A source tree mounted from another user, as in a container, ends the search without a warning."""
+    project, migrations_dir = _build_project(tmp_path)
+    foreign_uid = os.getuid() + 1000
+    _override_stat(
+        monkeypatch, {(project, False): {"st_uid": foreign_uid}, (migrations_dir, False): {"st_uid": foreign_uid}}
+    )
+
+    with caplog.at_level("DEBUG", logger="sqlspec.migrations.loaders"):
+        assert find_project_root(migrations_dir) == migrations_dir
+
+    assert {record.levelname for record in caplog.records} == {"DEBUG"}
+    assert f"directory is owned by another user (uid {foreign_uid})" in caplog.text

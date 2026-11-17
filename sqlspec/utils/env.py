@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, get_args, get_origin, overload
 
+from sqlspec.exceptions import with_cause
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -305,13 +307,13 @@ def _coerce_item(key: str, value: Any, item_type: object) -> Any:
             return int(value)
         except (TypeError, ValueError):
             msg = f"Cannot convert list item for key '{key}' to int"
-            raise ValueError(msg) from None
+            raise with_cause(ValueError(msg), None) from None
     if item_type is float:
         try:
             return float(value)
         except (TypeError, ValueError):
             msg = f"Cannot convert list item for key '{key}' to float"
-            raise ValueError(msg) from None
+            raise with_cause(ValueError(msg), None) from None
     if item_type is str or item_type is _UNSET:
         return str(value)
     if isinstance(item_type, type):
@@ -319,7 +321,7 @@ def _coerce_item(key: str, value: Any, item_type: object) -> Any:
             return item_type(value)
         except (TypeError, ValueError):
             msg = f"Cannot convert list item for key '{key}'"
-            raise ValueError(msg) from None
+            raise with_cause(ValueError(msg), None) from None
     return value
 
 
@@ -331,13 +333,13 @@ def _parse_basic_type(key: str, value: str, target_type: object) -> Any:
             return int(value)
         except ValueError:
             msg = f"Cannot convert value for key '{key}' to int"
-            raise ValueError(msg) from None
+            raise with_cause(ValueError(msg), None) from None
     if target_type is float:
         try:
             return float(value)
         except ValueError:
             msg = f"Cannot convert value for key '{key}' to float"
-            raise ValueError(msg) from None
+            raise with_cause(ValueError(msg), None) from None
     if target_type is Path:
         return Path(value)
     return value
@@ -350,7 +352,7 @@ def _parse_dict(key: str, value: str) -> dict[str, Any]:
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
             msg = f"'{key}' is not valid JSON"
-            raise ValueError(msg) from None
+            raise with_cause(ValueError(msg), None) from None
         if not isinstance(parsed, dict):
             msg = f"'{key}' is not a valid dict representation"
             raise ValueError(msg)
@@ -376,7 +378,7 @@ def _parse_list(key: str, value: str, item_type: object) -> list[Any]:
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
             msg = f"'{key}' is not valid JSON"
-            raise ValueError(msg) from None
+            raise with_cause(ValueError(msg), None) from None
         if not isinstance(parsed, list):
             msg = f"'{key}' is not a valid list representation"
             raise ValueError(msg)

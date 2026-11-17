@@ -4,7 +4,9 @@ import logging
 from itertools import chain
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, cast, overload
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
@@ -63,42 +65,36 @@ from sqlspec.adapters.oracledb.data_dictionary import (
     OracleVersionCache,
     resolve_oracle_connection_major,
 )
-from sqlspec.core import (
-    SQL,
-    SQLResult,
-    StackResult,
-    StatementConfig,
-    StatementStack,
-    build_arrow_result_from_table,
-    create_arrow_result,
-    get_cache_config,
-    register_driver_profile,
-)
+from sqlspec.core.cache import get_cache_config
 from sqlspec.core.explain import (
     ORACLE_EXPLAIN_DISPLAY_CURSOR_META_KEY,
     ORACLE_EXPLAIN_PREFIX,
     ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY,
     ORACLE_MANAGED_EXPLAIN_META_KEY,
 )
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.result._base import SQLResult, StackResult, build_arrow_result_from_table, create_arrow_result
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
-from sqlspec.driver import (
-    AsyncDriverAdapterBase,
-    AsyncRowStream,
-    BaseAsyncExceptionHandler,
-    BaseSyncExceptionHandler,
+from sqlspec.core.stack import StatementStack
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._common import (
     StackExecutionObserver,
-    SyncDriverAdapterBase,
-    SyncRowStream,
+    cache_hit_hooks_unchanged,
     describe_stack_statement,
     hash_stack_operations,
+    validate_load_from_storage_kwargs,
     validate_savepoint_name,
 )
-from sqlspec.driver._common import CommonDriverAttributesMixin, cache_hit_hooks_unchanged
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError, with_cause
 from sqlspec.storage._utils import import_pyarrow
 from sqlspec.utils.arrow_helpers import coerce_oracle_df_to_arrow_table
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 from sqlspec.utils.uuids import uuid4
@@ -106,13 +102,17 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement, StatementFilter
+    from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.builder._base import QueryBuilder
     from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult
     from sqlspec.core.stack import StackOperation
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.observability import ObservabilityRuntime
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.statement import Statement
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.observability._runtime import ObservabilityRuntime
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, SchemaT, StatementParameters
 
 __all__ = (
@@ -138,24 +138,6 @@ PLAN_DISPLAY_SQL: Final[str] = "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.D
 PLAN_CLEANUP_SQL: Final[str] = "DELETE FROM plan_table WHERE statement_id = :statement_id"
 
 
-class OraclePipelineDriver(Protocol):
-    """Protocol for Oracle pipeline driver methods used in stack execution."""
-
-    statement_config: "StatementConfig"
-    driver_features: "dict[str, Any]"
-
-    def prepare_statement(
-        self,
-        statement: "str | Statement | QueryBuilder",
-        parameters: "tuple[Any, ...] | dict[str, Any] | None",
-        *,
-        statement_config: "StatementConfig | None" = None,
-        kwargs: "dict[str, Any] | None" = None,
-    ) -> "SQL": ...
-
-    def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
-
-
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
 """Lowest python-oracledb version that supports pipelining."""
 
@@ -168,211 +150,254 @@ and falls back to sequential execution on databases that cannot pipeline.
 """
 
 
-class OraclePipelineMixin(CommonDriverAttributesMixin):
-    """Shared helpers for Oracle pipeline execution."""
+def _oracle_apply_session_tracing(driver: Any, connection: Any = None) -> None:
+    if not (getattr(driver, "_session_tracing_enabled", False) or getattr(driver, "_otel_tracing_enabled", False)):
+        return
+    target_conn = connection if connection is not None else getattr(driver, "connection", None)
+    if target_conn is None:
+        return
+    apply_session_tracing(
+        target_conn,
+        driver.statement_config,
+        driver.driver_features,
+        enable_session_attributes=getattr(driver, "_session_tracing_enabled", False),
+        enable_otel_trace_context=getattr(driver, "_otel_tracing_enabled", False),
+    )
 
-    __slots__ = ()
 
-    @property
-    def _oracle_version_cache(self) -> "OracleVersionCache | None":
-        """Pool-scoped Oracle version cache attached to this session."""
-        return cast("OracleVersionCache | None", cast("OracleCacheHitState", self._cache_hit_state).version_cache)
+def _oracle_format_wire_sql(driver: Any, sql: str, config: "StatementConfig | None" = None) -> str:
+    effective_config = config or driver.statement_config
+    if getattr(driver, "_session_tracing_enabled", False):
+        return strip_sqlcomment(sql)
+    if not effective_config.enable_sqlcommenter:
+        return sql
+    return format_wire_sqlcomment(sql, effective_config)
 
-    @_oracle_version_cache.setter
-    def _oracle_version_cache(self, value: "OracleVersionCache | None") -> None:
-        cast("OracleCacheHitState", self._cache_hit_state).version_cache = value
 
-    @property
-    def _otel_tracing_enabled(self) -> bool:
-        """Whether W3C trace context is propagated to the connection before each statement."""
-        return cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled
+def _oracle_stack_native_blocker(stack: "StatementStack") -> "str | None":
+    for operation in stack.operations:
+        if operation.method == "execute_arrow":
+            return "arrow_operation"
+        if operation.method == "execute_script":
+            return "script_operation"
+    return None
 
-    @_otel_tracing_enabled.setter
-    def _otel_tracing_enabled(self, value: bool) -> None:
-        cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled = bool(value)
 
-    def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
-        """Refresh trace propagation when the session receives its runtime."""
-        super().attach_observability(runtime)
-        driver = cast("OracleSyncDriver | OracleAsyncDriver", self)
-        driver._otel_tracing_enabled = (
-            bool(driver.driver_features.get("enable_otel_trace_context", True)) and runtime.span_manager.is_enabled
+def _oracle_log_pipeline_skip(driver: Any, reason: str, stack: "StatementStack") -> None:
+    log_level = logging.INFO if reason == "env_override" else logging.DEBUG
+    log_with_context(
+        logger,
+        log_level,
+        "stack.native_pipeline.skip",
+        driver=type(driver).__name__,
+        reason=reason,
+        hashed_operations=hash_stack_operations(stack),
+    )
+
+
+def _oracle_prepare_pipeline_operation(
+    driver: "OracleSyncDriver | OracleAsyncDriver", operation: "StackOperation"
+) -> "_CompiledStackOperation":
+    kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+    statement_config = kwargs.pop("statement_config", None)
+    config = statement_config or driver.statement_config
+
+    if operation.method == "execute":
+        sql_statement = driver.prepare_statement(
+            operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
         )
-
-    def _apply_session_tracing(self, connection: Any = None) -> None:
-        if not (getattr(self, "_session_tracing_enabled", False) or getattr(self, "_otel_tracing_enabled", False)):
-            return
-        driver = cast("OraclePipelineDriver", self)
-        target_conn = connection if connection is not None else getattr(self, "connection", None)
-        if target_conn is None:
-            return
-        apply_session_tracing(
-            target_conn,
-            driver.statement_config,
-            driver.driver_features,
-            enable_session_attributes=getattr(self, "_session_tracing_enabled", False),
-            enable_otel_trace_context=getattr(self, "_otel_tracing_enabled", False),
-        )
-
-    def _format_wire_sql(self, sql: str, config: "StatementConfig | None" = None) -> str:
-        driver = cast("OraclePipelineDriver", self)
-        effective_config = config or driver.statement_config
-        if getattr(self, "_session_tracing_enabled", False):
-            return strip_sqlcomment(sql)
-        if not effective_config.enable_sqlcommenter:
-            return sql
-        return format_wire_sqlcomment(sql, effective_config)
-
-    def _compiled_sql(
-        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
-    ) -> "tuple[str, Any]":
-        compiled_sql, prepared_parameters = super()._compiled_sql(
-            statement, statement_config, flatten_single_parameters=flatten_single_parameters
-        )
-        if getattr(self, "_session_tracing_enabled", False):
-            return strip_sqlcomment(compiled_sql), prepared_parameters
-        return compiled_sql, prepared_parameters
-
-    def _stack_native_blocker(self, stack: "StatementStack") -> "str | None":
-        for operation in stack.operations:
-            if operation.method == "execute_arrow":
-                return "arrow_operation"
-            if operation.method == "execute_script":
-                return "script_operation"
-        return None
-
-    def _log_pipeline_skip(self, reason: str, stack: "StatementStack") -> None:
-        log_level = logging.INFO if reason == "env_override" else logging.DEBUG
-        log_with_context(
-            logger,
-            log_level,
-            "stack.native_pipeline.skip",
-            driver=type(self).__name__,
-            reason=reason,
-            hashed_operations=hash_stack_operations(stack),
-        )
-
-    def _prepare_pipeline_operation(self, operation: "StackOperation") -> "_CompiledStackOperation":
-        driver = cast("OraclePipelineDriver", self)
-        kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
-        statement_config = kwargs.pop("statement_config", None)
-        config = statement_config or driver.statement_config
-
-        if operation.method == "execute":
-            sql_statement = driver.prepare_statement(
-                operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
-            )
-        elif operation.method == "execute_many":
-            if not operation.arguments:
-                msg = "execute_many stack operation requires parameter sets"
-                raise ValueError(msg)
-            parameter_sets = operation.arguments[0]
-            filters = operation.arguments[1:]
-            if isinstance(operation.statement, SQL):
-                statement_seed = operation.statement.raw_expression or operation.statement.raw_sql
-                sql_statement = SQL(statement_seed, parameter_sets, statement_config=config, is_many=True, **kwargs)
-            else:
-                base_statement = driver.prepare_statement(
-                    operation.statement, filters, statement_config=config, kwargs=kwargs
-                )
-                statement_seed = base_statement.raw_expression or base_statement.raw_sql
-                sql_statement = SQL(statement_seed, parameter_sets, statement_config=config, is_many=True, **kwargs)
-        else:
-            msg = f"Unsupported stack operation method: {operation.method}"
+    elif operation.method == "execute_many":
+        if not operation.arguments:
+            msg = "execute_many stack operation requires parameter sets"
             raise ValueError(msg)
-
-        compiled_sql, prepared_parameters = self._compiled_sql(sql_statement, config)
-        summary = describe_stack_statement(operation.statement)
-        return _CompiledStackOperation(
-            statement=sql_statement,
-            sql=compiled_sql,
-            parameters=prepared_parameters,
-            method=operation.method,
-            returns_rows=sql_statement.returns_rows()
-            and sql_statement.operation_type not in {"INSERT", "UPDATE", "DELETE"},
-            summary=summary,
-        )
-
-    def _add_pipeline_operation(self, pipeline: Any, operation: "_CompiledStackOperation") -> None:
-        parameters = operation.parameters or []
-        if operation.method == "execute":
-            if operation.returns_rows:
-                driver = cast("OraclePipelineDriver", self)
-                fetch_kwargs = build_fetch_kwargs(driver.driver_features)
-                arraysize = driver.driver_features.get("arraysize")
-                if arraysize is not None:
-                    fetch_kwargs["arraysize"] = arraysize
-                pipeline.add_fetchall(operation.sql, parameters, **fetch_kwargs)
-            else:
-                pipeline.add_execute(operation.sql, parameters)
-            return
-
-        if operation.method == "execute_many":
-            pipeline.add_executemany(operation.sql, parameters)
-            return
-
-        msg = f"Unsupported pipeline operation: {operation.method}"
+        parameter_sets = operation.arguments[0]
+        filters = operation.arguments[1:]
+        if isinstance(operation.statement, SQL):
+            statement_seed = operation.statement.raw_expression or operation.statement.raw_sql
+            sql_statement = SQL(statement_seed, parameter_sets, statement_config=config, is_many=True, **kwargs)
+        else:
+            base_statement = driver.prepare_statement(
+                operation.statement, filters, statement_config=config, kwargs=kwargs
+            )
+            statement_seed = base_statement.raw_expression or base_statement.raw_sql
+            sql_statement = SQL(statement_seed, parameter_sets, statement_config=config, is_many=True, **kwargs)
+    else:
+        msg = f"Unsupported stack operation method: {operation.method}"
         raise ValueError(msg)
 
-    def _build_stack_results_from_pipeline(
-        self,
-        compiled_operations: "Sequence[_CompiledStackOperation]",
-        pipeline_results: "Sequence[Any]",
-        continue_on_error: bool,
-        observer: StackExecutionObserver,
-        *,
-        coerced_rows_by_index: "Mapping[int, Sequence[Any] | None] | None" = None,
-    ) -> "list[StackResult]":
-        driver = cast("OraclePipelineDriver", self)
-        stack_results: list[StackResult] = []
-        for index, (compiled, result) in enumerate(zip(compiled_operations, pipeline_results, strict=False)):
-            try:
-                error = result.error
-            except AttributeError:
-                error = None
-            if error is not None:
-                mapped_error = create_mapped_exception(error) if not isinstance(error, SQLSpecError) else error
-                stack_error = StackExecutionError(
-                    index,
-                    compiled.summary,
-                    mapped_error,
-                    adapter=type(self).__name__,
-                    mode="continue-on-error" if continue_on_error else "fail-fast",
-                )
-                if continue_on_error:
-                    observer.record_operation_error(stack_error)
-                    stack_results.append(StackResult.from_error(stack_error))
-                    continue
-                raise stack_error
+    compiled_sql, prepared_parameters = driver._compiled_sql(sql_statement, config)
+    summary = describe_stack_statement(operation.statement)
+    return _CompiledStackOperation(
+        statement=sql_statement,
+        sql=compiled_sql,
+        parameters=prepared_parameters,
+        method=operation.method,
+        returns_rows=sql_statement.returns_rows()
+        and sql_statement.operation_type not in {"INSERT", "UPDATE", "DELETE"},
+        summary=summary,
+    )
 
-            stack_results.append(
-                build_pipeline_stack_result(
-                    compiled.statement,
-                    compiled.method,
-                    compiled.returns_rows,
-                    compiled.parameters,
-                    result,
-                    driver.driver_features,
-                    coerced_rows=coerced_rows_by_index.get(index) if coerced_rows_by_index is not None else None,
-                )
-            )
-        return stack_results
 
-    def _check_pipeline_commit_result(self, result: Any) -> None:
-        error = getattr(result, "error", None)
+def _oracle_add_pipeline_operation(
+    driver: "OracleSyncDriver | OracleAsyncDriver", pipeline: Any, operation: "_CompiledStackOperation"
+) -> None:
+    parameters = operation.parameters or []
+    if operation.method == "execute":
+        if operation.returns_rows:
+            fetch_kwargs = build_fetch_kwargs(driver.driver_features)
+            arraysize = driver.driver_features.get("arraysize")
+            if arraysize is not None:
+                fetch_kwargs["arraysize"] = arraysize
+            pipeline.add_fetchall(operation.sql, parameters, **fetch_kwargs)
+        else:
+            pipeline.add_execute(operation.sql, parameters)
+        return
+
+    if operation.method == "execute_many":
+        pipeline.add_executemany(operation.sql, parameters)
+        return
+
+    msg = f"Unsupported pipeline operation: {operation.method}"
+    raise ValueError(msg)
+
+
+def _oracle_build_stack_results_from_pipeline(
+    driver: "OracleSyncDriver | OracleAsyncDriver",
+    compiled_operations: "Sequence[_CompiledStackOperation]",
+    pipeline_results: "Sequence[Any]",
+    continue_on_error: bool,
+    observer: StackExecutionObserver,
+    *,
+    coerced_rows_by_index: "Mapping[int, Sequence[Any] | None] | None" = None,
+) -> "list[StackResult]":
+    stack_results: list[StackResult] = []
+    for index, (compiled, result) in enumerate(zip(compiled_operations, pipeline_results, strict=False)):
+        try:
+            error = result.error
+        except AttributeError:
+            error = None
         if error is not None:
-            raise create_mapped_exception(error)
+            mapped_error = create_mapped_exception(error) if not isinstance(error, SQLSpecError) else error
+            stack_error = StackExecutionError(
+                index,
+                compiled.summary,
+                mapped_error,
+                adapter=type(driver).__name__,
+                mode="continue-on-error" if continue_on_error else "fail-fast",
+            )
+            if continue_on_error:
+                observer.record_operation_error(stack_error)
+                stack_results.append(StackResult.from_error(stack_error))
+                continue
+            raise stack_error
 
-    def _wrap_pipeline_error(
-        self, error: Exception, stack: "StatementStack", continue_on_error: bool
-    ) -> StackExecutionError:
-        mode = "continue-on-error" if continue_on_error else "fail-fast"
-        mapped_error = create_mapped_exception(error) if not isinstance(error, SQLSpecError) else error
-        return StackExecutionError(
-            -1, "Oracle pipeline execution failed", mapped_error, adapter=type(self).__name__, mode=mode
+        stack_results.append(
+            build_pipeline_stack_result(
+                compiled.statement,
+                compiled.method,
+                compiled.returns_rows,
+                compiled.parameters,
+                result,
+                driver.driver_features,
+                coerced_rows=coerced_rows_by_index.get(index) if coerced_rows_by_index is not None else None,
+            )
         )
+    return stack_results
 
 
+def _oracle_check_pipeline_commit_result(result: Any) -> None:
+    error = getattr(result, "error", None)
+    if error is not None:
+        raise create_mapped_exception(error)
+
+
+def _oracle_wrap_pipeline_error(driver: Any, error: Exception, continue_on_error: bool) -> StackExecutionError:
+    mode = "continue-on-error" if continue_on_error else "fail-fast"
+    mapped_error = create_mapped_exception(error) if not isinstance(error, SQLSpecError) else error
+    wrapped = StackExecutionError(
+        -1, "Oracle pipeline execution failed", mapped_error, adapter=type(driver).__name__, mode=mode
+    )
+    wrapped.__cause__ = error
+    return wrapped
+
+
+class _OracleAsyncArrowBatchIterator:
+    """Async iterator yielding Oracle DataFrame batches as Arrow record batches."""
+
+    __slots__ = ("_arrow_schema", "_closed", "_driver_features", "_oracle_dfs", "_pending_batches", "_yielded")
+
+    def __init__(
+        self,
+        connection: Any,
+        sql: str,
+        parameters: "StatementParameters | None",
+        batch_size: int | None,
+        driver_features: Any,
+        arrow_schema: "ArrowSchema | None",
+    ) -> None:
+        self._oracle_dfs = _fetch_dataframe_batches(
+            connection, sql, parameters, batch_size, driver_features, arrow_schema
+        )
+        self._driver_features = driver_features
+        self._arrow_schema = arrow_schema
+        self._pending_batches: list[Any] = []
+        self._yielded = False
+        self._closed = False
+
+    def __aiter__(self) -> "_OracleAsyncArrowBatchIterator":
+        return self
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        aclose_dfs = getattr(self._oracle_dfs, "aclose", None)
+        if callable(aclose_dfs):
+            await cast("Any", aclose_dfs)()
+            return
+        close_dfs = getattr(self._oracle_dfs, "close", None)
+        if callable(close_dfs):
+            close_dfs()
+
+    async def __anext__(self) -> "ArrowRecordBatch":
+        while not self._pending_batches:
+            next_error: BaseException | None = None
+            oracle_df: Any = None
+            stop_iteration = False
+            try:
+                oracle_df = await self._oracle_dfs.__anext__()
+            except StopAsyncIteration:
+                stop_iteration = True
+            except OracleError as exc:
+                next_error = exc
+            except BaseException as exc:
+                next_error = exc
+            if next_error is not None:
+                await self.aclose()
+                if isinstance(next_error, OracleError):
+                    raise with_cause(create_mapped_exception(next_error), next_error) from next_error
+                raise next_error
+            if stop_iteration:
+                await self.aclose()
+                if not self._yielded and self._arrow_schema is not None:
+                    self._yielded = True
+                    return cast(
+                        "ArrowRecordBatch", import_pyarrow().RecordBatch.from_pylist([], schema=self._arrow_schema)
+                    )
+                raise StopAsyncIteration
+            batch_table = _coerce_oracle_arrow_batch_table(oracle_df, self._driver_features, self._arrow_schema)
+            if batch_table.num_rows:
+                batches = list(batch_table.to_batches())
+                batches.reverse()
+                self._pending_batches = batches
+            else:
+                self._yielded = True
+                return cast("ArrowRecordBatch", import_pyarrow().RecordBatch.from_pylist([], schema=batch_table.schema))
+        self._yielded = True
+        return cast("ArrowRecordBatch", self._pending_batches.pop())
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
 class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
     """Synchronous context manager for handling Oracle database exceptions.
 
@@ -392,6 +417,7 @@ class OracleSyncExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling Oracle database exceptions.
 
@@ -411,7 +437,8 @@ class OracleAsyncExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
-class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
+@mypyc_attr(allow_interpreted_subclasses=True)
+class OracleSyncDriver(SyncDriverAdapterBase):
     """Synchronous Oracle Database driver.
 
     Provides Oracle Database connectivity with parameter style conversion,
@@ -428,7 +455,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         "_sessionless_transaction_id",
         "_transaction_active",
     )
-    dialect = "oracle"
+    dialect: "DialectType | None" = "oracle"
     export_integers_may_widen: ClassVar[bool] = True
     native_arrow_export: ClassVar[bool] = True
     _pipeline_support: ClassVar[bool] = False
@@ -469,6 +496,83 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return self._sessionless_transaction_id
 
     @property
+    def _oracle_version_cache(self) -> "OracleVersionCache | None":
+        return cast("OracleVersionCache | None", cast("OracleCacheHitState", self._cache_hit_state).version_cache)
+
+    @_oracle_version_cache.setter
+    def _oracle_version_cache(self, value: "OracleVersionCache | None") -> None:
+        cast("OracleCacheHitState", self._cache_hit_state).version_cache = value
+
+    @property
+    def _otel_tracing_enabled(self) -> bool:
+        return cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled
+
+    @_otel_tracing_enabled.setter
+    def _otel_tracing_enabled(self, value: bool) -> None:
+        cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled = bool(value)
+
+    def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
+        """Refresh trace propagation when the session receives its runtime."""
+        super().attach_observability(runtime)
+        self._otel_tracing_enabled = (
+            bool(self.driver_features.get("enable_otel_trace_context", True)) and runtime.span_manager.is_enabled
+        )
+
+    def _apply_session_tracing(self, connection: Any = None) -> None:
+        _oracle_apply_session_tracing(self, connection)
+
+    def _format_wire_sql(self, sql: str, config: "StatementConfig | None" = None) -> str:
+        return _oracle_format_wire_sql(self, sql, config)
+
+    def _compiled_sql(
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
+    ) -> "tuple[str, Any]":
+        compiled_sql, prepared_parameters = super()._compiled_sql(
+            statement, statement_config, flatten_single_parameters=flatten_single_parameters
+        )
+        if self._session_tracing_enabled:
+            return strip_sqlcomment(compiled_sql), prepared_parameters
+        return compiled_sql, prepared_parameters
+
+    def _stack_native_blocker(self, stack: "StatementStack") -> "str | None":
+        return _oracle_stack_native_blocker(stack)
+
+    def _log_pipeline_skip(self, reason: str, stack: "StatementStack") -> None:
+        _oracle_log_pipeline_skip(self, reason, stack)
+
+    def _prepare_pipeline_operation(self, operation: "StackOperation") -> "_CompiledStackOperation":
+        return _oracle_prepare_pipeline_operation(self, operation)
+
+    def _add_pipeline_operation(self, pipeline: Any, operation: "_CompiledStackOperation") -> None:
+        _oracle_add_pipeline_operation(self, pipeline, operation)
+
+    def _build_stack_results_from_pipeline(
+        self,
+        compiled_operations: "Sequence[_CompiledStackOperation]",
+        pipeline_results: "Sequence[Any]",
+        continue_on_error: bool,
+        observer: StackExecutionObserver,
+        *,
+        coerced_rows_by_index: "Mapping[int, Sequence[Any] | None] | None" = None,
+    ) -> "list[StackResult]":
+        return _oracle_build_stack_results_from_pipeline(
+            self,
+            compiled_operations,
+            pipeline_results,
+            continue_on_error,
+            observer,
+            coerced_rows_by_index=coerced_rows_by_index,
+        )
+
+    def _check_pipeline_commit_result(self, result: Any) -> None:
+        _oracle_check_pipeline_commit_result(result)
+
+    def _wrap_pipeline_error(
+        self, error: Exception, stack: "StatementStack", continue_on_error: bool
+    ) -> StackExecutionError:
+        return _oracle_wrap_pipeline_error(self, error, continue_on_error)
+
+    @property
     def data_dictionary(self) -> "OracledbSyncDataDictionary":
         """Get the data dictionary for this driver.
 
@@ -497,7 +601,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         try:
             txid = method(resolved, timeout=timeout, defer_round_trip=defer_round_trip)
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._sessionless_transaction_id = cast("bytes", txid)
         return self._sessionless_transaction_id
 
@@ -515,7 +619,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         try:
             txid = method(cast("bytes", resolved), timeout=timeout, defer_round_trip=defer_round_trip)
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._sessionless_transaction_id = cast("bytes", txid)
         return self._sessionless_transaction_id
 
@@ -532,6 +636,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -815,6 +920,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -836,6 +942,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -1056,7 +1163,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         except AttributeError as exc:
             if native_only:
                 msg = "Oracle native Arrow support is not available for this connection."
-                raise ImproperConfigurationError(msg) from exc
+                error = ImproperConfigurationError(msg)
+                error.__cause__ = exc
+                raise error from exc
             return super().select_to_arrow(
                 prepared_statement,
                 statement_config=config,
@@ -1281,8 +1390,27 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 self._attach_partition_telemetry(telemetry_payload, partitioner)
                 return self._storage_job(telemetry_payload)
         if kwargs:
+            validate_load_from_storage_kwargs(kwargs)
             return super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+                table,
+                source,
+                file_format=file_format,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                storage_options=kwargs.get("storage_options"),
+                stage_table=kwargs.get("stage_table"),
+                conflict_keys=kwargs.get("conflict_keys"),
+                on_conflict=kwargs.get("on_conflict", "update"),
+                exclude_update_columns=kwargs.get("exclude_update_columns"),
+                drop_stage_table=kwargs.get("drop_stage_table", True),
+                drop_indexes=kwargs.get("drop_indexes", False),
+                concurrent_indexes=kwargs.get("concurrent_indexes", False),
+                checkpoint_table=kwargs.get("checkpoint_table"),
+                checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+                max_workers=kwargs.get("max_workers", 1),
+                executor=kwargs.get("executor", "thread"),
+                arrow_schema=kwargs.get("arrow_schema"),
+                type_casts=kwargs.get("type_casts"),
             )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
@@ -1460,7 +1588,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 else:
                     yield import_pyarrow().RecordBatch.from_pylist([], schema=batch_table.schema)
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         finally:
             close_dfs = getattr(oracle_dfs, "close", None)
             if callable(close_dfs):
@@ -1485,7 +1613,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                     batch_schema = batch_table.schema
                 record_batches.extend(batch_table.to_batches())
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         finally:
             close_dfs = getattr(oracle_dfs, "close", None)
             if callable(close_dfs):
@@ -1493,7 +1621,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return record_batches, batch_schema
 
 
-class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
+@mypyc_attr(allow_interpreted_subclasses=True)
+class OracleAsyncDriver(AsyncDriverAdapterBase):
     """Asynchronous Oracle Database driver.
 
     Provides Oracle Database connectivity with parameter style conversion,
@@ -1512,7 +1641,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         "_sessionless_transaction_id",
         "_transaction_active",
     )
-    dialect = "oracle"
+    dialect: "DialectType | None" = "oracle"
     export_integers_may_widen: ClassVar[bool] = True
 
     def __init__(
@@ -1552,6 +1681,83 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return self._sessionless_transaction_id
 
     @property
+    def _oracle_version_cache(self) -> "OracleVersionCache | None":
+        return cast("OracleVersionCache | None", cast("OracleCacheHitState", self._cache_hit_state).version_cache)
+
+    @_oracle_version_cache.setter
+    def _oracle_version_cache(self, value: "OracleVersionCache | None") -> None:
+        cast("OracleCacheHitState", self._cache_hit_state).version_cache = value
+
+    @property
+    def _otel_tracing_enabled(self) -> bool:
+        return cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled
+
+    @_otel_tracing_enabled.setter
+    def _otel_tracing_enabled(self, value: bool) -> None:
+        cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled = bool(value)
+
+    def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
+        """Refresh trace propagation when the session receives its runtime."""
+        super().attach_observability(runtime)
+        self._otel_tracing_enabled = (
+            bool(self.driver_features.get("enable_otel_trace_context", True)) and runtime.span_manager.is_enabled
+        )
+
+    def _apply_session_tracing(self, connection: Any = None) -> None:
+        _oracle_apply_session_tracing(self, connection)
+
+    def _format_wire_sql(self, sql: str, config: "StatementConfig | None" = None) -> str:
+        return _oracle_format_wire_sql(self, sql, config)
+
+    def _compiled_sql(
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
+    ) -> "tuple[str, Any]":
+        compiled_sql, prepared_parameters = super()._compiled_sql(
+            statement, statement_config, flatten_single_parameters=flatten_single_parameters
+        )
+        if self._session_tracing_enabled:
+            return strip_sqlcomment(compiled_sql), prepared_parameters
+        return compiled_sql, prepared_parameters
+
+    def _stack_native_blocker(self, stack: "StatementStack") -> "str | None":
+        return _oracle_stack_native_blocker(stack)
+
+    def _log_pipeline_skip(self, reason: str, stack: "StatementStack") -> None:
+        _oracle_log_pipeline_skip(self, reason, stack)
+
+    def _prepare_pipeline_operation(self, operation: "StackOperation") -> "_CompiledStackOperation":
+        return _oracle_prepare_pipeline_operation(self, operation)
+
+    def _add_pipeline_operation(self, pipeline: Any, operation: "_CompiledStackOperation") -> None:
+        _oracle_add_pipeline_operation(self, pipeline, operation)
+
+    def _build_stack_results_from_pipeline(
+        self,
+        compiled_operations: "Sequence[_CompiledStackOperation]",
+        pipeline_results: "Sequence[Any]",
+        continue_on_error: bool,
+        observer: StackExecutionObserver,
+        *,
+        coerced_rows_by_index: "Mapping[int, Sequence[Any] | None] | None" = None,
+    ) -> "list[StackResult]":
+        return _oracle_build_stack_results_from_pipeline(
+            self,
+            compiled_operations,
+            pipeline_results,
+            continue_on_error,
+            observer,
+            coerced_rows_by_index=coerced_rows_by_index,
+        )
+
+    def _check_pipeline_commit_result(self, result: Any) -> None:
+        _oracle_check_pipeline_commit_result(result)
+
+    def _wrap_pipeline_error(
+        self, error: Exception, stack: "StatementStack", continue_on_error: bool
+    ) -> StackExecutionError:
+        return _oracle_wrap_pipeline_error(self, error, continue_on_error)
+
+    @property
     def data_dictionary(self) -> "OracledbAsyncDataDictionary":
         """Get the data dictionary for this driver.
 
@@ -1580,7 +1786,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         try:
             txid = await cast("Any", method)(resolved, timeout=timeout, defer_round_trip=defer_round_trip)
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._sessionless_transaction_id = cast("bytes", txid)
         return self._sessionless_transaction_id
 
@@ -1600,7 +1806,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 cast("bytes", resolved), timeout=timeout, defer_round_trip=defer_round_trip
             )
         except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         self._sessionless_transaction_id = cast("bytes", txid)
         return self._sessionless_transaction_id
 
@@ -1617,6 +1823,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -1902,6 +2109,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -1923,6 +2131,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             if self._sessionless_transaction_id is not None:
                 self._sessionless_cleanup_error = pending
             if pending is not exc:
+                pending.__cause__ = exc
                 raise pending from exc
             raise
         else:
@@ -2105,6 +2314,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
         exc_handler = self.handle_database_exceptions()
+        arrow_fallback_error: AttributeError | None = None
+        oracle_df: Any = None
         try:
             self._apply_session_tracing(self.connection)
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
@@ -2136,9 +2347,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 exc_handler, self._execute_arrow_dataframe, sql, prepared_parameters, batch_size
             )
         except AttributeError as exc:
+            arrow_fallback_error = exc
+        if arrow_fallback_error is not None:
             if native_only:
                 msg = "Oracle native Arrow support is not available for this connection."
-                raise ImproperConfigurationError(msg) from exc
+                error = ImproperConfigurationError(msg)
+                error.__cause__ = arrow_fallback_error
+                raise error from arrow_fallback_error
             return await super().select_to_arrow(
                 prepared_statement,
                 statement_config=config,
@@ -2224,8 +2439,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """Asynchronously load Arrow data into Oracle."""
         self._require_capability("arrow_import_enabled")
         if drop_indexes:
-            async with self.without_indexes(table, concurrent=concurrent_indexes):
-                return await self.load_from_arrow(
+            index_context = self.without_indexes(table, concurrent=concurrent_indexes)
+            await index_context.__aenter__()
+            index_error: BaseException | None = None
+            index_job: StorageBridgeJob | None = None
+            try:
+                index_job = await self.load_from_arrow(
                     table,
                     source,
                     partitioner=partitioner,
@@ -2240,6 +2459,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                     concurrent_indexes=concurrent_indexes,
                     type_casts=type_casts,
                 )
+            except BaseException as exc:
+                index_error = exc
+            await exit_async_context(index_context, index_error)
+            assert index_job is not None
+            return index_job
         if stage_table or conflict_keys:
             return await self._execute_staged_load_async(
                 table,
@@ -2370,8 +2594,27 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 self._attach_partition_telemetry(telemetry_payload, partitioner)
                 return self._storage_job(telemetry_payload)
         if kwargs:
+            validate_load_from_storage_kwargs(kwargs)
             return await super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+                table,
+                source,
+                file_format=file_format,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                storage_options=kwargs.get("storage_options"),
+                stage_table=kwargs.get("stage_table"),
+                conflict_keys=kwargs.get("conflict_keys"),
+                on_conflict=kwargs.get("on_conflict", "update"),
+                exclude_update_columns=kwargs.get("exclude_update_columns"),
+                drop_stage_table=kwargs.get("drop_stage_table", True),
+                drop_indexes=kwargs.get("drop_indexes", False),
+                concurrent_indexes=kwargs.get("concurrent_indexes", False),
+                checkpoint_table=kwargs.get("checkpoint_table"),
+                checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+                max_workers=kwargs.get("max_workers", 1),
+                executor=kwargs.get("executor", "thread"),
+                arrow_schema=kwargs.get("arrow_schema"),
+                type_casts=kwargs.get("type_casts"),
             )
         arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
         return await self.load_from_arrow(
@@ -2523,6 +2766,8 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         await cursor.execute(_tagged_explain_plan_sql(statement_id, explained_sql), parameters or {})
         display_sql = PLAN_DISPLAY_SQL if xplan_format == "TYPICAL" else _format_plan_display_sql(xplan_format)
 
+        display_error: Exception | None = None
+        result: ExecutionResult | None = None
         try:
             await cursor.execute(display_sql, {"statement_id": statement_id}, **self._fetch_kwargs)
             fetched_data = await cursor.fetchall()
@@ -2542,14 +2787,16 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 is_select_result=True,
                 row_format="tuple",
             )
-        except Exception:
+        except Exception as exc:
+            display_error = exc
+        if display_error is not None:
             try:
                 await cursor.execute(PLAN_CLEANUP_SQL, {"statement_id": statement_id})
             except Exception:
                 logger.warning("Failed to clean up Oracle plan rows after plan retrieval failed", exc_info=True)
-            raise
-        else:
-            await cursor.execute(PLAN_CLEANUP_SQL, {"statement_id": statement_id})
+            raise display_error
+        await cursor.execute(PLAN_CLEANUP_SQL, {"statement_id": statement_id})
+        assert result is not None
         return result
 
     async def _execute_arrow_dataframe(self, sql: str, parameters: "Any", batch_size: int | None) -> "Any":
@@ -2560,56 +2807,40 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         except AttributeError:
             execute_df = None
         if execute_df is not None:
+            fallback_to_plain = False
             try:
                 return await execute_df(sql, params, arraysize=batch_size or 1000)
             except TypeError:
+                fallback_to_plain = True
+            if fallback_to_plain:
                 return await execute_df(sql, params)
         fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features)
+        retry_kwargs: dict[str, Any] | None = None
+        fetch_error: TypeError | None = None
         try:
             return await self.connection.fetch_df_all(
                 statement=sql, parameters=params, arraysize=batch_size or 1000, **fetch_kwargs
             )
         except TypeError as exc:
+            fetch_error = exc
             retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
-            if retry_kwargs is None:
-                raise
-            return await self.connection.fetch_df_all(
-                statement=sql, parameters=params, arraysize=batch_size or 1000, **retry_kwargs
-            )
+        if retry_kwargs is None:
+            assert fetch_error is not None
+            raise fetch_error
+        return await self.connection.fetch_df_all(
+            statement=sql, parameters=params, arraysize=batch_size or 1000, **retry_kwargs
+        )
 
-    async def _iter_arrow_record_batches(
+    def _iter_arrow_record_batches(
         self,
         sql: str,
         parameters: "StatementParameters | None",
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "AsyncIterator[ArrowRecordBatch]":
-        oracle_dfs = _fetch_dataframe_batches(
+        return _OracleAsyncArrowBatchIterator(
             self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
         )
-        yielded = False
-        try:
-            async for oracle_df in oracle_dfs:
-                batch_table = _coerce_oracle_arrow_batch_table(oracle_df, self.driver_features, arrow_schema)
-                if batch_table.num_rows:
-                    for batch in batch_table.to_batches():
-                        yielded = True
-                        yield batch
-                else:
-                    yielded = True
-                    yield import_pyarrow().RecordBatch.from_pylist([], schema=batch_table.schema)
-            if not yielded and arrow_schema is not None:
-                yield import_pyarrow().RecordBatch.from_pylist([], schema=arrow_schema)
-        except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
-        finally:
-            aclose_dfs = getattr(oracle_dfs, "aclose", None)
-            if callable(aclose_dfs):
-                await cast("Any", aclose_dfs)()
-            else:
-                close_dfs = getattr(oracle_dfs, "close", None)
-                if callable(close_dfs):
-                    close_dfs()
 
     async def _fetch_arrow_record_batches(
         self,
@@ -2623,22 +2854,26 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         oracle_dfs = _fetch_dataframe_batches(
             self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
         )
+        fetch_error: BaseException | None = None
         try:
             async for oracle_df in oracle_dfs:
                 batch_table = _coerce_oracle_arrow_batch_table(oracle_df, self.driver_features, arrow_schema)
                 if batch_schema is None:
                     batch_schema = batch_table.schema
                 record_batches.extend(batch_table.to_batches())
-        except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
-        finally:
-            aclose_dfs = getattr(oracle_dfs, "aclose", None)
-            if callable(aclose_dfs):
-                await cast("Any", aclose_dfs)()
-            else:
-                close_dfs = getattr(oracle_dfs, "close", None)
-                if callable(close_dfs):
-                    close_dfs()
+        except BaseException as exc:
+            fetch_error = exc
+        aclose_dfs = getattr(oracle_dfs, "aclose", None)
+        if callable(aclose_dfs):
+            await cast("Any", aclose_dfs)()
+        else:
+            close_dfs = getattr(oracle_dfs, "close", None)
+            if callable(close_dfs):
+                close_dfs()
+        if fetch_error is not None:
+            if isinstance(fetch_error, OracleError):
+                raise with_cause(create_mapped_exception(fetch_error), fetch_error) from fetch_error
+            raise fetch_error
         return record_batches, batch_schema
 
     async def _execute_stack_native(
@@ -2679,6 +2914,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         owns_transaction = not self._connection_in_transaction()
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
+            pipeline_error: Exception | None = None
             try:
                 pipelined_commit = owns_transaction and not continue_on_error
                 if owns_transaction:
@@ -2713,14 +2949,18 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                     else:
                         await self.rollback()
             except Exception as exc:
+                pipeline_error = exc
+            if pipeline_error is not None:
                 if owns_transaction:
                     try:
                         await self.rollback()
                     except Exception as rollback_error:
                         logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
-                if isinstance(exc, StackExecutionError):
-                    raise
-                raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
+                if isinstance(pipeline_error, StackExecutionError):
+                    raise pipeline_error
+                raise with_cause(
+                    self._wrap_pipeline_error(pipeline_error, stack, continue_on_error), pipeline_error
+                ) from pipeline_error
 
         return tuple(results)
 
@@ -3019,7 +3259,7 @@ def _fetch_dataframe_batches(
                 statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
             )
     except OracleError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 def _coerce_oracle_arrow_batch_table(oracle_df: Any, driver_features: Any, arrow_schema: "ArrowSchema | None") -> Any:

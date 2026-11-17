@@ -2,7 +2,7 @@
 
 import importlib
 import inspect
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -41,7 +41,7 @@ async def rows(session: Any, sql: str) -> "list[Any]":
 
 
 @asynccontextmanager
-async def session_scope(config: Any) -> "AsyncIterator[Any]":
+async def session_scope(config: Any) -> "AsyncGenerator[Any, None]":
     context = config.provide_session()
     if hasattr(context, "__aenter__"):
         async with context as session:

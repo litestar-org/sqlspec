@@ -13,9 +13,10 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 from sqlglot import exp
 
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
-from sqlspec.driver import rows_to_dicts
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -32,8 +33,9 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_sqlite_error, resolve_row_format
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.core.cache import CachedQuery
     from sqlspec.core.compiler import OperationType
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = (
     "JULIAN_EPOCH",
@@ -190,7 +193,7 @@ def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str,
         msg = str(exc).replace(
             "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
         )
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
     return tuple(statements)
 
 
@@ -307,7 +310,8 @@ def resolve_lastrowid(
     operation_type: "OperationType",
     rowcount: int,
     expression: Any,
-    eligibility_cache: "dict[tuple[str | None, str], bool]",
+    eligibility_cache: "dict[Any, bool]",
+    compiled_sql: "str | None" = None,
 ) -> "int | None":
     """Resolve lastrowid only when compiled target metadata proves rowid eligibility.
 
@@ -321,23 +325,45 @@ def resolve_lastrowid(
         operation_type: Compiled statement operation type.
         rowcount: Normalized affected-row count.
         expression: Compiled SQLGlot expression.
-        eligibility_cache: Driver-local target eligibility cache.
+        eligibility_cache: Driver-local eligibility cache, keyed by ``(schema, table)`` target and
+            by compiled SQL text.
+        compiled_sql: Optional compiled SQL text used to key eligibility lookups without AST walks.
+            Text that ends with a comment is resolved by target and never stored, so per-request
+            comments do not add entries.
 
     Returns:
         Integer lastrowid when the current target is a rowid table, otherwise None.
     """
     if operation_type != "INSERT" or rowcount <= 0:
         return None
+    if compiled_sql is not None:
+        supports_rowid = eligibility_cache.get(compiled_sql)
+        if supports_rowid is None:
+            supports_rowid = _target_rowid_eligibility(connection, expression, eligibility_cache)
+            if supports_rowid is not None and not compiled_sql.endswith("*/"):
+                if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
+                    eligibility_cache.clear()
+                eligibility_cache[compiled_sql] = supports_rowid
+        if not supports_rowid:
+            return None
+        return normalize_lastrowid(cursor, operation_type, rowcount)
+    if not _target_rowid_eligibility(connection, expression, eligibility_cache):
+        return None
+    return normalize_lastrowid(cursor, operation_type, rowcount)
+
+
+def _target_rowid_eligibility(connection: Any, expression: Any, eligibility_cache: "dict[Any, bool]") -> "bool | None":
+    """Return whether the INSERT target of ``expression`` is a rowid table, or None without a target."""
     target = _resolve_insert_target(expression)
     if target is None:
         return None
     supports_rowid = eligibility_cache.get(target)
     if supports_rowid is None:
         supports_rowid = _target_supports_rowid(connection, target)
+        if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
+            eligibility_cache.clear()
         eligibility_cache[target] = supports_rowid
-    if not supports_rowid:
-        return None
-    return normalize_lastrowid(cursor, operation_type, rowcount)
+    return supports_rowid
 
 
 def _close_cursor(cursor: Any) -> None:
@@ -354,7 +380,8 @@ def execute_cache_hit(
     params: Any,
     cached: "CachedQuery",
     statement_config: "StatementConfig",
-    rowid_target_cache: "dict[tuple[str | None, str], bool]",
+    rowid_target_cache: "dict[Any, bool]",
+    wire_sql: "str | None" = None,
 ) -> "SQLResult":
     """Execute a cached statement on a SQLite connection and build its result.
 
@@ -365,6 +392,7 @@ def execute_cache_hit(
         cached: Cached compilation of ``sql``.
         statement_config: Statement configuration the result uses to rebuild its statement.
         rowid_target_cache: Driver-local rowid eligibility cache, cleared when the statement can change schema.
+        wire_sql: Optional wire SQL override with sqlcommenter formatting applied.
 
     Returns:
         The statement result.
@@ -375,8 +403,9 @@ def execute_cache_hit(
     operation_type = cached.operation_type
     if operation_type not in ROWID_SAFE_OPERATIONS:
         rowid_target_cache.clear()
+    executed_sql = cached.compiled_sql if wire_sql is None else wire_sql
     try:
-        cursor = connection.execute(cached.compiled_sql, params or ())
+        cursor = connection.execute(executed_sql, params or ())
     except sqlite3.Error as exc:
         mapped_error = create_mapped_exception(exc)
         mapped_error.__cause__ = exc
@@ -397,6 +426,7 @@ def execute_cache_hit(
                     affected_rows,
                     cached.processed_state.parsed_expression,
                     rowid_target_cache,
+                    cached.compiled_sql,
                 ),
             )
         fetched_data: list[Any] = cursor.fetchall()
@@ -410,6 +440,7 @@ def execute_cache_hit(
                 effective_rowcount,
                 cached.processed_state.parsed_expression,
                 rowid_target_cache,
+                cached.compiled_sql,
             )
         description = cursor.description
         column_names: list[str] = [column[0] for column in description] if description else []
@@ -417,7 +448,7 @@ def execute_cache_hit(
             sql,
             statement_config,
             cached.processed_state,
-            cached.compiled_sql,
+            executed_sql,
             params,
             fetched_data,
             column_names,
@@ -512,6 +543,7 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
 
 
 _INSERT_TARGET_CACHE_SIZE: Final[int] = 512
+_ROWID_ELIGIBILITY_CACHE_SIZE: Final[int] = 512
 _INSERT_TARGET_CACHE: "dict[int, tuple[Any, tuple[str | None, str] | None]]" = {}
 _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
     "query_only",

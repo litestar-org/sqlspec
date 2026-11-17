@@ -12,6 +12,7 @@ from sqlspec.storage.errors import execute_sync_storage_operation
 from sqlspec.storage.registry import storage_registry
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.module_loader import import_optional, import_optional_attr
+from sqlspec.utils.uuids import uuid4
 from tests.fixtures.rustfs import rustfs_fsspec_kwargs, rustfs_obstore_kwargs
 
 if TYPE_CHECKING:
@@ -249,6 +250,44 @@ def test_fsspec_s3_copy_move_operations(fsspec_s3_backend: "ObjectStoreProtocol"
     assert not fsspec_s3_backend.exists_sync(move_source_path)
     assert fsspec_s3_backend.exists_sync(move_dest_path)
     assert fsspec_s3_backend.read_text_sync(move_dest_path) == TEST_TEXT_CONTENT
+
+
+@pytest.mark.xdist_group("rustfs")
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_fsspec_s3_glob_characters_in_keys_are_literal(fsspec_s3_backend: "ObjectStoreProtocol") -> None:
+    """FSSpec S3 copy, move, and delete act on the literal key and leave glob-matching siblings alone."""
+    root = f"glob_literal_{uuid4().hex}"
+    siblings = {
+        f"{root}/t/a.bin": b"sibling-a",
+        f"{root}/t/b.bin": b"sibling-b",
+        f"{root}/tenants/one/data.bin": b"one",
+        f"{root}/tenants/two/nested/data.bin": b"two",
+    }
+    for sibling_path, sibling_content in siblings.items():
+        fsspec_s3_backend.write_bytes_sync(sibling_path, sibling_content)
+    literal_key = f"{root}/t/[ab].bin"
+    fsspec_s3_backend.write_bytes_sync(literal_key, b"literal")
+    fsspec_s3_backend.write_bytes_sync(f"{root}/tenants/*/data.bin", b"star")
+    fsspec_s3_backend.write_bytes_sync(f"{root}/tenants/*/nested/data.bin", b"star-nested")
+
+    try:
+        fsspec_s3_backend.copy_sync(literal_key, f"{root}/out/copy.bin")
+        assert fsspec_s3_backend.read_bytes_sync(f"{root}/out/copy.bin") == b"literal"
+        assert len(fsspec_s3_backend.list_objects_sync(f"{root}/out/")) == 1
+
+        fsspec_s3_backend.move_sync(literal_key, f"{root}/out/moved.bin")
+        assert fsspec_s3_backend.read_bytes_sync(f"{root}/out/moved.bin") == b"literal"
+        assert not fsspec_s3_backend.exists_sync(literal_key)
+
+        fsspec_s3_backend.write_bytes_sync(literal_key, b"literal")
+        fsspec_s3_backend.delete_sync(literal_key)
+        assert not fsspec_s3_backend.exists_sync(literal_key)
+
+        fsspec_s3_backend.delete_sync(f"{root}/tenants/*", recursive=True)
+        assert len(fsspec_s3_backend.list_objects_sync(f"{root}/tenants/")) == 2
+        assert {path: fsspec_s3_backend.read_bytes_sync(path) for path in siblings} == siblings
+    finally:
+        fsspec_s3_backend.delete_sync(root, recursive=True)
 
 
 @pytest.mark.xdist_group("rustfs")

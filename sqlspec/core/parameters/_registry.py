@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import sqlspec.exceptions
 from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyleConfig
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.exceptions import with_cause
+from sqlspec.utils.serializers._json import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -42,7 +43,7 @@ def get_driver_profile(adapter_key: str) -> "DriverParameterProfile":
         return DRIVER_PARAMETER_PROFILES[key]
     except KeyError as exc:
         msg = f"No driver parameter profile registered for adapter '{adapter_key}'."
-        raise sqlspec.exceptions.ImproperConfigurationError(msg) from exc
+        raise with_cause(sqlspec.exceptions.ImproperConfigurationError(msg), exc) from exc
 
 
 def register_driver_profile(

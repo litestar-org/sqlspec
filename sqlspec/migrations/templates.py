@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, with_cause
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -256,10 +256,10 @@ def _format_template(template: str, context: "Mapping[str, str]", template_kind:
     except KeyError as exc:  # pragma: no cover
         missing = str(exc).strip("'")
         msg = f"Missing template variable '{missing}' in {template_kind} template"
-        raise TemplateValidationError(msg) from exc
+        raise with_cause(TemplateValidationError(msg), exc) from exc
     except ValueError as exc:  # pragma: no cover
         msg = f"Invalid {template_kind} template fragment: {exc}"
-        raise TemplateValidationError(msg) from exc
+        raise with_cause(TemplateValidationError(msg), exc) from exc
 
 
 _HEADER_UNSAFE_PATTERN: Final[re.Pattern[str]] = re.compile("[\x01-\x1f\x7f-\x9f\u2028\u2029]+")

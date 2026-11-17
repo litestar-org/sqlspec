@@ -6,6 +6,7 @@ parameter binding and validation.
 
 from typing import TYPE_CHECKING, Any, Final, Self
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder
@@ -13,8 +14,8 @@ from sqlspec.builder._dml import InsertFromSelectMixin, InsertIntoClauseMixin, I
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import resolve_value_expression
 from sqlspec.core.query_modifiers import parse_column_for_condition
-from sqlspec.exceptions import SQLBuilderError, SQLSpecError
-from sqlspec.utils.serializers import schema_dump, serialize_collection
+from sqlspec.exceptions import SQLBuilderError, SQLSpecError, with_cause
+from sqlspec.utils.serializers._schema import schema_dump, serialize_collection
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -27,6 +28,7 @@ ERR_MSG_INTERNAL_EXPRESSION_TYPE: Final[str] = "Internal error: expression is no
 ERR_MSG_EXPRESSION_NOT_INITIALIZED: Final[str] = "Internal error: base expression not initialized."
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Insert(
     QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin, ExplainMixin
 ):
@@ -277,7 +279,7 @@ class ConflictBuilder:
                 try:
                     keys.append(parse_column_for_condition(col))
                 except SQLSpecError as exc:
-                    raise SQLBuilderError(str(exc)) from exc
+                    raise with_cause(SQLBuilderError(str(exc)), exc) from exc
             else:
                 keys.append(exp.to_identifier(col))
         return keys
@@ -294,7 +296,7 @@ def _build_conflict_set_expressions(builder: "Insert", kwargs: dict[str, Any]) -
         try:
             target = parse_column_for_condition(col)
         except SQLSpecError as exc:
-            raise SQLBuilderError(str(exc)) from exc
+            raise with_cause(SQLBuilderError(str(exc)), exc) from exc
         leaf_name = col.rsplit(".", maxsplit=1)[-1]
         value_expr = resolve_value_expression(val, builder, leaf_name)
         if value_expr is None:

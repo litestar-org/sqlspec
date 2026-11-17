@@ -5,6 +5,7 @@ import os
 import threading
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 import pytest
 
@@ -159,7 +160,7 @@ async def test_rustfs_s3_obstore_create_only_stream(
     assert plain_backend.supports_direct_arrow_write("parquet", overwrite=False) is False
     if PYARROW_INSTALLED and pyarrow is not None:
         tbl = pyarrow.table({"id": [1, 2]})
-        plain_key = "streaming/rustfs_obstore_plain_once/table.parquet"
+        plain_key = f"streaming/rustfs_obstore_plain_once/{uuid4().hex}/table.parquet"
         plain_backend.write_arrow_sync(plain_key, tbl, overwrite=False)
         with pytest.raises(FileExistsInStorageError):
             plain_backend.write_arrow_sync(plain_key, tbl, overwrite=False)
@@ -324,6 +325,7 @@ async def test_azurite_fsspec_direct_stream_abort_and_create_only(
 
 async def _assert_fsspec_direct_streaming(backend: "FSSpecBackend", prefix: str, abort_probe: "list[bool]") -> None:
     """Assert multipart success, abort, cancellation, and create-only conflict for one backend."""
+    prefix = f"{prefix}/{uuid4().hex}"
     block_size = 5_242_880
     payload_12mb = os.urandom(12 * 1024 * 1024)
     chunks = [payload_12mb[i : i + 1_048_576] for i in range(0, len(payload_12mb), 1_048_576)]
@@ -406,6 +408,7 @@ async def _assert_fsspec_direct_streaming(backend: "FSSpecBackend", prefix: str,
 
 async def _assert_obstore_create_only_stream(backend: "ObStoreBackend", prefix: str) -> None:
     """Assert 12 MiB staged create-only streaming, conflict rejection, and stage cleanup on ObStoreBackend."""
+    prefix = f"{prefix}/{uuid4().hex}"
     assert backend.supports_direct_arrow_write("parquet", overwrite=False) is True
 
     payload_12mb = os.urandom(12 * 1024 * 1024)
@@ -582,13 +585,14 @@ async def _assert_pipeline_direct_arrow_streaming(
     assert not await backend.exists_async(f"{prefix}/cancel_fresh.parquet")
 
     if check_overwrite_false_conflict:
-        once_dest = f"alias://{alias_name}/{prefix}/once.parquet"
+        once_key = f"{prefix}/once_{uuid4().hex}.parquet"
+        once_dest = f"alias://{alias_name}/{once_key}"
         sync_pipeline.write_arrow(v1, once_dest, overwrite=False)
         with pytest.raises(FileExistsInStorageError):
             sync_pipeline.write_arrow(v1, once_dest, overwrite=False)
         with pytest.raises(FileExistsInStorageError):
             await async_pipeline.write_arrow(v1, once_dest, overwrite=False)
-        assert backend.read_arrow_sync(f"{prefix}/once.parquet").equals(v1)
+        assert backend.read_arrow_sync(once_key).equals(v1)
 
     if check_multipart_12mb:
         random_chunks = [os.urandom(1024 * 1024) for _ in range(12)]

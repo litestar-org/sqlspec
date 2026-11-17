@@ -13,7 +13,7 @@ import queue
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, TypeVar, cast
 
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, with_cause
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -166,7 +166,7 @@ class PortalProvider:
             if future_holder:
                 future_holder[0].cancel()
             msg = f"Portal call timed out after {timeout} seconds"
-            raise ImproperConfigurationError(msg) from None
+            raise with_cause(ImproperConfigurationError(msg), None) from None
 
         if exception is not None:
             raise exception

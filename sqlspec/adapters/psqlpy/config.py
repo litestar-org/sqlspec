@@ -504,11 +504,13 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         return PsqlpySessionContext(
             acquire_connection=factory.acquire_connection,
             release_connection=factory.release_connection,
-            statement_config=statement_config
-            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
+            statement_config=statement_config or self._default_runtime_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
+
+    def _default_runtime_statement_config(self) -> "StatementConfig":
+        return resolve_runtime_statement_config(None, self.statement_config, default_statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide async pool instance.

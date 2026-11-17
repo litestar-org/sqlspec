@@ -16,7 +16,7 @@ from sqlspec.utils.tenant._postgres import PostgresTenantSettings, pyformat_bind
 if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_psycopg._typing import CockroachAsyncConnection, CockroachSyncConnection
     from sqlspec.core.tenant.base import AsyncTenantStrategy, SyncTenantStrategy
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 __all__ = (
     "CockroachPsycopgAsyncRLSStrategy",

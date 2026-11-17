@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, with_cause
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateValidationError, build_template_settings
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger
@@ -386,7 +386,7 @@ def _resolve_migrations_spec(ext_name: str, spec: str) -> "Path":
             f"which could not be imported ({exc}); correct "
             f"extension_config['{ext_name}']['migrations_path'] or install the package."
         )
-        raise MigrationError(msg) from exc
+        raise with_cause(MigrationError(msg), exc) from exc
 
     return module_path / subdir if subdir else module_path
 
@@ -479,7 +479,7 @@ def _resolve_author_callable(import_path: str, config: "DatabaseConfigProtocol[A
         result_value: object = candidate() if param_count == 0 else candidate(config)
     except Exception as exc:  # pragma: no cover
         msg = f"Author callable '{import_path}' raised an error: {exc}"
-        raise TemplateValidationError(msg) from exc
+        raise with_cause(TemplateValidationError(msg), exc) from exc
     result_str: str = str(result_value)
     return result_str
 

@@ -18,6 +18,8 @@ import copy
 import importlib.util
 import logging
 import pickle
+from dataclasses import dataclass
+from functools import partial
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -2088,4 +2090,26 @@ def test_statement_config_precomputes_uncacheable_transformers() -> None:
             parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, ast_transformer=ast_transformer)
         )._has_uncacheable_transformers
         is True
+    )
+
+
+class _DefaultHashTransformer:
+    def transform(self, sql: str, params: Any) -> tuple[str, Any]:
+        return sql, params
+
+
+@dataclass(frozen=True)
+class _ValueHashTransformer:
+    tag: str
+
+    def transform(self, sql: str, params: Any) -> tuple[str, Any]:
+        return f"{sql} {self.tag}", params
+
+
+def test_statement_config_blocks_bound_method_on_default_hash_and_partial() -> None:
+    """Bound methods of default-hashed instances and functools.partial are treated as uncacheable."""
+    assert StatementConfig(output_transformer=_DefaultHashTransformer().transform)._has_uncacheable_transformers is True
+    assert StatementConfig(output_transformer=partial(_static_output_transformer))._has_uncacheable_transformers is True
+    assert (
+        StatementConfig(output_transformer=_ValueHashTransformer("v1").transform)._has_uncacheable_transformers is False
     )

@@ -4,7 +4,12 @@ import errno
 import logging
 from typing import TYPE_CHECKING, NoReturn, TypeVar
 
-from sqlspec.exceptions import FileExistsInStorageError, FileNotFoundInStorageError, StorageOperationFailedError
+from sqlspec.exceptions import (
+    FileExistsInStorageError,
+    FileNotFoundInStorageError,
+    StorageOperationFailedError,
+    with_cause,
+)
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -56,14 +61,14 @@ def raise_storage_error(error: Exception, *, backend: str, operation: str, path:
 
     if is_missing:
         log_with_context(logger, logging.INFO, "storage.object.missing", **log_extra)
-        raise FileNotFoundInStorageError(normalized.message) from error
+        raise with_cause(FileNotFoundInStorageError(normalized.message), error) from error
 
     if is_exists:
         log_with_context(logger, logging.INFO, "storage.object.exists", **log_extra)
-        raise FileExistsInStorageError(normalized.message) from error
+        raise with_cause(FileExistsInStorageError(normalized.message), error) from error
 
     log_with_context(logger, logging.WARNING, "storage.operation.failed", **log_extra)
-    raise StorageOperationFailedError(normalized.message) from error
+    raise with_cause(StorageOperationFailedError(normalized.message), error) from error
 
 
 def execute_sync_storage_operation(func: "Callable[[], T]", *, backend: str, operation: str, path: str | None) -> T:

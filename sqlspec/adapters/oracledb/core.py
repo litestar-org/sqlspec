@@ -23,22 +23,17 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
-    StackResult,
-    StatementConfig,
-    build_statement_config_from_profile,
-    create_sql_result,
-)
-from sqlspec.core.result._base import DMLResult, SQLResult
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
+from sqlspec.core.result._base import DMLResult, SQLResult, StackResult, create_sql_result
 from sqlspec.core.sqlcommenter import SQLCommenterContext, format_wire_sqlcomment, strip_sqlcomment
-from sqlspec.data_dictionary.dialects.oracle import (
+from sqlspec.core.statement import StatementConfig
+from sqlspec.data_dictionary.dialects.oracle.config import (
     ORACLE_JSON_STORAGE_NATIVE,
     parse_oracle_version_components,
     resolve_oracle_json_storage,
 )
-from sqlspec.driver import rows_to_dicts
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -60,12 +55,13 @@ from sqlspec.exceptions import (
     SQLSpecError,
     TransactionError,
     UniqueViolationError,
+    with_cause,
 )
-from sqlspec.observability import get_trace_context, get_w3c_trace_context
+from sqlspec.observability._common import get_trace_context, get_w3c_trace_context
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import import_optional
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
@@ -79,9 +75,9 @@ if TYPE_CHECKING:
         OracleSyncConnection,
         OracleSyncRawCursor,
     )
-    from sqlspec.core import SQL
     from sqlspec.core.cache import CachedQuery
-    from sqlspec.driver import AsyncExceptionHandler, SyncExceptionHandler
+    from sqlspec.core.statement import SQL
+    from sqlspec.driver._common import AsyncExceptionHandler, SyncExceptionHandler
 
 
 __all__ = (
@@ -888,7 +884,7 @@ def apply_end_user_security_checkout(connection: Any, config: OracleEndUserSecur
         )
         connection.set_end_user_security_context(context)
     except oracledb_module.DatabaseError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 def clear_end_user_security_release(connection: Any) -> None:
@@ -896,7 +892,7 @@ def clear_end_user_security_release(connection: Any) -> None:
     try:
         connection.clear_end_user_security_context()
     except oracledb_module.DatabaseError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 _INITIAL_SCHEMA_BY_CONN_ID: dict[int, str] = {}
@@ -3042,7 +3038,9 @@ def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") 
     if resolved.retry_delay is not None:
         desc_parts.append(f"(RETRY_DELAY={resolved.retry_delay})")
     if resolved.transport_connect_timeout is not None:
-        desc_parts.append(f"(TRANSPORT_CONNECT_TIMEOUT={resolved.transport_connect_timeout})")
+        timeout = resolved.transport_connect_timeout
+        formatted_timeout = str(int(timeout)) if isinstance(timeout, float) and timeout.is_integer() else str(timeout)
+        desc_parts.append(f"(TRANSPORT_CONNECT_TIMEOUT={formatted_timeout})")
 
     for endpoints in resolved.address_lists or (resolved.endpoints,):
         addr_parts: list[str] = []
@@ -3127,7 +3125,7 @@ def execute_session_checkout_sync(
                 if plsql is not None:
                     cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
     except oracledb_module.DatabaseError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 def execute_session_release_sync(connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]) -> None:
@@ -3142,7 +3140,7 @@ def execute_session_release_sync(connection: Any, config: OracleSessionContextCo
         if deferred is not None:
             deferred()
     except oracledb_module.DatabaseError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 async def execute_session_checkout_async(
@@ -3167,7 +3165,7 @@ async def execute_session_checkout_async(
                 if plsql is not None:
                     await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
     except oracledb_module.DatabaseError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 async def execute_session_release_async(
@@ -3184,7 +3182,7 @@ async def execute_session_release_async(
         if deferred is not None:
             deferred()
     except oracledb_module.DatabaseError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 def sanitize_oracle_text_query(raw_query: str, *, operator: str = "ACCUM") -> str:
@@ -3468,7 +3466,7 @@ def apply_oracle_transaction_priority(connection: Any, priority: Any) -> None:
             if not has_oracle_transaction_priority(connection, resolved):
                 connection.transaction_priority = resolved
         except oracledb_module.Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 class OracleAcquireOptions:
@@ -4513,7 +4511,7 @@ def _write_private_wallet_file(target_path: Path, data: bytes) -> None:
     except OSError as exc:
         if target_path.is_symlink():
             msg = f"Unsafe symlink for Oracle wallet file: {target_path.name!r}"
-            raise ImproperConfigurationError(msg) from exc
+            raise with_cause(ImproperConfigurationError(msg), exc) from exc
         raise
     try:
         fchmod = getattr(os, "fchmod", None)
@@ -4542,7 +4540,7 @@ def _convert_p12_to_pem_bytes(p12_bytes: bytes, wallet_password: "str | bytes | 
                 parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, b"")
             except (ValueError, TypeError) as exc:
                 msg = "Oracle wallet contains encrypted 'ewallet.p12'; provide a valid 'wallet_password'"
-                raise ImproperConfigurationError(msg) from exc
+                raise with_cause(ImproperConfigurationError(msg), exc) from exc
     else:
         pw_bytes = wallet_password.encode("utf-8") if isinstance(wallet_password, str) else bytes(wallet_password)
         try:
@@ -4553,10 +4551,10 @@ def _convert_p12_to_pem_bytes(p12_bytes: bytes, wallet_password: "str | bytes | 
                     parsed_bundle = pkcs12_mod.load_key_and_certificates(p12_bytes, None)
                 except (ValueError, TypeError) as inner_exc:
                     msg = "Failed to decrypt Oracle 'ewallet.p12' with the provided 'wallet_password'"
-                    raise ImproperConfigurationError(msg) from inner_exc
+                    raise with_cause(ImproperConfigurationError(msg), inner_exc) from inner_exc
             else:
                 msg = "Failed to decrypt Oracle 'ewallet.p12' with the provided 'wallet_password'"
-                raise ImproperConfigurationError(msg) from exc
+                raise with_cause(ImproperConfigurationError(msg), exc) from exc
 
     private_key, certificate, additional_certs = parsed_bundle
     if private_key is None and certificate is None:
@@ -4702,7 +4700,7 @@ def _extract_wallet_bytes_into(
                     _write_private_wallet_file(dest_path, src_file.read())
     except zipfile.BadZipFile as exc:
         msg = f"Invalid Oracle wallet zip archive: {exc}"
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
 
     _ensure_wallet_pem(extract_dir, wallet_password=wallet_password)
     if not (extract_dir / "ewallet.pem").is_file() and not (extract_dir / "tnsnames.ora").is_file():

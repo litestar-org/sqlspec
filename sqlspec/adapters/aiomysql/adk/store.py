@@ -89,6 +89,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
+        await self.reconcile_schema(assume_existing=True)
 
     async def reconcile_companion_objects_async(self, driver: Any) -> None:
         """Reconcile legacy column collations and missing session/event secondary indexes."""
@@ -770,6 +771,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
 
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._memory_table_ddl())
+        await self.reconcile_schema(assume_existing=True)
 
     async def reconcile_companion_objects_async(self, driver: Any) -> None:
         """Reconcile legacy memory identity collations and missing ordinary/FULLTEXT indexes."""

@@ -143,32 +143,30 @@ jobs:
             PGO_DIR=/tmp/sqlspec-pgo &&
             BUILD_DIR=/tmp/sqlspec-mypyc-build &&
             mkdir -p "$PGO_DIR" "$BUILD_DIR" &&
-            CFLAGS="-fprofile-generate=$PGO_DIR"
+            CFLAGS="-DNDEBUG -fno-strict-overflow -fno-semantic-interposition -fprofile-generate=$PGO_DIR"
+            LDFLAGS="-Wl,-Bsymbolic-functions"
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
             pip install --no-build-isolation --no-deps "{package}" &&
             pip install --require-hashes -r "{project}/.build-requirements/pgo.txt" &&
-            python "{project}/tools/scripts/pgo_training.py" &&
+            PYTHONSAFEPATH=1 python "{project}/tools/scripts/pgo_training.py" --strict &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 
           CIBW_ENVIRONMENT_LINUX: >-
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR=/tmp/sqlspec-mypyc-build
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
-            CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+            CFLAGS="-DNDEBUG -fno-strict-overflow -fno-semantic-interposition -flto=auto -fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+            LDFLAGS="-Wl,-Bsymbolic-functions -flto=auto"
 
           # ── macOS (Clang): plain mypyc, no PGO ──
           CIBW_ENVIRONMENT_MACOS: >-
             HATCH_BUILD_HOOKS_ENABLE=1
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
 
           # ── Windows (MSVC): plain mypyc, no PGO ──
           CIBW_ENVIRONMENT_WINDOWS: >-
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR=C:/b
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -184,7 +182,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
-        python-version: ["3.11", "3.13", "3.14", "3.15"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -223,7 +221,7 @@ jobs:
         shell: bash
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
-        run: uv run --no-project --python "$PYTHON_VERSION" python tools/scripts/export_hashed_requirements.py --profile runtime --profile smoke --output-dir .build-requirements
+        run: uv run --no-project --python "$PYTHON_VERSION" python tools/scripts/export_hashed_requirements.py --profile runtime --profile smoke --profile drivers --profile drivers-db2 --profile drivers-sqlanywhere --profile drivers-sqlanywhere-build --output-dir .build-requirements
 
       - name: Download standard wheel artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -242,6 +240,10 @@ jobs:
       # missing host wheel fails loudly instead of silently grabbing a stale
       # PyPI release. Core and smoke dependencies use hash-pinned requirements.
       # The version assert catches drift between pyproject.toml and the wheel.
+      # Linux also installs the hash-pinned driver SDK profiles so the smoke run
+      # imports those compiled adapter drivers instead of skipping them. sqlanydb
+      # ships only as a source distribution, so it builds with a hash-pinned
+      # backend; ibm_db ships Linux wheels for x86_64 only.
       - name: Test standard wheel installation
         shell: bash
         env:
@@ -268,7 +270,22 @@ jobs:
           else
             echo "::warning::obstore or pyarrow binary wheel unavailable for Python ${PYTHON_VERSION}; the obstore smoke check will be skipped"
           fi
-          uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py --require-compiled
+          smoke_args=(--require-compiled)
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            uv pip install --no-config --python test-mypyc --require-hashes --only-binary :all: -r .build-requirements/drivers.txt
+            uv pip install --no-config --python test-mypyc --require-hashes --build-constraints .build-requirements/drivers-sqlanywhere-build.txt -r .build-requirements/drivers-sqlanywhere.txt
+            smoke_args+=(--require-sdk-profile)
+            if [ "$RUNNER_ARCH" = "X64" ]; then
+              grep -v '^[[:space:]]*--hash=' .build-requirements/drivers-db2.txt | sed -e 's/[[:space:]]*\\$//' > .build-requirements/drivers-db2-specs.txt
+              if uv pip install --no-config --python test-mypyc --dry-run --only-binary :all: -r .build-requirements/drivers-db2-specs.txt; then
+                uv pip install --no-config --python test-mypyc --require-hashes --only-binary :all: -r .build-requirements/drivers-db2.txt
+                smoke_args+=(--require-sdk ibm_db --require-sdk ibm_db_dbi)
+              else
+                echo "::warning::ibm_db binary wheel unavailable for Python ${PYTHON_VERSION}; the Db2 driver smoke check will be skipped"
+              fi
+            fi
+          fi
+          uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py "${smoke_args[@]}"
 
   publish-release:
     name: Publish to PyPI

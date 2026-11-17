@@ -7,7 +7,7 @@ import inspect
 import operator
 import sqlite3
 import types
-from collections.abc import AsyncIterator, Generator, Iterator
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -759,7 +759,7 @@ def _build_litestar_renewal_config(mode: str, executed: "list[str]") -> Any:
                 executed.append(_decode_sql(sql))
 
         @asynccontextmanager
-        async def provide_async_fetch(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+        async def provide_async_fetch(*_a: Any, **_kw: Any) -> AsyncGenerator[Any, None]:
             yield _AsyncFetchConn()
 
         return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_async_fetch)
@@ -781,7 +781,7 @@ def _build_litestar_renewal_config(mode: str, executed: "list[str]") -> Any:
                 return None
 
         @asynccontextmanager
-        async def provide_async_cursor(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+        async def provide_async_cursor(*_a: Any, **_kw: Any) -> AsyncGenerator[Any, None]:
             yield _AsyncCursorConn()
 
         return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_async_cursor)
@@ -806,7 +806,7 @@ def _build_litestar_renewal_config(mode: str, executed: "list[str]") -> Any:
                 return None
 
         @contextmanager
-        def provide_sync_cursor(*_a: Any, **_kw: Any) -> Iterator[Any]:
+        def provide_sync_cursor(*_a: Any, **_kw: Any) -> Generator[Any, None, None]:
             yield _SyncCursorConn()
 
         return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_sync_cursor)
@@ -825,7 +825,7 @@ def _build_litestar_renewal_config(mode: str, executed: "list[str]") -> Any:
                 return None
 
         @contextmanager
-        def provide_direct_sync(*_a: Any, **_kw: Any) -> Iterator[Any]:
+        def provide_direct_sync(*_a: Any, **_kw: Any) -> Generator[Any, None, None]:
             yield _DirectSyncConn()
 
         return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_direct_sync)
@@ -842,7 +842,7 @@ def _build_litestar_renewal_config(mode: str, executed: "list[str]") -> Any:
                 return None
 
         @asynccontextmanager
-        async def provide_aiosqlite(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+        async def provide_aiosqlite(*_a: Any, **_kw: Any) -> AsyncGenerator[Any, None]:
             yield _AiosqliteConn()
 
         return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_aiosqlite)
@@ -861,7 +861,7 @@ def _build_litestar_renewal_config(mode: str, executed: "list[str]") -> Any:
                 return None
 
         @asynccontextmanager
-        async def provide_async_session(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+        async def provide_async_session(*_a: Any, **_kw: Any) -> AsyncGenerator[Any, None]:
             yield _AsyncDriver()
 
         return SimpleNamespace(extension_config={"litestar": {}}, provide_session=provide_async_session)
@@ -888,7 +888,7 @@ def _build_litestar_renewal_config(mode: str, executed: "list[str]") -> Any:
             return None
 
     @contextmanager
-    def provide_sync_session(*_a: Any, **_kw: Any) -> Iterator[Any]:
+    def provide_sync_session(*_a: Any, **_kw: Any) -> Generator[Any, None, None]:
         yield _SyncDriver()
 
     return SimpleNamespace(

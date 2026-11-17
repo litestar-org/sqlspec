@@ -63,6 +63,7 @@ def test_sqlstate_attribute_mapping(sqlstate: str, expected_type: type[SQLSpecEr
     mapped = create_mapped_exception(exc)
     assert isinstance(mapped, expected_type)
     assert sqlstate in str(mapped)
+    assert mapped.__cause__ is exc
 
 
 @pytest.mark.parametrize(

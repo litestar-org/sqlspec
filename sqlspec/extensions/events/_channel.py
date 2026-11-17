@@ -24,10 +24,12 @@ from sqlspec.utils.type_guards import has_span_attribute
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
     from sqlspec.extensions.events._hints import EventRuntimeHints
     from sqlspec.extensions.events._protocols import AsyncEventHandler, SyncEventHandler
-    from sqlspec.observability import ObservabilityRuntime
+    from sqlspec.observability._runtime import ObservabilityRuntime
 
 __all__ = (
     "AsyncEventChannel",
@@ -963,7 +965,7 @@ def _event_span(
     *,
     mode: str = "sync",
     result: str,
-) -> "Iterator[Any]":
+) -> "Generator[Any, None, None]":
     """Manage an observability span around one event operation.
 
     Starts a span, ends it with ``error`` when the wrapped operation raises,

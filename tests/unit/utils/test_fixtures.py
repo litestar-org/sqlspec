@@ -3333,3 +3333,55 @@ def test_postgres_fixture_insert_statement_casts_json_placeholders_via_text(json
     assert sql_text == (
         f'INSERT INTO "events" ("id", "payload") VALUES (%(id)s, CAST(CAST(%(payload)s AS TEXT) AS {expected_cast}))'
     )
+
+
+def test_fixture_insert_sanitizes_placeholder_names_for_special_columns() -> None:
+    """Fixture INSERT builder sanitizes columns containing spaces or punctuation while remapping row dicts."""
+    columns = [
+        fixture_module._TableColumn(
+            name="first name",
+            data_type="text",
+            is_primary=False,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+        fixture_module._TableColumn(
+            name="first-name",
+            data_type="text",
+            is_primary=False,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+    ]
+    sql_text = fixture_module._table_insert_statement(
+        "sqlite", "sqlite", "users", ["first name", "first-name"], (), columns
+    )
+    assert ":first_name" in sql_text
+    assert ":first_name_2" in sql_text
+
+    recorded: list[tuple[str, Any]] = []
+
+    class _FakeDriver:
+        def execute(self, *_args: Any) -> None:
+            return None
+
+        def execute_many(self, stmt: str, batch: list[dict[str, Any]]) -> None:
+            recorded.append((stmt, batch))
+
+    count = fixture_module._insert_table_rows_sync(
+        cast("Any", _FakeDriver()),
+        "sqlite",
+        "sqlite",
+        "users",
+        [{"first name": "Ada", "first-name": "Lovelace"}],
+        columns,
+        (),
+        set(),
+        10,
+    )
+    assert count == 1
+    assert recorded[0][1] == [{"first_name": "Ada", "first_name_2": "Lovelace"}]

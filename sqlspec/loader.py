@@ -20,7 +20,10 @@ from urllib.parse import unquote, urlparse
 
 from sqlglot import exp
 
-from sqlspec.core import SQL, ParameterDeclaration, ParameterValidator, get_cache, get_cache_config
+from sqlspec.core.cache import get_cache, get_cache_config
+from sqlspec.core.parameters._declared import ParameterDeclaration
+from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import (
     FileNotFoundInStorageError,
     SQLFileNotFoundError,
@@ -29,6 +32,7 @@ from sqlspec.exceptions import (
     SQLSlotError,
     SQLStatementNotFoundError,
     StorageOperationFailedError,
+    with_cause,
 )
 from sqlspec.storage.registry import storage_registry as default_storage_registry
 from sqlspec.utils.correlation import CorrelationContext
@@ -38,7 +42,7 @@ from sqlspec.utils.text import slugify
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.observability import ObservabilityRuntime
+    from sqlspec.observability._runtime import ObservabilityRuntime
     from sqlspec.storage.registry import StorageRegistry
 
 __all__ = (
@@ -629,7 +633,7 @@ class SQLFileLoader:
         try:
             sql.compile()
         except Exception as exc:
-            raise SQLFileParseError(name=name, path="<statement>", original_error=exc) from exc
+            raise with_cause(SQLFileParseError(name=name, path="<statement>", original_error=exc), exc) from exc
         if slot_parameters:
             return SQL(sql, slot_parameters, dialect=sqlglot_dialect, declared_parameters=parsed_statement.parameters)
         if not slots:
@@ -691,7 +695,7 @@ class SQLFileLoader:
         try:
             return self._compute_checksum(self._read_file_content(path))
         except Exception as e:
-            raise SQLFileParseError(str(path), str(path), e) from e
+            raise with_cause(SQLFileParseError(str(path), str(path), e), e) from e
 
     def _is_file_unchanged(self, path: str | Path, cached_file: SQLFile) -> bool:
         """Check if file has changed since caching.
@@ -810,15 +814,15 @@ class SQLFileLoader:
 
             return backend.read_text_sync(path_str, encoding=self.encoding)
         except KeyError as e:
-            raise SQLFileNotFoundError(path_str) from e
+            raise with_cause(SQLFileNotFoundError(path_str), e) from e
         except FileNotFoundInStorageError as e:
-            raise SQLFileNotFoundError(path_str) from e
+            raise with_cause(SQLFileNotFoundError(path_str), e) from e
         except FileNotFoundError as e:
-            raise SQLFileNotFoundError(path_str) from e
+            raise with_cause(SQLFileNotFoundError(path_str), e) from e
         except StorageOperationFailedError as e:
-            raise SQLFileParseError(path_str, path_str, e) from e
+            raise with_cause(SQLFileParseError(path_str, path_str, e), e) from e
         except Exception as e:
-            raise SQLFileParseError(path_str, path_str, e) from e
+            raise with_cause(SQLFileParseError(path_str, path_str, e), e) from e
 
     @staticmethod
     def _strip_leading_comments(sql_text: str) -> str:

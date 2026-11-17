@@ -29,9 +29,9 @@ from sqlspec.builder._parsing_utils import (
     _truthy_metadata_flag,
     parse_order_expression,
 )
-from sqlspec.core import SQL
 from sqlspec.core.splitter import contains_statement_terminator
-from sqlspec.data_dictionary import (
+from sqlspec.core.statement import SQL
+from sqlspec.data_dictionary._types import (
     DDLResult,
     ForeignKeyMetadata,
     MetadataFidelity,
@@ -39,7 +39,7 @@ from sqlspec.data_dictionary import (
     MetadataSupport,
     ObjectIdentity,
 )
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.exceptions import SQLBuilderError, with_cause
 from sqlspec.utils.arrow_helpers import sql_type_for_category, sql_type_from_arrow_type
 from sqlspec.utils.type_guards import has_sqlglot_expression
 
@@ -468,6 +468,7 @@ def build_constraint_expression(
     return None
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class DDLBuilder(QueryBuilder):
     """Base class for DDL builders (CREATE, DROP, ALTER, etc)."""
 
@@ -542,6 +543,7 @@ class DDLBuilder(QueryBuilder):
         return select_expr
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class _IfExistsDDLMixin:
     __slots__ = ()
@@ -553,6 +555,7 @@ class _IfExistsDDLMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class _CascadeRestrictDDLMixin:
     __slots__ = ()
@@ -568,6 +571,7 @@ class _CascadeRestrictDDLMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class _IfNotExistsDDLMixin:
     __slots__ = ()
@@ -4463,7 +4467,7 @@ def _parse_ddl_expression(text: str, *, label: str, dialect: "DialectType | None
         statements = sqlglot.parse(text, read=norm_dialect)
     except (ParseError, TokenError) as exc:
         msg = f"Invalid {label}: {text!r}"
-        raise SQLBuilderError(msg) from exc
+        raise with_cause(SQLBuilderError(msg), exc) from exc
     if len(statements) != 1 or statements[0] is None:
         msg = f"Invalid {label}: {text!r}"
         raise SQLBuilderError(msg)
@@ -4494,6 +4498,6 @@ def _coerce_int_argument(value: Any, *, name: str) -> int:
                 return int(stripped)
             except ValueError as exc:
                 msg = f"{name} must be an integer, got {value!r}"
-                raise SQLBuilderError(msg) from exc
+                raise with_cause(SQLBuilderError(msg), exc) from exc
     msg = f"{name} must be an integer, got {type(value).__name__}"
     raise SQLBuilderError(msg)

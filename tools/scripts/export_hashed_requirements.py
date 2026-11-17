@@ -34,19 +34,40 @@ REQUIREMENT_PROFILES: dict[str, tuple[str, ...]] = {
     "runtime": ("typing-extensions", "sqlglot", "mypy-extensions", "rich-click"),
     "build": ("hatch-mypyc", "hatchling", "typing-extensions", "sqlglot", "mypy-extensions", "rich-click"),
     "pgo": ("anyio", "pyarrow", "aiosqlite", "duckdb", "adbc-driver-sqlite", "adbc-driver-manager"),
-    "pgo-validate": (
-        "anyio",
-        "pyarrow",
-        "oracledb",
-        "asyncpg",
-        "aiosqlite",
-        "duckdb",
-        "adbc-driver-sqlite",
-        "adbc-driver-manager",
-    ),
     "test": ("aiosqlite", "pymssql", "cloud-sql-python-connector", "google-cloud-alloydb-connector"),
     "smoke": ("obstore", "pyarrow"),
+    "drivers": (
+        "adbc-driver-manager",
+        "adbc-driver-postgresql",
+        "adbc-driver-sqlite",
+        "aiomysql",
+        "aiosqlite",
+        "asyncmy",
+        "asyncpg",
+        "duckdb",
+        "google-cloud-bigquery",
+        "google-cloud-spanner",
+        "mssql-python",
+        "mysql-connector-python",
+        "oracledb",
+        "psqlpy",
+        "psycopg",
+        "psycopg-binary",
+        "psycopg-pool",
+        "pyarrow",
+        "pymssql",
+        "pymysql",
+    ),
+    "drivers-db2": ("ibm-db",),
+    "drivers-sqlanywhere": ("sqlanydb",),
+    "drivers-sqlanywhere-build": ("setuptools",),
 }
+"""Root distributions exported per requirement profile.
+
+``drivers`` holds SDKs with a binary wheel for every Linux wheel-test target. ``ibm-db`` ships Linux
+wheels for x86_64 only, so it has its own profile. ``sqlanydb`` ships as a source distribution, so it
+has its own profile and ``drivers-sqlanywhere-build`` pins the backend that builds it.
+"""
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,7 +3,7 @@
 import asyncio
 import inspect
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Self, cast
@@ -417,7 +417,7 @@ class SQLSpecSessionService(BaseSessionService):
         return trimmed_event
 
     @asynccontextmanager
-    async def _with_session_lock(self, *, app_name: str, user_id: str, session_id: str) -> AsyncIterator[None]:
+    async def _with_session_lock(self, *, app_name: str, user_id: str, session_id: str) -> AsyncGenerator[None, None]:
         """Serialize in-process concurrent mutations for the same session."""
         lock_key = (app_name, user_id, session_id)
         lock = self._session_locks.get(lock_key)

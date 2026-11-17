@@ -12,11 +12,11 @@ from uuid import UUID
 
 from typing_extensions import TypeVar
 
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, with_cause
 from sqlspec.typing import CATTRS_INSTALLED, NUMPY_INSTALLED, MsgspecValidationError, SchemaT, convert, get_type_adapter
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_optional_attr
-from sqlspec.utils.serializers._json import decode_json as from_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.type_guards import (
     is_attrs_instance,
     is_attrs_schema,
@@ -187,7 +187,7 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
         return value_type(value)  # type: ignore[call-arg]
     except (TypeError, ValueError) as e:
         msg = f"Cannot convert {type(value).__name__} to {value_type.__name__}"
-        raise TypeError(msg) from e
+        raise with_cause(TypeError(msg), e) from e
 
 
 def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
@@ -773,7 +773,7 @@ def _convert_to_int(value: Any) -> int:
             return int(value)
         except (ValueError, OverflowError) as e:
             msg = f"Cannot convert {type(value).__name__} to int"
-            raise TypeError(msg) from e
+            raise with_cause(TypeError(msg), e) from e
     if isinstance(value, str):
         try:
             return int(value)

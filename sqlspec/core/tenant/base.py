@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 if TYPE_CHECKING:
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 __all__ = (
     "AsyncTenantStrategy",

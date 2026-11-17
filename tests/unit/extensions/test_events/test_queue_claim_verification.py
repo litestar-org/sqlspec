@@ -6,7 +6,7 @@ every DML statement. The table queue must confirm claim ownership through the
 persisted lease token instead of trusting the zero rowcount.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -157,7 +157,7 @@ async def test_async_locked_candidate_verifies_claim_when_rowcount_unreported() 
     )
 
     @asynccontextmanager
-    async def provide_session(*_args: Any, **_kwargs: Any) -> AsyncIterator[Any]:
+    async def provide_session(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Any, None]:
         yield driver
 
     config_stub = SimpleNamespace(

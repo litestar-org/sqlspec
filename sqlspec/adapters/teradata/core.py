@@ -6,7 +6,9 @@ from logging import Logger
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
+from sqlspec.core.statement import StatementConfig
 from sqlspec.dialects.teradata import Vantage as _VantageDialect
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -24,8 +26,9 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 
@@ -410,7 +413,7 @@ def parse_teradata_replica_endpoint(endpoint: str) -> dict[str, Any]:
         hostname, port = parsed.hostname, parsed.port
     except ValueError as exc:
         msg = "Invalid teradata replica endpoint"
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
     if not hostname or (parsed.scheme and parsed.scheme != "teradata"):
         msg = "Invalid teradata replica endpoint"
         raise ImproperConfigurationError(msg)

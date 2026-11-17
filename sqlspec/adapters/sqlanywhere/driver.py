@@ -5,6 +5,8 @@ import sys
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sqlanywhere._typing import (
     SqlanywhereConnection,
     SqlanywhereCursor,
@@ -26,27 +28,32 @@ from sqlspec.adapters.sqlanywhere.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.sqlanywhere.data_dictionary import SqlanywhereSyncDataDictionary
-from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.driver import (
-    BaseSyncExceptionHandler,
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.driver._common import (
     ExecutionResult,
-    SyncDriverAdapterBase,
-    SyncRowStream,
-    rows_to_dicts,
+    cache_hit_hooks_unchanged,
+    validate_load_from_storage_kwargs,
     validate_savepoint_name,
 )
-from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream, rows_to_dicts
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError, TransactionError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.sqlanywhere._typing import SqlanywhereQueryParams as QueryParams
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
-    from sqlspec.driver import CachedQuery
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 
 __all__ = (
@@ -60,6 +67,7 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.sqlanywhere")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SqlanywhereExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling SAP SQL Anywhere sqlanydb exceptions."""
 
@@ -142,11 +150,12 @@ class SqlanywhereStreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SqlanywhereDriver(SyncDriverAdapterBase):
     """SAP SQL Anywhere database driver using sqlanydb."""
 
     __slots__ = ("_column_name_cache", "_data_dictionary", "_transaction_active")
-    dialect = "sqlanywhere"
+    dialect: "DialectType | None" = "sqlanywhere"
 
     def __init__(
         self,
@@ -236,14 +245,18 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
             self._transaction_active = False
         except Exception as exc:
             msg = f"Failed to commit SQL Anywhere transaction: {exc}"
-            raise TransactionError(msg) from exc
+            error = TransactionError(msg)
+            error.__cause__ = exc
+            raise error from exc
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except Exception as exc:
             msg = f"Failed to rollback SQL Anywhere transaction: {exc}"
-            raise TransactionError(msg) from exc
+            error = TransactionError(msg)
+            error.__cause__ = exc
+            raise error from exc
         finally:
             self._transaction_active = False
 
@@ -413,8 +426,27 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into the target SQL Anywhere table."""
         if kwargs:
+            validate_load_from_storage_kwargs(kwargs)
             return super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+                table,
+                source,
+                file_format=file_format,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                storage_options=kwargs.get("storage_options"),
+                stage_table=kwargs.get("stage_table"),
+                conflict_keys=kwargs.get("conflict_keys"),
+                on_conflict=kwargs.get("on_conflict", "update"),
+                exclude_update_columns=kwargs.get("exclude_update_columns"),
+                drop_stage_table=kwargs.get("drop_stage_table", True),
+                drop_indexes=kwargs.get("drop_indexes", False),
+                concurrent_indexes=kwargs.get("concurrent_indexes", False),
+                checkpoint_table=kwargs.get("checkpoint_table"),
+                checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+                max_workers=kwargs.get("max_workers", 1),
+                executor=kwargs.get("executor", "thread"),
+                arrow_schema=kwargs.get("arrow_schema"),
+                type_casts=kwargs.get("type_casts"),
             )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
@@ -435,7 +467,10 @@ class SqlanywhereDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached statement through the compiled SQL Anywhere cache-hit executor."""
-        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._column_name_cache)
+        wire_sql = self._format_wire_sql(cached.compiled_sql) if self.statement_config.enable_sqlcommenter else None
+        return execute_cache_hit(
+            self.connection, sql, params, cached, self.statement_config, self._column_name_cache, wire_sql
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Return whether a transaction opened by this driver remains active."""

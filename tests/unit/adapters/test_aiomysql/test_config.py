@@ -578,3 +578,30 @@ async def test_aiomysql_replica_applies_session_read_only_without_mutating_init_
 
     expected = ["sql:SET SESSION TRANSACTION READ ONLY", "hook"] if read_only else ["hook"]
     assert events == expected
+
+
+async def test_aiomysql_disables_multi_statements_once_and_after_reset() -> None:
+    """Default AiomysqlConfig sends COM_SET_OPTION off once per connection and again after reset."""
+    from sqlspec.adapters.aiomysql.config import _COM_SET_OPTION, _MYSQL_OPTION_MULTI_STATEMENTS_OFF, _reset_session
+
+    conn = MagicMock(closed=False, _execute_command=AsyncMock(), _read_packet=AsyncMock(), _read_ok_packet=AsyncMock())
+    config = AiomysqlConfig(connection_config={"host": "localhost", "db": "test"})
+
+    await config._ensure_connection(conn)
+    await config._ensure_connection(conn)
+    assert conn._execute_command.await_count == 1
+    assert conn._execute_command.await_args.args == (_COM_SET_OPTION, _MYSQL_OPTION_MULTI_STATEMENTS_OFF)
+    assert conn._read_packet.await_count == 1
+
+    await _reset_session(config, conn)
+    assert conn._execute_command.await_count == 3
+    assert conn._execute_command.await_args_list[2].args == (_COM_SET_OPTION, _MYSQL_OPTION_MULTI_STATEMENTS_OFF)
+
+
+async def test_aiomysql_preserves_explicit_multi_statements_client_flag() -> None:
+    """Explicit CLIENT.MULTI_STATEMENTS opt-in skips COM_SET_OPTION multi-statement disabling."""
+    conn = MagicMock(closed=False, _execute_command=AsyncMock(), _read_packet=AsyncMock())
+    config = AiomysqlConfig(connection_config={"host": "localhost", "db": "test", "client_flag": 1 << 16})
+
+    await config._ensure_connection(conn)
+    conn._execute_command.assert_not_awaited()

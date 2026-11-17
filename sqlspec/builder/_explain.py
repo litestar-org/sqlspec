@@ -6,10 +6,9 @@ dialect-aware SQL generation.
 
 from typing import TYPE_CHECKING, Any, Final, Self
 
-from mypy_extensions import trait
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import Dialect, exp
 
-from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.explain import (
     ORACLE_EXPLAIN_DISPLAY_CURSOR_META_KEY,
     ORACLE_EXPLAIN_PREFIX,
@@ -18,6 +17,7 @@ from sqlspec.core.explain import (
     ExplainFormat,
     ExplainOptions,
 )
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_sql, has_parameter_builder, is_expression
 
@@ -293,6 +293,7 @@ def build_explain_sql(statement_sql: str, options: "ExplainOptions", dialect: "D
     return build_generic_explain(statement_sql, options)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Explain:
     """Builder for EXPLAIN statements with dialect-aware rendering.
 
@@ -614,6 +615,7 @@ class Explain:
         return source_config
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class ExplainMixin:
     """Mixin to add .explain() method to QueryBuilder subclasses.

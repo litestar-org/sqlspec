@@ -15,6 +15,7 @@ from sqlspec.adapters.asyncmy._typing import (
     AsyncmyMySQLError,
     AsyncmyPool,
     AsyncmyRawCursor,
+    AsyncmySessionContext,
 )
 from sqlspec.adapters.asyncmy.core import (
     apply_driver_features,
@@ -311,81 +312,11 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
         return exit_result
 
 
-class AsyncmySessionContext:
-    """Async context manager for AsyncMy sessions.
-
-    Acquires a connection from the config, builds the driver, and releases the
-    connection when the session ends.
-    """
-
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
-
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Awaitable[AsyncmyConnection]]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[AsyncmyDriver], AsyncmyDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: AsyncmyConnection | None = None
-        self._driver: AsyncmyDriver | None = None
-
-    async def __aenter__(self) -> "AsyncmyDriver":
-        self._connection = await self._acquire_connection()
-        try:
-            self._driver = AsyncmyDriver(
-                connection=self._connection,
-                statement_config=self._statement_config,
-                driver_features=self._driver_features,
-            )
-            return self._prepare_driver(self._driver)
-        except BaseException as exc:
-            with contextlib.suppress(Exception):
-                await self.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                await driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
-            try:
-                if self._connection is not None:
-                    await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
-
-
 @mypyc_attr(native_class=False)
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):
     """Configuration for Asyncmy database connections."""
 
-    __slots__ = ("_initialized_connections", "_read_only", "_user_connection_hook")
+    __slots__ = ("_allow_multi_statements", "_initialized_connections", "_read_only", "_user_connection_hook")
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncmyConnection)
@@ -439,6 +370,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         replica_read_only = features_dict.pop("_replica_read_only", None)
         self._read_only: bool = (
             bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
+        )
+        raw_client_flag = connection_config.get("client_flag")
+        self._allow_multi_statements: bool = bool(
+            isinstance(raw_client_flag, int) and (raw_client_flag & _CLIENT_MULTI_STATEMENTS)
         )
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
@@ -572,13 +507,23 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             raise
 
     async def _ensure_connection(self, connection: "AsyncmyConnection") -> None:
-        """Ensure read-only session state and connection callback run once per physical connection.
+        """Disable implicit multi-statements and apply read-only / create hooks once per connection.
 
-        Uses WeakSet tracking to ensure initialization runs once per physical connection.
+        Upstream ``asyncmy`` unconditionally ORs ``CLIENT.MULTI_STATEMENTS`` during the initial
+        handshake without an opt-out keyword parameter. Unless ``CLIENT.MULTI_STATEMENTS`` is
+        explicitly requested via ``connection_config["client_flag"]``, SQLSpec sends
+        ``COM_SET_OPTION(MYSQL_OPTION_MULTI_STATEMENTS_OFF)`` once per physical connection and
+        again after ``COM_RESET_CONNECTION`` so single-statement queries cannot smuggle stacked SQL.
         """
-        if not self._read_only and self._user_connection_hook is None:
+        if self._allow_multi_statements and not self._read_only and self._user_connection_hook is None:
             return
         if connection not in self._initialized_connections:
+            if not self._allow_multi_statements:
+                try:
+                    await _disable_multi_statements(connection)
+                except Exception as exc:
+                    _raise_mapped_connection_error(exc)
+                    raise
             if self._read_only:
                 try:
                     async with AsyncmyCursor(connection) as cursor:
@@ -598,6 +543,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             self.connection_instance = None
 
 
+_COM_SET_OPTION: Final[int] = 0x1B
+_MYSQL_OPTION_MULTI_STATEMENTS_OFF: Final[bytes] = b"\x01\x00"
+_CLIENT_MULTI_STATEMENTS: Final[int] = 1 << 16
 _COM_RESET_CONNECTION: Final[int] = 0x1F
 _FALLBACK_ASYNCMY_CONNECT_PARAMS: Final[frozenset[str]] = frozenset({
     "host",
@@ -689,6 +637,20 @@ def _is_autocommit_enabled(connection: Any) -> bool:
     if callable(get_autocommit):
         return bool(get_autocommit())
     return bool(getattr(connection, "autocommit_mode", False))
+
+
+async def _disable_multi_statements(connection: Any) -> None:
+    """Send ``COM_SET_OPTION(MYSQL_OPTION_MULTI_STATEMENTS_OFF)`` when supported by the connection."""
+    execute_command = getattr(connection, "_execute_command", None)
+    read_packet = getattr(connection, "read_packet", None)
+    if not callable(execute_command) or not callable(read_packet):
+        return
+    result = execute_command(_COM_SET_OPTION, _MYSQL_OPTION_MULTI_STATEMENTS_OFF)
+    if inspect.isawaitable(result):
+        await result
+    packet = read_packet()
+    if inspect.isawaitable(packet):
+        await packet
 
 
 async def _reset_session(config: Any, connection: Any) -> None:

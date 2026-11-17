@@ -14,7 +14,8 @@ from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgInterfaceError, CockroachAsyncpgPostgresError
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_module as asyncpg
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -42,7 +43,7 @@ from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.routing import RoutingContext
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_sqlstate
@@ -50,9 +51,10 @@ from sqlspec.utils.type_guards import has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlspec.core import ParameterStyleConfig
     from sqlspec.core.cache import CachedQuery
-    from sqlspec.storage import StorageTelemetry
+    from sqlspec.core.parameters._types import ParameterStyleConfig
+    from sqlspec.core.statement import StatementConfig
+    from sqlspec.storage.pipeline import StorageTelemetry
 
 __all__ = (
     "DEFAULT_FOLLOWER_READ_STALENESS",
@@ -496,12 +498,16 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return mapped
 
     if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
-        return QueryTimeoutError(str(error))
+        timeout_error = QueryTimeoutError(str(error))
+        timeout_error.__cause__ = error
+        return timeout_error
 
     if isinstance(error, OSError) or (
         asyncpg is not None and isinstance(error, getattr(asyncpg, "InterfaceError", ()))
     ):
-        return DatabaseConnectionError(str(error))
+        connection_error = DatabaseConnectionError(str(error))
+        connection_error.__cause__ = error if isinstance(error, BaseException) else None
+        return connection_error
 
     mapped_error = _EXCEPTION_MAPPING_DISPATCHER.get(error)
     if mapped_error is not None:

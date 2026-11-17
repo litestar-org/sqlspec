@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable

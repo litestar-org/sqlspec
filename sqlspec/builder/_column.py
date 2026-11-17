@@ -11,7 +11,7 @@ from typing import Any, cast, final
 from sqlglot import exp
 
 from sqlspec.builder._vector_distance import VectorDistance, validate_vector_elements
-from sqlspec.core import NullsPlacement, ordered
+from sqlspec.core._ordering import NullsPlacement, ordered
 
 __all__ = ("Column", "ColumnExpression", "ColumnNamespace", "FunctionColumn")
 

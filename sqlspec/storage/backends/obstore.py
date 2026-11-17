@@ -19,7 +19,12 @@ from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import StorageCapabilityError, StorageOperationFailedError, StoragePathTraversalError
+from sqlspec.exceptions import (
+    StorageCapabilityError,
+    StorageOperationFailedError,
+    StoragePathTraversalError,
+    with_cause,
+)
 from sqlspec.storage._arrow_payload import (
     StorageFormat,
     encode_arrow_payload,
@@ -195,7 +200,7 @@ class ObStoreBackend:
             raise
         except Exception as exc:
             msg = f"Failed to initialize obstore backend for {sanitize_uri_for_log(uri)}"
-            raise StorageOperationFailedError(msg) from exc
+            raise with_cause(StorageOperationFailedError(msg), exc) from exc
 
     @property
     def supports_signing(self) -> bool:
@@ -410,7 +415,7 @@ class ObStoreBackend:
                 try:
                     resolved_pattern = pattern_path.relative_to(Path(self._local_store_root)).as_posix()
                 except ValueError as exc:
-                    raise StoragePathTraversalError(pattern, self._local_store_root) from exc
+                    raise with_cause(StoragePathTraversalError(pattern, self._local_store_root), exc) from exc
             else:
                 resolved_pattern = pattern
         else:
@@ -781,7 +786,7 @@ class ObStoreBackend:
             return signed_urls[0] if is_single else signed_urls
         except Exception as exc:
             msg = f"Failed to generate signed URL(s) for {resolved_paths}"
-            raise StorageOperationFailedError(msg) from exc
+            raise with_cause(StorageOperationFailedError(msg), exc) from exc
 
     async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from storage asynchronously."""
@@ -1196,7 +1201,7 @@ class ObStoreBackend:
             return signed_urls[0] if is_single else signed_urls
         except Exception as exc:
             msg = f"Failed to generate signed URL(s) for {resolved_paths}"
-            raise StorageOperationFailedError(msg) from exc
+            raise with_cause(StorageOperationFailedError(msg), exc) from exc
 
     def _supports_atomic_copy_create(self) -> bool:
         """Return whether the underlying store supports atomic conditional copy (overwrite=False)."""

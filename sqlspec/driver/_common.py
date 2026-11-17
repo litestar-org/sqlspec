@@ -38,30 +38,29 @@ from sqlglot import exp
 from sqlglot.errors import ParseError, SqlglotError
 from sqlglot.tokenizer_core import TokenType
 
-from sqlspec.builder import QueryBuilder
+from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._ddl import compile_table_ddl_results
 from sqlspec.builder._parsing_utils import _normalize_dialect
-from sqlspec.core import (
-    SQL,
+from sqlspec.core._pool import ObjectPool, get_processed_state_pool, get_sql_pool
+from sqlspec.core.cache import (
+    _POSITIONAL_NUMBERED_STYLES,
+    CachedQuery,
     CachedStatement,
-    OperationProfile,
-    ParameterDeclaration,
-    ParameterStyle,
-    SQLResult,
-    Statement,
-    StatementConfig,
-    TypedParameter,
+    QueryCache,
+    StatementCacheHolder,
     get_cache,
     get_cache_config,
-    matches_param_type,
-    split_sql_script,
+    resolve_statement_cache_size,
 )
-from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
-from sqlspec.core.cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
-from sqlspec.core.compiler import _split_leading_keyword  # pyright: ignore[reportPrivateUsage]
+from sqlspec.core.compiler import (
+    OperationProfile,
+    _split_leading_keyword,  # pyright: ignore[reportPrivateUsage]
+)
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
-from sqlspec.core.parameters import (
+from sqlspec.core.parameters._converter import ambiguous_index_message
+from sqlspec.core.parameters._declared import ParameterDeclaration, matches_param_type
+from sqlspec.core.parameters._processor import (
     ParameterProcessor,
     apply_type_coercion,
     structural_fingerprint,
@@ -69,17 +68,25 @@ from sqlspec.core.parameters import (
     type_coercion_fallbacks,
     value_fingerprint,
 )
-from sqlspec.core.parameters._converter import ambiguous_index_message
-from sqlspec.core.result._base import RowFormat
+from sqlspec.core.parameters._types import ParameterStyle, TypedParameter
+from sqlspec.core.result._base import RowFormat, SQLResult
+from sqlspec.core.splitter import split_sql_script
 from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
-from sqlspec.core.statement import ProcessedState, _is_uncacheable_callable
-from sqlspec.data_dictionary import (
-    DDL_PARENT_TABLE_CONTEXT_KEY,
-    ColumnProfileMetadata,
-    DDLResult,
+from sqlspec.core.statement import SQL, ProcessedState, Statement, StatementConfig, _is_uncacheable_callable
+from sqlspec.data_dictionary._dependencies import (
     DependencyEdge,
     DependencyEdgeKind,
     DependencyStrength,
+    dependency_edges_from_foreign_keys,
+    sort_ddl_results,
+    sort_dependencies,
+)
+from sqlspec.data_dictionary._loader import get_data_dictionary_loader
+from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.data_dictionary._types import (
+    DDL_PARENT_TABLE_CONTEXT_KEY,
+    ColumnProfileMetadata,
+    DDLResult,
     ForeignKeyMetadata,
     MetadataCapability,
     MetadataFidelity,
@@ -89,12 +96,7 @@ from sqlspec.data_dictionary import (
     ObjectIdentity,
     VersionCacheResult,
     VersionInfo,
-    dependency_edges_from_foreign_keys,
-    get_data_dictionary_loader,
-    sort_ddl_results,
-    sort_dependencies,
 )
-from sqlspec.data_dictionary._registry import get_dialect_config
 from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, SyncRowStream
 from sqlspec.exceptions import (
     ImproperConfigurationError,
@@ -104,8 +106,8 @@ from sqlspec.exceptions import (
     StorageCapabilityError,
     TransactionError,
 )
-from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
-from sqlspec.observability._common import redact_sql_literals
+from sqlspec.observability._common import get_trace_context, redact_sql_literals, resolve_db_system
+from sqlspec.observability._runtime import ObservabilityRuntime
 from sqlspec.protocols import StatementProtocol
 from sqlspec.storage._ingest import (
     execute_load_from_storage_async,
@@ -133,7 +135,7 @@ from sqlspec.utils.arrow_helpers import (
 )
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
-from sqlspec.utils.serializers import from_json as decode_json
+from sqlspec.utils.serializers._json import from_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import (
     has_asdict_method,
@@ -149,11 +151,13 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from types import TracebackType
 
-    from sqlspec.core import ArrowResult, FilterTypeT, OperationType, StatementFilter
+    from sqlspec.core.compiler import OperationType
+    from sqlspec.core.filters import FilterTypeT, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
+    from sqlspec.core.result._base import ArrowResult
     from sqlspec.core.stack import StatementStack
-    from sqlspec.data_dictionary import DialectConfig
-    from sqlspec.storage import (
+    from sqlspec.data_dictionary._types import DialectConfig
+    from sqlspec.storage.pipeline import (
         AsyncStoragePipeline,
         StorageBridgeJob,
         StorageCapabilities,
@@ -182,6 +186,7 @@ __all__ = (
     "parameter_value_needs_processing",
     "parameter_values_need_processing",
     "type_coercion_fallbacks",
+    "validate_load_from_storage_kwargs",
     "validate_savepoint_name",
 )
 
@@ -312,7 +317,9 @@ def handle_single_row_error(error: ValueError) -> "NoReturn":
     message = str(error)
     if message.startswith("No result found"):
         msg = "No rows found"
-        raise NotFoundError(msg) from error
+        not_found = NotFoundError(msg)
+        not_found.__cause__ = error
+        raise not_found from error
     raise error
 
 
@@ -1830,7 +1837,9 @@ class CommonDriverAttributesMixin:
         "_cache_hit_executor",
         "_cache_hit_state",
         "_cache_holder",
+        "_has_active_observability",
         "_observability",
+        "_observability_generation",
         "_open_streams",
         "_pending_statement_profile",
         "_processed_state_pool",
@@ -1896,8 +1905,10 @@ class CommonDriverAttributesMixin:
             | None
         ) = None
         self._cache_hit_state: Any = None
-        self._statement_pool = get_sql_pool()
-        self._processed_state_pool = get_processed_state_pool()
+        self._has_active_observability = False
+        self._observability_generation = -1
+        self._statement_pool: ObjectPool[SQL] | None = None
+        self._processed_state_pool: ObjectPool[ProcessedState] | None = None
         self._refresh_statement_cache_state()
 
     @property
@@ -2354,6 +2365,9 @@ class CommonDriverAttributesMixin:
         return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
+        runtime = self._observability
+        self._has_active_observability = runtime is not None and not runtime.is_idle
+        self._observability_generation = runtime.hook_generation if runtime is not None else -1
         self._stmt_cache_enabled = bool(
             self.connection is not _CLOSED_CONNECTION
             and self._stmt_cache_max_size > 0
@@ -2391,9 +2405,23 @@ class CommonDriverAttributesMixin:
         remediation = "Override storage methods on the adapter to enable this capability."
         raise StorageCapabilityError(msg, capability=capability, remediation=remediation)
 
+    def _get_statement_pool(self) -> "ObjectPool[SQL]":
+        pool = self._statement_pool
+        if pool is None:
+            pool = get_sql_pool()
+            self._statement_pool = pool
+        return pool
+
+    def _get_processed_state_pool(self) -> "ObjectPool[ProcessedState]":
+        pool = self._processed_state_pool
+        if pool is None:
+            pool = get_processed_state_pool()
+            self._processed_state_pool = pool
+        return pool
+
     def _release_pooled_statement(self, statement: "SQL") -> None:
         if statement._pooled:
-            self._statement_pool.release(statement)
+            self._get_statement_pool().release(statement)
 
     def _cached_statement(
         self,
@@ -2525,7 +2553,7 @@ class CommonDriverAttributesMixin:
         return statements
 
     def _sub_statement(self, sql: str, execution_parameters: "ConvertedParameters") -> "SQL":
-        direct_state = self._processed_state_pool.acquire()
+        direct_state = self._get_processed_state_pool().acquire()
         ProcessedState.__init__(direct_state, compiled_sql=sql, execution_parameters=execution_parameters)
         return SQL._create_cached_direct(sql, self.statement_config, direct_state)
 
@@ -2650,6 +2678,23 @@ class CommonDriverAttributesMixin:
             else processed.compiled_sql
         )
         cached_state = _clone_processed_state(processed, operation_profile, compiled_sql=clean_sql)
+        needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(param_profile.styles))
+        stmt_config = self.statement_config
+        positional_passthrough = (not processed.applied_wrap_types and not needs_style_remap) and (
+            not processed.input_named_parameters
+            or (
+                bool(param_profile.styles)
+                and _POSITIONAL_NUMBERED_STYLES.issuperset(param_profile.styles)
+                and len(processed.input_named_parameters) == param_profile.total_count
+                and processed.input_named_parameters == tuple(str(i) for i in range(1, param_profile.total_count + 1))
+            )
+        )
+        simple_wire_fast_path = (
+            positional_passthrough
+            and not stmt_config._has_output_transformer
+            and not stmt_config.enable_sqlcommenter
+            and stmt_config.parameter_config.ast_transformer is None
+        )
         cached = CachedQuery(
             compiled_sql=clean_sql,
             parameter_profile=param_profile,
@@ -2660,7 +2705,9 @@ class CommonDriverAttributesMixin:
             operation_profile=operation_profile,
             param_count=param_profile.total_count,
             processed_state=cached_state,
-            needs_style_remap=bool(_CACHED_NAMED_STYLES.intersection(param_profile.styles)),
+            needs_style_remap=needs_style_remap,
+            positional_passthrough=positional_passthrough,
+            simple_wire_fast_path=simple_wire_fast_path,
         )
         self._stmt_cache.set(statement.raw_sql, cached)
 
@@ -3066,6 +3113,16 @@ class CommonDriverAttributesMixin:
                 if not isinstance(cached_result, CachedStatement):
                     cached_result = None
             if cached_result is not None:
+                expected_guard = (
+                    statement.raw_sql,
+                    statement.is_many,
+                    statement.is_script,
+                    flatten_single_parameters,
+                    statement_config,
+                )
+                if cached_result._source_guard is not None and cached_result._source_guard != expected_guard:
+                    cached_result = None
+            if cached_result is not None:
                 parameter_profile = cached_result.parameter_profile
                 if parameter_profile is not None:
                     rebound_input = (
@@ -3132,17 +3189,21 @@ class CommonDriverAttributesMixin:
         )
 
         if cache_key is not None and cache is not None:
-            stored_statement = (
-                CachedStatement(
-                    compiled_sql=stored_sql,
-                    parameters=cached_statement.parameters,
-                    expression=cached_statement.expression,
-                    input_named_parameters=cached_statement.input_named_parameters,
-                    parameter_profile=cached_statement.parameter_profile,
-                    applied_wrap_types=cached_statement.applied_wrap_types,
-                )
-                if stored_sql != compiled_sql
-                else cached_statement
+            source_guard = (
+                statement.raw_sql,
+                statement.is_many,
+                statement.is_script,
+                flatten_single_parameters,
+                statement_config,
+            )
+            stored_statement = CachedStatement(
+                compiled_sql=stored_sql,
+                parameters=cached_statement.parameters,
+                expression=cached_statement.expression,
+                input_named_parameters=cached_statement.input_named_parameters,
+                parameter_profile=cached_statement.parameter_profile,
+                applied_wrap_types=cached_statement.applied_wrap_types,
+                _source_guard=source_guard,
             )
             cache.put_statement(cache_key, stored_statement, dialect_key)
 
@@ -3666,18 +3727,17 @@ def cache_hit_hooks_unchanged(driver_type: type, owner: type) -> bool:
     return all(getattr(driver_type, name, None) is getattr(owner, name, None) for name in _CACHE_HIT_HOOKS)
 
 
-async def _await_cache_hit(
-    driver: "CommonDriverAttributesMixin",
-    pending: "Awaitable[SQLResult | None]",
-    statement: str,
-    params: "tuple[Any, ...] | list[Any] | dict[str, Any]",
-    cached: "CachedQuery",
-) -> "SQLResult | None":
-    """Await an async cache-hit executor and run the driver's cache-hit method when it declines."""
-    outcome = await pending
-    if outcome is not None:
-        return outcome
-    return await cast("Awaitable[SQLResult]", driver._execute_cache_hit(statement, params, cached))
+def _has_active_observability(driver: "CommonDriverAttributesMixin") -> bool:
+    """Return whether the driver's runtime has hooks, observers, or spans to notify.
+
+    The driver caches the answer and recomputes it when a lifecycle hook is registered on the runtime.
+    """
+    runtime = driver._observability
+    if runtime is None:
+        return False
+    if runtime.hook_generation != driver._observability_generation:
+        driver._refresh_statement_cache_state()
+    return driver._has_active_observability
 
 
 def run_cached_execution(
@@ -3706,18 +3766,38 @@ def run_cached_execution(
 
     config = driver.statement_config
     param_config = config.parameter_config
-    if param_config.ast_transformer is not None:
+    if cached.simple_wire_fast_path:
+        is_mapping = _is_mapping_parameters(params)
+        if not is_mapping:
+            needs_rebind = False
+            if params:
+                holder = getattr(driver, "_cache_holder", None)
+                passthrough = holder.passthrough_types if holder is not None else None
+                param_values = _cache_param_values(params)
+                needs_rebind = parameter_values_need_processing(
+                    param_values, param_config.type_coercion_map, passthrough_types=passthrough
+                )
+            if not needs_rebind:
+                if _has_active_observability(driver):
+                    return driver._execute_cache_hit_observed(statement, params, cached)
+                executor = driver._cache_hit_executor
+                if executor is None:
+                    return driver._execute_cache_hit(statement, params, cached)
+                outcome = executor(driver.connection, statement, params, cached, config, driver._cache_hit_state)
+                if outcome is None:
+                    return driver._execute_cache_hit(statement, params, cached)
+                return outcome
+    elif param_config.ast_transformer is not None:
         return None
 
-    needs_rebind = bool(
-        cached.input_named_parameters
-        or cached.applied_wrap_types
-        or cached.needs_style_remap
-        or _is_mapping_parameters(params)
-    )
+    needs_rebind = (not cached.positional_passthrough) or _is_mapping_parameters(params)
     if not needs_rebind and params:
+        holder = getattr(driver, "_cache_holder", None)
+        passthrough = holder.passthrough_types if holder is not None else None
         param_values = _cache_param_values(params)
-        needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
+        needs_rebind = parameter_values_need_processing(
+            param_values, param_config.type_coercion_map, passthrough_types=passthrough
+        )
 
     if not needs_rebind and not config._has_output_transformer:
         effective_cached = cached
@@ -3735,9 +3815,10 @@ def run_cached_execution(
                     param_count=cached.param_count,
                     processed_state=cached.processed_state,
                     needs_style_remap=cached.needs_style_remap,
+                    positional_passthrough=cached.positional_passthrough,
+                    simple_wire_fast_path=False,
                 )
-        runtime = driver._observability
-        if runtime is not None and not runtime.is_idle:
+        if _has_active_observability(driver):
             return driver._execute_cache_hit_observed(statement, params, effective_cached)
         executor = driver._cache_hit_executor
         if executor is None:
@@ -3745,9 +3826,7 @@ def run_cached_execution(
         outcome = executor(driver.connection, statement, params, effective_cached, config, driver._cache_hit_state)
         if outcome is None:
             return driver._execute_cache_hit(statement, params, effective_cached)
-        if isinstance(outcome, SQLResult):
-            return outcome
-        return _await_cache_hit(driver, outcome, statement, params, effective_cached)
+        return outcome
 
     if needs_rebind:
         rebound_params = driver.stmt_cache_rebind(params, cached)
@@ -3765,8 +3844,7 @@ def run_cached_execution(
     prepared = driver._cached_statement(
         statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
     )
-    runtime = driver._observability
-    if runtime is not None and not runtime.is_idle:
+    if _has_active_observability(driver):
         return driver._execute_cached_statement_observed(prepared, compiled_sql, rebound_params, cached.operation_type)
     return driver._execute_cached_statement(prepared)
 
@@ -3775,6 +3853,7 @@ def parameter_values_need_processing(
     values: "tuple[Any, ...] | list[Any]",
     type_coercion_map: "dict[type, Any] | None",
     fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
+    passthrough_types: "set[type] | None" = None,
 ) -> bool:
     if not values:
         return False
@@ -3791,17 +3870,17 @@ def parameter_values_need_processing(
             if dispatcher.resolve_type(value_type) is not None:
                 return True
         return False
-    passthrough_types = _passthrough_types(type_coercion_map)
+    active_passthrough = passthrough_types if passthrough_types is not None else _passthrough_types(type_coercion_map)
     for value in values:
         value_type = type(value)
-        if value_type in passthrough_types:
+        if value_type in active_passthrough:
             continue
         if value_type is TypedParameter or value_type in type_coercion_map:
             return True
         if type_coercion_dispatcher(type_coercion_fallbacks(type_coercion_map)).resolve_type(value_type) is not None:
             return True
-        if len(passthrough_types) < _PASSTHROUGH_TYPES_MAX_SIZE:
-            passthrough_types.add(value_type)
+        if len(active_passthrough) < _PASSTHROUGH_TYPES_MAX_SIZE:
+            active_passthrough.add(value_type)
     return False
 
 
@@ -3871,6 +3950,7 @@ def _raise_database_exception(
     pending_exception = exc_handler.pending_exception
     if pending_exception is not None:
         if exc is not None:
+            pending_exception.__cause__ = exc
             raise pending_exception from exc
         if pending_exception.__cause__ is not None:
             raise pending_exception
@@ -4640,6 +4720,34 @@ def _is_valid_profile_datetime(value: Any) -> bool:
     return True
 
 
+_LOAD_FROM_STORAGE_KWARGS: Final[frozenset[str]] = frozenset({
+    "arrow_schema",
+    "checkpoint_phase",
+    "checkpoint_table",
+    "concurrent_indexes",
+    "conflict_keys",
+    "drop_indexes",
+    "drop_stage_table",
+    "exclude_update_columns",
+    "executor",
+    "max_workers",
+    "on_conflict",
+    "stage_table",
+    "storage_options",
+    "type_casts",
+})
+
+
+def validate_load_from_storage_kwargs(kwargs: "dict[str, Any]") -> None:
+    """Validate optional keyword arguments forwarded to ``load_from_storage``."""
+    if not kwargs:
+        return
+    unknown = sorted(set(kwargs) - _LOAD_FROM_STORAGE_KWARGS)
+    if unknown:
+        msg = f"load_from_storage() got unexpected keyword argument '{unknown[0]}'"
+        raise TypeError(msg)
+
+
 def _is_valid_profile_json(value: Any) -> bool:
     if isinstance(value, (Mapping, list)):
         return True
@@ -4651,7 +4759,7 @@ def _is_valid_profile_json(value: Any) -> bool:
     ):
         return False
     try:
-        parsed = decode_json(stripped)
+        parsed = from_json(stripped)
     except ValueError:
         return False
     return isinstance(parsed, (Mapping, list))

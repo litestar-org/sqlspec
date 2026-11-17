@@ -12,6 +12,8 @@ import re
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
+from sqlspec.exceptions import with_cause
+
 __all__ = ("oracle_table_feature_report", "validate_oracle_identifier")
 
 _UNQUOTED_ORACLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"\A[A-Za-z][A-Za-z0-9_$#]*\Z")
@@ -66,7 +68,7 @@ def oracle_table_feature_report(
         except KeyError as exc:
             supported = ", ".join(sorted(ORACLE_COMPRESSION_CLAUSES))
             msg = f"Unsupported Oracle compression algorithm {algorithm!r}. Supported values: {supported}"
-            raise ValueError(msg) from exc
+            raise with_cause(ValueError(msg), exc) from exc
         clauses.append(compression_clause)
         applied.append("basic_compression" if algorithm == "basic" else "advanced_compression")
 

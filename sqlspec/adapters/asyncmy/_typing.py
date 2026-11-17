@@ -22,11 +22,13 @@ from asyncmy.errors import ProgrammingError as _AsyncmyProgrammingError
 from asyncmy.pool import Pool as _AsyncmyPool
 from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
 
+from sqlspec.driver._session import AsyncDriverSessionContext
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from typing import Protocol, TypeAlias
+
+    from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
 
     class AsyncmyMySQLError(Exception):
         errno: int
@@ -64,6 +66,7 @@ if TYPE_CHECKING:
     AsyncmyModule: TypeAlias = AsyncmyModuleProtocol
     AsyncmyPool: TypeAlias = _AsyncmyPool
     AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
+    from collections.abc import Generator
 else:
     AsyncmyConnection = Connection
     AsyncmyDictCursor = _AsyncmyDictCursor
@@ -88,6 +91,7 @@ __all__ = (
     "AsyncmyProgrammingError",
     "AsyncmyRawCursor",
     "AsyncmySSCursor",
+    "AsyncmySessionContext",
     "asyncmy_local_infile",
 )
 
@@ -126,7 +130,7 @@ class AsyncmyCursor:
 
 
 @contextlib.contextmanager
-def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Iterator[None]":
+def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Generator[None, None, None]":
     """Scope the asyncmy 0.2.13/0.2.14 filename handoff fix to one native load.
 
     Args:
@@ -194,3 +198,18 @@ class _AsyncmyLocalInfileResult(_AsyncmyResult):
             raise SQLSpecError(msg)
         raw_self: Any = self
         raw_self._read_ok_packet(packet)
+
+
+class AsyncmySessionContext(AsyncDriverSessionContext):
+    """Async context manager for AsyncMy sessions."""
+
+    __slots__ = ()
+
+    if TYPE_CHECKING:
+
+        async def __aenter__(self) -> "AsyncmyDriver": ...
+
+    def _resolve_driver_class(self) -> "type[AsyncmyDriver]":
+        from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
+
+        return AsyncmyDriver

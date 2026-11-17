@@ -14,6 +14,8 @@ from collections.abc import Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.aiomysql._typing import (
     AIOMYSQL_INSERT_VALUES_PATTERN,
     AiomysqlCursor,
@@ -44,20 +46,29 @@ from sqlspec.adapters.aiomysql.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
-from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
-from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
+from sqlspec.driver._stream import AsyncRowStream
+from sqlspec.exceptions import with_cause
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers._json import from_json
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.aiomysql._typing import AiomysqlConnection
-    from sqlspec.core import SQL, SQLResult, StatementConfig
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("AiomysqlCursor", "AiomysqlDriver", "AiomysqlExceptionHandler", "AiomysqlSessionContext")
 
@@ -67,13 +78,16 @@ json_type_value = (
     AiomysqlFieldType.JSON if AiomysqlFieldType is not None and supports_json_type(AiomysqlFieldType) else None
 )
 AIOMYSQL_JSON_TYPE_CODES: Final[set[int]] = {json_type_value} if json_type_value is not None else set()
+_MYSQL_CLIENT_PACKAGES: Final[frozenset[str]] = frozenset({"aiomysql", "pymysql"})
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiomysql (MySQL) database exceptions.
 
     Maps MySQL error codes and SQLSTATE values from ``pymysql.err.Error`` to
-    SQLSpec exceptions stored on ``pending_exception``.
+    SQLSpec exceptions stored on ``pending_exception``. A ``TypeError`` is mapped
+    only when the aiomysql or PyMySQL client raised it while binding parameters.
     """
 
     __slots__ = ()
@@ -81,12 +95,15 @@ class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if issubclass(exc_type, AiomysqlPymysqlError):
+        if issubclass(exc_type, AiomysqlPymysqlError) or (
+            issubclass(exc_type, TypeError) and _raised_by_mysql_client(exc_val)
+        ):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AiomysqlDriver(AsyncDriverAdapterBase):
     """MySQL/MariaDB database driver using aiomysql client library.
 
@@ -96,7 +113,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_json_deserializer")
-    dialect = "mysql"
+    dialect: "DialectType | None" = "mysql"
 
     def __init__(
         self,
@@ -232,7 +249,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.begin()
         except AiomysqlPymysqlError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def commit(self) -> None:
         """Commit the current transaction.
@@ -243,7 +260,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.commit()
         except AiomysqlPymysqlError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction.
@@ -254,7 +271,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.rollback()
         except AiomysqlPymysqlError as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def with_cursor(self, connection: "AiomysqlConnection") -> "AiomysqlCursor":
         """Create cursor context manager for the connection.
@@ -365,6 +382,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             if use_infile:
                 payload = encode_records_for_local_infile(records)
                 tmp_name = await asyncio.to_thread(_write_local_infile_tempfile, payload)
+                load_error: BaseException | None = None
                 try:
                     load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
@@ -372,8 +390,11 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
                         exc_handler, self._execute_cursor_statement, load_sql, (tmp_name,)
                     )
                     self._check_pending_exception(exc_handler)
-                finally:
-                    await asyncio.to_thread(Path(tmp_name).unlink, True)
+                except BaseException as exc:
+                    load_error = exc
+                await asyncio.to_thread(Path(tmp_name).unlink, True)
+                if load_error is not None:
+                    raise load_error
             else:
                 insert_sql = build_insert_statement(table, columns)
                 prepared_records = (
@@ -392,7 +413,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: Any, fetched: "Sequence[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect aiomysql rows for the direct execution path."""
         description = cursor.description or None
         row_plan = resolve_row_plan(description, AIOMYSQL_JSON_TYPE_CODES)
@@ -420,15 +441,27 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         return await super()._execute_cache_hit(sql, params, cached)
 
     async def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             if parameters is None:
                 await cursor.execute(statement)
             else:
                 await cursor.execute(statement, parameters)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     async def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
-        async with self.with_cursor(self.connection) as cursor:
+        cursor_context = self.with_cursor(self.connection)
+        cursor = await cursor_context.__aenter__()
+        cursor_error: BaseException | None = None
+        try:
             await cursor.executemany(statement, parameters)
+        except BaseException as exc:
+            cursor_error = exc
+        await exit_async_context(cursor_context, cursor_error)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
@@ -437,6 +470,17 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             True when the server reports an open transaction.
         """
         return bool(self.connection.get_transaction_status())
+
+
+def _raised_by_mysql_client(error: BaseException) -> bool:
+    """Return whether the innermost traceback frame of ``error`` belongs to aiomysql or PyMySQL."""
+    tb = error.__traceback__
+    if tb is None:
+        return False
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    module_name = tb.tb_frame.f_globals.get("__name__")
+    return isinstance(module_name, str) and module_name.partition(".")[0] in _MYSQL_CLIENT_PACKAGES
 
 
 def _write_local_infile_tempfile(payload: bytes) -> str:

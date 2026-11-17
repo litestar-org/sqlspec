@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from sqlspec.driver._deferred import DeferredAsyncSession, raise_async_connection_required
     from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
     from sqlspec.driver._routing import AsyncRoutingSession, SyncRoutingSession
+    from sqlspec.driver._session import AsyncDriverSessionContext, SyncDriverSessionContext
     from sqlspec.driver._sql_helpers import convert_to_dialect
     from sqlspec.driver._stream import AsyncRowStream, SyncRowStream, rows_to_dicts
     from sqlspec.driver._sync import (
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 __all__ = (
     "AsyncDataDictionaryBase",
     "AsyncDriverAdapterBase",
+    "AsyncDriverSessionContext",
     "AsyncExceptionHandler",
     "AsyncPoolConnectionContext",
     "AsyncPoolSessionFactory",
@@ -66,6 +68,7 @@ __all__ = (
     "StackExecutionObserver",
     "SyncDataDictionaryBase",
     "SyncDriverAdapterBase",
+    "SyncDriverSessionContext",
     "SyncExceptionHandler",
     "SyncPoolConnectionContext",
     "SyncPoolSessionFactory",
@@ -86,6 +89,7 @@ __all__ = (
 _EXPORTS: dict[str, tuple[str, str]] = {
     "AsyncDataDictionaryBase": ("sqlspec.driver._async", "AsyncDataDictionaryBase"),
     "AsyncDriverAdapterBase": ("sqlspec.driver._async", "AsyncDriverAdapterBase"),
+    "AsyncDriverSessionContext": ("sqlspec.driver._session", "AsyncDriverSessionContext"),
     "AsyncExceptionHandler": ("sqlspec.driver._common", "AsyncExceptionHandler"),
     "AsyncPoolConnectionContext": ("sqlspec.driver._async", "AsyncPoolConnectionContext"),
     "AsyncPoolSessionFactory": ("sqlspec.driver._async", "AsyncPoolSessionFactory"),
@@ -103,6 +107,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "StackExecutionObserver": ("sqlspec.driver._common", "StackExecutionObserver"),
     "SyncDataDictionaryBase": ("sqlspec.driver._sync", "SyncDataDictionaryBase"),
     "SyncDriverAdapterBase": ("sqlspec.driver._sync", "SyncDriverAdapterBase"),
+    "SyncDriverSessionContext": ("sqlspec.driver._session", "SyncDriverSessionContext"),
     "SyncExceptionHandler": ("sqlspec.driver._common", "SyncExceptionHandler"),
     "SyncPoolConnectionContext": ("sqlspec.driver._sync", "SyncPoolConnectionContext"),
     "SyncPoolSessionFactory": ("sqlspec.driver._sync", "SyncPoolSessionFactory"),

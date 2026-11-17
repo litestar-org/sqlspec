@@ -1,23 +1,18 @@
 """Lazy sync and async session routing with explicit driver method contracts."""
 
 import sys
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from contextlib import (
-    AbstractAsyncContextManager,
-    AbstractContextManager,
-    AsyncExitStack,
-    ExitStack,
-    asynccontextmanager,
-    contextmanager,
-)
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, AsyncExitStack, ExitStack, contextmanager
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Self, cast, overload
 from uuid import UUID
 
+from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
-from sqlspec.core import SQL, ArrowResult, SQLResult, StackResult, Statement, StatementConfig, StatementFilter
+from sqlspec.core.result._base import ArrowResult, SQLResult, StackResult
 from sqlspec.core.stack import StatementStack
+from sqlspec.core.statement import SQL, Statement, StatementConfig
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
@@ -26,14 +21,15 @@ from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, AsyncRowStream, S
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError, SQLSpecError, TransactionError
 from sqlspec.utils.routing import RoutingContext
-from sqlspec.utils.tenant import TenantContextPayload
+from sqlspec.utils.tenant._context import TenantContextPayload
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.builder import QueryBuilder
+    from sqlspec.builder._base import QueryBuilder
     from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
-    from sqlspec.data_dictionary import (
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.data_dictionary._types import (
         ColumnMetadata,
         ColumnProfileMetadata,
         DDLResult,
@@ -47,9 +43,14 @@ if TYPE_CHECKING:
         TableMetadata,
         VersionInfo,
     )
-    from sqlspec.observability import ObservabilityRuntime
-    from sqlspec.storage import StorageCapabilities
-    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.observability._runtime import ObservabilityRuntime
+    from sqlspec.storage.pipeline import (
+        StorageBridgeJob,
+        StorageCapabilities,
+        StorageDestination,
+        StorageFormat,
+        StorageTelemetry,
+    )
     from sqlspec.typing import ArrowReturnFormat, SchemaT, StatementParameters
     from sqlspec.utils.schema import ValueT
 
@@ -60,6 +61,7 @@ AsyncDriverT = TypeVar("AsyncDriverT", bound=AsyncDriverAdapterBase, default=Asy
 _ARROW_STACK_OPTIONS: Final[tuple[str, ...]] = ("return_format", "native_only", "batch_size", "arrow_schema")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class _RoutingSessionState:
     __slots__ = (
         "_active_replica_group",
@@ -288,6 +290,7 @@ class _RoutingSessionState:
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     """Lazy synchronous session selecting replicas for provably safe reads."""
 
@@ -402,7 +405,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         self._primary_driver.rollback_to_savepoint(name)
 
     @contextmanager
-    def transaction(self) -> Iterator[Self]:
+    def transaction(self) -> Generator[Self, None, None]:
         """Own a primary transaction while preserving nested savepoint behavior.
 
         Yields:
@@ -414,7 +417,9 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             yield self
 
     @contextmanager
-    def without_indexes(self, table: str, *, schema: str | None = None, concurrent: bool = False) -> Iterator[Any]:
+    def without_indexes(
+        self, table: str, *, schema: str | None = None, concurrent: bool = False
+    ) -> Generator[Any, None, None]:
         """Temporarily remove indexes using the primary's native context.
 
         Yields:
@@ -887,14 +892,326 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             type_casts=type_casts,
         )
 
-    fetch = select
-    fetch_one = select_one
-    fetch_one_or_none = select_one_or_none
-    fetch_value = select_value
-    fetch_value_or_none = select_value_or_none
-    fetch_with_total = select_with_total
-    fetch_to_arrow = select_to_arrow
-    fetch_stream = select_stream
+    @overload
+    def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT]": ...
+
+    @overload
+    def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[dict[str, Any]]": ...
+
+    def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT] | list[dict[str, Any]]":
+        """Execute a select statement and return all rows."""
+        if schema_type is not None:
+            return self.select(
+                statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+            )
+        return self.select(statement, *parameters, schema_type=None, statement_config=statement_config, **kwargs)
+
+    @overload
+    def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT": ...
+
+    @overload
+    def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+
+    def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | dict[str, Any]":
+        """Execute a select statement and return exactly one row."""
+        if schema_type is not None:
+            return self.select_one(
+                statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+            )
+        return self.select_one(statement, *parameters, schema_type=None, statement_config=statement_config, **kwargs)
+
+    @overload
+    def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | None": ...
+
+    @overload
+    def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any] | None": ...
+
+    def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | dict[str, Any] | None":
+        """Execute a select statement and return at most one row."""
+        if schema_type is not None:
+            return self.select_one_or_none(
+                statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+            )
+        return self.select_one_or_none(
+            statement, *parameters, schema_type=None, statement_config=statement_config, **kwargs
+        )
+
+    @overload
+    def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT": ...
+
+    @overload
+    def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | Any":
+        """Execute a select statement and return a single scalar value."""
+        if value_type is not None:
+            return self.select_value(
+                statement, *parameters, value_type=value_type, statement_config=statement_config, **kwargs
+            )
+        return self.select_value(statement, *parameters, statement_config=statement_config, **kwargs)
+
+    @overload
+    def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | None": ...
+
+    @overload
+    def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | Any | None":
+        """Execute a select statement and return a single scalar value or None."""
+        if value_type is not None:
+            return self.select_value_or_none(
+                statement, *parameters, value_type=value_type, statement_config=statement_config, **kwargs
+            )
+        return self.select_value_or_none(statement, *parameters, statement_config=statement_config, **kwargs)
+
+    @overload
+    def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> "tuple[list[SchemaT], int]": ...
+
+    @overload
+    def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> "tuple[list[dict[str, Any]], int]": ...
+
+    def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> "tuple[list[SchemaT] | list[dict[str, Any]], int]":
+        """Execute a select statement and return both the data and total count."""
+        if schema_type is not None:
+            return self.select_with_total(
+                statement,
+                *parameters,
+                schema_type=schema_type,
+                statement_config=statement_config,
+                count_with_window=count_with_window,
+                **kwargs,
+            )
+        return self.select_with_total(
+            statement, *parameters, statement_config=statement_config, count_with_window=count_with_window, **kwargs
+        )
+
+    def fetch_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: "ArrowReturnFormat" = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute query and return results as Apache Arrow format."""
+        return self.select_to_arrow(
+            statement,
+            *parameters,
+            statement_config=statement_config,
+            return_format=return_format,
+            native_only=native_only,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+            **kwargs,
+        )
+
+    @overload
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT]": ...
+
+    @overload
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[dict[str, Any]]": ...
+
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRowStream[SchemaT] | SyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows in chunks."""
+        if schema_type is not None:
+            return self.select_stream(
+                statement,
+                *parameters,
+                schema_type=schema_type,
+                statement_config=statement_config,
+                chunk_size=chunk_size,
+                native_only=native_only,
+                **kwargs,
+            )
+        return self.select_stream(
+            statement,
+            *parameters,
+            statement_config=statement_config,
+            chunk_size=chunk_size,
+            native_only=native_only,
+            **kwargs,
+        )
 
     def _release_replica(self) -> None:
         if self._replica_stack is not None or self._replica_driver is not None:
@@ -1022,6 +1339,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         return driver, sql
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     """Lazy asynchronous session selecting replicas for provably safe reads."""
 
@@ -1134,31 +1452,25 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             raise TransactionError(msg)
         await self._primary_driver.rollback_to_savepoint(name)
 
-    @asynccontextmanager
-    async def transaction(self) -> AsyncIterator[Self]:
+    def transaction(self) -> AbstractAsyncContextManager[Self]:
         """Own a primary transaction while preserving nested savepoint behavior.
 
-        Yields:
-            This routing facade with its primary transaction active.
+        Returns:
+            Async context manager yielding this routing facade with its primary transaction active.
         """
-        self._primary_only()
-        driver = await self._acquire_primary()
-        async with driver.transaction():
-            yield self
+        return cast("AbstractAsyncContextManager[Self]", _AsyncRoutingTransactionContext(self))
 
-    @asynccontextmanager
-    async def without_indexes(
+    def without_indexes(
         self, table: str, *, schema: str | None = None, concurrent: bool = False
-    ) -> AsyncIterator[Any]:
+    ) -> AbstractAsyncContextManager[Any]:
         """Temporarily remove indexes using the primary's native context.
 
-        Yields:
-            The primary driver's index restoration context.
+        Returns:
+            Async context manager wrapping the primary driver's index restoration context.
         """
-        self._primary_only()
-        driver = await self._acquire_primary()
-        async with driver.without_indexes(table, schema=schema, concurrent=concurrent) as context:
-            yield context
+        return cast(
+            "AbstractAsyncContextManager[Any]", _AsyncRoutingWithoutIndexesContext(self, table, schema, concurrent)
+        )
 
     async def execute_stack(self, stack: StatementStack, *, continue_on_error: bool = False) -> tuple[StackResult, ...]:
         """Execute a stack on one connection, pinning any mixed or write stack."""
@@ -1621,14 +1933,333 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             type_casts=type_casts,
         )
 
-    fetch = select
-    fetch_one = select_one
-    fetch_one_or_none = select_one_or_none
-    fetch_value = select_value
-    fetch_value_or_none = select_value_or_none
-    fetch_with_total = select_with_total
-    fetch_to_arrow = select_to_arrow
-    fetch_stream = select_stream
+    @overload
+    async def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT]": ...
+
+    @overload
+    async def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[dict[str, Any]]": ...
+
+    async def fetch(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "list[SchemaT] | list[dict[str, Any]]":
+        """Execute a select statement and return all rows."""
+        if schema_type is not None:
+            return await self.select(
+                statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+            )
+        return await self.select(statement, *parameters, schema_type=None, statement_config=statement_config, **kwargs)
+
+    @overload
+    async def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT": ...
+
+    @overload
+    async def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any]": ...
+
+    async def fetch_one(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | dict[str, Any]":
+        """Execute a select statement and return exactly one row."""
+        if schema_type is not None:
+            return await self.select_one(
+                statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+            )
+        return await self.select_one(
+            statement, *parameters, schema_type=None, statement_config=statement_config, **kwargs
+        )
+
+    @overload
+    async def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | None": ...
+
+    @overload
+    async def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "dict[str, Any] | None": ...
+
+    async def fetch_one_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "SchemaT | dict[str, Any] | None":
+        """Execute a select statement and return at most one row."""
+        if schema_type is not None:
+            return await self.select_one_or_none(
+                statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
+            )
+        return await self.select_one_or_none(
+            statement, *parameters, schema_type=None, statement_config=statement_config, **kwargs
+        )
+
+    @overload
+    async def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT": ...
+
+    @overload
+    async def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    async def fetch_value(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | Any":
+        """Execute a select statement and return a single scalar value."""
+        if value_type is not None:
+            return await self.select_value(
+                statement, *parameters, value_type=value_type, statement_config=statement_config, **kwargs
+            )
+        return await self.select_value(statement, *parameters, statement_config=statement_config, **kwargs)
+
+    @overload
+    async def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT]",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | None": ...
+
+    @overload
+    async def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    async def fetch_value_or_none(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        value_type: "type[ValueT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ValueT | Any | None":
+        """Execute a select statement and return a single scalar value or None."""
+        if value_type is not None:
+            return await self.select_value_or_none(
+                statement, *parameters, value_type=value_type, statement_config=statement_config, **kwargs
+            )
+        return await self.select_value_or_none(statement, *parameters, statement_config=statement_config, **kwargs)
+
+    @overload
+    async def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> "tuple[list[SchemaT], int]": ...
+
+    @overload
+    async def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> "tuple[list[dict[str, Any]], int]": ...
+
+    async def fetch_with_total(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        count_with_window: bool = False,
+        **kwargs: Any,
+    ) -> "tuple[list[SchemaT] | list[dict[str, Any]], int]":
+        """Execute a select statement and return both the data and total count."""
+        if schema_type is not None:
+            return await self.select_with_total(
+                statement,
+                *parameters,
+                schema_type=schema_type,
+                statement_config=statement_config,
+                count_with_window=count_with_window,
+                **kwargs,
+            )
+        return await self.select_with_total(
+            statement,
+            *parameters,
+            schema_type=None,
+            statement_config=statement_config,
+            count_with_window=count_with_window,
+            **kwargs,
+        )
+
+    async def fetch_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: "ArrowReturnFormat" = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute query and return results as Apache Arrow format (async)."""
+        return await self.select_to_arrow(
+            statement,
+            *parameters,
+            statement_config=statement_config,
+            return_format=return_format,
+            native_only=native_only,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+            **kwargs,
+        )
+
+    @overload
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[SchemaT]": ...
+
+    @overload
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[dict[str, Any]]": ...
+
+    def fetch_stream(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        chunk_size: int = 1000,
+        native_only: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRowStream[SchemaT] | AsyncRowStream[dict[str, Any]]":
+        """Execute a query and stream rows in chunks."""
+        if schema_type is not None:
+            return self.select_stream(
+                statement,
+                *parameters,
+                schema_type=schema_type,
+                statement_config=statement_config,
+                chunk_size=chunk_size,
+                native_only=native_only,
+                **kwargs,
+            )
+        return self.select_stream(
+            statement,
+            *parameters,
+            statement_config=statement_config,
+            chunk_size=chunk_size,
+            native_only=native_only,
+            **kwargs,
+        )
 
     async def _release_replica(self) -> None:
         if self._replica_stack is not None or self._replica_driver is not None:
@@ -1719,15 +2350,24 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
 
                 context = _RuntimeReadAsyncContext(context, session=True)
             lease_stack = AsyncExitStack()
+            enter_exc_info: tuple[type[BaseException] | None, BaseException | None, TracebackType | None] | None = None
+            driver = None
             try:
                 driver = await lease_stack.enter_async_context(context)
             except BaseException:
-                try:
-                    if entered_context is not None:
-                        await entered_context._close_on_error(*sys.exc_info())
-                finally:
-                    await lease_stack.aclose()
-                raise
+                enter_exc_info = sys.exc_info()
+            if enter_exc_info is not None:
+                close_error: BaseException | None = None
+                if entered_context is not None:
+                    try:
+                        await entered_context._close_on_error(*enter_exc_info)
+                    except BaseException as exc:
+                        close_error = exc
+                await lease_stack.aclose()
+                if close_error is not None:
+                    raise close_error
+                if enter_exc_info[1] is not None:
+                    raise enter_exc_info[1]
             await self._stack.enter_async_context(lease_stack)
             self._replica_driver = driver
             self._replica_stack = lease_stack
@@ -2192,3 +2832,60 @@ class _EnteredReadAsyncContext:
         if not self._closed:
             self._closed = True
             await self._context.__aexit__(exc_type, exc_val, exc_tb)
+
+
+class _AsyncRoutingTransactionContext:
+    """Async context manager owning a primary transaction for AsyncRoutingSession."""
+
+    __slots__ = ("_inner", "_session")
+
+    def __init__(self, session: AsyncRoutingSession[Any]) -> None:
+        self._session = session
+        self._inner: AbstractAsyncContextManager[Any] | None = None
+
+    async def __aenter__(self) -> AsyncRoutingSession[Any]:
+        self._session._primary_only()
+        driver = await self._session._acquire_primary()
+        inner = driver.transaction()
+        await inner.__aenter__()
+        self._inner = inner
+        return self._session
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> bool | None:
+        inner = self._inner
+        self._inner = None
+        if inner is None:
+            return None
+        return await inner.__aexit__(exc_type, exc_val, exc_tb)
+
+
+class _AsyncRoutingWithoutIndexesContext:
+    """Async context manager delegating index teardown to the primary driver."""
+
+    __slots__ = ("_concurrent", "_inner", "_schema", "_session", "_table")
+
+    def __init__(self, session: AsyncRoutingSession[Any], table: str, schema: str | None, concurrent: bool) -> None:
+        self._session = session
+        self._table = table
+        self._schema = schema
+        self._concurrent = concurrent
+        self._inner: AbstractAsyncContextManager[Any] | None = None
+
+    async def __aenter__(self) -> Any:
+        self._session._primary_only()
+        driver = await self._session._acquire_primary()
+        inner = driver.without_indexes(self._table, schema=self._schema, concurrent=self._concurrent)
+        result = await inner.__aenter__()
+        self._inner = inner
+        return result
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> bool | None:
+        inner = self._inner
+        self._inner = None
+        if inner is None:
+            return None
+        return await inner.__aexit__(exc_type, exc_val, exc_tb)

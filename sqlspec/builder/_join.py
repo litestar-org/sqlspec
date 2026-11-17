@@ -6,7 +6,7 @@ Provides mixins for JOIN operations in SELECT statements.
 
 from typing import TYPE_CHECKING, Any, Self, Union, cast, final
 
-from mypy_extensions import trait
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder, register_subquery_fragment
@@ -19,8 +19,8 @@ from sqlspec.builder._parsing_utils import (
     unwrap_expression_source,
 )
 from sqlspec.builder._temporal import create_temporal_version, register_version_generators
-from sqlspec.core import SQL
 from sqlspec.core.query_modifiers import is_valid_parameter_name
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_parameter_builder
 
@@ -47,6 +47,7 @@ def build_join_clause(
     return join_expr
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class JoinClauseMixin:
     """Mixin providing JOIN clause methods for SELECT builders.

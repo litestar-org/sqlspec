@@ -5,7 +5,8 @@ from collections.abc import Callable, Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import unquote, urlsplit
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.dialects.sybase import Sybase as _SybaseDialect
 from sqlspec.exceptions import (
@@ -25,9 +26,10 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
@@ -37,7 +39,8 @@ if TYPE_CHECKING:
     from logging import Logger
 
     from sqlspec.core.cache import CachedQuery
-    from sqlspec.core.parameters import ParameterValidator
+    from sqlspec.core.parameters._validator import ParameterValidator
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = (
     "DEFAULT_SYBASE_CONN_PROPERTIES",
@@ -524,7 +527,7 @@ def parse_sybase_replica_endpoint(endpoint: str) -> dict[str, Any]:
         hostname, port = parsed.hostname, parsed.port
     except ValueError as exc:
         msg = "Invalid sybase replica endpoint"
-        raise ImproperConfigurationError(msg) from exc
+        raise with_cause(ImproperConfigurationError(msg), exc) from exc
     if not hostname or (parsed.scheme and parsed.scheme != "sybase"):
         msg = "Invalid sybase replica endpoint"
         raise ImproperConfigurationError(msg)

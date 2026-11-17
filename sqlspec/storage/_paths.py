@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Final
 from urllib.parse import unquote, urlparse
 
-from sqlspec.exceptions import StorageOperationFailedError, StoragePathTraversalError
+from sqlspec.exceptions import StorageOperationFailedError, StoragePathTraversalError, with_cause
 
 __all__ = (
     "FILE_PROTOCOL",
@@ -239,7 +239,7 @@ def resolve_storage_path(
                 try:
                     win_rel = PureWindowsPath(path_str).relative_to(PureWindowsPath(base_path))
                 except ValueError as exc:
-                    raise StoragePathTraversalError(path_str, base_path) from exc
+                    raise with_cause(StoragePathTraversalError(path_str, base_path), exc) from exc
                 if str(win_rel) == ".":
                     return base_path
                 trimmed_base = base_path.rstrip("/\\")
@@ -256,7 +256,7 @@ def resolve_storage_path(
                 try:
                     relative = path_obj.relative_to(base_obj)
                 except ValueError as exc:
-                    raise StoragePathTraversalError(path_str, base_path) from exc
+                    raise with_cause(StoragePathTraversalError(path_str, base_path), exc) from exc
                 if str(relative) == ".":
                     return base_path
                 return f"{base_path.rstrip('/')}/{relative.as_posix()}"

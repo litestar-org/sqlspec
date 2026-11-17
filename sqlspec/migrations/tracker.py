@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import IntegrityError, MigrationError, SerializationConflictError, SQLSpecError
+from sqlspec.exceptions import IntegrityError, MigrationError, SerializationConflictError, SQLSpecError, with_cause
 from sqlspec.migrations.base import (
     _PG_RELATION_GUARD_SQL,
     BaseMigrationTracker,
@@ -24,7 +24,7 @@ from sqlspec.migrations.base import (
 )
 from sqlspec.migrations.runner import _driver_in_transaction_async, _driver_in_transaction_sync
 from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
-from sqlspec.observability import resolve_db_system
+from sqlspec.observability._common import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -34,7 +34,8 @@ if TYPE_CHECKING:
 
     from rich.console import Console
 
-    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver._sync import SyncDriverAdapterBase
     from sqlspec.migrations.base import AppliedMigrationRecord
 
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
@@ -1042,7 +1043,7 @@ def _resolve_current_schema(result: Any) -> str:
 
 
 def _validate_pg_relation_rows(rows: "Sequence[Mapping[str, Any]]", version_table: str) -> None:
-    """Validate pre-existing PostgreSQL tracking relation kind, owner, and trigger state."""
+    """Validate pre-existing PostgreSQL tracking relation kind, owner, trigger, rule, and RLS state."""
     for row in rows:
         relkind = row.get("relkind")
         if isinstance(relkind, str) and relkind.strip() not in {"r", "p"}:
@@ -1060,6 +1061,16 @@ def _validate_pg_relation_rows(rows: "Sequence[Mapping[str, Any]]", version_tabl
         has_triggers = row.get("has_user_triggers")
         if has_triggers is True or (isinstance(has_triggers, int) and has_triggers > 0):
             msg = f"Migration tracking table '{version_table}' cannot have non-internal triggers attached"
+            raise MigrationError(msg)
+        has_rules = row.get("has_rules")
+        if has_rules is True or (isinstance(has_rules, int) and has_rules > 0):
+            msg = f"Migration tracking table '{version_table}' cannot have rewrite rules attached"
+            raise MigrationError(msg)
+        has_rls = row.get("has_row_security")
+        if has_rls is True or (isinstance(has_rls, int) and has_rls > 0):
+            msg = (
+                f"Migration tracking table '{version_table}' cannot have row-level security active for the current role"
+            )
             raise MigrationError(msg)
 
 
@@ -1190,6 +1201,7 @@ class _SyncMigrationLockContext:
             except SQLSpecError as exc:
                 translated = self._tracker._translate_mssql_lock_exception(self._lock_name, self._timeout_seconds, exc)
                 if translated is not None:
+                    translated.__cause__ = exc
                     raise translated from exc
                 raise
             self._tracker._validate_mssql_lock_result(self._lock_name, ms_result)
@@ -1227,7 +1239,7 @@ class _SyncMigrationLockContext:
                         self._driver.rollback()
                 remaining = deadline - _monotonic()
                 if remaining <= 0:
-                    raise _lease_timeout_error(self._lock_name, timeout_seconds) from None
+                    raise with_cause(_lease_timeout_error(self._lock_name, timeout_seconds), None) from None
                 _sleep(min(_LEASE_LOCK_POLL_INTERVAL_SECONDS, remaining))
                 continue
             self._owner_token = owner_token
@@ -1385,6 +1397,7 @@ class _AsyncMigrationLockContext:
             except SQLSpecError as exc:
                 translated = self._tracker._translate_mssql_lock_exception(self._lock_name, self._timeout_seconds, exc)
                 if translated is not None:
+                    translated.__cause__ = exc
                     raise translated from exc
                 raise
             self._tracker._validate_mssql_lock_result(self._lock_name, ms_result)
@@ -1428,7 +1441,7 @@ class _AsyncMigrationLockContext:
                         await self._driver.rollback()
                 remaining = deadline - _monotonic()
                 if remaining <= 0:
-                    raise _lease_timeout_error(self._lock_name, timeout_seconds) from None
+                    raise with_cause(_lease_timeout_error(self._lock_name, timeout_seconds), None) from None
                 await _async_sleep(min(_LEASE_LOCK_POLL_INTERVAL_SECONDS, remaining))
                 continue
             self._owner_token = owner_token

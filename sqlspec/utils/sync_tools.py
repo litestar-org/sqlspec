@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from typing_extensions import ParamSpec
 
+from sqlspec.exceptions import with_cause
 from sqlspec.utils.env import get_env
 from sqlspec.utils.module_loader import module_available
 from sqlspec.utils.portal import get_global_portal
@@ -425,7 +426,7 @@ class _AwaitWrapper(Generic[ParamSpecT, ReturnT]):
         except RuntimeError:
             if self._raise_sync_error:
                 msg = "Cannot run async function"
-                raise RuntimeError(msg) from None
+                raise with_cause(RuntimeError(msg), None) from None
             portal = get_global_portal()
             typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
             return portal.call(typed_partial)

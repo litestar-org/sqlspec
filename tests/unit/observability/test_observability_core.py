@@ -18,6 +18,7 @@ import pytest
 
 from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, SQLSpec, StatementObserver
 from sqlspec.adapters.adbc.driver import AdbcDriver
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
@@ -959,6 +960,56 @@ def test_register_lifecycle_hook_updates_is_idle() -> None:
     assert runtime.is_idle is False
 
 
+def _drive_registry_provider(spec: SQLSpec, config: Any, provider_name: str) -> None:
+    """Enter and exit one registry-provided session or connection for a sync or async config."""
+    provider = getattr(spec, provider_name)
+    if not config.is_async:
+        try:
+            with provider(config):
+                pass
+        finally:
+            config.close_pool()
+        return
+
+    async def _drive() -> None:
+        try:
+            async with provider(config):
+                pass
+        finally:
+            await config.close_pool()
+
+    asyncio.run(_drive())
+
+
+@pytest.mark.parametrize("config_type", [SqliteConfig, AiosqliteConfig])
+@pytest.mark.parametrize(
+    ("event_name", "provider_name"),
+    [
+        ("on_connection_create", "provide_session"),
+        ("on_session_start", "provide_session"),
+        ("on_session_end", "provide_session"),
+        ("on_connection_destroy", "provide_session"),
+        ("on_connection_create", "provide_connection"),
+        ("on_connection_destroy", "provide_connection"),
+    ],
+)
+def test_runtime_registered_lifecycle_hook_fires_through_registry(
+    config_type: Any, event_name: str, provider_name: str
+) -> None:
+    """A session or connection hook registered after construction fires with telemetry disabled."""
+    spec = SQLSpec()
+    config = spec.add_config(config_type(connection_config={"database": ":memory:"}))
+    fired: list[str] = []
+
+    def _hook(_context: dict[str, Any]) -> None:
+        fired.append(event_name)
+
+    config.get_observability_runtime().register_lifecycle_hook(event_name, _hook)
+    _drive_registry_provider(spec, config, provider_name)
+
+    assert fired == [event_name]
+
+
 @pytest.mark.parametrize(
     ("config_name", "driver", "db_system", "expected"),
     [
@@ -1575,3 +1626,30 @@ def test_create_statement_event_preserves_profile_when_redaction_disabled() -> N
     )
 
     assert event.profile == {"query_name": "SELECT 'raw' WHERE id = 7"}
+
+
+def test_get_trace_context_caches_otel_trace_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_trace_context resolves opentelemetry.trace once per process instead of re-importing per query."""
+    import builtins
+
+    import sqlspec.observability._common as obs_common
+
+    obs_common._reset_otel_trace_cache()
+    real_import = builtins.__import__
+    import_attempts = 0
+
+    def _counting_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        nonlocal import_attempts
+        if name == "opentelemetry" or name.startswith("opentelemetry."):
+            import_attempts += 1
+        return real_import(name, *args, **kwargs)
+
+    try:
+        monkeypatch.setattr(builtins, "__import__", _counting_import)
+        obs_common.get_trace_context()
+        first_count = import_attempts
+        obs_common.get_trace_context()
+        obs_common.get_w3c_trace_context()
+        assert import_attempts == first_count
+    finally:
+        obs_common._reset_otel_trace_cache()

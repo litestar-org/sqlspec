@@ -4,12 +4,14 @@
 import inspect
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage.backends.local import LocalStore
+from sqlspec.storage.pipeline import SyncStoragePipeline
 from sqlspec.storage.registry import StorageRegistry
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 from sqlspec.utils.type_guards import is_local_path
@@ -315,3 +317,26 @@ def test_storage_registry_sanitizes_uri_credentials_in_logs_and_errors(caplog: p
         registry.get("nonexistent_alias?token=should-not-leak")
     assert "should-not-leak" not in str(exc_info.value)
     assert "nonexistent_alias" in str(exc_info.value)
+
+
+@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
+@pytest.mark.parametrize(
+    ("uri", "options"),
+    [
+        ("s3a://example-bucket/dir/key.parquet", {"skip_signature": True, "region": "us-east-1"}),
+        ("abfs://container@account.dfs.core.windows.net/dir/key.parquet", {"skip_signature": True}),
+        ("abfss://container@account.dfs.core.windows.net/dir/key.parquet", {"skip_signature": True}),
+    ],
+    ids=["s3a", "abfs", "abfss"],
+)
+def test_storage_pipeline_strips_bucket_from_s3a_abfs_and_abfss_object_keys(
+    uri: str, options: "dict[str, Any]"
+) -> None:
+    """The pipeline resolves s3a, abfs, and abfss URIs to a bucket-scoped backend and a bucket-relative key."""
+    pipeline = SyncStoragePipeline(registry=StorageRegistry())
+
+    backend, key, backend_name = pipeline._backend(uri, options)
+
+    assert backend_name == "obstore"
+    assert key == "dir/key.parquet"
+    assert backend.resolve_uri(key) == uri

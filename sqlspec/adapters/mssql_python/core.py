@@ -6,9 +6,8 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonError
-from sqlspec.core.parameters import ParameterStyle
 from sqlspec.core.parameters._registry import build_statement_config_from_profile
-from sqlspec.core.parameters._types import DriverParameterProfile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -32,7 +31,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, resolve_row_format
@@ -41,8 +40,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from logging import Logger
 
-    from sqlspec.core import StatementConfig
     from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = (
     "MSSQL_PYTHON_VERSION",
@@ -440,6 +439,7 @@ def execute_cache_hit(
     cached: "CachedQuery",
     statement_config: "StatementConfig",
     column_name_cache: "dict[int, tuple[Any, list[str]]]",
+    wire_sql: "str | None" = None,
 ) -> "SQLResult":
     """Execute a cached statement on an mssql-python connection and build its result.
 
@@ -450,6 +450,7 @@ def execute_cache_hit(
         cached: Cached compilation of ``sql``.
         statement_config: Statement configuration the result uses to rebuild its statement.
         column_name_cache: Session-local cache of resolved column names.
+        wire_sql: Optional wire SQL override with sqlcommenter formatting applied.
 
     Returns:
         The statement result.
@@ -458,7 +459,7 @@ def execute_cache_hit(
         SQLSpecError: Mapped from any mssql-python error the statement raises.
     """
     parameters = normalize_execute_parameters(params) or ()
-    compiled_sql = cached.compiled_sql
+    compiled_sql = cached.compiled_sql if wire_sql is None else wire_sql
     try:
         cursor = connection.cursor()
         try:

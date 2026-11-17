@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
 from sqlspec.config import DatabaseConfigProtocol
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, with_cause
 from sqlspec.utils.routing import validate_routing_middleware_settings
-from sqlspec.utils.tenant import TenantExtractorValue
+from sqlspec.utils.tenant._context import TenantExtractorValue
 
 __all__ = ("FlaskConfigState",)
 
@@ -36,8 +36,8 @@ class FlaskConfigState:
     connection_key: str
     session_key: str
     commit_mode: Literal["manual", "autocommit", "autocommit_include_redirect"]
-    extra_commit_statuses: "set[int] | None"
-    extra_rollback_statuses: "set[int] | None"
+    extra_commit_statuses: set[int] | None
+    extra_rollback_statuses: set[int] | None
     is_async: bool
     disable_di: bool
     tenant_extractor: Callable[..., TenantExtractorValue] | None = None
@@ -45,7 +45,7 @@ class FlaskConfigState:
     extractor_takes_request: bool = field(default=False, init=False)
     enable_correlation_middleware: bool = True
     correlation_header: str = "x-request-id"
-    correlation_headers: "tuple[str, ...] | None" = None
+    correlation_headers: tuple[str, ...] | None = None
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
     replica_session_key: str = "db_replica_session"
@@ -96,7 +96,7 @@ class FlaskConfigState:
                     extractor_signature.bind(object())
                 except TypeError as exc:
                     msg = "Flask tenant_extractor must accept zero arguments or one request"
-                    raise ImproperConfigurationError(msg) from exc
+                    raise with_cause(ImproperConfigurationError(msg), exc) from exc
                 self.extractor_takes_request = True
 
     def should_commit(self, status_code: int) -> bool:

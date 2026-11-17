@@ -4,19 +4,17 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-import contextlib
 import sqlite3 as sqlite_module
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
+
+from sqlspec.driver._session import SyncDriverSessionContext
 
 _SqliteConnection = sqlite_module.Connection
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from types import TracebackType
     from typing import TypeAlias
 
     from sqlspec.adapters.sqlite.driver import SqliteDriver
-    from sqlspec.core import StatementConfig
 
     SqliteConnection: TypeAlias = _SqliteConnection
     SqliteConnectionFactory: TypeAlias = type[sqlite_module.Connection]
@@ -70,90 +68,24 @@ class SqliteCursor:
             exc_val: Exception value if an exception occurred
             exc_tb: Exception traceback if an exception occurred
         """
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                self.cursor.close()
-
-
-class SqliteSessionContext:
-    """Sync context manager for SQLite sessions.
-
-    This class is intentionally excluded from mypyc compilation to avoid ABI
-    boundary issues. It receives callables from uncompiled config classes and
-    instantiates compiled Driver objects, acting as a bridge between compiled
-    and uncompiled code.
-
-    Uses callable-based connection management to decouple from config implementation.
-    """
-
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_class",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
-
-    _default_driver_class: ClassVar["type[SqliteDriver] | None"] = None
-
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[SqliteDriver], SqliteDriver]",
-        driver_class: "type[SqliteDriver] | None" = None,
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._driver_class = driver_class or self._default_driver_class
-        self._connection: Any = None
-        self._driver: SqliteDriver | None = None
-
-    def __enter__(self) -> "SqliteDriver":
-        driver_cls = self._driver_class
-        if driver_cls is None:
-            from sqlspec.adapters.sqlite.driver import SqliteDriver
-
-            driver_cls = SqliteDriver
-
-        self._connection = self._acquire_connection()
-        try:
-            self._driver = driver_cls(
-                connection=self._connection,
-                statement_config=self._statement_config,
-                driver_features=self._driver_features,
-            )
-            return self._prepare_driver(self._driver)
-        except BaseException as exc:
-            self.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-
-    def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
+        cursor = self.cursor
+        if cursor is not None:
             try:
-                if self._connection is not None:
-                    self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
+                cursor.close()
+            except Exception:
+                return
+
+
+class SqliteSessionContext(SyncDriverSessionContext):
+    """Sync context manager for SQLite sessions."""
+
+    __slots__ = ()
+
+    if TYPE_CHECKING:
+
+        def __enter__(self) -> "SqliteDriver": ...
+
+    def _resolve_driver_class(self) -> "type[SqliteDriver]":
+        from sqlspec.adapters.sqlite.driver import SqliteDriver
+
+        return SqliteDriver

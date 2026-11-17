@@ -10,7 +10,7 @@ from starlette.middleware import Middleware
 from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.core._cursor import resolve_plugin_cursor_settings
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.starlette._state import SQLSpecConfigState
+from sqlspec.extensions.starlette._state import CommitMode, SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import (
     get_or_create_db_session,
     get_or_create_db_session_async,
@@ -28,7 +28,9 @@ from sqlspec.extensions.starlette.middleware import (
     get_request_resource_async,
     has_tenant_strategy,
 )
+from sqlspec.utils.config_tools import normalize_extension_status_codes, resolve_extension_commit_mode
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.routing import validate_routing_middleware_settings
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
@@ -52,7 +54,7 @@ __all__ = ("SQLSpecPlugin",)
 
 logger = get_logger("sqlspec.extensions.starlette")
 
-DEFAULT_COMMIT_MODE = "autocommit"
+DEFAULT_COMMIT_MODE: CommitMode = "autocommit"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
@@ -487,7 +489,7 @@ class SQLSpecPlugin:
             "routing_header": framework_config.get("routing_header"),
             "primary_pin_cookie": framework_config.get("primary_pin_cookie"),
             "primary_pin_secret": framework_config.get("primary_pin_secret"),
-            "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
+            "commit_mode": resolve_extension_commit_mode(config, framework_config, DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
             "disable_di": framework_config.get("disable_di", False),
@@ -519,20 +521,26 @@ class SQLSpecPlugin:
         if settings.get("tenant_extractor") is not None and not has_tenant_strategy(config):
             msg = "tenant_extractor requires driver_features['tenant_strategy'] on the same configuration"
             raise ImproperConfigurationError(msg)
+        enable_routing, routing_header, primary_pin_cookie, primary_pin_secret = validate_routing_middleware_settings(
+            enable_routing_middleware=settings.get("enable_routing_middleware", True),
+            routing_header=settings.get("routing_header"),
+            primary_pin_cookie=settings.get("primary_pin_cookie"),
+            primary_pin_secret=settings.get("primary_pin_secret"),
+        )
         return SQLSpecConfigState(
             config=config,
             connection_key=settings["connection_key"],
             pool_key=settings["pool_key"],
             session_key=settings["session_key"],
             commit_mode=settings["commit_mode"],
-            extra_commit_statuses=settings["extra_commit_statuses"],
-            extra_rollback_statuses=settings["extra_rollback_statuses"],
-            disable_di=settings["disable_di"],
-            enable_correlation_middleware=settings["enable_correlation_middleware"],
+            extra_commit_statuses=normalize_extension_status_codes(settings["extra_commit_statuses"]),
+            extra_rollback_statuses=normalize_extension_status_codes(settings["extra_rollback_statuses"]),
+            disable_di=bool(settings["disable_di"]),
+            enable_correlation_middleware=bool(settings["enable_correlation_middleware"]),
             correlation_header=settings["correlation_header"],
             correlation_headers=settings["correlation_headers"],
-            auto_trace_headers=settings["auto_trace_headers"],
-            enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
+            auto_trace_headers=bool(settings["auto_trace_headers"]),
+            enable_sqlcommenter_middleware=bool(settings["enable_sqlcommenter_middleware"]),
             sqlcommenter_framework=settings["sqlcommenter_framework"],
             tenant_extractor=settings.get("tenant_extractor"),
             replica_connection_key=settings.get(
@@ -553,10 +561,10 @@ class SQLSpecPlugin:
             ),
             routing_session_key=settings.get("routing_session_key"),
             default_routing_mode=settings.get("default_routing_mode", "auto"),
-            enable_routing_middleware=settings.get("enable_routing_middleware", True),
-            routing_header=settings.get("routing_header"),
-            primary_pin_cookie=settings.get("primary_pin_cookie"),
-            primary_pin_secret=settings.get("primary_pin_secret"),
+            enable_routing_middleware=enable_routing,
+            routing_header=routing_header,
+            primary_pin_cookie=primary_pin_cookie,
+            primary_pin_secret=primary_pin_secret,
         )
 
     def _ensure_unique_keys(self) -> None:

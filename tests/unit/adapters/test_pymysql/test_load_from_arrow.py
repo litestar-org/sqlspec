@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -131,8 +130,7 @@ def test_load_from_arrow_needs_preparation_bypasses_local_infile() -> None:
     conn = _FakeConnection()
     driver = _make_driver(conn, enable_local_infile=True)
 
-    with patch.object(type(driver), "_arrow_rows_need_preparation", lambda _self, _table: True):
-        driver.load_from_arrow("orders", pa.table({"id": [1], "name": ["a"]}))
+    driver.load_from_arrow("orders", pa.table({"id": [1], "tags": [["a", "b"]]}))
 
     assert conn._cursor.execute_calls == []
     assert len(conn._cursor.executemany_calls) == 1

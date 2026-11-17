@@ -1068,3 +1068,46 @@ def test_sql_result_schema_cache_avoids_rematerialization_and_preserves_prior_di
     items = res.get_data(schema_type=Item)
     assert len(items) == 2
     assert res._materialized_dicts is dicts_before
+
+
+def test_cached_select_result_and_dml_result_lazy_lists_and_fast_scalar() -> None:
+    """CachedSelectResult and DMLResult defer empty lists and scalar() avoids dict materialization."""
+    from sqlspec.core import ProcessedState, StatementConfig
+    from sqlspec.core.result import DMLResult
+    from sqlspec.core.result._base import CachedSelectResult
+
+    state = ProcessedState(compiled_sql="SELECT ? AS val", execution_parameters=[42], operation_type="SELECT")
+    res = SQLResult.create_cached_select(
+        sql="SELECT ? AS val",
+        config=StatementConfig(),
+        cached_state=state,
+        compiled_sql="SELECT ? AS val",
+        params=(42,),
+        data=[(42,)],
+        column_names=["val"],
+        rows_affected=1,
+        row_format="tuple",
+    )
+    assert isinstance(res, CachedSelectResult)
+    assert isinstance(res, SQLResult)
+    assert res.is_success() is True
+    assert res.scalar() == 42
+    assert res.scalar_or_none() == 42
+    assert res._materialized_dicts is None
+    assert res._inserted_ids is None
+    assert res._statement_results is None
+    assert res._errors is None
+
+    one_row = res.one()
+    assert one_row == {"val": 42}
+    assert res._materialized_dicts is None
+    assert res.inserted_ids == []
+
+    dml = DMLResult("INSERT", rows_affected=1)
+    assert dml._column_names is None
+    assert dml._inserted_ids is None
+    assert dml._statement_results is None
+    assert dml._errors is None
+    assert dml.is_success() is True
+    assert dml._errors is None
+    assert dml.errors == []

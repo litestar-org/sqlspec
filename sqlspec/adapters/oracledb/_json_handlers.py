@@ -56,12 +56,12 @@ from sqlspec.adapters.oracledb.core import (
     resolve_oracle_connection_compatible_major,
     resolve_oracle_connection_major,
 )
-from sqlspec.data_dictionary.dialects.oracle import (
+from sqlspec.data_dictionary.dialects.oracle.config import (
     ORACLE_JSON_STORAGE_BLOB_PLAIN,
     ORACLE_JSON_STORAGE_NATIVE,
     resolve_oracle_json_storage,
 )
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection as AsyncConnection

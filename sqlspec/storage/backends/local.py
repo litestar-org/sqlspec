@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar, Final, Literal, cast,
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import FileNotFoundInStorageError, StorageCapabilityError, StoragePathTraversalError
+from sqlspec.exceptions import FileNotFoundInStorageError, StorageCapabilityError, StoragePathTraversalError, with_cause
 from sqlspec.storage._arrow_payload import (
     StorageFormat,
     encode_arrow_to_async_sink,
@@ -188,7 +188,7 @@ class LocalStore:
                 resolved.read_bytes, backend=self.backend_type, operation="read_bytes", path=str(resolved)
             )
         except FileNotFoundInStorageError as error:
-            raise FileNotFoundError(str(resolved)) from error
+            raise with_cause(FileNotFoundError(str(resolved)), error) from error
 
     def write_bytes_sync(self, path: "str | Path", data: bytes, *, overwrite: bool = True, **kwargs: Any) -> None:
         """Write bytes to file synchronously."""
@@ -229,7 +229,7 @@ class LocalStore:
                         break
                     yield chunk
         except FileNotFoundError as error:
-            raise FileNotFoundError(str(resolved)) from error
+            raise with_cause(FileNotFoundError(str(resolved)), error) from error
 
     def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects in directory synchronously.
@@ -329,7 +329,7 @@ class LocalStore:
                 rel_pattern_path = pattern_path.relative_to(self.base_path)
             except ValueError as exc:
                 msg = f"Glob pattern resolves outside base_path '{self.base_path}': {pattern!r}"
-                raise StoragePathTraversalError(msg) from exc
+                raise with_cause(StoragePathTraversalError(msg), exc) from exc
             rel_pattern = str(rel_pattern_path)
         else:
             rel_pattern = normalized_pattern

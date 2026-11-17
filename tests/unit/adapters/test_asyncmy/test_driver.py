@@ -109,7 +109,7 @@ async def test_asyncmy_execute_cache_hit_invokes_collect_rows_on_clean_query(mon
 
     cursor = MagicMock()
     cursor.description = [("id", 3, None, None, None, None, None)]
-    cursor.fetchall = AsyncMock(return_value=[(1,)])
+    cursor.fetchall = AsyncMock(return_value=((1,),))
     cursor.execute = AsyncMock(return_value=None)
 
     conn = MagicMock()
@@ -172,7 +172,7 @@ async def test_asyncmy_dispatch_execute_uses_statement_statement_config() -> Non
     cursor = MagicMock()
     cursor.description = [("1", 3, None, None, None, None, None)]
     cursor.execute = AsyncMock()
-    cursor.fetchall = AsyncMock(return_value=[(1,)])
+    cursor.fetchall = AsyncMock(return_value=((1,),))
     cursor.rowcount = 1
     cursor.lastrowid = None
 

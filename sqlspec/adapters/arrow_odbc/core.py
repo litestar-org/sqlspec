@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp
 
-from sqlspec.core import DriverParameterProfile, ParameterStyle, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -28,13 +29,13 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import ArrowException
 from sqlspec.utils.config_tools import parse_odbc_connection_string
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping
+    from collections.abc import Callable, Generator, Mapping
 
-    from sqlspec.core import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = (
     "DB2_INDEX_EXISTS_SQL",
@@ -492,7 +493,7 @@ def strip_bracket_quotes(part: str) -> str:
 
 
 @contextlib.contextmanager
-def atomic_store_write(driver: Any) -> "Iterator[None]":
+def atomic_store_write(driver: Any) -> "Generator[None, None, None]":
     """Wrap multi-statement store mutations in an explicit transaction when supported.
 
     Yields:

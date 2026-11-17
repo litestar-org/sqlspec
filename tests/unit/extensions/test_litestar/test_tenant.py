@@ -1,7 +1,7 @@
 """Verified tenant resolution and guards for the Litestar integration."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, contextmanager
 from inspect import isawaitable
 from types import SimpleNamespace
@@ -11,6 +11,8 @@ from uuid import UUID
 import pytest
 
 pytest.importorskip("litestar")
+
+from collections.abc import AsyncGenerator, Generator
 
 from litestar import Controller, Litestar, WebSocket, get, websocket
 from litestar.connection import ASGIConnection
@@ -517,7 +519,7 @@ def test_litestar_unguarded_routes_controller_bypass_and_websockets_translate_te
 
     class _TenantSqliteConfig(SqliteConfig):
         @contextmanager
-        def provide_connection(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[Any, None, None]:
             payload = TenantContext.get()
             if payload is None:
                 raise TenantContextError("Tenant context required")
@@ -621,7 +623,7 @@ def test_litestar_unguarded_routes_controller_bypass_and_websockets_translate_te
 
 async def test_provide_request_session_async_translates_missing_tenant() -> None:
     @asynccontextmanager
-    async def never_called(_pool: Any) -> AsyncIterator[Any]:
+    async def never_called(_pool: Any) -> AsyncGenerator[Any, None]:
         pytest.fail("provide_connection should not run without an authorized tenant")
         yield None
 

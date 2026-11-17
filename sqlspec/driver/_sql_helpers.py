@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING, Final, NoReturn
 
 from sqlglot import exp, parse_one
 
-from sqlspec.core import SQL
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLConversionError
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.core import Statement
+    from sqlspec.core.statement import Statement
 
 
 __all__ = (
@@ -119,7 +119,9 @@ def raise_parse_error(e: Exception) -> "NoReturn":
         SQLConversionError: Always raised.
     """
     error_msg = f"Failed to parse SQL statement: {e!s}"
-    raise SQLConversionError(error_msg) from e
+    error = SQLConversionError(error_msg)
+    error.__cause__ = e
+    raise error from e
 
 
 def raise_conversion_error(dialect: "DialectType | None", e: Exception) -> "NoReturn":
@@ -133,4 +135,6 @@ def raise_conversion_error(dialect: "DialectType | None", e: Exception) -> "NoRe
         SQLConversionError: Always raised.
     """
     error_msg = f"Failed to convert SQL expression to {dialect}: {e!s}"
-    raise SQLConversionError(error_msg) from e
+    error = SQLConversionError(error_msg)
+    error.__cause__ = e
+    raise error from e

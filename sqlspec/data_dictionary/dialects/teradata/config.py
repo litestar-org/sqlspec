@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
-from sqlspec.data_dictionary import register_dialect
+from sqlspec.data_dictionary._registry import register_dialect
 from sqlspec.data_dictionary._types import (
     DialectConfig,
     FeatureFlags,
@@ -18,7 +18,7 @@ from sqlspec.data_dictionary._types import (
 )
 
 if TYPE_CHECKING:
-    from sqlspec.data_dictionary import TableMetadata
+    from sqlspec.data_dictionary._types import TableMetadata
 
 __all__ = (
     "TERADATA_COLUMN_TYPE_CODES",

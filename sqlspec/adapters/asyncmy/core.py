@@ -7,9 +7,10 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyError, AsyncmySSCursor
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.result._base import DMLResult, SQLResult
-from sqlspec.driver import rows_to_dicts
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -31,14 +32,15 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.config_tools import parse_mysql_dsn
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlstate, has_type_code, resolve_row_format
 
 if TYPE_CHECKING:
     from sqlspec.core.cache import CachedQuery
-    from sqlspec.core.parameters import ParameterValidator
+    from sqlspec.core.parameters._validator import ParameterValidator
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = (
     "AsyncmyStreamSource",

@@ -53,6 +53,12 @@ __all__ = (
 )
 
 ConditionFactory = Callable[[exp.Expr, exp.Expr], exp.Expr]
+_COLUMN_SEGMENT_RE: Final["re.Pattern[str]"] = re.compile(r"\A[\w$-]+\Z", re.UNICODE)
+
+
+def _is_valid_column_segment(segment: str) -> bool:
+    return "--" not in segment and _COLUMN_SEGMENT_RE.fullmatch(segment) is not None
+
 
 _TABLE_QUALIFIED_PARTS: Final[int] = 2
 _DATABASE_QUALIFIED_PARTS: Final[int] = 3
@@ -179,23 +185,24 @@ def parse_column_for_condition(column: str | exp.Column | exp.Expr) -> exp.Expr:
     if isinstance(column, exp.Expr):
         return column
 
-    if isinstance(column, str):
-        if not column.strip() or "\x00" in column:
-            msg = "Column name must be nonempty and must not contain NUL characters"
+    col_name = column if isinstance(column, str) else str(column)
+    if not col_name.strip() or "\x00" in col_name:
+        msg = "Column name must be nonempty and must not contain NUL characters"
+        raise SQLSpecError(msg)
+    if "." in col_name:
+        parts = col_name.split(".")
+        if len(parts) > _CATALOG_QUALIFIED_PARTS or not all(_is_valid_column_segment(part) for part in parts):
+            msg = f"Invalid qualified column name: {col_name!r}"
             raise SQLSpecError(msg)
-        if "." in column:
-            parts = column.split(".")
-            if len(parts) > _CATALOG_QUALIFIED_PARTS or not all(part.strip() for part in parts):
-                msg = f"Invalid qualified column name: {column!r}"
-                raise SQLSpecError(msg)
-            if len(parts) == _TABLE_QUALIFIED_PARTS:
-                return exp.column(parts[1], table=parts[0], copy=False)
-            if len(parts) == _DATABASE_QUALIFIED_PARTS:
-                return exp.column(parts[2], table=parts[1], db=parts[0], copy=False)
-            return exp.column(parts[3], table=parts[2], db=parts[1], catalog=parts[0], copy=False)
-        return exp.column(column, copy=False)
-
-    return exp.column(str(column), copy=False)
+        if len(parts) == _TABLE_QUALIFIED_PARTS:
+            return exp.column(parts[1], table=parts[0], copy=False)
+        if len(parts) == _DATABASE_QUALIFIED_PARTS:
+            return exp.column(parts[2], table=parts[1], db=parts[0], copy=False)
+        return exp.column(parts[3], table=parts[2], db=parts[1], catalog=parts[0], copy=False)
+    if not _is_valid_column_segment(col_name):
+        msg = f"Invalid column name: {col_name!r}"
+        raise SQLSpecError(msg)
+    return exp.column(col_name, copy=False)
 
 
 def extract_column_name(column: str | exp.Column | exp.Expr) -> str:

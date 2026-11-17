@@ -22,7 +22,7 @@ from sqlspec.adapters.duckdb.core import (
     create_duckdb_profile_path,
     create_mapped_exception,
 )
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, with_cause
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -816,9 +816,9 @@ def _open_duckdb_connection(
             try:
                 connection = duckdb.connect(**connect_parameters)
             except duckdb.Error as retry_exc:
-                raise create_mapped_exception(retry_exc) from retry_exc
+                raise with_cause(create_mapped_exception(retry_exc), retry_exc) from retry_exc
         elif isinstance(exc, duckdb.Error):
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
         else:
             raise
     return connection, deferred_parquet_metadata_cache

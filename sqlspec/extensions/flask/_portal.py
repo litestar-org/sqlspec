@@ -10,10 +10,10 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.utils.routing import RoutingContext, RoutingContextPayload
-from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding
+from sqlspec.utils.tenant._context import TenantContext, TenantContextPayload, TenantRequestBinding
 
 if TYPE_CHECKING:
     from sqlspec.utils.portal import Portal

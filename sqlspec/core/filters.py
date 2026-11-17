@@ -38,7 +38,7 @@ from sqlspec.core.query_modifiers import (
     sanitize_parameter_name,
     wrap_as_subquery,
 )
-from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
+from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError, with_cause
 from sqlspec.utils.type_guards import has_field_name
 from sqlspec.utils.uuids import uuid4
 
@@ -931,7 +931,7 @@ class CursorFilter(PaginationFilter):
                 value = row[key.result_name]
             except KeyError as exc:
                 msg = f"Cursor key column '{key.result_name}' is not present in the result row; select it or set CursorKey.result_name"
-                raise ImproperConfigurationError(msg) from exc
+                raise with_cause(ImproperConfigurationError(msg), exc) from exc
             if value is None and key.nulls is None:
                 msg = f"Cursor key '{key.field_name}' returned NULL; declare nulls='first' or nulls='last'"
                 raise ImproperConfigurationError(msg)

@@ -16,7 +16,7 @@ from sqlspec.observability import ObservabilityRuntime
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
 
 def _events(count: int = 1_000) -> "list[tuple[str, dict[str, Any], dict[str, Any] | None]]":
@@ -280,7 +280,7 @@ class _AsyncQueueConfig:
         return self.runtime
 
     @asynccontextmanager
-    async def provide_session(self, **_: Any) -> "AsyncIterator[Any]":
+    async def provide_session(self, **_: Any) -> "AsyncGenerator[Any, None]":
         self.sessions += 1
         yield self.driver
 
@@ -328,7 +328,7 @@ class _NativeAsyncConfig:
         return self.runtime
 
     @asynccontextmanager
-    async def provide_session(self, **_: Any) -> "AsyncIterator[Any]":
+    async def provide_session(self, **_: Any) -> "AsyncGenerator[Any, None]":
         self.sessions += 1
         yield self.driver
 

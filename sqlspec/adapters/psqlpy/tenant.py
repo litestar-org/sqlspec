@@ -15,7 +15,7 @@ from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
     from sqlspec.core.tenant.base import AsyncTenantStrategy
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 PSQLPY_DISPOSAL_TIMEOUT_S: Final = 2.0
 _IDLE_PROBE: Final = "SELECT transaction_timestamp() = statement_timestamp()"

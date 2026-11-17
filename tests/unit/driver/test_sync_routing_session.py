@@ -3,7 +3,7 @@
 import asyncio
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -780,7 +780,7 @@ class _BoundedMaxOneSqliteConfig(SqliteConfig):
         super().__init__(**kwargs)
 
     @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+    def provide_session(self, *args: Any, **kwargs: Any) -> Generator[Any, None, None]:
         if not self._checkout_gate.acquire(blocking=False):
             msg = "max_size=1 primary pool exhausted"
             raise TimeoutError(msg)

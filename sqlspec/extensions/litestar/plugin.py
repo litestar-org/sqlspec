@@ -73,6 +73,7 @@ from sqlspec.extensions.litestar.tenant import (
     tenant_receipt_key,
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
+from sqlspec.utils.config_tools import resolve_extension_commit_mode
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -1511,7 +1512,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         connection_key = litestar_config.get("connection_key", DEFAULT_CONNECTION_KEY)
         pool_key = litestar_config.get("pool_key", DEFAULT_POOL_KEY)
         session_key = litestar_config.get("session_key", DEFAULT_SESSION_KEY)
-        commit_mode = litestar_config.get("commit_mode", DEFAULT_COMMIT_MODE)
+        commit_mode = resolve_extension_commit_mode(config, litestar_config, DEFAULT_COMMIT_MODE)
 
         if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
             pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
@@ -1807,11 +1808,17 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 }:
                     return state
 
+        matches: list[PluginConfigState] = []
         for state in self._plugin_configs:
             if state.annotation is None:
                 self._raise_plugin_not_registered()
             if key in {state.config, state.annotation}:
-                return state
+                matches.append(state)
+
+        if len(matches) > 1 and isinstance(key, type):
+            self._raise_ambiguous_config_type(key, matches)
+        if matches:
+            return matches[0]
 
         self._raise_config_not_found(key)
         msg = "unreachable"
@@ -1886,7 +1893,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         bind_keys = [state.config.bind_key or "<unbound>" for state in candidates]
         msg = (
             f"Multiple database configurations use the type '{config_type.__name__}'. "
-            f"Look one up by its bind key instead. Candidate bind keys: {bind_keys}"
+            f"Pass the configuration instance instead. Candidate bind keys: {bind_keys}"
         )
         raise KeyError(msg)
 

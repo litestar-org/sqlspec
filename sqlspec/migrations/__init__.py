@@ -100,5 +100,5 @@ def __dir__() -> list[str]:
 
 if _COMPILED:
     for _name in __all__:
-        if _name not in globals():
+        if _name not in globals() and _EXPORTS[_name][0] != "sqlspec.migrations.commands":
             __getattr__(_name)

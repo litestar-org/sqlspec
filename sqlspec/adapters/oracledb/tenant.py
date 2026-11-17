@@ -33,7 +33,7 @@ from sqlspec.adapters.oracledb.core import (
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
 from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease, await_owned_disposal
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
-from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+from sqlspec.utils.tenant._context import TenantContext, TenantContextPayload
 from sqlspec.utils.type_guards import has_pipeline_capability
 
 if TYPE_CHECKING:

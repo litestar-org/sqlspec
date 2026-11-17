@@ -40,22 +40,17 @@ from sqlspec.builder._parsing_utils import (
     _resolve_dialect,
 )
 from sqlspec.builder._vector_distance import has_vector_distance_ancestor, register_vector_distance_generator
-from sqlspec.core import (
-    SQL,
-    ParameterStyle,
-    ParameterStyleConfig,
-    ParameterValidator,
-    StatementConfig,
-    get_cache,
-    get_cache_config,
-    hash_optimized_expression,
-)
+from sqlspec.core.cache import get_cache, get_cache_config
 from sqlspec.core.compiler import validate_placeholder_names
 from sqlspec.core.filters import StatementFilter
-from sqlspec.core.hashing import _expression_cache_fingerprint
+from sqlspec.core.hashing import _expression_cache_fingerprint, hash_optimized_expression
+from sqlspec.core.parameters._types import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.core.query_modifiers import is_valid_parameter_name, sanitize_parameter_name
-from sqlspec.data_dictionary import DialectConfig, get_dialect_config
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.data_dictionary._types import DialectConfig
+from sqlspec.exceptions import SQLBuilderError, with_cause
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, is_expression
 from sqlspec.utils.uuids import uuid4
@@ -104,6 +99,7 @@ class BuiltQuery:
         return hash((self.sql, frozenset(self.parameters.items()), self.dialect))
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class QueryBuilder:
     """Abstract base class for SQL query builders.
 
@@ -633,7 +629,7 @@ class QueryBuilder:
         Raises:
             SQLBuilderError: Always raises this exception.
         """
-        raise SQLBuilderError(message) from cause
+        raise with_cause(SQLBuilderError(message), cause) from cause
 
     @staticmethod
     def _raise_invalid_expression_type(expression: Any) -> NoReturn:
@@ -673,7 +669,7 @@ class QueryBuilder:
             SQLBuilderError: Always raised with chained cause
         """
         msg = f"Failed to parse CTE query: {cause!s}"
-        raise SQLBuilderError(msg) from cause
+        raise with_cause(SQLBuilderError(msg), cause) from cause
 
     def _prepare_expression_for_build(self, dialect: DialectType = None, *, copy: bool = True) -> exp.Expr:
         """Validate builder state and return the expression ready for optimization and rendering."""
@@ -1395,6 +1391,7 @@ class QueryBuilder:
         return str(dialect).lower() not in _UPPER_FOLDING_DIALECTS
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ExpressionBuilder(QueryBuilder):
     """Builder wrapper for a pre-parsed SQLGlot expression."""
 

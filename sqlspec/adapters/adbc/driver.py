@@ -8,7 +8,9 @@ import contextlib
 import sys
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, final
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcNotSupportedError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
@@ -41,25 +43,23 @@ from sqlspec.adapters.adbc.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
-from sqlspec.core import (
-    SQL,
-    StatementConfig,
-    build_arrow_result_from_reader,
-    build_arrow_result_from_table,
-    get_cache_config,
-    register_driver_profile,
-)
-from sqlspec.core.parameters import ParameterValidator
-from sqlspec.core.result import DMLResult
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
-from sqlspec.driver._common import cache_hit_hooks_unchanged
-from sqlspec.exceptions import DatabaseConnectionError, DataError, SQLSpecError, TransactionError
-from sqlspec.observability import resolve_db_system
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.core.result._base import DMLResult, build_arrow_result_from_reader, build_arrow_result_from_table
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_savepoint_name
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import DatabaseConnectionError, DataError, SQLSpecError, TransactionError, with_cause
+from sqlspec.observability._common import resolve_db_system
+from sqlspec.storage._utils import import_pyarrow
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional, import_optional_attr
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers._json import to_json
 from sqlspec.utils.text import (
     normalize_identifier,
     quote_identifier,
@@ -71,10 +71,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcRawCursor
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import Statement
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext")
@@ -90,7 +93,7 @@ _CATALOG_QUALIFIED_PARTS = 3
 _SCRIPT_PARAMETER_VALIDATOR = ParameterValidator()
 
 
-@final
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AdbcExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling ADBC database exceptions.
 
@@ -241,7 +244,7 @@ class AdbcSelectStreamSource:
                 self._owner.close()
 
 
-@final
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AdbcDriver(SyncDriverAdapterBase):
     """ADBC driver for Arrow Database Connectivity.
 
@@ -589,7 +592,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             except (AdbcNotSupportedError, NotImplementedError):
                 pass
             except AdbcNativeError as exc:
-                raise self._map_native_error(exc) from exc
+                raise with_cause(self._map_native_error(exc), exc) from exc
         if (
             native is not None
             and callable(getattr(native, "set_autocommit", None))
@@ -607,12 +610,14 @@ class AdbcDriver(SyncDriverAdapterBase):
             except AdbcNotSupportedError as exc:
                 self._previous_autocommit = None
                 msg = f"ADBC {self._dialect_name} cannot disable autocommit; this driver supports autocommit-only operations."
-                raise TransactionError(msg) from exc
+                error = TransactionError(msg)
+                error.__cause__ = exc
+                raise error from exc
             except BaseException as exc:
                 with contextlib.suppress(BaseException):
                     native.set_autocommit(True)
                 if isinstance(exc, AdbcNativeError):
-                    raise self._map_native_error(exc) from exc
+                    raise with_cause(self._map_native_error(exc), exc) from exc
                 raise
             self._previous_autocommit = True
         self._transaction_active = True
@@ -1059,8 +1064,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         def resolve(name: str) -> str:
             return resolve_catalog_identifier(name, catalog_columns) or name
 
-        ensure_pyarrow()
-        import pyarrow as pa
+        pa = import_pyarrow()
 
         source_data: Any = source.get_data() if hasattr(source, "get_data") else source
         if hasattr(source_data, "read_next_batch"):
@@ -1077,22 +1081,6 @@ class AdbcDriver(SyncDriverAdapterBase):
             [resolve(name) for name in conflict_keys] if conflict_keys else conflict_keys,
             [resolve(name) for name in exclude_update_columns] if exclude_update_columns else exclude_update_columns,
             {resolve(name): value for name, value in type_casts.items()} if type_casts else type_casts,
-        )
-
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Read an artifact from storage and ingest it via ADBC."""
-
-        return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
         )
 
     def collect_rows(self, cursor: "AdbcRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
@@ -1210,7 +1198,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             self._previous_autocommit = None
             self._transaction_active = False
         if isinstance(primary, AdbcNativeError):
-            raise self._map_native_error(primary) from primary
+            raise with_cause(self._map_native_error(primary), primary) from primary
         if primary is not None:
             raise primary
 

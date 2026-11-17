@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 from sqlglot import parse_one
 
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteCursor, SqliteDriver
 from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config, resolve_lastrowid
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import json_converter, register_type_handlers, unregister_type_handlers
@@ -234,30 +234,31 @@ def test_execute_many_closes_cursor() -> None:
         connection.close()
 
 
-def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails() -> None:
     import pyarrow as pa
 
-    connection = sqlite3.connect(":memory:")
-    connection.execute("CREATE TABLE target (value INTEGER)")
-    driver = SqliteDriver(
-        connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
-    )
     batches_prepared = 0
 
-    def prepare(parameters: Any, *args: Any, **kwargs: Any) -> Any:
-        nonlocal batches_prepared
-        batches_prepared += 1
-        if batches_prepared == 2:
-            raise ValueError("conversion failed")
-        return parameters
+    class _FailingPrepareSqliteDriver(SqliteDriver):
+        def prepare_driver_parameters(
+            self, parameters: Any, statement_config: Any, is_many: bool = False, prepared_statement: Any = None
+        ) -> Any:
+            nonlocal batches_prepared
+            batches_prepared += 1
+            if batches_prepared == 2:
+                raise ValueError("conversion failed")
+            return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
 
-    monkeypatch.setattr(SqliteDriver, "_arrow_rows_need_preparation", lambda *args: True)
-    monkeypatch.setattr(
-        SqliteDriver, "prepare_driver_parameters", lambda self, *args, **kwargs: prepare(*args, **kwargs)
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE target (value TEXT)")
+    driver = _FailingPrepareSqliteDriver(
+        connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
     )
+    nested_values = pa.table({"value": [[number] for number in range(10001)]})
     try:
         with pytest.raises(ValueError, match="conversion failed"):
-            driver.load_from_arrow("target", pa.table({"value": list(range(10001))}))
+            driver.load_from_arrow("target", nested_values)
+        assert batches_prepared == 2
         assert connection.in_transaction is False
         assert connection.execute("SELECT COUNT(*) FROM target").fetchone() == (0,)
     finally:
@@ -528,3 +529,24 @@ def test_cached_select_maps_errors_raised_while_fetching_rows() -> None:
                 session.execute(statement)
     finally:
         config.close_pool()
+
+
+def test_cursor_context_closes_the_cursor_and_ignores_a_failing_close() -> None:
+    closed: list[str] = []
+
+    class FailingCursor:
+        def close(self) -> None:
+            closed.append("close")
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+
+    class Connection:
+        def cursor(self) -> FailingCursor:
+            return FailingCursor()
+
+    with SqliteCursor(cast("Any", Connection())) as cursor:
+        assert isinstance(cursor, FailingCursor)
+    assert closed == ["close"]
+
+    with pytest.raises(ValueError, match="statement failed"), SqliteCursor(cast("Any", Connection())):
+        raise ValueError("statement failed")
+    assert closed == ["close", "close"]

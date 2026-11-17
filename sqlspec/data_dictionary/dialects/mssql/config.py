@@ -5,7 +5,9 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.builder._ddl import compile_table_ddl_results
-from sqlspec.data_dictionary import (
+from sqlspec.data_dictionary._capabilities import system_metadata_gated_result
+from sqlspec.data_dictionary._registry import register_dialect
+from sqlspec.data_dictionary._types import (
     DDLResult,
     DialectConfig,
     FeatureFlags,
@@ -22,14 +24,12 @@ from sqlspec.data_dictionary import (
     SystemMetadataRequest,
     SystemMetadataResult,
     VersionInfo,
-    register_dialect,
-    system_metadata_gated_result,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.data_dictionary import TableMetadata
+    from sqlspec.data_dictionary._types import TableMetadata
 
 __all__ = (
     "MSSQL_CONFIG",

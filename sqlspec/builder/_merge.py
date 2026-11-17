@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Self, cast
 from uuid import UUID
 
 import sqlglot
-from mypy_extensions import trait
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
@@ -28,9 +28,9 @@ from sqlspec.builder._parsing_utils import (
     unwrap_expression_source,
 )
 from sqlspec.core.splitter import contains_statement_terminator
-from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
+from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError, with_cause
 from sqlspec.utils.dispatch import TypeDispatcher
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers._json import to_json
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -91,6 +91,7 @@ _FORBIDDEN_MERGE_CONDITION_NODES: Final[tuple[type[exp.Expr], ...]] = (
 )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class _MergeAssignmentMixin:
     """Shared assignment helpers for MERGE clause mixins."""
@@ -115,6 +116,7 @@ class _MergeAssignmentMixin:
         whens.append("expressions", when_node)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class MergeIntoClauseMixin:
     """Mixin providing INTO clause for MERGE builders."""
@@ -143,6 +145,7 @@ class MergeIntoClauseMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class MergeUsingClauseMixin(_MergeAssignmentMixin):
     """Mixin providing USING clause for MERGE builders."""
@@ -654,6 +657,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         return exp.paren(select_expr, copy=False)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class MergeOnClauseMixin:
     """Mixin providing ON clause for MERGE builders."""
@@ -671,6 +675,7 @@ class MergeOnClauseMixin:
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class MergeMatchedClauseMixin(_MergeAssignmentMixin):
     """Mixin providing WHEN MATCHED THEN ... clauses for MERGE builders."""
@@ -718,6 +723,7 @@ class MergeMatchedClauseMixin(_MergeAssignmentMixin):
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
     """Mixin providing WHEN NOT MATCHED THEN ... clauses for MERGE builders."""
@@ -789,6 +795,7 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 @trait
 class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
     """Mixin providing WHEN NOT MATCHED BY SOURCE THEN ... clauses."""
@@ -823,6 +830,7 @@ class MergeNotMatchedBySourceClauseMixin(_MergeAssignmentMixin):
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Merge(
     QueryBuilder,
     MergeUsingClauseMixin,
@@ -1004,7 +1012,7 @@ def _parse_merge_condition(
             statements = sqlglot.parse(condition, read=dialect_name)
         except SqlglotError as exc:
             msg = f"Could not parse {condition_label}: {condition}"
-            raise SQLBuilderError(msg) from exc
+            raise with_cause(SQLBuilderError(msg), exc) from exc
         if len(statements) != 1 or statements[0] is None:
             msg = f"Could not parse {condition_label}: {condition}"
             raise SQLBuilderError(msg)

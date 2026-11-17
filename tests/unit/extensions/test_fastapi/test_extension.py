@@ -10,6 +10,8 @@ import pytest
 
 pytest.importorskip("fastapi")
 
+from collections.abc import AsyncGenerator
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
@@ -257,7 +259,7 @@ def _make_deferred_tenant_config(checkouts: list[_TenantConn]) -> AiosqliteConfi
             return None
 
         @asynccontextmanager
-        async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
             payload = TenantContext.get()
             if payload is None:
                 raise TenantContextError("Tenant context required")

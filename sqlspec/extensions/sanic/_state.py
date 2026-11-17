@@ -37,14 +37,14 @@ class SanicConfigState:
     pool_key: str
     session_key: str
     commit_mode: CommitMode
-    extra_commit_statuses: "set[int] | None"
-    extra_rollback_statuses: "set[int] | None"
+    extra_commit_statuses: set[int] | None
+    extra_rollback_statuses: set[int] | None
     disable_di: bool
     tenant_extractor: Callable[[Any], Any] | None = None
     tenant_receipt_keys: tuple[str, ...] = field(default=(), init=False, repr=False, compare=False)
     enable_correlation_middleware: bool = True
     correlation_header: str = "x-request-id"
-    correlation_headers: "tuple[str, ...] | None" = None
+    correlation_headers: tuple[str, ...] | None = None
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
     sqlcommenter_framework: str = "sanic"

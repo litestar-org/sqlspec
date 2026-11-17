@@ -29,23 +29,18 @@ from sqlspec.adapters.psqlpy._typing import (
     TargetSessionAttrs,
 )
 from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
-    ParameterStyleConfig,
-    StatementConfig,
-    build_statement_config_from_profile,
-)
+from sqlspec.core.cache import CachedQuery
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
     is_postgres_extension_active,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.core.parameters import type_coercion_dispatcher, type_coercion_fallbacks
+from sqlspec.core.parameters._processor import type_coercion_dispatcher, type_coercion_fallbacks
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle, ParameterStyleConfig
 from sqlspec.core.result._base import DMLResult, SQLResult
 from sqlspec.core.sqlcommenter import split_sqlcomment
-from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -64,10 +59,11 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
     _classify_timeout_or_cancellation,
+    with_cause,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer, build_uuid_coercions
 from sqlspec.utils.type_guards import has_query_result_metadata
@@ -76,7 +72,7 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlspec.core import SQL
+    from sqlspec.core.statement import SQL, StatementConfig
 
 __all__ = (
     "PsqlpyStreamSource",
@@ -567,7 +563,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     ):
         return _create_postgres_error(error, ReadOnlyTransactionError, "read-only transaction")
 
-    if isinstance(error, PsqlpyDataError):
+    if isinstance(error, (PsqlpyDataError, TypeError)):
         return _create_postgres_error(error, DataError, "data error")
 
     if "syntax error" in error_msg or "parse error" in error_msg:
@@ -704,7 +700,7 @@ def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[An
         serialized_value = serializer(value)
     except Exception as error:
         msg = "Failed to serialize JSON parameter for psqlpy."
-        raise SQLSpecError(msg) from error
+        raise with_cause(SQLSpecError(msg), error) from error
     return serialized_value
 
 
@@ -718,7 +714,7 @@ def _coerce_uuid_parameter(value: Any) -> Any:
             return uuid_from_string(value)
         except ValueError as error:
             msg = "Invalid UUID parameter for psqlpy."
-            raise SQLSpecError(msg) from error
+            raise with_cause(SQLSpecError(msg), error) from error
     return value
 
 
@@ -733,7 +729,7 @@ def _coerce_timestamp_parameter(value: Any) -> Any:
             return dt.datetime.fromisoformat(normalized_value)
         except ValueError as error:
             msg = "Invalid ISO timestamp parameter for psqlpy."
-            raise SQLSpecError(msg) from error
+            raise with_cause(SQLSpecError(msg), error) from error
     return value
 
 

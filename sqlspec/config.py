@@ -1032,6 +1032,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     _default_statement_config: "ClassVar[StatementConfig]"
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
+    supports_transactions: "ClassVar[bool]" = True
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_native_arrow_import: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = False

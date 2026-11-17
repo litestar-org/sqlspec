@@ -28,7 +28,7 @@ from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.core import ParameterStyle
 from sqlspec.core.compiler import OperationType
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLSpecError, UniqueViolationError
 
 
 def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
@@ -548,3 +548,88 @@ async def test_aiosqlite_transaction_open_checks_worker_thread(monkeypatch: pyte
         assert all(tid != threading.get_ident() for tid in observed_threads)
     finally:
         await conn.close()
+
+
+def _record_worker_round_trips(connection: aiosqlite.Connection, monkeypatch: pytest.MonkeyPatch) -> "list[str]":
+    round_trips: list[str] = []
+    execute_on_worker: Any = connection._execute
+
+    async def recorded(function: Any, *args: Any, **kwargs: Any) -> Any:
+        round_trips.append(getattr(function, "__name__", repr(function)))
+        return await execute_on_worker(function, *args, **kwargs)
+
+    monkeypatch.setattr(connection, "_execute", recorded)
+    return round_trips
+
+
+async def test_each_statement_takes_one_worker_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(connection=connection)
+        await driver.execute_script("CREATE TABLE round_trips (id INTEGER PRIMARY KEY, value TEXT)")
+        round_trips = _record_worker_round_trips(connection, monkeypatch)
+
+        await driver.begin()
+        begin_round_trips = len(round_trips)
+        round_trips.clear()
+        many = await driver.execute_many("INSERT INTO round_trips (value) VALUES (?)", [("a",), ("b",), ("c",)])
+        many_round_trips = len(round_trips)
+        round_trips.clear()
+        inserted = await driver.execute("INSERT INTO round_trips (value) VALUES (:value)", {"value": "d"})
+        insert_round_trips = len(round_trips)
+        round_trips.clear()
+        await driver.execute_script(
+            "UPDATE round_trips SET value = 'z' WHERE id = 1; DELETE FROM round_trips WHERE id = 2"
+        )
+        script_round_trips = len(round_trips)
+        selected = await driver.execute("SELECT value FROM round_trips WHERE id = :id", {"id": 1})
+
+        assert (begin_round_trips, many_round_trips, insert_round_trips, script_round_trips) == (1, 1, 1, 2)
+        assert many.rows_affected == 3
+        assert inserted.rows_affected == 1
+        assert inserted.last_inserted_id == 4
+        assert selected.get_data() == [{"value": "z"}]
+        assert connection.in_transaction
+    finally:
+        await connection.close()
+
+
+async def test_failing_statement_without_cursor_round_trip_maps_error_and_keeps_connection_usable() -> None:
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(connection=connection)
+        await driver.execute_script("CREATE TABLE unique_values (id INTEGER PRIMARY KEY)")
+
+        with pytest.raises(UniqueViolationError):
+            await driver.execute_many("INSERT INTO unique_values (id) VALUES (?)", [(1,), (1,)])
+        with pytest.raises(SQLSpecError):
+            await driver.execute_script(
+                "INSERT INTO unique_values (id) VALUES (2); INSERT INTO missing_table VALUES (1)"
+            )
+
+        assert await driver.select_value("SELECT COUNT(*) FROM unique_values WHERE id = 2") == 1
+    finally:
+        await connection.close()
+
+
+async def test_subclass_dispatch_override_still_receives_an_open_cursor() -> None:
+    received: list[Any] = []
+
+    class _CursorUsingDriver(AiosqliteDriver):
+        async def dispatch_execute_many(self, cursor: Any, statement: Any) -> Any:
+            received.append(cursor)
+            await cursor.execute("INSERT INTO subclass_rows (value) VALUES ('from-cursor')")
+            return await super().dispatch_execute_many(cursor, statement)
+
+    connection = await aiosqlite.connect(":memory:")
+    try:
+        driver = _CursorUsingDriver(connection=connection)
+        await driver.execute_script("CREATE TABLE subclass_rows (id INTEGER PRIMARY KEY, value TEXT)")
+
+        result = await driver.execute_many("INSERT INTO subclass_rows (value) VALUES (?)", [("a",), ("b",)])
+
+        assert result.rows_affected == 2
+        assert isinstance(received[0], aiosqlite.Cursor)
+        assert await driver.select_value("SELECT COUNT(*) FROM subclass_rows") == 3
+    finally:
+        await connection.close()

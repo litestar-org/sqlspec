@@ -4,10 +4,11 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo, register_dialect
+from sqlspec.data_dictionary._registry import register_dialect
+from sqlspec.data_dictionary._types import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo
 
 if TYPE_CHECKING:
-    from sqlspec.data_dictionary import TableMetadata
+    from sqlspec.data_dictionary._types import TableMetadata
 
 __all__ = (
     "ORACLE_CONFIG",

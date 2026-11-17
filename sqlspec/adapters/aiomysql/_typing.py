@@ -19,16 +19,15 @@ from aiomysql.cursors import Cursor as _AiomysqlCursor
 from aiomysql.cursors import DictCursor as _AiomysqlDictCursor
 from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE
 
+from sqlspec.driver._session import AsyncDriverSessionContext
+
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-    from types import TracebackType
     from typing import Protocol, TypeAlias
 
     from pymysql.err import Error as _PymysqlError
     from pymysql.err import MySQLError as _PymysqlMySQLError
 
     from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
-    from sqlspec.core import StatementConfig
 
     class AiomysqlConnectionProtocol(Protocol):
         async def cursor(self, cursor: "type[AiomysqlRawCursor] | None" = None) -> "AiomysqlRawCursor": ...
@@ -87,8 +86,6 @@ __all__ = (
     "AiomysqlSessionContext",
 )
 
-_resolved_driver_type: "type[AiomysqlDriver] | None" = None
-
 
 class AiomysqlCursor:
     """Context manager for aiomysql cursor operations.
@@ -122,85 +119,16 @@ class AiomysqlCursor:
                 await self.cursor.close()
 
 
-class AiomysqlSessionContext:
-    """Async context manager for aiomysql sessions.
+class AiomysqlSessionContext(AsyncDriverSessionContext):
+    """Async context manager for aiomysql sessions."""
 
-    This class is intentionally excluded from mypyc compilation to avoid ABI
-    boundary issues. It receives callables from uncompiled config classes and
-    instantiates compiled Driver objects, acting as a bridge between compiled
-    and uncompiled code.
+    __slots__ = ()
 
-    Uses callable-based connection management to decouple from config implementation.
-    """
+    if TYPE_CHECKING:
 
-    __slots__ = (
-        "_acquire_connection",
-        "_connection",
-        "_driver",
-        "_driver_features",
-        "_prepare_driver",
-        "_release_connection",
-        "_statement_config",
-    )
+        async def __aenter__(self) -> "AiomysqlDriver": ...
 
-    def __init__(
-        self,
-        acquire_connection: "Callable[[], Awaitable[AiomysqlConnection]]",
-        release_connection: "Callable[..., Any]",
-        statement_config: "StatementConfig",
-        driver_features: "dict[str, Any]",
-        prepare_driver: "Callable[[AiomysqlDriver], AiomysqlDriver]",
-    ) -> None:
-        self._acquire_connection = acquire_connection
-        self._release_connection = release_connection
-        self._statement_config = statement_config
-        self._driver_features = driver_features
-        self._prepare_driver = prepare_driver
-        self._connection: AiomysqlConnection | None = None
-        self._driver: AiomysqlDriver | None = None
+    def _resolve_driver_class(self) -> "type[AiomysqlDriver]":
+        from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
 
-    async def __aenter__(self) -> "AiomysqlDriver":
-        driver_cls = _get_aiomysql_driver_type()
-        self._connection = await self._acquire_connection()
-        try:
-            self._driver = driver_cls(
-                connection=self._connection,
-                statement_config=self._statement_config,
-                driver_features=self._driver_features,
-            )
-            return self._prepare_driver(self._driver)
-        except BaseException as exc:
-            with contextlib.suppress(Exception):
-                await self.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
-
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
-        driver = self._driver
-        try:
-            if driver is not None:
-                await driver._close_open_streams(error=exc_type is not None)
-        except BaseException as close_exc:
-            if exc_type is None:
-                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
-            raise
-        finally:
-            try:
-                if self._connection is not None:
-                    await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                    self._connection = None
-            finally:
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
-        return None
-
-
-def _get_aiomysql_driver_type() -> "type[AiomysqlDriver]":
-    global _resolved_driver_type
-    if _resolved_driver_type is None:
-        from sqlspec.adapters.aiomysql.driver import AiomysqlDriver as _Driver
-
-        _resolved_driver_type = _Driver
-    return _resolved_driver_type
+        return AiomysqlDriver

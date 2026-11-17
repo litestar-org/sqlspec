@@ -17,15 +17,11 @@ from sqlspec.adapters.spanner._typing import SpannerTypeCode as TypeCode
 from sqlspec.adapters.spanner._typing import spanner_exceptions as api_exceptions
 from sqlspec.adapters.spanner._typing import spanner_param_types
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
-from sqlspec.core import (
-    DriverParameterProfile,
-    ParameterStyle,
-    StatementConfig,
-    TypedParameter,
-    build_statement_config_from_profile,
-)
-from sqlspec.driver import rows_to_dicts
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle, TypedParameter
+from sqlspec.core.statement import StatementConfig
 from sqlspec.driver._exception_handler import _run_with_async_exception_handler, _run_with_sync_exception_handler
+from sqlspec.driver._stream import rows_to_dicts
 from sqlspec.exceptions import (
     DataError,
     DeadlockError,
@@ -40,10 +36,11 @@ from sqlspec.exceptions import (
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
+    with_cause,
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
 from sqlspec.utils.routing import RoutingContext
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.sync_tools import exit_async_context
 
 if TYPE_CHECKING:
@@ -629,6 +626,7 @@ class _SpannerSyncTransactionWork:
         except DeadlockError as exc:
             cause = exc.__cause__
             if isinstance(cause, api_exceptions.Aborted):
+                cause.__cause__ = None
                 raise cause from None
             raise
 
@@ -649,6 +647,7 @@ class _SpannerAsyncTransactionWork:
         except DeadlockError as exc:
             cause = exc.__cause__
             if isinstance(cause, api_exceptions.Aborted):
+                cause.__cause__ = None
                 raise cause from None
             raise
 
@@ -678,7 +677,7 @@ def run_in_transaction_sync(
     try:
         return database.run_in_transaction(_SpannerSyncTransactionWork(build_driver, fn), *args, **kwargs)
     except api_exceptions.GoogleAPICallError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 async def run_in_transaction_async(
@@ -706,7 +705,7 @@ async def run_in_transaction_async(
     try:
         return await database.run_in_transaction(_SpannerAsyncTransactionWork(build_driver, fn), *args, **kwargs)
     except api_exceptions.GoogleAPICallError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 def list_existing_table_names_sync(database: Any) -> "set[str]":
@@ -801,7 +800,7 @@ def execute_partitioned_dml_sync(
             database.execute_partitioned_dml(sql, params=coerced_params, param_types=resolved_types, **kwargs) or 0
         )
     except api_exceptions.GoogleAPICallError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 async def execute_partitioned_dml_async(
@@ -843,7 +842,7 @@ async def execute_partitioned_dml_async(
         )
         return int(result or 0)
     except api_exceptions.GoogleAPICallError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 class _SpannerStreamSourceBase:
@@ -1046,7 +1045,11 @@ def resolve_snapshot_kwargs(
     if not supplied and default_staleness is not None and apply_default_staleness:
         supplied = dict(default_staleness)
         if multi_use is None:
-            multi_use = supplied.pop("multi_use", None)
+            raw_multi_use: Any = supplied.pop("multi_use", None)
+            if raw_multi_use is not None and not isinstance(raw_multi_use, bool):
+                msg = "Spanner multi_use must be a boolean"
+                raise ImproperConfigurationError(msg)
+            multi_use = raw_multi_use
         else:
             supplied.pop("multi_use", None)
         if len(supplied) > 1:
@@ -1063,7 +1066,7 @@ def resolve_snapshot_kwargs(
                     value = timedelta(seconds=value)
                 except (ValueError, OverflowError) as exc:
                     msg = "Spanner staleness must be finite and within the supported duration range"
-                    raise ImproperConfigurationError(msg) from exc
+                    raise with_cause(ImproperConfigurationError(msg), exc) from exc
             if not isinstance(value, timedelta) or value.total_seconds() < 0:
                 msg = "Spanner staleness must be a nonnegative duration or numeric seconds"
                 raise ImproperConfigurationError(msg)
@@ -1073,7 +1076,7 @@ def resolve_snapshot_kwargs(
                     value = datetime.fromisoformat(value)
                 except ValueError as exc:
                     msg = "Spanner snapshot timestamps must be valid ISO-8601 values"
-                    raise ImproperConfigurationError(msg) from exc
+                    raise with_cause(ImproperConfigurationError(msg), exc) from exc
             if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
                 msg = "Spanner snapshot timestamps must include a timezone"
                 raise ImproperConfigurationError(msg)
@@ -1189,7 +1192,7 @@ async def _run_read_async(
             read_error = caught
         await exit_async_context(snapshot_context, read_error)
     except api_exceptions.GoogleAPICallError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
     return rows
 
 
@@ -1209,7 +1212,7 @@ def _run_read(
             reader = cast("_SpannerReadProtocol", snapshot)
             return list(reader.execute_sql(sql, params=params, param_types=types))
     except api_exceptions.GoogleAPICallError as exc:
-        raise create_mapped_exception(exc) from exc
+        raise with_cause(create_mapped_exception(exc), exc) from exc
 
 
 class _SpannerSyncUpdateJob:

@@ -6,6 +6,7 @@ parameter binding and validation.
 
 from typing import TYPE_CHECKING, Any
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = ("Delete",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin, ExplainMixin):
     """Builder for DELETE statements.
 

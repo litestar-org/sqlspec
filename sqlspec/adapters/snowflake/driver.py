@@ -8,6 +8,8 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.snowflake._typing import SnowflakeCursor
 from sqlspec.adapters.snowflake.core import (
     DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS,
@@ -26,31 +28,35 @@ from sqlspec.adapters.snowflake.core import (
     normalize_many_parameters,
     resolve_rowcount,
 )
-from sqlspec.core import (
-    SQL,
-    StatementConfig,
-    build_arrow_result_from_reader,
-    build_arrow_result_from_table,
-    get_cache_config,
-    register_driver_profile,
-)
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.result._base import build_arrow_result_from_reader, build_arrow_result_from_table
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.storage._staging_sql import build_create_table_from_arrow_schema
+from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet
 from sqlspec.typing import ArrowReturnFormat, StatementParameters
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.serializers import to_json as encode_json
+from sqlspec.utils.serializers._json import to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, CachedQuery, SQLResult, Statement, StatementFilter
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import Statement
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("SnowflakeDriver", "SnowflakeExceptionHandler")
 
@@ -106,8 +112,7 @@ def _iter_arrow_tables(cursor: Any, features: Mapping[str, Any]) -> Iterator[Any
     except NotSupportedError:
         row_fallback = True
     if row_fallback:
-        ensure_pyarrow()
-        import pyarrow as pa
+        pa = import_pyarrow()
 
         raw_names = [descriptor_column_name(column) for column in cursor.description or ()]
         names = normalize_column_names(
@@ -131,8 +136,7 @@ def _iter_arrow_tables(cursor: Any, features: Mapping[str, Any]) -> Iterator[Any
 
 def materialize_arrow_table_from_batches(cursor: Any, driver_features: Mapping[str, Any]) -> Any:
     """Read native Arrow batches, preserving metadata for empty and JSON results."""
-    ensure_pyarrow()
-    import pyarrow as pa
+    pa = import_pyarrow()
 
     tables = list(_iter_arrow_tables(cursor, driver_features))
     if not tables:
@@ -148,8 +152,7 @@ def build_arrow_reader_from_cursor(
     batch_size: int | None = None,
 ) -> Any:
     """Stream Arrow batches and close the cursor on exhaustion or early close."""
-    ensure_pyarrow()
-    import pyarrow as pa
+    pa = import_pyarrow()
 
     tables = iter(_iter_arrow_tables(cursor, driver_features))
     try:
@@ -174,6 +177,7 @@ def build_arrow_reader_from_cursor(
     return arrow_reader_with_deferred_close(reader, cursor_close_callback)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SnowflakeExceptionHandler(BaseSyncExceptionHandler):
     """Capture mapped connector exceptions outside compiled context-manager frames."""
 
@@ -186,6 +190,7 @@ class SnowflakeExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SnowflakeDriver(SyncDriverAdapterBase):
     """Execute Snowflake SQL with explicit transactions and zero-pandas Arrow I/O."""
 
@@ -198,7 +203,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         "_paramstyle",
         "_session_query_tag",
     )
-    dialect = "snowflake"
+    dialect: "DialectType | None" = "snowflake"
     native_arrow_export: ClassVar[bool] = True
 
     def __init__(
@@ -297,7 +302,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
     ) -> "SQLResult":
         """Apply statement correlation and Snowflake row semantics on cache hits."""
         statement = self._cached_statement(
-            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            sql, params, cached, params, params_are_simple=True, compiled_sql=self._format_wire_sql(cached.compiled_sql)
         )
         try:
             with self.with_cursor(self.connection) as cursor:
@@ -717,10 +722,10 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         ):
             self._load_parquet_stage(formatted, arrow_table, overwrite=overwrite)
         elif arrow_table.num_rows or overwrite:
-            import pyarrow as pa
+            pa = import_pyarrow()
 
             nested = {field.name for field in arrow_table.schema if pa.types.is_nested(field.type)}
-            serializer = self.driver_features.get("json_serializer", encode_json)
+            serializer = self.driver_features.get("json_serializer", to_json)
             columns = ", ".join(quote_identifier(name) for name in arrow_table.column_names)
             names = [f"p{index}" for index in range(arrow_table.num_columns)]
             values = ", ".join(
@@ -775,7 +780,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
 
     def _load_parquet_stage(self, table: str, arrow_table: Any, *, overwrite: bool) -> None:
         """Upload Parquet to a user stage, then replace or append rows and copy them in one DML transaction."""
-        import pyarrow.parquet as pq
+        pq = import_pyarrow_parquet()
 
         stage = f"@~/sqlspec_stage/{uuid4().hex}/"
         handler = self.handle_database_exceptions()
@@ -848,9 +853,9 @@ class _SnowflakeArrowStreamSource:
             if batch is not None:
                 rows = batch.to_pylist()
                 if self._variant_names and self._driver.driver_features.get("enable_json_deserialization", True):
-                    from sqlspec.utils.serializers import from_json as decode_json
+                    from sqlspec.utils.serializers._json import from_json
 
-                    decoder = self._driver.driver_features.get("json_deserializer", decode_json)
+                    decoder = self._driver.driver_features.get("json_deserializer", from_json)
                     for row in rows:
                         for name in self._variant_names:
                             if isinstance(row.get(name), str):

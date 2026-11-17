@@ -13,7 +13,7 @@ from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, T
 
 if TYPE_CHECKING:
     from sqlspec.core.tenant.base import AsyncTenantStrategy, SyncTenantStrategy
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 __all__ = (
     "DEFAULT_DB2_TENANT_VARIABLE",

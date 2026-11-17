@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from sqlspec.adapters.adbc._typing import AdbcNativeError
 from sqlspec.adapters.adbc.core import create_mapped_exception
-from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError, with_cause
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -98,7 +98,7 @@ class AdbcConnectionPool:
                 try:
                     connection = self._seed.adbc_clone()
                 except AdbcNativeError as exc:
-                    raise create_mapped_exception(exc) from exc
+                    raise with_cause(create_mapped_exception(exc), exc) from exc
         except BaseException:
             with self._condition:
                 self._reservations -= 1

@@ -19,10 +19,13 @@ from sqlglot.tokens import Tokenizer
 
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
-from sqlspec.core import SQL, ParameterStyle, ParameterValidator, default_nulls, ordered
+from sqlspec.core._ordering import default_nulls, ordered
+from sqlspec.core.parameters._types import ParameterStyle
+from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.core.query_modifiers import is_valid_parameter_name, parse_column_for_condition
 from sqlspec.core.splitter import contains_statement_terminator
-from sqlspec.exceptions import SQLBuilderError, SQLSpecError
+from sqlspec.core.statement import SQL
+from sqlspec.exceptions import SQLBuilderError, SQLSpecError, with_cause
 from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
 
 if TYPE_CHECKING:
@@ -246,7 +249,7 @@ def parse_column_expression(
             parsed: exp.Expr | None = exp.maybe_parse(column_input, dialect=resolved_dialect)
         except SqlglotError as exc:
             msg = f"Invalid column expression: {column_input!r}"
-            raise SQLBuilderError(msg) from exc
+            raise with_cause(SQLBuilderError(msg), exc) from exc
         if parsed is None:
             msg = f"Invalid column expression: {column_input!r}"
             raise SQLBuilderError(msg)
@@ -352,7 +355,7 @@ def parse_table_function(
     try:
         statements = sqlglot.parse(f"SELECT * FROM {function_input}", dialect=_table_reader(dialect))
     except SqlglotError as error:
-        raise SQLBuilderError(msg) from error
+        raise with_cause(SQLBuilderError(msg), error) from error
 
     statement = statements[0] if len(statements) == 1 else None
     if not isinstance(statement, exp.Select) or _set_arguments(statement) != {"expressions", "from_"}:
@@ -423,7 +426,7 @@ def parse_order_expression(order_input: str | exp.Expr, *, dialect: "DialectType
         parsed = maybe_parse(order_value, into=exp.Ordered, dialect=resolved_dialect)
     except SqlglotError as exc:
         msg = f"Invalid ORDER BY expression: {order_input!r}"
-        raise SQLBuilderError(msg) from exc
+        raise with_cause(SQLBuilderError(msg), exc) from exc
     if parsed:
         inner = parsed.this if isinstance(parsed, exp.Ordered) and isinstance(parsed.this, exp.Expr) else parsed
         _validate_scalar_ast_nodes(inner, raw=order_value)
@@ -514,7 +517,7 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
             parsed = exp.condition(condition_input, dialect=resolved_dialect, copy=False)
     except SqlglotError as exc:
         msg = f"Invalid condition expression: {condition_input!r}"
-        raise SQLBuilderError(msg) from exc
+        raise with_cause(SQLBuilderError(msg), exc) from exc
 
     if (
         isinstance(parsed, (*_FORBIDDEN_STATEMENT_NODES, exp.Select, exp.SetOperation))
@@ -797,7 +800,7 @@ def _read_table_tokens(text: str, dialect: "DialectType | None", error: str) -> 
     try:
         tokens = list(_table_reader(dialect).tokenize(text))
     except SqlglotError as exc:
-        raise SQLBuilderError(error) from exc
+        raise with_cause(SQLBuilderError(error), exc) from exc
     if not tokens or any(token.comments for token in tokens) or _has_invisible_unquoted_text(text, tokens):
         raise SQLBuilderError(error)
     return tokens
@@ -1009,7 +1012,7 @@ def _coerce_column(value: str | exp.Expr | Column | FunctionColumn | ColumnExpre
         try:
             return parse_column_for_condition(value)
         except SQLSpecError as exc:
-            raise SQLBuilderError(str(exc)) from exc
+            raise with_cause(SQLBuilderError(str(exc)), exc) from exc
     if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
         return value.sqlglot_expression
     if isinstance(value, ExpressionWrapper):

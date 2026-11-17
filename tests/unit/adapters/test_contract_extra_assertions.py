@@ -1,7 +1,7 @@
 """Unit tests for the additive extra_assertions hook on the contract harness."""
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Generator
 
 import pytest
 
@@ -28,7 +28,7 @@ def _make_case(*extra_assertions: str) -> DriverCase:
 
 
 @contextlib.contextmanager
-def _registered_sync(key: str, scope: str) -> "Iterator[list[tuple[object, DriverCase]]]":
+def _registered_sync(key: str, scope: str) -> "Generator[list[tuple[object, DriverCase]], None, None]":
     calls: list[tuple[object, DriverCase]] = []
     register_sync_extra_assertion(key, scope, lambda driver, case: calls.append((driver, case)))
     try:
@@ -40,7 +40,7 @@ def _registered_sync(key: str, scope: str) -> "Iterator[list[tuple[object, Drive
 
 
 @contextlib.contextmanager
-def _registered_async(key: str, scope: str) -> "Iterator[list[tuple[object, DriverCase]]]":
+def _registered_async(key: str, scope: str) -> "Generator[list[tuple[object, DriverCase]], None, None]":
     calls: list[tuple[object, DriverCase]] = []
 
     async def _fn(driver: object, case: DriverCase) -> None:

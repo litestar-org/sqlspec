@@ -3,7 +3,7 @@
 import inspect
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
@@ -48,7 +48,7 @@ _ADK_PRIMARY_READ: ContextVar[bool] = ContextVar("sqlspec_adk_primary_read", def
 
 
 @contextmanager
-def adk_primary_read_scope() -> Iterator[None]:
+def adk_primary_read_scope() -> Generator[None, None, None]:
     """Keep reads inside a mutating ADK operation on the primary.
 
     Yields:

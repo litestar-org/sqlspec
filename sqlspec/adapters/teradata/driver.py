@@ -5,6 +5,8 @@ import re
 import sys
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.teradata._typing import (
     TeradataConnection,
     TeradataCursor,
@@ -32,22 +34,13 @@ from sqlspec.adapters.teradata.type_converter import (
     extract_arrow_column_types,
     prepare_teradata_parameters,
 )
-from sqlspec.core import (
-    SQL,
-    SQLResult,
-    StatementConfig,
-    build_arrow_result_from_reader,
-    create_arrow_result,
-    get_cache_config,
-    register_driver_profile,
-)
-from sqlspec.driver import (
-    BaseSyncExceptionHandler,
-    ExecutionResult,
-    SyncDriverAdapterBase,
-    SyncRowStream,
-    rows_to_dicts,
-)
+from sqlspec.core.cache import CachedQuery, get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.result._base import DMLResult, SQLResult, build_arrow_result_from_reader, create_arrow_result
+from sqlspec.driver._common import validate_load_from_storage_kwargs
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream, rows_to_dicts
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, TransactionError
 from sqlspec.utils.arrow_helpers import (
     arrow_batches_from_rows,
@@ -59,10 +52,15 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.teradata._typing import TeradataQueryParams as QueryParams
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, CachedQuery, Statement, StatementFilter
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = (
@@ -77,6 +75,7 @@ logger = get_logger("sqlspec.adapters.teradata")
 _SESSION_QUERY_BAND_SQL_PATTERN = re.compile(r"\bQUERY_BAND\b.*\bFOR\s+SESSION\b", re.IGNORECASE | re.DOTALL)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class TeradataExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling Teradata Vantage teradatasql exceptions."""
 
@@ -186,6 +185,7 @@ class TeradataStreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class TeradataDriver(SyncDriverAdapterBase):
     """Teradata Vantage database driver using teradatasql."""
 
@@ -197,7 +197,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         "_stream_sources",
         "_transaction_active",
     )
-    dialect = "vantage"
+    dialect: "DialectType | None" = "vantage"
 
     def __init__(
         self,
@@ -312,7 +312,9 @@ class TeradataDriver(SyncDriverAdapterBase):
             self._transaction_active = True
         except Exception as exc:
             msg = "Failed to begin Teradata transaction"
-            raise TransactionError(msg) from exc
+            error = TransactionError(msg)
+            error.__cause__ = exc
+            raise error from exc
 
     def commit(self) -> None:
         """Commit manual-mode work and restore the autocommit state captured by ``begin()``."""
@@ -325,7 +327,9 @@ class TeradataDriver(SyncDriverAdapterBase):
             self._previous_autocommit = None
         except Exception as exc:
             msg = "Failed to commit Teradata transaction"
-            raise TransactionError(msg) from exc
+            error = TransactionError(msg)
+            error.__cause__ = exc
+            raise error from exc
 
     def rollback(self) -> None:
         """Roll back manual-mode work and restore the autocommit state captured by ``begin()``."""
@@ -338,7 +342,9 @@ class TeradataDriver(SyncDriverAdapterBase):
             self._previous_autocommit = None
         except Exception as exc:
             msg = "Failed to rollback Teradata transaction"
-            raise TransactionError(msg) from exc
+            error = TransactionError(msg)
+            error.__cause__ = exc
+            raise error from exc
 
     def set_query_band(self, band: "Mapping[str, str] | str", *, transaction: bool = False) -> None:
         """Apply validated query-band metadata to the session or active transaction."""
@@ -417,7 +423,7 @@ class TeradataDriver(SyncDriverAdapterBase):
             msg = "Teradata Arrow export uses chunked DB-API conversion"
             raise ImproperConfigurationError(msg)
         size = batch_size if batch_size is not None else int(self.driver_features.get("arraysize", 2048))
-        if isinstance(size, bool) or size < 1:
+        if isinstance(batch_size, bool) or size < 1:
             msg = "batch_size must be >= 1"
             raise ImproperConfigurationError(msg)
         fast = bool(self.driver_features.get("enable_fastexport", False))
@@ -599,8 +605,27 @@ class TeradataDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load staged artifacts from storage into the target Teradata table."""
         if kwargs:
+            validate_load_from_storage_kwargs(kwargs)
             return super().load_from_storage(
-                table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
+                table,
+                source,
+                file_format=file_format,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                storage_options=kwargs.get("storage_options"),
+                stage_table=kwargs.get("stage_table"),
+                conflict_keys=kwargs.get("conflict_keys"),
+                on_conflict=kwargs.get("on_conflict", "update"),
+                exclude_update_columns=kwargs.get("exclude_update_columns"),
+                drop_stage_table=kwargs.get("drop_stage_table", True),
+                drop_indexes=kwargs.get("drop_indexes", False),
+                concurrent_indexes=kwargs.get("concurrent_indexes", False),
+                checkpoint_table=kwargs.get("checkpoint_table"),
+                checkpoint_phase=kwargs.get("checkpoint_phase", "default"),
+                max_workers=kwargs.get("max_workers", 1),
+                executor=kwargs.get("executor", "thread"),
+                arrow_schema=kwargs.get("arrow_schema"),
+                type_casts=kwargs.get("type_casts"),
             )
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
@@ -625,8 +650,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a compiled cache hit while preserving FastExport, row coercion, and DDL commit rules."""
-        _ = sql
-        compiled_sql = cached.compiled_sql
+        compiled_sql = self._format_wire_sql(cached.compiled_sql)
         returns_rows = cached.operation_profile.returns_rows
         exec_sql = (
             maybe_prefix_fastexport(
@@ -642,10 +666,8 @@ class TeradataDriver(SyncDriverAdapterBase):
         names: list[str] = []
         column_types: dict[str, str] = {}
         affected = 0
-        exc_handler = self.handle_database_exceptions()
 
-        def _run(cursor: "TeradataRawCursor") -> None:
-            nonlocal names, column_types, affected
+        with self.with_cursor(self.connection) as cursor:
             cursor.arraysize = int(self.driver_features.get("arraysize", 2048))
             if _sets_session_query_band(compiled_sql):
                 self._session_query_band_dirty = True
@@ -660,33 +682,25 @@ class TeradataDriver(SyncDriverAdapterBase):
                 while chunk := cursor.fetchmany(cursor.arraysize):
                     rows.extend(coerce_teradata_row(row, description=description) for row in chunk)
                 column_types = extract_arrow_column_types(description, column_names=names)
-                return
-            if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(compiled_sql):
-                self.connection.commit()
-            affected = resolve_rowcount(cursor)
-
-        with self.with_cursor(self.connection) as cursor:
-            if sys.exc_info()[1] is None:
-                with exc_handler:
-                    _run(cursor)
             else:
-                self._run_with_exception_handler(exc_handler, _run, cursor)
-        self._check_pending_exception(exc_handler)
+                if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(compiled_sql):
+                    self.connection.commit()
+                affected = resolve_rowcount(cursor)
 
         if returns_rows:
-            return SQLResult(
-                statement=None,
-                data=rows,
-                rows_affected=len(rows),
-                operation_type=cached.operation_type,
+            result = self.build_cached_select_result(
+                sql,
+                params,
+                cached,
+                selected_data=rows,
                 column_names=names,
-                total_count=len(rows),
+                data_row_count=len(rows),
                 row_format="tuple",
-                metadata={"column_types": column_types},
+                compiled_sql=exec_sql,
             )
-        return SQLResult(
-            statement=None, data=[], rows_affected=affected, operation_type=cached.operation_type, total_count=0
-        )
+            result.metadata = {"column_types": column_types}
+            return result
+        return DMLResult(cached.operation_type, affected)
 
     def _release_open_work(self) -> None:
         for source in tuple(self._stream_sources):

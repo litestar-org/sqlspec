@@ -15,7 +15,7 @@ The fakes reproduce the ``ibm_db_dbi`` 3.3 semantics the Db2 adapter depends on:
 """
 
 import inspect
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, Callable, Generator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Self
 
@@ -499,7 +499,7 @@ class FakeDb2SessionConfig(_FakeDb2SessionState):
     """Config stand-in whose sessions run a real ``Db2SyncDriver`` over one scripted fake connection."""
 
     @contextmanager
-    def provide_session(self, **_: Any) -> "Iterator[Db2SyncDriver]":
+    def provide_session(self, **_: Any) -> "Generator[Db2SyncDriver, None, None]":
         """Yield a driver bound to the shared fake connection."""
         yield Db2SyncDriver(
             self.connection, statement_config=default_statement_config, driver_features=self.driver_features
@@ -514,7 +514,7 @@ class FakeDb2AsyncSessionConfig(_FakeDb2SessionState):
     """
 
     @asynccontextmanager
-    async def provide_session(self, **_: Any) -> "AsyncIterator[Any]":
+    async def provide_session(self, **_: Any) -> "AsyncGenerator[Any, None]":
         """Yield an async driver bound to the shared fake connection."""
         yield db2_driver.Db2AsyncDriver(
             FakeDb2AsyncConnection(self.connection),
@@ -657,7 +657,7 @@ class DriverMode:
         return result
 
     @asynccontextmanager
-    async def enter(self, manager: Any) -> "AsyncIterator[Any]":
+    async def enter(self, manager: Any) -> "AsyncGenerator[Any, None]":
         """Enter a sync or async context manager.
 
         Yields:

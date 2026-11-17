@@ -1,6 +1,6 @@
 """Tenant leases keep each adapter's native session commit behavior."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from inspect import isawaitable
@@ -169,7 +169,7 @@ async def _invoke(function: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 @asynccontextmanager
-async def _session(config: Any) -> "AsyncIterator[Any]":
+async def _session(config: Any) -> "AsyncGenerator[Any, None]":
     context = config.provide_session()
     if isinstance(context, AbstractAsyncContextManager):
         async with context as session:

@@ -1,7 +1,7 @@
 """Teradata Vantage ADK stores for Google Agent Development Kit session storage."""
 
 import re
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
@@ -1255,7 +1255,7 @@ def _create_missing_index(driver: Any, table_name: str, index_name: str, columns
 
 
 @contextmanager
-def _transaction(config: "TeradataConfig") -> Iterator[tuple[Any, Any]]:
+def _transaction(config: "TeradataConfig") -> Generator[tuple[Any, Any], None, None]:
     """Keep compound DML atomic and restore autocommit.
 
     Yields:

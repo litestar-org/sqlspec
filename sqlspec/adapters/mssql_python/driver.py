@@ -5,6 +5,8 @@ import sys
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.mssql_python._typing import (
     MssqlPythonConnection,
     MssqlPythonCursor,
@@ -26,20 +28,13 @@ from sqlspec.adapters.mssql_python.core import (
     validate_bulk_identifier,
 )
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
-from sqlspec.core import (
-    build_arrow_result_from_reader,
-    build_arrow_result_from_table,
-    get_cache_config,
-    register_driver_profile,
-)
-from sqlspec.driver import (
-    BaseSyncExceptionHandler,
-    SyncDriverAdapterBase,
-    SyncRowStream,
-    rows_to_dicts,
-    validate_savepoint_name,
-)
-from sqlspec.driver._common import cache_hit_hooks_unchanged
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.result._base import build_arrow_result_from_reader, build_arrow_result_from_table
+from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_savepoint_name
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream, rows_to_dicts
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
@@ -48,10 +43,15 @@ from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.builder._base import QueryBuilder
+    from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import ArrowResult, SQLResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 
@@ -72,6 +72,7 @@ class MssqlPythonBulkCopyResult(TypedDict):
     """Wall-clock bulk-copy execution time in seconds."""
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class MssqlPythonExceptionHandler(BaseSyncExceptionHandler):
     """Sync context manager handling mssql-python exceptions."""
 
@@ -145,6 +146,7 @@ class MssqlPythonStreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class MssqlPythonDriver(SyncDriverAdapterBase):
     """mssql-python sync driver."""
 
@@ -156,7 +158,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         "_restore_autocommit",
         "_transaction_active",
     )
-    dialect = "tsql"
+    dialect: "DialectType | None" = "tsql"
     native_arrow_export: ClassVar[bool] = True
 
     def __init__(
@@ -238,7 +240,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         except MssqlPythonError as exc:
             mapped = create_mapped_exception(exc)
             msg = f"Failed to begin transaction: {mapped}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._restore_autocommit = restore_autocommit
         self._transaction_active = True
 
@@ -248,7 +252,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         except MssqlPythonError as exc:
             mapped = create_mapped_exception(exc)
             msg = f"Failed to commit transaction: {mapped}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
         self._transaction_active = False
         self._implicit_transaction = False
         self._restore_connection_autocommit()
@@ -259,7 +265,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         except MssqlPythonError as exc:
             mapped = create_mapped_exception(exc)
             msg = f"Failed to rollback transaction: {mapped}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
         finally:
             self._transaction_active = False
             self._implicit_transaction = False
@@ -689,26 +697,14 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    def load_from_storage(
-        self,
-        table: str,
-        source: "StorageDestination",
-        *,
-        file_format: "StorageFormat",
-        partitioner: "dict[str, object] | None" = None,
-        overwrite: bool = False,
-        **kwargs: Any,
-    ) -> "StorageBridgeJob":
-        """Load staged artifacts from storage into SQL Server via BulkCopy."""
-        return super().load_from_storage(
-            table, source, file_format=file_format, partitioner=partitioner, overwrite=overwrite, **kwargs
-        )
-
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached statement through the compiled mssql-python cache-hit executor."""
-        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._column_name_cache)
+        wire_sql = self._format_wire_sql(cached.compiled_sql) if self.statement_config.enable_sqlcommenter else None
+        return execute_cache_hit(
+            self.connection, sql, params, cached, self.statement_config, self._column_name_cache, wire_sql
+        )
 
     @staticmethod
     def _validate_bulk_column_mappings(column_mappings: "Sequence[str] | Sequence[tuple[int, str]] | None") -> None:
@@ -742,7 +738,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         except MssqlPythonError as exc:
             mapped = create_mapped_exception(exc)
             msg = f"Failed to restore autocommit: {mapped}"
-            raise type(mapped)(msg) from exc
+            error = type(mapped)(msg)
+            error.__cause__ = exc
+            raise error from exc
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:

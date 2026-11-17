@@ -25,7 +25,7 @@ from sqlspec.utils.schema import to_schema
 if TYPE_CHECKING:
     from types import TracebackType
 
-    from sqlspec.core import SQL
+    from sqlspec.core.statement import SQL
 
 __all__ = (
     "AsyncRowSource",

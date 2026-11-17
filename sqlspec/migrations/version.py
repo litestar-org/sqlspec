@@ -33,8 +33,7 @@ logger = get_logger(__name__)
 
 SEQUENTIAL_PATTERN = re.compile(r"^(?!\d{14}$)\d+$")
 TIMESTAMP_PATTERN = re.compile(r"^(\d{14})$")
-EXTENSION_PATTERN = re.compile(r"^ext_(\w+)_(.+)$")
-EXTENSION_STEM_PATTERN = re.compile(r"^ext_(?P<name>\w+?)_(?P<version>\d+)(?:_.*)?$")
+_WORD_SEGMENT_RE = re.compile(r"\A\w+\Z")
 
 
 class VersionType(Enum):
@@ -232,10 +231,9 @@ def parse_version(version_str: "str | None") -> MigrationVersion:
         msg = "Invalid migration version: version string is None or empty"
         raise ValueError(msg)
 
-    extension_match = EXTENSION_PATTERN.match(version_str)
-    if extension_match:
-        extension_name = extension_match.group(1)
-        base_version = extension_match.group(2)
+    extension_parts = _parse_extension_version(version_str)
+    if extension_parts is not None:
+        extension_name, base_version = extension_parts
         parsed = parse_version(base_version)
 
         return MigrationVersion(
@@ -261,6 +259,16 @@ def parse_version(version_str: "str | None") -> MigrationVersion:
     raise ValueError(msg)
 
 
+def _parse_extension_version(version_str: str) -> "tuple[str, str] | None":
+    """Split ``ext_<name>_<version>`` deterministically without regex backtracking."""
+    if not version_str.startswith("ext_"):
+        return None
+    extension_name, sep, base_version = version_str[4:].rpartition("_")
+    if not sep or not base_version or _WORD_SEGMENT_RE.fullmatch(extension_name) is None:
+        return None
+    return extension_name, base_version
+
+
 def parse_extension_stem(stem: str) -> "tuple[str, str] | None":
     """Split an extension migration filename stem into its extension name and version.
 
@@ -275,10 +283,17 @@ def parse_extension_stem(stem: str) -> "tuple[str, str] | None":
         Tuple of extension name and version, or None when the stem is not an
         extension-prefixed migration.
     """
-    match = EXTENSION_STEM_PATTERN.match(stem)
-    if match is None:
+    if not stem.startswith("ext_"):
         return None
-    return match.group("name"), match.group("version")
+    parts = stem[4:].split("_")
+    for index in range(1, len(parts)):
+        prev = parts[index - 1]
+        if not prev or _WORD_SEGMENT_RE.fullmatch(prev) is None:
+            return None
+        segment = parts[index]
+        if segment and segment.isascii() and segment.isdigit():
+            return "_".join(parts[:index]), segment
+    return None
 
 
 def extract_migration_version(filename: str) -> "str | None":

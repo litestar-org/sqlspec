@@ -1,6 +1,6 @@
 """External database boundary fixtures for Snowflake extension store tests."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 from unittest.mock import MagicMock
@@ -24,7 +24,7 @@ def store_config(
     driver.select.return_value = []
 
     @contextmanager
-    def provide_session(self: SnowflakeConfig, *args: Any, **kwargs: Any) -> Iterator[Any]:
+    def provide_session(self: SnowflakeConfig, *args: Any, **kwargs: Any) -> Generator[Any, None, None]:
         yield driver
 
     monkeypatch.setattr(SnowflakeConfig, "provide_session", provide_session)

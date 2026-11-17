@@ -391,12 +391,12 @@ def sign_primary_pin(
 
 
 def verify_primary_pin(
-    token: str, secret: str | bytes, *, bind_key: str | None = None, clock: Callable[[], float] = time.time
+    token: Any, secret: str | bytes, *, bind_key: str | None = None, clock: Callable[[], float] = time.time
 ) -> tuple[bool, str | None]:
     """Verify an HMAC-signed primary pin cookie value and check expiration and bind key.
 
     Args:
-        token: Raw cookie value supplied by the client.
+        token: Raw cookie value supplied by the client; a missing or non-string value is invalid.
         secret: Shared HMAC secret key (non-empty ``str`` or ``bytes``).
         bind_key: Logical database bind key expected for this check.
         clock: Wall-clock epoch provider in seconds.
@@ -466,7 +466,9 @@ def validate_routing_middleware_settings(
             routing_header.encode("ascii")
         except UnicodeEncodeError as exc:
             msg = "routing_header must be None or a non-empty printable ASCII header name"
-            raise ImproperConfigurationError(msg) from exc
+            error = ImproperConfigurationError(msg)
+            error.__cause__ = exc
+            raise error from exc
     if primary_pin_cookie is not None and (
         not isinstance(primary_pin_cookie, str)
         or not primary_pin_cookie.strip()

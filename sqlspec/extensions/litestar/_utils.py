@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
     from litestar.types import Scope
 
@@ -167,7 +167,7 @@ def _current_task() -> "asyncio.Task[Any] | None":
 
 
 @contextmanager
-def request_session_scope() -> "Iterator[_RequestSessionHolder]":
+def request_session_scope() -> "Generator[_RequestSessionHolder, None, None]":
     """Install a request session holder owned by the current task for the enclosed request.
 
     Yields:

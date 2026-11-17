@@ -25,7 +25,7 @@ from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection
     from sqlspec.core.tenant.base import AsyncTenantStrategy
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 __all__ = ("AsyncpgRLSStrategy", "AsyncpgTenantLease", "apply_session_baseline", "validate_asyncpg_tenant_config")
 

@@ -13,21 +13,22 @@ import asyncio
 import contextlib
 from abc import abstractmethod
 from collections.abc import Iterable, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, final, overload
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 from sqlspec.core.statement import SQL, ProcessedState
-from sqlspec.exceptions import MultipleResultsFoundError
-from sqlspec.storage import (
+from sqlspec.exceptions import MultipleResultsFoundError, with_cause
+from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
     StorageDestination,
     StorageFormat,
     StorageTelemetry,
     SyncStoragePipeline,
+    close_async_arrow_result_resources,
+    close_sync_arrow_source,
 )
-from sqlspec.storage.pipeline import close_async_arrow_result_resources, close_sync_arrow_source
 from sqlspec.utils.arrow_helpers import (
     arrow_reader_to_return_format,
     arrow_table_column_names,
@@ -55,7 +56,15 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowReturnFormat, ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
 
-__all__ = ("ArrowResult", "DMLResult", "EmptyResult", "SQLResult", "StackResult", "StatementResult")
+__all__ = (
+    "ArrowResult",
+    "CachedSelectResult",
+    "DMLResult",
+    "EmptyResult",
+    "SQLResult",
+    "StackResult",
+    "StatementResult",
+)
 
 T = TypeVar("T")
 RowFormat = Literal["dict", "tuple", "record"]
@@ -290,18 +299,18 @@ class SQLResult(StatementResult):
     """
 
     __slots__ = (
+        "_column_names",
+        "_errors",
+        "_inserted_ids",
         "_materialized_dicts",
         "_row_format",
         "_schema_row_cache",
         "_schema_rows_cache",
-        "column_names",
+        "_statement_results",
         "error",
-        "errors",
         "has_more",
-        "inserted_ids",
         "operation_index",
         "parameters",
-        "statement_results",
         "successful_statements",
         "total_count",
         "total_statements",
@@ -371,21 +380,73 @@ class SQLResult(StatementResult):
         self._schema_rows_cache: dict[type[Any], list[Any]] | None = None
         self._schema_row_cache: dict[type[Any], Any] | None = None
 
-        self.column_names = column_names or []
+        self._column_names: list[str] | None = column_names
         self.total_count = total_count
         self.has_more = has_more
-        self.inserted_ids = inserted_ids or []
-        self.statement_results = statement_results or []
-        self.errors = errors or []
+        self._inserted_ids: list[int | str] | None = inserted_ids
+        self._statement_results: list[SQLResult] | None = statement_results
+        self._errors: list[str] | None = errors
         self.total_statements = total_statements
         self.successful_statements = successful_statements
 
-        if not self.column_names and data and len(data) > 0:
+        if not self._column_names and data and len(data) > 0:
             first_row = data[0]
             if isinstance(first_row, dict):
-                self.column_names = list(first_row.keys())
+                self._column_names = list(first_row.keys())
         if self.total_count is None:
             self.total_count = len(data) if data is not None else 0
+
+    @property
+    def column_names(self) -> "list[str]":
+        """Column names for the result set, initialized lazily when empty."""
+        val = self._column_names
+        if val is None:
+            val = []
+            self._column_names = val
+        return val
+
+    @column_names.setter
+    def column_names(self, value: "list[str]") -> None:
+        self._column_names = value
+
+    @property
+    def inserted_ids(self) -> "list[int | str]":
+        """Inserted row identifiers, allocated lazily."""
+        val = self._inserted_ids
+        if val is None:
+            val = []
+            self._inserted_ids = val
+        return val
+
+    @inserted_ids.setter
+    def inserted_ids(self, value: "list[int | str]") -> None:
+        self._inserted_ids = value
+
+    @property
+    def statement_results(self) -> "list[SQLResult]":
+        """Individual statement results for scripts, allocated lazily."""
+        val = self._statement_results
+        if val is None:
+            val = []
+            self._statement_results = val
+        return val
+
+    @statement_results.setter
+    def statement_results(self, value: "list[SQLResult]") -> None:
+        self._statement_results = value
+
+    @property
+    def errors(self) -> "list[str]":
+        """Script error messages, allocated lazily."""
+        val = self._errors
+        if val is None:
+            val = []
+            self._errors = val
+        return val
+
+    @errors.setter
+    def errors(self, value: "list[str]") -> None:
+        self._errors = value
 
     def __len__(self) -> int:
         """Get the number of rows in the result set.
@@ -443,7 +504,7 @@ class SQLResult(StatementResult):
         Returns:
             Number of columns.
         """
-        return len(self.column_names) if self.column_names else 0
+        return len(self._column_names) if self._column_names else 0
 
     @classmethod
     def create_cached_select(
@@ -460,23 +521,18 @@ class SQLResult(StatementResult):
         last_inserted_id: int | str | None = None,
     ) -> "SQLResult":
         """Construct a fast-path SELECT result with deferred SQL statement materialization."""
-        result = SQLResult(
-            statement=None,
+        return CachedSelectResult(
+            sql=sql,
+            config=config,
+            cached_state=cached_state,
+            compiled_sql=compiled_sql,
+            params=params,
             data=data,
-            rows_affected=rows_affected,
-            last_inserted_id=last_inserted_id,
-            metadata=_DEFAULT_DML_METADATA,
-            operation_type="SELECT",
             column_names=column_names,
-            total_count=rows_affected,
+            rows_affected=rows_affected,
             row_format=row_format,
+            last_inserted_id=last_inserted_id,
         )
-        result._lazy_sql = sql
-        result._lazy_config = config
-        result._lazy_cached_state = cached_state
-        result._lazy_compiled_sql = compiled_sql
-        result._lazy_params = params
-        return result
 
     def is_success(self) -> bool:
         """Check if the operation was successful.
@@ -486,17 +542,17 @@ class SQLResult(StatementResult):
         """
         op_type = self.operation_type
 
-        if op_type == "SCRIPT" or self.statement_results:
-            return not self.errors and self.total_statements == self.successful_statements
+        if op_type == "SCRIPT" or self._statement_results:
+            return not self._errors and self.total_statements == self.successful_statements
 
         if op_type == "SELECT":
             return self.data is not None and self.rows_affected >= 0
 
         if op_type in {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "EXECUTE"}:
-            return not self.errors and self.rows_affected >= 0
+            return not self._errors and self.rows_affected >= 0
 
         if op_type in {"DDL", "PRAGMA", "COPY", "COPY_FROM", "COPY_TO", "COMMAND"}:
-            return not self.errors and self.rows_affected >= -1
+            return not self._errors and self.rows_affected >= -1
 
         return False
 
@@ -556,9 +612,9 @@ class SQLResult(StatementResult):
         Returns:
             Total rows affected.
         """
-        if self.statement_results:
+        if self._statement_results:
             total = 0
-            for stmt in self.statement_results:
+            for stmt in self._statement_results:
                 if stmt.rows_affected and stmt.rows_affected > 0:
                     total += stmt.rows_affected
             return total
@@ -578,10 +634,18 @@ class SQLResult(StatementResult):
         Returns:
             First row (optionally transformed to schema_type) or None if no data.
         """
-        rows = self._get_rows()
-        if not rows:
-            return None
-        row = rows[0]
+        if self._materialized_dicts is None and not (self._row_format == "tuple" and not self._column_names):
+            raw = self.data
+            if not raw or not isinstance(raw, list):
+                return None
+            if __debug__:
+                self._assert_row_format_fidelity(raw)
+            row = _row_to_dict(raw[0], self._row_format, self._column_names)
+        else:
+            rows = self._get_rows()
+            if not rows:
+                return None
+            row = rows[0]
         if schema_type:
             return self._get_schema_row(schema_type, row)
         return row
@@ -673,17 +737,30 @@ class SQLResult(StatementResult):
         Raises:
             ValueError: If no results or more than one result
         """
-        rows = self._get_rows()
-        if not rows:
-            msg = "No result found, exactly one row expected"
-            raise ValueError(msg)
+        if self._materialized_dicts is None and not (self._row_format == "tuple" and not self._column_names):
+            raw = self.data
+            if not raw or not isinstance(raw, list):
+                msg = "No result found, exactly one row expected"
+                raise ValueError(msg)
+            data_len = len(raw)
+            if data_len > 1:
+                msg = f"Multiple results found ({data_len}), exactly one row expected"
+                raise ValueError(msg)
+            if __debug__:
+                self._assert_row_format_fidelity(raw)
+            row = _row_to_dict(raw[0], self._row_format, self._column_names)
+        else:
+            rows = self._get_rows()
+            if not rows:
+                msg = "No result found, exactly one row expected"
+                raise ValueError(msg)
 
-        data_len = len(rows)
-        if data_len > 1:
-            msg = f"Multiple results found ({data_len}), exactly one row expected"
-            raise ValueError(msg)
+            data_len = len(rows)
+            if data_len > 1:
+                msg = f"Multiple results found ({data_len}), exactly one row expected"
+                raise ValueError(msg)
 
-        row = rows[0]
+            row = rows[0]
         if schema_type:
             return self._get_schema_row(schema_type, row)
         return row
@@ -705,16 +782,28 @@ class SQLResult(StatementResult):
         Raises:
             MultipleResultsFoundError: If more than one result.
         """
-        rows = self._get_rows()
-        if not rows:
-            return None
+        if self._materialized_dicts is None and not (self._row_format == "tuple" and not self._column_names):
+            raw = self.data
+            if not raw or not isinstance(raw, list):
+                return None
+            data_len = len(raw)
+            if data_len > 1:
+                msg = f"Multiple results found ({data_len}), at most one row expected"
+                raise MultipleResultsFoundError(msg)
+            if __debug__:
+                self._assert_row_format_fidelity(raw)
+            row = _row_to_dict(raw[0], self._row_format, self._column_names)
+        else:
+            rows = self._get_rows()
+            if not rows:
+                return None
 
-        data_len = len(rows)
-        if data_len > 1:
-            msg = f"Multiple results found ({data_len}), at most one row expected"
-            raise MultipleResultsFoundError(msg)
+            data_len = len(rows)
+            if data_len > 1:
+                msg = f"Multiple results found ({data_len}), at most one row expected"
+                raise MultipleResultsFoundError(msg)
 
-        row = rows[0]
+            row = rows[0]
         if schema_type:
             return self._get_schema_row(schema_type, row)
         return row
@@ -725,6 +814,21 @@ class SQLResult(StatementResult):
         Returns:
             The scalar value from first column of first row
         """
+        if self._materialized_dicts is None and not (self._row_format == "tuple" and not self._column_names):
+            raw = self.data
+            if not raw or not isinstance(raw, list):
+                msg = "No result found, exactly one row expected"
+                raise ValueError(msg)
+            data_len = len(raw)
+            if data_len > 1:
+                msg = f"Multiple results found ({data_len}), exactly one row expected"
+                raise ValueError(msg)
+            if __debug__:
+                self._assert_row_format_fidelity(raw)
+            first_row = raw[0]
+            if self._row_format == "dict":
+                return next(iter(cast("dict[str, Any]", first_row).values()))
+            return first_row[0]
         row = self.one()
         return next(iter(row.values()))
 
@@ -734,6 +838,20 @@ class SQLResult(StatementResult):
         Returns:
             The scalar value from first column of first row, or None
         """
+        if self._materialized_dicts is None and not (self._row_format == "tuple" and not self._column_names):
+            raw = self.data
+            if not raw or not isinstance(raw, list):
+                return None
+            data_len = len(raw)
+            if data_len > 1:
+                msg = f"Multiple results found ({data_len}), at most one row expected"
+                raise MultipleResultsFoundError(msg)
+            if __debug__:
+                self._assert_row_format_fidelity(raw)
+            first_row = raw[0]
+            if self._row_format == "dict":
+                return next(iter(cast("dict[str, Any]", first_row).values()))
+            return first_row[0]
         row = self.one_or_none()
         if row is None:
             return None
@@ -842,7 +960,7 @@ class SQLResult(StatementResult):
         if fmt == "dict":
             self._materialized_dicts = raw
         elif fmt == "tuple":
-            col_names = self.column_names
+            col_names = self._column_names
             if not col_names:
                 self._materialized_dicts = []
             elif len(col_names) == 1:
@@ -875,7 +993,7 @@ class SQLResult(StatementResult):
                 keys = first_row.keys
             except AttributeError as exc:
                 msg = "row_format='record' requires dict-like rows"
-                raise AssertionError(msg) from exc
+                raise with_cause(AssertionError(msg), exc) from exc
             assert callable(keys), "row_format='record' requires dict-like rows"
 
     def _get_schema_rows(
@@ -1269,6 +1387,76 @@ class EmptyResult(StatementResult):
         return []
 
 
+def _row_to_dict(row: Any, fmt: RowFormat, col_names: "list[str] | None") -> "dict[str, Any]":
+    """Materialize a single raw row into a dict without allocating a row list."""
+    if fmt == "dict":
+        return cast("dict[str, Any]", row)
+    if fmt == "tuple":
+        if not col_names:
+            return {}
+        if len(col_names) == 1:
+            return {col_names[0]: row[0]}
+        if len(col_names) == _TWO_COLUMN_THRESHOLD:
+            return {col_names[0]: row[0], col_names[1]: row[1]}
+        return dict(zip(col_names, row, strict=False))
+    return dict(row)
+
+
+@final
+@mypyc_attr(allow_interpreted_subclasses=False)
+class CachedSelectResult(SQLResult):
+    """Optimized flat-slot SELECT result constructed by cached query fast paths."""
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        sql: str,
+        config: "StatementConfig",
+        cached_state: "ProcessedState",
+        compiled_sql: str,
+        params: Any,
+        data: "list[Any]",
+        column_names: "list[str]",
+        rows_affected: int,
+        row_format: RowFormat = "dict",
+        last_inserted_id: int | str | None = None,
+    ) -> None:
+        self._statement = None
+        self._lazy_sql = sql
+        self._lazy_config = config
+        self._lazy_cached_state = cached_state
+        self._lazy_compiled_sql = compiled_sql
+        self._lazy_params = params
+        self._operation_type = "SELECT"
+        self.data = data
+        self.rows_affected = rows_affected
+        self.last_inserted_id = last_inserted_id
+        self.execution_time = None
+        self.metadata = _DEFAULT_DML_METADATA
+
+        self.error = None
+        self.operation_index = None
+        self.parameters = None
+        self._row_format = row_format
+        self._materialized_dicts = None
+        self._schema_rows_cache = None
+        self._schema_row_cache = None
+
+        self._column_names = column_names
+        if not column_names and data:
+            first_row = data[0]
+            if isinstance(first_row, dict):
+                self._column_names = list(first_row.keys())
+        self.total_count = rows_affected
+        self.has_more = False
+        self._inserted_ids = None
+        self._statement_results = None
+        self._errors = None
+        self.total_statements = 0
+        self.successful_statements = 0
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class DMLResult(SQLResult):
     """Optimized result for simple DML operations (INSERT/UPDATE/DELETE).
@@ -1303,12 +1491,12 @@ class DMLResult(SQLResult):
         self._schema_rows_cache = None
         self._schema_row_cache = None
 
-        self.column_names: list[str] = []
+        self._column_names = None
         self.total_count = 0
         self.has_more = False
-        self.inserted_ids: list[int | str] = []
-        self.statement_results: list[SQLResult] = []
-        self.errors: list[str] = []
+        self._inserted_ids = None
+        self._statement_results = None
+        self._errors = None
         self.total_statements = 0
         self.successful_statements = 0
 

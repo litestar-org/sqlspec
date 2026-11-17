@@ -606,11 +606,13 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         return PsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config
-            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
+            statement_config=statement_config or self._default_runtime_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
+
+    def _default_runtime_statement_config(self) -> "StatementConfig":
+        return resolve_runtime_statement_config(None, self.statement_config, default_statement_config)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -1184,11 +1186,13 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         return PsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
-            statement_config=statement_config
-            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
+            statement_config=statement_config or self._default_runtime_statement_config,
             driver_features=self.driver_features,
             prepare_driver=self._prepare_driver,
         )
+
+    def _default_runtime_statement_config(self) -> "StatementConfig":
+        return resolve_runtime_statement_config(None, self.statement_config, default_statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.

@@ -248,7 +248,7 @@ def _to_json_str(data: Any) -> str:
     """Serialize log record dict to JSON string using cached serializer lookup."""
     global _TO_JSON_FN
     if _TO_JSON_FN is None:
-        from sqlspec.utils.serializers import to_json
+        from sqlspec.utils.serializers._json import to_json
 
         _TO_JSON_FN = to_json
     return cast("str", _TO_JSON_FN(data))
@@ -261,7 +261,7 @@ def _get_trace_context() -> "tuple[str | None, str | None]":
         Tuple of (trace_id, span_id) or (None, None) if unavailable.
     """
     try:
-        from sqlspec.observability import get_trace_context
+        from sqlspec.observability._common import get_trace_context
     except Exception:
         return (None, None)
     return get_trace_context()

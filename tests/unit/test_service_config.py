@@ -3,7 +3,7 @@
 import asyncio
 import sqlite3
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, closing, contextmanager, nullcontext
 from contextvars import copy_context
@@ -40,7 +40,7 @@ def sync_config(
         session.commit()
 
     @contextmanager
-    def observed(self: SqliteConfig, *args: Any, **kwargs: Any) -> Iterator[SqliteDriver]:
+    def observed(self: SqliteConfig, *args: Any, **kwargs: Any) -> Generator[SqliteDriver, None, None]:
         driver: SqliteDriver | None = None
         try:
             with original(self, *args, **kwargs) as driver:
@@ -68,7 +68,7 @@ async def async_config(
         await session.commit()
 
     @asynccontextmanager
-    async def observed(self: AiosqliteConfig, *args: Any, **kwargs: Any) -> AsyncIterator[AiosqliteDriver]:
+    async def observed(self: AiosqliteConfig, *args: Any, **kwargs: Any) -> AsyncGenerator[AiosqliteDriver, None]:
         driver: AiosqliteDriver | None = None
         try:
             async with original(self, *args, **kwargs) as driver:
@@ -367,7 +367,7 @@ def test_sync_transaction_failure_releases_and_resets(
     original_provider = SqliteConfig.provide_session
 
     @contextmanager
-    def provider(self: SqliteConfig) -> Iterator[SqliteDriver]:
+    def provider(self: SqliteConfig) -> Generator[SqliteDriver, None, None]:
         try:
             with original_provider(self) as driver:
                 yield driver
@@ -408,7 +408,7 @@ async def test_async_transaction_failure_releases_and_resets(
     original_provider = AiosqliteConfig.provide_session
 
     @asynccontextmanager
-    async def provider(self: AiosqliteConfig) -> AsyncIterator[AiosqliteDriver]:
+    async def provider(self: AiosqliteConfig) -> AsyncGenerator[AiosqliteDriver, None]:
         try:
             async with original_provider(self) as driver:
                 yield driver

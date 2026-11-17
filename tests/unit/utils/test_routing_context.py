@@ -168,6 +168,12 @@ def test_signed_primary_pin_roundtrip_expiry_and_bind_isolation() -> None:
     assert verify_primary_pin("x" * 1025, "top-secret", clock=lambda: now) == (False, None)
 
 
+@pytest.mark.parametrize("token", [None, 123, b"v1.1.a.b.c"])
+def test_verify_primary_pin_rejects_missing_and_non_string_tokens(token: Any) -> None:
+    """A missing cookie or a non-string value is reported as an invalid pin instead of raising."""
+    assert verify_primary_pin(token, "top-secret") == (False, None)
+
+
 @pytest.mark.parametrize(
     ("secret", "kwargs", "exc_type"),
     [

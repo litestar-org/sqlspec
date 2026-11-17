@@ -18,15 +18,16 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
-from sqlspec.core.parameters import (
+from sqlspec.core.parameters._alignment import validate_parameter_alignment
+from sqlspec.core.parameters._processor import (
     ParameterProcessor,
-    ParameterProfile,
+    _make_cache_key_tuple,
     structural_fingerprint,
-    validate_parameter_alignment,
     value_fingerprint,
 )
-from sqlspec.core.parameters._processor import _make_cache_key_tuple
+from sqlspec.core.parameters._types import ParameterProfile
 from sqlspec.core.sqlcommenter import _append_comment, _comment_attributes
+from sqlspec.exceptions import with_cause
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import get_value_attribute
 
@@ -1173,7 +1174,7 @@ class SQLProcessor:
             raise
         except RecursionError as exc:
             msg = "Statement nesting exceeds the supported depth"
-            raise sqlspec.exceptions.SQLParsingError(msg) from exc
+            raise with_cause(sqlspec.exceptions.SQLParsingError(msg), exc) from exc
         except ParseError as exc:
             log_with_context(logger, logging.DEBUG, "sql.compile", error_type=type(exc).__name__, status="fallback")
             fallback_profile = OperationProfile(returns_rows=SQLProcessor._statement_text_returns_rows(sql))

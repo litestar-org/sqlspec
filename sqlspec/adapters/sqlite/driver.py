@@ -31,7 +31,7 @@ from sqlspec.driver._common import cache_hit_hooks_unchanged, validate_savepoint
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, with_cause
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -100,7 +100,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SqliteDataDictionary | None = None
-        self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
+        self._rowid_target_cache: dict[Any, bool] = {}
         self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), SqliteDriver) else None
         self._cache_hit_state = self._rowid_target_cache
 
@@ -142,6 +142,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 effective_rowcount,
                 statement._get_shared_expression(),
                 self._rowid_target_cache,
+                sql,
             )
 
             return self.create_execution_result(
@@ -162,6 +163,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             affected_rows,
             statement._get_shared_expression(),
             self._rowid_target_cache,
+            sql,
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
@@ -207,13 +209,11 @@ class SqliteDriver(SyncDriverAdapterBase):
             if not self.connection.in_transaction:
                 stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
                 cursor = self.connection.execute(stmt)
-                with contextlib.suppress(AttributeError, TypeError):
-                    self.connection.in_transaction = True
                 if cursor is not None:
                     with contextlib.suppress(Exception):
                         cursor.close()
         except sqlite3.Error as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def commit(self) -> None:
         """Commit the current transaction.
@@ -223,10 +223,8 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         try:
             end_transaction(self.connection, commit=True, supports_autocommit=self._in_autocommit_mode())
-            with contextlib.suppress(AttributeError, TypeError):
-                self.connection.in_transaction = False
         except sqlite3.Error as e:
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def rollback(self) -> None:
         """Rollback the current transaction.
@@ -236,12 +234,10 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         try:
             end_transaction(self.connection, commit=False, supports_autocommit=self._in_autocommit_mode())
-            with contextlib.suppress(AttributeError, TypeError):
-                self.connection.in_transaction = False
             self._rowid_target_cache.clear()
         except sqlite3.Error as e:
             self._rowid_target_cache.clear()
-            raise create_mapped_exception(e) from e
+            raise with_cause(create_mapped_exception(e), e) from e
 
     def create_savepoint(self, name: str) -> None:
         """Create a savepoint within the current transaction without script splitting."""
@@ -252,7 +248,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 with contextlib.suppress(Exception):
                     cursor.close()
         except sqlite3.Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def release_savepoint(self, name: str) -> None:
         """Release a savepoint without clearing rowid target cache or splitting script."""
@@ -263,7 +259,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 with contextlib.suppress(Exception):
                     cursor.close()
         except sqlite3.Error as exc:
-            raise create_mapped_exception(exc) from exc
+            raise with_cause(create_mapped_exception(exc), exc) from exc
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         """Create context manager for SQLite cursor.
@@ -386,7 +382,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             if owns_transaction:
                 self.rollback()
             if isinstance(exc, sqlite3.Error):
-                raise create_mapped_exception(exc) from exc
+                raise with_cause(create_mapped_exception(exc), exc) from exc
             raise
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -415,7 +411,10 @@ class SqliteDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached statement through the compiled SQLite cache-hit executor."""
-        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._rowid_target_cache)
+        wire_sql = self._format_wire_sql(cached.compiled_sql) if self.statement_config.enable_sqlcommenter else None
+        return execute_cache_hit(
+            self.connection, sql, params, cached, self.statement_config, self._rowid_target_cache, wire_sql
+        )
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in ROWID_SAFE_OPERATIONS:

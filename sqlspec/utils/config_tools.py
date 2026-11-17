@@ -8,14 +8,17 @@ This module consolidates configuration-related helpers:
 
 import inspect
 import os
+import stat
 import tomllib
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError
+from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError, with_cause
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import async_, await_
 from sqlspec.utils.type_guards import (
@@ -34,12 +37,16 @@ __all__ = (
     "discover_config_from_pyproject",
     "find_pyproject_toml",
     "normalize_connection_config",
+    "normalize_extension_status_codes",
     "parse_mysql_dsn",
     "parse_odbc_connection_string",
     "parse_pyproject_config",
     "resolve_config_async",
     "resolve_config_sync",
+    "resolve_extension_commit_mode",
 )
+
+logger = get_logger("sqlspec.utils.config_tools")
 
 
 def discover_config_from_pyproject() -> str | None:
@@ -55,7 +62,10 @@ def discover_config_from_pyproject() -> str | None:
     if pyproject_path is None:
         return None
 
-    return parse_pyproject_config(pyproject_path)
+    data = _load_trusted_pyproject(pyproject_path)
+    if data is None:
+        return None
+    return _config_from_pyproject_data(data, pyproject_path)
 
 
 def find_pyproject_toml() -> "Path | None":
@@ -63,8 +73,13 @@ def find_pyproject_toml() -> "Path | None":
 
     Starts from current working directory and walks up to filesystem root.
     Stops at .git directory boundary (repository root) if found. On POSIX,
-    stops at the first directory owned by another non-root user and refuses
-    configuration files owned by another non-root user.
+    stops at the first directory owned by another non-root user and refuses a
+    configuration file that another non-root user owns. A symlinked
+    configuration file is accepted when the link and its target both pass the
+    ownership test. Inside a shared world-writable directory (sticky, or owned
+    by a different user) the file must also be singly linked and not
+    world-writable. Every refusal is logged at warning level. Platforms
+    without ``os.getuid`` skip the ownership and permission tests.
 
     Returns:
         Path to pyproject.toml, or None if not found.
@@ -73,16 +88,17 @@ def find_pyproject_toml() -> "Path | None":
     current = Path.cwd()
 
     while True:
-        if not _is_owned_by_user_or_root(current, current_uid):
+        if not _is_safe_directory(current, current_uid):
             return None
 
         pyproject = current / "pyproject.toml"
-        if pyproject.exists():
-            if not _is_owned_by_user_or_root(pyproject, current_uid):
-                return None
+        pyproject_status = _inspect_path_trust(pyproject, current_uid)
+        if pyproject_status is True:
             return pyproject
+        if pyproject_status is False:
+            return None
 
-        if (current / ".git").exists():
+        if _path_exists_or_symlink(current / ".git"):
             return None
 
         if current == current.parent:
@@ -108,8 +124,50 @@ def parse_pyproject_config(pyproject_path: "Path") -> str | None:
             data = tomllib.load(f)
     except Exception as e:
         msg = f"Failed to parse {pyproject_path}: {e}"
-        raise ValueError(msg) from e
+        raise with_cause(ValueError(msg), e) from e
 
+    return _config_from_pyproject_data(data, pyproject_path)
+
+
+def _load_trusted_pyproject(pyproject_path: "Path") -> "dict[str, Any] | None":
+    """Read a discovered pyproject.toml, applying the ownership test to the file that was opened.
+
+    The file is opened once, and its ownership and permissions are read from the open
+    descriptor before its content is parsed, so the file that is checked is the file that is read.
+
+    Args:
+        pyproject_path: Path returned by ``find_pyproject_toml``.
+
+    Returns:
+        The parsed document, or None when the opened file is not trusted.
+
+    Raises:
+        ValueError: If the file cannot be read or parsed.
+    """
+    current_uid: int | None = os.getuid() if hasattr(os, "getuid") else None
+    try:
+        with pyproject_path.open("rb") as f:
+            if current_uid is not None and not _is_trusted_file_stat(pyproject_path, os.fstat(f.fileno()), current_uid):
+                return None
+            return tomllib.load(f)
+    except Exception as e:
+        msg = f"Failed to parse {pyproject_path}: {e}"
+        raise with_cause(ValueError(msg), e) from e
+
+
+def _config_from_pyproject_data(data: "dict[str, Any]", pyproject_path: "Path") -> str | None:
+    """Return the ``[tool.sqlspec].config`` value of a parsed pyproject document.
+
+    Args:
+        data: Parsed pyproject.toml content.
+        pyproject_path: Path the content was read from, used in error messages.
+
+    Returns:
+        Config path(s) as string (converts list to comma-separated), or None if not found.
+
+    Raises:
+        ValueError: If [tool.sqlspec].config has invalid type (not str or list[str]).
+    """
     tool_section = data.get("tool", {})
     if not isinstance(tool_section, dict):
         return None
@@ -155,7 +213,7 @@ async def resolve_config_async(
         config_obj = import_string(_normalize_config_path(config_path))
     except ImportError as e:
         msg = f"Failed to import config from path '{config_path}': {e}"
-        raise ConfigResolverError(msg) from e
+        raise with_cause(ConfigResolverError(msg), e) from e
 
     if not callable(config_obj):
         return _validate_config_result(config_obj, config_path)
@@ -167,7 +225,7 @@ async def resolve_config_async(
             result = await async_(config_obj)()
     except Exception as e:
         msg = f"Failed to execute callable config '{config_path}': {e}"
-        raise ConfigResolverError(msg) from e
+        raise with_cause(ConfigResolverError(msg), e) from e
 
     return _validate_config_result(result, config_path)
 
@@ -187,7 +245,7 @@ def resolve_config_sync(
         config_obj = import_string(_normalize_config_path(config_path))
     except ImportError as e:
         msg = f"Failed to import config from path '{config_path}': {e}"
-        raise ConfigResolverError(msg) from e
+        raise with_cause(ConfigResolverError(msg), e) from e
 
     if not callable(config_obj):
         return _validate_config_result(config_obj, config_path)
@@ -199,7 +257,7 @@ def resolve_config_sync(
             result = config_obj()
     except Exception as e:
         msg = f"Failed to execute callable config '{config_path}': {e}"
-        raise ConfigResolverError(msg) from e
+        raise with_cause(ConfigResolverError(msg), e) from e
 
     return _validate_config_result(result, config_path)
 
@@ -509,10 +567,146 @@ def _is_valid_config(config: Any) -> bool:
 
 
 def _is_owned_by_user_or_root(path: Path, current_uid: int | None) -> bool:
-    if current_uid is None:
-        return True
     try:
-        path_stat = path.stat()
+        path_stat = path.stat(follow_symlinks=False)
     except OSError:
         return False
+    mode = getattr(path_stat, "st_mode", 0)
+    if stat.S_ISLNK(mode):
+        return False
+    if current_uid is None:
+        return True
     return path_stat.st_uid in {current_uid, 0}
+
+
+def _is_safe_directory(path: Path, current_uid: int | None) -> bool:
+    """Return True when ``path`` is a non-symlinked directory that the current user or root owns."""
+    try:
+        path_stat = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        logger.warning("Stopping pyproject.toml discovery at %s: directory cannot be inspected (%s)", path, exc)
+        return False
+    if stat.S_ISLNK(getattr(path_stat, "st_mode", 0)):
+        logger.warning("Stopping pyproject.toml discovery at %s: directory is a symbolic link", path)
+        return False
+    if current_uid is not None and path_stat.st_uid not in {current_uid, 0}:
+        logger.warning(
+            "Stopping pyproject.toml discovery at %s: directory is owned by another user (uid %s)",
+            path,
+            path_stat.st_uid,
+        )
+        return False
+    return True
+
+
+def _is_shared_directory(path: Path, current_uid: int) -> bool:
+    """Return True when ``path`` is world-writable and either sticky or owned by a different user."""
+    try:
+        path_stat = path.stat(follow_symlinks=False)
+    except OSError:
+        return True
+    mode = getattr(path_stat, "st_mode", 0)
+    if not mode & stat.S_IWOTH:
+        return False
+    return bool(mode & stat.S_ISVTX) or path_stat.st_uid != current_uid
+
+
+def _inspect_path_trust(path: Path, current_uid: int | None) -> "bool | None":
+    """Return True if present and trusted, False if present and untrusted, or None if missing.
+
+    On POSIX the current user or root must own ``path`` and, for a symbolic link, its target.
+    Inside a shared world-writable directory ``path`` must also be singly linked unless it is
+    a directory, and its target must not be world-writable.
+    """
+    try:
+        link_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.warning("Refusing %s: it cannot be inspected (%s)", path, exc)
+        return False
+    link_mode = getattr(link_stat, "st_mode", 0)
+    target_stat = link_stat
+    if stat.S_ISLNK(link_mode):
+        try:
+            target_stat = path.stat()
+        except OSError as exc:
+            logger.warning("Refusing %s: symbolic link target cannot be inspected (%s)", path, exc)
+            return False
+    if current_uid is None:
+        return True
+    if link_stat.st_uid not in {current_uid, 0}:
+        logger.warning("Refusing %s: it is owned by another user (uid %s)", path, link_stat.st_uid)
+        return False
+    return _is_trusted_file_stat(path, target_stat, current_uid)
+
+
+def _is_trusted_file_stat(path: Path, file_stat: Any, current_uid: int) -> bool:
+    """Return True when ``file_stat``, the status of the file at ``path``, passes the ownership test.
+
+    The current user or root must own the file. Inside a shared world-writable directory the
+    file must also be singly linked unless it is a directory, and must not be world-writable.
+    """
+    if file_stat.st_uid not in {current_uid, 0}:
+        logger.warning("Refusing %s: it is owned by another user (uid %s)", path, file_stat.st_uid)
+        return False
+    if not _is_shared_directory(path.parent, current_uid):
+        return True
+    mode = getattr(file_stat, "st_mode", 0)
+    if not stat.S_ISDIR(mode) and getattr(file_stat, "st_nlink", 1) > 1:
+        logger.warning("Refusing %s: it has several hard links inside a shared world-writable directory", path)
+        return False
+    if mode & stat.S_IWOTH:
+        logger.warning("Refusing %s: it is world-writable inside a shared world-writable directory", path)
+        return False
+    return True
+
+
+def normalize_extension_status_codes(value: Any) -> Any:
+    """Return framework status-code overrides as a ``set``, treating empty values as unset.
+
+    Args:
+        value: The configured ``extra_commit_statuses`` or ``extra_rollback_statuses`` value.
+
+    Returns:
+        ``None`` for unset or empty values, a ``set`` for any set-like value, list, or tuple,
+        and any other value unchanged.
+    """
+    if value is None or isinstance(value, set):
+        return value
+    if not value:
+        return None
+    if isinstance(value, (AbstractSet, list, tuple)):
+        return set(value)
+    return value
+
+
+def resolve_extension_commit_mode(
+    config: Any,
+    framework_config: "Mapping[str, Any]",
+    default_commit_mode: Literal["manual", "autocommit", "autocommit_include_redirect"] = "autocommit",
+) -> Literal["manual", "autocommit", "autocommit_include_redirect"]:
+    """Resolve web extension ``commit_mode``, requiring manual mode on non-transactional configs."""
+    explicit = framework_config.get("commit_mode")
+    if not getattr(config, "supports_transactions", True):
+        if explicit is not None and explicit != "manual":
+            msg = (
+                f"{type(config).__name__} does not support transactions "
+                f"(supports_transactions=False); commit_mode={explicit!r} is not supported, use 'manual'."
+            )
+            raise ImproperConfigurationError(msg)
+        return "manual"
+    if explicit is None:
+        return default_commit_mode
+    return cast("Literal['manual', 'autocommit', 'autocommit_include_redirect']", explicit)
+
+
+def _path_exists_or_symlink(path: Path) -> bool:
+    """Return True when ``path`` exists or is a symlink (including dangling symlinks)."""
+    try:
+        path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True

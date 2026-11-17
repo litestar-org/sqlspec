@@ -20,7 +20,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
-from sqlspec.core import (
+from sqlspec.core.cache import (
     CacheConfig,
     get_cache_config,
     get_cache_statistics,
@@ -30,9 +30,10 @@ from sqlspec.core import (
 )
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
+from sqlspec.extensions.events._channel import AsyncEventChannel, SyncEventChannel
 from sqlspec.loader import SQLFileLoader
-from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryDiagnostics
+from sqlspec.observability._diagnostics import TelemetryDiagnostics
+from sqlspec.observability._runtime import ObservabilityRuntime
 from sqlspec.typing import ConnectionT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_name
@@ -42,10 +43,12 @@ if TYPE_CHECKING:
     from types import TracebackType
     from uuid import UUID
 
-    from sqlspec.core import SQL, ParameterDeclaration, StatementConfig
+    from sqlspec.core.parameters._declared import ParameterDeclaration
+    from sqlspec.core.statement import SQL, StatementConfig
     from sqlspec.driver._routing import AsyncDriverT, AsyncRoutingSession, SyncDriverT, SyncRoutingSession
+    from sqlspec.observability._config import ObservabilityConfig
     from sqlspec.typing import PoolT
-    from sqlspec.utils.tenant import TenantContextPayload
+    from sqlspec.utils.tenant._context import TenantContextPayload
 
 
 __all__ = ("SQLSpec", "coerce_sqlspec")
@@ -218,13 +221,15 @@ class SQLSpec:
 
         connection_context = config.provide_connection(*args, **kwargs)
         runtime = config.get_observability_runtime()
+        if not runtime.has_session_lifecycle:
+            return connection_context
 
-        if _is_async_context_manager(connection_context):
-            async_context = cast("AbstractAsyncContextManager[ConnectionT]", connection_context)
-            return _RuntimeAsyncContext[ConnectionT](async_context, runtime)
+        config_is_async = getattr(config, "is_async", None)
+        is_async = config_is_async if type(config_is_async) is bool else _is_async_context_manager(connection_context)
+        if is_async:
+            return _RuntimeAsyncContext(cast("AbstractAsyncContextManager[Any]", connection_context), runtime)
 
-        sync_context = cast("AbstractContextManager[ConnectionT]", connection_context)
-        return _RuntimeSyncContext[ConnectionT](sync_context, runtime)
+        return _RuntimeSyncContext(cast("AbstractContextManager[Any]", connection_context), runtime)
 
     @overload
     def provide_session(
@@ -270,23 +275,31 @@ class SQLSpec:
         """
         self._ensure_registered(config)
 
-        call_kwargs = dict(kwargs)
-        if statement_config is not None:
-            call_kwargs["statement_config"] = statement_config
-        if tenant is not None:
-            call_kwargs["tenant"] = tenant
-        if bypass_tenant:
-            call_kwargs["bypass_tenant"] = True
-
-        session_context = config.provide_session(*args, **call_kwargs)
+        if statement_config is not None or tenant is not None or bypass_tenant:
+            call_kwargs = dict(kwargs) if kwargs else {}
+            if statement_config is not None:
+                call_kwargs["statement_config"] = statement_config
+            if tenant is not None:
+                call_kwargs["tenant"] = tenant
+            if bypass_tenant:
+                call_kwargs["bypass_tenant"] = True
+            session_context = config.provide_session(*args, **call_kwargs)
+        elif kwargs:
+            session_context = config.provide_session(*args, **kwargs)
+        else:
+            session_context = config.provide_session(*args)
         runtime = config.get_observability_runtime()
+        if not runtime.has_session_lifecycle and isinstance(
+            config, (SyncDatabaseConfig, AsyncDatabaseConfig, NoPoolSyncConfig, NoPoolAsyncConfig)
+        ):
+            return session_context
 
-        if _is_async_context_manager(session_context):
-            async_session = cast("AbstractAsyncContextManager[DriverT]", session_context)
-            return _RuntimeAsyncContext[DriverT](async_session, runtime, config)
+        config_is_async = getattr(config, "is_async", None)
+        is_async = config_is_async if type(config_is_async) is bool else _is_async_context_manager(session_context)
+        if is_async:
+            return _RuntimeAsyncContext(cast("AbstractAsyncContextManager[Any]", session_context), runtime, config)
 
-        sync_session = cast("AbstractContextManager[DriverT]", session_context)
-        return _RuntimeSyncContext[DriverT](sync_session, runtime, config)
+        return _RuntimeSyncContext(cast("AbstractContextManager[Any]", session_context), runtime, config)
 
     @overload
     def provide_replica_connection(
@@ -949,7 +962,11 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
             raw_connection: Any | None = None
             connection_created = False
             try:
-                prepared: Any = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+                prepared: Any = (
+                    value
+                    if getattr(value, "_observability", None) is self._runtime
+                    else cast("Any", config)._prepare_driver(value)
+                )
                 driver = prepared
                 raw_connection = prepared.connection
                 if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
@@ -1005,7 +1022,8 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
                             if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                                 self._runtime.emit_connection_destroy_sync(raw_connection)
                     finally:
-                        value._mark_closed()
+                        if value.connection is not _CLOSED_CONNECTION:
+                            value._mark_closed()
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1033,7 +1051,11 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
             enter_error: BaseException | None = None
             prepared: Any = None
             try:
-                prepared = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+                prepared = (
+                    value
+                    if getattr(value, "_observability", None) is self._runtime
+                    else cast("Any", config)._prepare_driver(value)
+                )
                 driver = prepared
                 raw_connection = prepared.connection
                 if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
@@ -1097,7 +1119,8 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                         await self._runtime.emit_connection_destroy_async(raw_connection)
                     except BaseException as exc:
                         exit_error = exc
-                value._mark_closed()
+                if value.connection is not _CLOSED_CONNECTION:
+                    value._mark_closed()
         if exit_error is not None:
             raise exit_error
         return suppressed
@@ -1140,7 +1163,7 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
                     if connection_created and connection is not None and connection is not _CLOSED_CONNECTION:
                         runtime.emit_connection_destroy_sync(connection)
             finally:
-                if self._session:
+                if self._session and value.connection is not _CLOSED_CONNECTION:
                     value._mark_closed()
             raise
         self._runtime = runtime
@@ -1167,7 +1190,7 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
                         if connection is not None and connection is not _CLOSED_CONNECTION:
                             runtime.emit_connection_destroy_sync(connection)
             finally:
-                if self._session and value is not None:
+                if self._session and value is not None and value.connection is not _CLOSED_CONNECTION:
                     value._mark_closed()
 
 
@@ -1213,7 +1236,7 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
                     await runtime.emit_connection_destroy_async(connection)
                 except BaseException as exc:
                     enter_error = exc
-            if self._session:
+            if self._session and value.connection is not _CLOSED_CONNECTION:
                 value._mark_closed()
             raise enter_error
         self._runtime = runtime
@@ -1245,7 +1268,7 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
                     await runtime.emit_connection_destroy_async(connection)
                 except BaseException as exc:
                     exit_error = exc
-        if self._session and value is not None:
+        if self._session and value is not None and value.connection is not _CLOSED_CONNECTION:
             value._mark_closed()
         if exit_error is not None:
             raise exit_error

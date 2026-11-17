@@ -17,7 +17,8 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
 )
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_errors as pg_errors
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_module as psycopg
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core.parameters._registry import build_statement_config_from_profile
+from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -44,7 +45,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import import_optional_attr
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.routing import RoutingContext
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_sqlstate
@@ -53,10 +54,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgPoolConfig
-    from sqlspec.core import ParameterStyleConfig
     from sqlspec.core.cache import CachedQuery
+    from sqlspec.core.parameters._types import ParameterStyleConfig
     from sqlspec.core.result._base import SQLResult
-    from sqlspec.storage import StorageTelemetry
+    from sqlspec.core.statement import StatementConfig
+    from sqlspec.storage.pipeline import StorageTelemetry
 
 __all__ = (
     "DEFAULT_FOLLOWER_READ_STALENESS",

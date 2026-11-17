@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 if TYPE_CHECKING:
     from typing import Self
 
+from sqlspec.exceptions import with_cause
 from sqlspec.typing import MSGSPEC_INSTALLED, NUMPY_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED, UNSET
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional_attr
@@ -32,9 +33,9 @@ __all__ = (
     "TypeEncodersMap",
     "convert_date_to_iso",
     "convert_datetime_to_gmt_iso",
-    "decode_json",
-    "encode_json",
+    "from_json",
     "get_default_serializer",
+    "to_json",
 )
 
 
@@ -291,7 +292,7 @@ class OrjsonSerializer(BaseJSONSerializer):
                 raise
             if "type is not json serializable" in str(exc).lower():
                 unsupported_msg = "unsupported JSON value"
-                raise TypeError(unsupported_msg) from exc
+                raise with_cause(TypeError(unsupported_msg), exc) from exc
             raise
         return encoded if as_bytes else encoded.decode("utf-8")
 
@@ -346,19 +347,19 @@ def get_default_serializer() -> JSONSerializer:
 
 
 @overload
-def encode_json(data: Any, *, as_bytes: Literal[False] = ...) -> str: ...
+def to_json(data: Any, *, as_bytes: Literal[False] = ...) -> str: ...
 
 
 @overload
-def encode_json(data: Any, *, as_bytes: Literal[True]) -> bytes: ...
+def to_json(data: Any, *, as_bytes: Literal[True]) -> bytes: ...
 
 
-def encode_json(data: Any, *, as_bytes: bool = False) -> "str | bytes":
+def to_json(data: Any, *, as_bytes: bool = False) -> "str | bytes":
     """Encode Python data into JSON."""
     return get_default_serializer().encode(data, as_bytes=as_bytes)
 
 
-def decode_json(data: "str | bytes", *, decode_bytes: bool = True) -> Any:
+def from_json(data: "str | bytes", *, decode_bytes: bool = True) -> Any:
     """Decode JSON input into Python data."""
     return get_default_serializer().decode(data, decode_bytes=decode_bytes)
 

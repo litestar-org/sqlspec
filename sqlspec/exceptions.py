@@ -1,6 +1,6 @@
 """Exception hierarchy and SQLSTATE error mapping for SQLSpec."""
 
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 
 __all__ = (
     "SQLSTATE_EXCEPTION_MAP",
@@ -53,7 +53,10 @@ __all__ = (
     "TransactionError",
     "UniqueViolationError",
     "map_sqlstate_to_exception",
+    "with_cause",
 )
+
+ExceptionT = TypeVar("ExceptionT", bound=BaseException)
 
 STACK_SQL_PREVIEW_LIMIT: Final[int] = 120
 
@@ -507,6 +510,24 @@ SQLSTATE_EXCEPTION_MAP: Final[dict[str, type[SQLSpecError]]] = {
     "57": OperationalError,
     "58": OperationalError,
 }
+
+
+def with_cause(error: ExceptionT, cause: "BaseException | None") -> ExceptionT:
+    """Attach ``cause`` to ``error`` as its direct cause and return ``error``.
+
+    ``raise with_cause(error, cause) from cause`` sets ``__cause__`` on the exception itself
+    instead of relying on the ``raise`` statement to apply its ``from`` clause. Passing
+    ``None`` suppresses the implicit context, as ``from None`` does.
+
+    Args:
+        error: Exception about to be raised.
+        cause: Exception that caused ``error``, or ``None`` to suppress the implicit context.
+
+    Returns:
+        ``error``, with ``__cause__`` set to ``cause``.
+    """
+    error.__cause__ = cause
+    return error
 
 
 def map_sqlstate_to_exception(sqlstate: str | None) -> type[SQLSpecError] | None:

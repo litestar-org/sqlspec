@@ -6,6 +6,7 @@ parameter binding and validation.
 
 from typing import TYPE_CHECKING, Any, Self, cast
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 __all__ = ("Update",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Update(
     QueryBuilder,
     WhereClauseMixin,
