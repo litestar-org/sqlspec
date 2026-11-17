@@ -12,6 +12,8 @@
     "prepare_driver_parameters (tuple)",
     "prepare_driver_parameters (dict)",
     "_driver_parameters (3 params)",
+    "_check_declared_parameters (2 declared)",
+    "_check_declared_parameters (none declared)",
     "SQLResult.__init__() - DML",
     "SQLResult.__init__() - SELECT (100 rows)",
     "StorageRegistry.get() - cached alias",
@@ -40,7 +42,7 @@
   "metadata": {
     "iterations": 5000,
     "profile": false,
-    "timestamp": "2026-10-13T21:39:22+0000",
+    "timestamp": "2026-11-17T16:13:19+0000",
     "warmup": 100
   },
   "results": [
@@ -48,289 +50,305 @@
       "description": "Time SQL('INSERT INTO test (value) VALUES (?)')",
       "iterations": 5000,
       "name": "SQL() construction (no params)",
-      "ops_per_sec": 913719.3186319757,
-      "time_per_op_us": 1.0944279929390177,
-      "total_time": 0.005437102998257615
+      "ops_per_sec": 1201103.2044950407,
+      "time_per_op_us": 0.832567922770977,
+      "total_time": 0.00663077284116298
     },
     {
       "description": "Time SQL('INSERT ...', ('hello',))",
       "iterations": 5000,
       "name": "SQL() construction (with params)",
-      "ops_per_sec": 626649.6571693261,
-      "time_per_op_us": 1.5957879950292408,
-      "total_time": 0.008684266998898238
+      "ops_per_sec": 778292.4687715697,
+      "time_per_op_us": 1.2848640326410532,
+      "total_time": 0.006465306039899588
     },
     {
       "description": "Time SQL('SELECT ... WHERE ...', param)",
       "iterations": 5000,
       "name": "SQL() construction (SELECT + param)",
-      "ops_per_sec": 637129.3471429019,
-      "time_per_op_us": 1.5695400070399046,
-      "total_time": 0.007883617014158517
+      "ops_per_sec": 767238.8989332351,
+      "time_per_op_us": 1.3033750001341105,
+      "total_time": 0.006807590136304498
     },
     {
       "description": "Convert same-shape UPDATE builders while parameter values vary",
       "iterations": 5000,
       "name": "QueryBuilder.to_statement() - same shape varying values",
-      "ops_per_sec": 4120.919565822979,
-      "time_per_op_us": 242.66428500413895,
-      "total_time": 1.2694333770195954
+      "ops_per_sec": 6152.492263345013,
+      "time_per_op_us": 162.53575903829187,
+      "total_time": 0.8162630000151694
     },
     {
       "description": "Compile simple INSERT statement",
       "iterations": 5000,
       "name": "SQL.compile() - INSERT",
-      "ops_per_sec": 161767.66763378118,
-      "time_per_op_us": 6.1817050009267405,
-      "total_time": 0.030903736987966113
+      "ops_per_sec": 184180.85385350234,
+      "time_per_op_us": 5.4294459987431765,
+      "total_time": 0.02760164102073759
     },
     {
       "description": "Compile simple SELECT statement",
       "iterations": 5000,
       "name": "SQL.compile() - SELECT",
-      "ops_per_sec": 162352.42156694084,
-      "time_per_op_us": 6.159440003102645,
-      "total_time": 0.03080166499421466
+      "ops_per_sec": 179368.7864529638,
+      "time_per_op_us": 5.575106013566256,
+      "total_time": 0.028748748125508428
     },
     {
       "description": "Compile complex JOIN with multiple params",
       "iterations": 5000,
       "name": "SQL.compile() - complex JOIN",
-      "ops_per_sec": 147818.3926397272,
-      "time_per_op_us": 6.76505800220184,
-      "total_time": 0.033716250996803865
+      "ops_per_sec": 164567.60761802475,
+      "time_per_op_us": 6.076529971323907,
+      "total_time": 0.030427350779064
     },
     {
       "description": "Cache lookup with cache miss (early return, no execution)",
       "iterations": 5000,
       "name": "QC _cached_execution() - cache miss",
-      "ops_per_sec": 3329193.936325096,
-      "time_per_op_us": 0.3003730089403689,
-      "total_time": 0.0015094660047907382
+      "ops_per_sec": 6178902.227299015,
+      "time_per_op_us": 0.1618410460650921,
+      "total_time": 0.0008515319786965847
     },
     {
       "description": "Full stmt_cache lookup -> prepare -> execute cycle",
       "iterations": 5000,
       "name": "QC _cached_execution() - full cycle",
-      "ops_per_sec": 48080.33261572494,
-      "time_per_op_us": 20.79852500173729,
-      "total_time": 0.10446592500375118
+      "ops_per_sec": 47818.61077093518,
+      "time_per_op_us": 20.912359934300184,
+      "total_time": 0.1061803309712559
     },
     {
       "description": "Prepare a single positional parameter tuple",
       "iterations": 5000,
       "name": "prepare_driver_parameters (tuple)",
-      "ops_per_sec": 1000033.0009910618,
-      "time_per_op_us": 0.9999670000979677,
-      "total_time": 0.005002377001801506
+      "ops_per_sec": 1239212.8287058696,
+      "time_per_op_us": 0.8069638861343265,
+      "total_time": 0.004041154868900776
     },
     {
       "description": "Prepare a single named parameter dict",
       "iterations": 5000,
       "name": "prepare_driver_parameters (dict)",
-      "ops_per_sec": 854326.9969933727,
-      "time_per_op_us": 1.170511997770518,
-      "total_time": 0.005851471985806711
+      "ops_per_sec": 943560.0265824522,
+      "time_per_op_us": 1.0598159860819578,
+      "total_time": 0.005572059890255332
     },
     {
       "description": "Format a 3-element positional parameter set",
       "iterations": 5000,
       "name": "_driver_parameters (3 params)",
-      "ops_per_sec": 635211.826417988,
-      "time_per_op_us": 1.574277994222939,
-      "total_time": 0.007899189979070798
+      "ops_per_sec": 791355.2935024629,
+      "time_per_op_us": 1.263654907234013,
+      "total_time": 0.006361614912748337
+    },
+    {
+      "description": "Validate a named statement carrying two parameter declarations",
+      "iterations": 5000,
+      "name": "_check_declared_parameters (2 declared)",
+      "ops_per_sec": 797466.5984745527,
+      "time_per_op_us": 1.2539710151031613,
+      "total_time": 0.00630593579262495
+    },
+    {
+      "description": "Short-circuit declared-parameter validation when no declarations exist",
+      "iterations": 5000,
+      "name": "_check_declared_parameters (none declared)",
+      "ops_per_sec": 10363765.625094257,
+      "time_per_op_us": 0.09649002458900213,
+      "total_time": 0.0004958219360560179
     },
     {
       "description": "Construct SQLResult for an INSERT operation",
       "iterations": 5000,
       "name": "SQLResult.__init__() - DML",
-      "ops_per_sec": 1198160.0977602866,
-      "time_per_op_us": 0.834613005281426,
-      "total_time": 0.004188569990219548
+      "ops_per_sec": 1479640.2521023024,
+      "time_per_op_us": 0.6758399540558457,
+      "total_time": 0.00339864706620574
     },
     {
       "description": "Construct SQLResult for a SELECT with 100 rows",
       "iterations": 5000,
       "name": "SQLResult.__init__() - SELECT (100 rows)",
-      "ops_per_sec": 1097976.8669275937,
-      "time_per_op_us": 0.910766000743024,
-      "total_time": 0.004547191012534313
+      "ops_per_sec": 1445101.2280089331,
+      "time_per_op_us": 0.6919930456206203,
+      "total_time": 0.003463471308350563
     },
     {
       "description": "Resolve a cached storage alias through the registry hot path",
       "iterations": 5000,
       "name": "StorageRegistry.get() - cached alias",
-      "ops_per_sec": 980211.4838925864,
-      "time_per_op_us": 1.020188006805256,
-      "total_time": 0.005175599013455212
+      "ops_per_sec": 1088629.7889144707,
+      "time_per_op_us": 0.9185859235003591,
+      "total_time": 0.004609520896337926
     },
     {
       "description": "Encode rows and route them through the sync local storage pipeline",
       "iterations": 5000,
       "name": "SyncStoragePipeline.write_rows() - local jsonl",
-      "ops_per_sec": 5791.079632721365,
-      "time_per_op_us": 172.6793730049394,
-      "total_time": 0.8718435269984184
+      "ops_per_sec": 7153.684450326693,
+      "time_per_op_us": 139.7881059674546,
+      "total_time": 0.7009224889334291
     },
     {
       "description": "Decode JSONL bytes through the Arrow boundary helper",
       "iterations": 5000,
       "name": "_decode_arrow_payload() - jsonl",
-      "ops_per_sec": 6869.321496958173,
-      "time_per_op_us": 145.57478499773424,
-      "total_time": 0.7582230610132683
+      "ops_per_sec": 8751.714444368226,
+      "time_per_op_us": 114.26332592964172,
+      "total_time": 0.5687030248809606
     },
     {
       "description": "Enter/exit SqliteCursor context manager",
       "iterations": 5000,
       "name": "SqliteCursor context manager",
-      "ops_per_sec": 1128520.4166203288,
-      "time_per_op_us": 0.8861160022206604,
-      "total_time": 0.004822624992812052
+      "ops_per_sec": 2409714.1653278484,
+      "time_per_op_us": 0.41498697828501463,
+      "total_time": 0.002076625940389931
     },
     {
       "description": "Raw sqlite3 cursor() + close() for comparison",
       "iterations": 5000,
       "name": "raw sqlite3 cursor create+close",
-      "ops_per_sec": 5109861.88069036,
-      "time_per_op_us": 0.19570000586099923,
-      "total_time": 0.0009786640148377046
+      "ops_per_sec": 6100870.813254403,
+      "time_per_op_us": 0.16391102690249681,
+      "total_time": 0.000823984039016068
     },
     {
       "description": "Full sqlspec execute() including QC, dispatch, result",
       "iterations": 5000,
       "name": "session.execute() - full path",
-      "ops_per_sec": 46879.57367445652,
-      "time_per_op_us": 21.331252006348222,
-      "total_time": 0.10676726199744735
+      "ops_per_sec": 37107.59496044093,
+      "time_per_op_us": 26.94866107776761,
+      "total_time": 0.13498832704499364
     },
     {
       "description": "Raw sqlite3 execute for comparison baseline",
       "iterations": 5000,
       "name": "raw sqlite3 conn.execute()",
-      "ops_per_sec": 62133.80282324967,
-      "time_per_op_us": 16.09429898962844,
-      "total_time": 0.0820974859962007
+      "ops_per_sec": 7125.084335325993,
+      "time_per_op_us": 140.3492159442976,
+      "total_time": 0.7125933900242671
     },
     {
       "description": "Pure-Python driver overhead on warm fast-path SELECT with 1-tuple param",
       "iterations": 5000,
       "name": "stub driver: fast-path execute(SELECT, tuple)",
-      "ops_per_sec": 199214.29866762075,
-      "time_per_op_us": 5.019720003474504,
-      "total_time": 0.02853145000699442
+      "ops_per_sec": 251303.07317035782,
+      "time_per_op_us": 3.9792589377611876,
+      "total_time": 0.02121697086840868
     },
     {
       "description": "Pure-Python driver overhead on warm fast-path INSERT with 1-tuple param",
       "iterations": 5000,
       "name": "stub driver: fast-path execute(INSERT, tuple)",
-      "ops_per_sec": 266848.62190703605,
-      "time_per_op_us": 3.747442999156192,
-      "total_time": 0.021824130992172286
+      "ops_per_sec": 531526.7099155732,
+      "time_per_op_us": 1.8813729984685779,
+      "total_time": 0.00944000098388642
     },
     {
       "description": "Pure-Python driver overhead on warm fetch_one_or_none with 1-tuple param",
       "iterations": 5000,
       "name": "stub driver: fast-path fetch_one_or_none(SELECT, tuple)",
-      "ops_per_sec": 152632.9798998559,
-      "time_per_op_us": 6.551664002472535,
-      "total_time": 0.03708145199925639
+      "ops_per_sec": 183708.5070005023,
+      "time_per_op_us": 5.443406058475375,
+      "total_time": 0.028725587879307568
     },
     {
       "description": "Pure-Python driver overhead on parameterless SELECT 1",
       "iterations": 5000,
       "name": "stub driver: parameterless execute(SELECT)",
-      "ops_per_sec": 238372.71592313284,
-      "time_per_op_us": 4.195110988803208,
-      "total_time": 0.021016020997194573
+      "ops_per_sec": 286821.0051005778,
+      "time_per_op_us": 3.4864949993789196,
+      "total_time": 0.01737948413938284
     },
     {
       "description": "Pure-Python driver overhead on SELECT with scalar positional param",
       "iterations": 5000,
       "name": "stub driver: scalar-param execute(SELECT, int)",
-      "ops_per_sec": 191849.39328270138,
-      "time_per_op_us": 5.21242200920824,
-      "total_time": 0.026079890012624674
+      "ops_per_sec": 246536.53261549614,
+      "time_per_op_us": 4.0561939822509885,
+      "total_time": 0.021314883837476373
     },
     {
       "description": "Pure-Python driver overhead on CTE + 2-join query with scalar param",
       "iterations": 2000,
       "name": "stub driver: complex CTE+2-join execute(SELECT, int)",
-      "ops_per_sec": 190476.18934846655,
-      "time_per_op_us": 5.250000031082891,
-      "total_time": 0.0105269009800395
+      "ops_per_sec": 234381.81134180585,
+      "time_per_op_us": 4.266542673576623,
+      "total_time": 0.009350505075417459
     },
     {
       "description": "New driver instance per request executing simple SELECT",
       "iterations": 2000,
       "name": "stub driver: session-per-request simple SELECT",
-      "ops_per_sec": 150011.68233821707,
-      "time_per_op_us": 6.666147492069285,
-      "total_time": 0.013450521000777371
+      "ops_per_sec": 160224.76015532407,
+      "time_per_op_us": 6.241232622414827,
+      "total_time": 0.012901977053843439
     },
     {
       "description": "New driver instance per request executing CTE + 2-join SELECT",
       "iterations": 2000,
       "name": "stub driver: session-per-request complex CTE SELECT",
-      "ops_per_sec": 148770.50532131383,
-      "time_per_op_us": 6.721762474626303,
-      "total_time": 0.013813848985591903
+      "ops_per_sec": 156776.73685627396,
+      "time_per_op_us": 6.378497346304357,
+      "total_time": 0.012717136065475643
     },
     {
       "description": "Pure-Python driver overhead on execute_many with 100 parameter rows",
       "iterations": 2000,
       "name": "stub driver: execute_many 100 rows",
-      "ops_per_sec": 7149.427723435246,
-      "time_per_op_us": 139.87133497721516,
-      "total_time": 0.2836982590088155
+      "ops_per_sec": 10038.25303758506,
+      "time_per_op_us": 99.61892734281719,
+      "total_time": 0.19985014689154923
     },
     {
       "description": "Current list-join placeholder assembly shape from ParameterConverter",
       "iterations": 5000,
       "name": "librt ParameterConverter baseline",
-      "ops_per_sec": 1007553.6268856531,
-      "time_per_op_us": 0.9925030026352033,
-      "total_time": 0.00521571101853624
+      "ops_per_sec": 1247609.2765902565,
+      "time_per_op_us": 0.8015329949557781,
+      "total_time": 0.003999022883363068
     },
     {
       "description": "librt.strings.StringWriter candidate for ParameterConverter assembly",
       "iterations": 5000,
       "name": "librt ParameterConverter StringWriter",
-      "ops_per_sec": 1062117.9553103049,
-      "time_per_op_us": 0.941515012527816,
-      "total_time": 0.004716872004792094
+      "ops_per_sec": 1249486.105579616,
+      "time_per_op_us": 0.800329027697444,
+      "total_time": 0.004018869949504733
     },
     {
       "description": "Current list-join statement assembly shape from StatementSplitter",
       "iterations": 5000,
       "name": "librt splitter join baseline",
-      "ops_per_sec": 341651.7555122614,
-      "time_per_op_us": 2.9269570077303797,
-      "total_time": 0.014837033028015867
+      "ops_per_sec": 375775.9665247996,
+      "time_per_op_us": 2.661160076968372,
+      "total_time": 0.013330832007341087
     },
     {
       "description": "librt.strings.StringWriter candidate for StatementSplitter assembly",
       "iterations": 5000,
       "name": "librt splitter StringWriter",
-      "ops_per_sec": 302831.35208128975,
-      "time_per_op_us": 3.302167999208905,
-      "total_time": 0.020603441007551737
+      "ops_per_sec": 303409.4757514113,
+      "time_per_op_us": 3.2958759693428874,
+      "total_time": 0.0173936088103801
     },
     {
       "description": "Current StringIO row assembly shape from psqlpy binary copy encoding",
       "iterations": 5000,
       "name": "librt psqlpy copy baseline",
-      "ops_per_sec": 60645.925178129015,
-      "time_per_op_us": 16.48915400437545,
-      "total_time": 0.08254189301806036
+      "ops_per_sec": 66307.21955802142,
+      "time_per_op_us": 15.08131402079016,
+      "total_time": 0.07701656490098685
     },
     {
       "description": "librt.strings.StringWriter candidate for psqlpy binary copy encoding",
       "iterations": 5000,
       "name": "librt psqlpy copy StringWriter",
-      "ops_per_sec": 90935.46218894077,
-      "time_per_op_us": 10.99681000050623,
-      "total_time": 0.05711644601251464
+      "ops_per_sec": 86773.67135845075,
+      "time_per_op_us": 11.524232919327915,
+      "total_time": 0.05768734193406999
     }
   ]
 }
