@@ -560,12 +560,7 @@ def test_split_bracket_identifier_with_semicolon() -> None:
 
 @pytest.mark.parametrize("unterminated", ["/* ", "$$ "])
 def test_snowflake_splitter_unterminated_openers_scale_linearly(unterminated: str) -> None:
-    def elapsed(count: int) -> float:
-        started = time.perf_counter()
-        split_sql_script("SELECT " + unterminated * count, "snowflake")
-        return time.perf_counter() - started
-
-    small = elapsed(4000)
-    large = elapsed(16000)
+    small = _fastest_split_seconds("SELECT " + unterminated * 4000, "snowflake")
+    large = _fastest_split_seconds("SELECT " + unterminated * 16000, "snowflake")
 
     assert large < max(small * 12, 0.5)
