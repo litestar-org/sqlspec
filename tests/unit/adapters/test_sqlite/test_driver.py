@@ -240,10 +240,6 @@ def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails() -> None:
     batches_prepared = 0
 
     class _FailingPrepareSqliteDriver(SqliteDriver):
-        @staticmethod
-        def _arrow_rows_need_preparation(table: Any) -> bool:
-            return True
-
         def prepare_driver_parameters(
             self, parameters: Any, statement_config: Any, is_many: bool = False, prepared_statement: Any = None
         ) -> Any:
@@ -251,16 +247,18 @@ def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails() -> None:
             batches_prepared += 1
             if batches_prepared == 2:
                 raise ValueError("conversion failed")
-            return parameters
+            return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
 
     connection = sqlite3.connect(":memory:")
-    connection.execute("CREATE TABLE target (value INTEGER)")
+    connection.execute("CREATE TABLE target (value TEXT)")
     driver = _FailingPrepareSqliteDriver(
         connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
     )
+    nested_values = pa.table({"value": [[number] for number in range(10001)]})
     try:
         with pytest.raises(ValueError, match="conversion failed"):
-            driver.load_from_arrow("target", pa.table({"value": list(range(10001))}))
+            driver.load_from_arrow("target", nested_values)
+        assert batches_prepared == 2
         assert connection.in_transaction is False
         assert connection.execute("SELECT COUNT(*) FROM target").fetchone() == (0,)
     finally:

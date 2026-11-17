@@ -2,10 +2,12 @@
 
 import inspect
 import math
+import sqlite3
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, cast
 
 import pytest
+from sqlglot import parse_one
 
 from sqlspec import SQLResult, StatementStack, sql
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
@@ -13,6 +15,7 @@ from sqlspec.adapters.aiosqlite import core as aiosqlite_core
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite import core as sqlite_core
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.correlation import CorrelationContext
 from tests.conftest import requires_interpreted
 
 pytestmark = pytest.mark.xdist_group("sqlite")
@@ -205,6 +208,54 @@ async def test_repeated_cached_insert_reuses_rowid_eligibility_lookup(
     assert isinstance(first.last_inserted_id, int)
     assert isinstance(second.last_inserted_id, int)
     assert lookup_count == 1
+
+
+@pytest.mark.parametrize("adapter", ["sqlite", "aiosqlite"], ids=["sync", "async"])
+async def test_rowid_eligibility_probe_is_shared_across_sqlcommenter_comments(adapter: str) -> None:
+    config: SqliteConfig | AiosqliteConfig = (
+        SqliteConfig(connection_config={"database": ":memory:"}) if adapter == "sqlite" else AiosqliteConfig()
+    )
+    config.statement_config = config.statement_config.replace(
+        enable_sqlcommenter=True, sqlcommenter_enable_context=True
+    )
+    session = config.provide_session()
+    traced: list[str] = []
+    try:
+        driver = await _invoke(getattr(session, "__enter__" if adapter == "sqlite" else "__aenter__"))
+        await _invoke(
+            _method(driver, "execute_script"), "CREATE TABLE commented_rowid (id INTEGER PRIMARY KEY, value TEXT)"
+        )
+        await _invoke(driver.connection.set_trace_callback, traced.append)
+        for request_number in range(200):
+            with CorrelationContext.context(f"request-{request_number}"):
+                result = await _invoke(
+                    _method(driver, "execute"), "INSERT INTO commented_rowid (value) VALUES (?)", ("value",)
+                )
+            assert result.last_inserted_id == request_number + 1
+        await _invoke(driver.connection.set_trace_callback, None)
+
+        inserts = {statement for statement in traced if statement.startswith("INSERT INTO commented_rowid")}
+        probes = [statement for statement in traced if "table_list" in statement.lower()]
+        assert len(inserts) == 200
+        assert len(probes) == 1
+        assert list(driver._rowid_target_cache) == [(None, "commented_rowid")]
+    finally:
+        await _invoke(getattr(session, "__exit__" if adapter == "sqlite" else "__aexit__"), None, None, None)
+        await _invoke(config.close_pool)
+
+
+@pytest.mark.parametrize("rowid_core", [sqlite_core, aiosqlite_core], ids=["sync", "async"])
+def test_rowid_eligibility_cache_stays_bounded_across_many_targets(rowid_core: Any) -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        cursor = connection.execute("SELECT 1")
+        eligibility_cache: dict[Any, bool] = {}
+        for table_number in range(600):
+            expression = parse_one(f"INSERT INTO bounded_{table_number} (value) VALUES (1)", dialect="sqlite")
+            rowid_core.resolve_lastrowid(connection, cursor, "INSERT", 1, expression, eligibility_cache)
+        assert 0 < len(eligibility_cache) <= 512
+    finally:
+        connection.close()
 
 
 async def test_schema_change_invalidates_rowid_eligibility_cache(sqlite_family_driver: "SQLiteFamilyDriver") -> None:

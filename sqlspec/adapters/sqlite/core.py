@@ -310,7 +310,6 @@ def resolve_lastrowid(
     rowcount: int,
     expression: Any,
     eligibility_cache: "dict[Any, bool]",
-    compiled_sql: "str | None" = None,
 ) -> "int | None":
     """Resolve lastrowid only when compiled target metadata proves rowid eligibility.
 
@@ -324,31 +323,21 @@ def resolve_lastrowid(
         operation_type: Compiled statement operation type.
         rowcount: Normalized affected-row count.
         expression: Compiled SQLGlot expression.
-        eligibility_cache: Driver-local target eligibility cache.
-        compiled_sql: Optional compiled SQL text used to key eligibility lookups cleanly without AST walks.
+        eligibility_cache: Driver-local eligibility cache keyed by ``(schema, table)`` target.
 
     Returns:
         Integer lastrowid when the current target is a rowid table, otherwise None.
     """
     if operation_type != "INSERT" or rowcount <= 0:
         return None
-    if compiled_sql is not None:
-        supports_rowid = eligibility_cache.get(compiled_sql)
-        if supports_rowid is None:
-            target = _resolve_insert_target(expression)
-            if target is None:
-                return None
-            supports_rowid = _target_supports_rowid(connection, target)
-            eligibility_cache[compiled_sql] = supports_rowid
-        if not supports_rowid:
-            return None
-        return normalize_lastrowid(cursor, operation_type, rowcount)
     target = _resolve_insert_target(expression)
     if target is None:
         return None
     supports_rowid = eligibility_cache.get(target)
     if supports_rowid is None:
         supports_rowid = _target_supports_rowid(connection, target)
+        if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
+            eligibility_cache.clear()
         eligibility_cache[target] = supports_rowid
     if not supports_rowid:
         return None
@@ -415,7 +404,6 @@ def execute_cache_hit(
                     affected_rows,
                     cached.processed_state.parsed_expression,
                     rowid_target_cache,
-                    cached.compiled_sql,
                 ),
             )
         fetched_data: list[Any] = cursor.fetchall()
@@ -429,7 +417,6 @@ def execute_cache_hit(
                 effective_rowcount,
                 cached.processed_state.parsed_expression,
                 rowid_target_cache,
-                cached.compiled_sql,
             )
         description = cursor.description
         column_names: list[str] = [column[0] for column in description] if description else []
@@ -532,6 +519,7 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
 
 
 _INSERT_TARGET_CACHE_SIZE: Final[int] = 512
+_ROWID_ELIGIBILITY_CACHE_SIZE: Final[int] = 512
 _INSERT_TARGET_CACHE: "dict[int, tuple[Any, tuple[str | None, str] | None]]" = {}
 _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
     "query_only",

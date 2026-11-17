@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import inspect
 import secrets
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -38,6 +38,7 @@ from sqlspec.driver._common import cache_hit_hooks_unchanged
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler
 from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.exceptions import DeadlockError
+from sqlspec.utils.sync_tools import exit_async_context
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -64,6 +65,16 @@ __all__ = (
 _execute_and_resolve_metadata = execute_and_resolve_metadata
 _execute_fetchall_with_metadata = execute_fetchall_with_metadata
 random = secrets.SystemRandom()
+_NO_CURSOR: Any = None
+_DISPATCH_HOOKS: Final[tuple[str, ...]] = (
+    "with_cursor",
+    "dispatch_special_handling",
+    "dispatch_execute",
+    "dispatch_execute_many",
+    "dispatch_execute_script",
+    "create_execution_result",
+    "build_statement_result",
+)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -88,7 +99,7 @@ class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
 class AiosqliteDriver(AsyncDriverAdapterBase):
     """AIOSQLite driver for async SQLite database operations."""
 
-    __slots__ = ("_data_dictionary", "_rowid_target_cache")
+    __slots__ = ("_data_dictionary", "_dispatches_without_cursor", "_rowid_target_cache")
     dialect: "DialectType | None" = "sqlite"
     export_integers_may_widen: ClassVar[bool] = True
 
@@ -108,6 +119,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         self._rowid_target_cache: dict[Any, bool] = {}
         self._cache_hit_executor = execute_cache_hit if cache_hit_hooks_unchanged(type(self), AiosqliteDriver) else None
         self._cache_hit_state = self._rowid_target_cache
+        self._dispatches_without_cursor = _dispatch_hooks_unchanged(type(self))
 
     @property
     def data_dictionary(self) -> "AiosqliteDataDictionary":
@@ -136,7 +148,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 statement.operation_type,
                 statement._get_shared_expression(),
                 self._rowid_target_cache,
-                sql,
             )
             data, column_names, row_count = collect_rows(fetched_data, description)
             row_format = resolve_row_format(data)
@@ -160,7 +171,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             statement.operation_type,
             statement._get_shared_expression(),
             self._rowid_target_cache,
-            sql,
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
@@ -198,7 +208,10 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             raise ValueError(msg)
         begin_error: aiosqlite.Error | sqlite3.Error | None = None
         try:
-            if not await _check_in_transaction(self.connection):
+            raw_conn = getattr(self.connection, "_conn", None)
+            if _executes_on_worker_thread(self.connection, raw_conn):
+                await run_on_worker_thread(self.connection, _begin_on_worker, raw_conn, stmt)
+            elif not await _check_in_transaction(self.connection):
                 cursor = await self.connection.execute(stmt)
                 if cursor is not None:
                     with contextlib.suppress(Exception):
@@ -316,7 +329,10 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         try:
             if owns_transaction:
                 await self.begin()
-            async with self.with_cursor(self.connection) as cursor:
+            cursor_context = self.with_cursor(self.connection)
+            cursor = await cursor_context.__aenter__()
+            cursor_error: BaseException | None = None
+            try:
                 if overwrite:
                     statement = f"DELETE FROM {format_identifier(table)}"
                     await cursor.execute(statement)
@@ -330,6 +346,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                             else records
                         )
                         await cursor.executemany(insert_sql, cast("Any", prepared_records))
+            except BaseException as exc:
+                cursor_error = exc
+            await exit_async_context(cursor_context, cursor_error)
             if owns_transaction:
                 await self.commit()
         except BaseException as exc:
@@ -371,7 +390,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 cached.operation_type,
                 cached.processed_state.parsed_expression,
                 self._rowid_target_cache,
-                cached.compiled_sql,
             )
             data, column_names, row_count = collect_rows(fetched_data, description)
             return self.build_cached_select_result(
@@ -394,9 +412,38 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             cached.operation_type,
             cached.processed_state.parsed_expression,
             self._rowid_target_cache,
-            cached.compiled_sql,
         )
         return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
+
+    async def _dispatch_statement_with_cursor(
+        self, connection: Any, statement: "SQL", *, has_execution_parameters: bool
+    ) -> "SQLResult":
+        """Dispatch a statement, opening a cursor only when a dispatch hook is overridden.
+
+        The driver's own dispatch methods run each statement on the worker thread with a
+        cursor they open and close there, so no cursor is created on the event-loop side.
+        """
+        if not self._dispatches_without_cursor:
+            return await super()._dispatch_statement_with_cursor(
+                connection, statement, has_execution_parameters=has_execution_parameters
+            )
+        if statement.is_script:
+            execution_result = await self.dispatch_execute_script(_NO_CURSOR, statement)
+        elif statement.is_many:
+            if has_execution_parameters:
+                execution_result = await self.dispatch_execute_many(_NO_CURSOR, statement)
+            else:
+                execution_result = self.create_execution_result(_NO_CURSOR, rowcount_override=0, is_many_result=True)
+        else:
+            execution_result = await self.dispatch_execute(_NO_CURSOR, statement)
+        return self.build_statement_result(statement, execution_result)
+
+    async def _execute_cached_statement_with_cursor(self, statement: "SQL") -> "SQLResult":
+        """Execute a prepared statement, opening a cursor only when a dispatch hook is overridden."""
+        if not self._dispatches_without_cursor:
+            return await super()._execute_cached_statement_with_cursor(statement)
+        execution_result = await self.dispatch_execute(_NO_CURSOR, statement)
+        return self.build_statement_result(statement, execution_result)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in ROWID_SAFE_OPERATIONS:
@@ -415,8 +462,35 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return await _check_in_transaction(self.connection)
 
 
+def _dispatch_hooks_unchanged(driver_type: type) -> bool:
+    """Return whether ``driver_type`` dispatches statements exactly as ``AiosqliteDriver`` does."""
+    if driver_type is AiosqliteDriver:
+        return True
+    return all(getattr(driver_type, name, None) is getattr(AiosqliteDriver, name, None) for name in _DISPATCH_HOOKS)
+
+
 def _read_in_transaction_on_worker(raw_conn: Any) -> bool:
     return bool(getattr(raw_conn, "in_transaction", False))
+
+
+def _begin_on_worker(raw_conn: Any, statement: str) -> None:
+    """Start a transaction on the worker thread unless the connection already holds one."""
+    if _read_in_transaction_on_worker(raw_conn):
+        return
+    cursor = raw_conn.execute(statement)
+    with contextlib.suppress(Exception):
+        cursor.close()
+
+
+def _executes_on_worker_thread(connection: Any, raw_conn: Any) -> bool:
+    """Return whether statements can run directly on the connection's worker thread.
+
+    A connection whose ``execute`` is replaced on the instance keeps running through that method.
+    """
+    if not isinstance(raw_conn, sqlite3.Connection) or not callable(getattr(connection, "_execute", None)):
+        return False
+    conn_dict = getattr(connection, "__dict__", None)
+    return not (isinstance(conn_dict, dict) and "execute" in conn_dict)
 
 
 async def _check_in_transaction(connection: "AiosqliteConnection") -> bool:

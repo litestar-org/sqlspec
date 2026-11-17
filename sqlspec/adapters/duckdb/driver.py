@@ -672,7 +672,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         inserted_rows = 0
         manage_transaction = overwrite and not self._connection_in_transaction()
         columns_sql = ", ".join(format_identifier(col) for col in source_columns) if source_columns else None
-        if columns_sql and source_columns and not overwrite:
+        if columns_sql and source_columns:
             try:
                 table_info_rows = self.connection.execute(f"PRAGMA table_info({table_name})").fetchall()
             except Exception:

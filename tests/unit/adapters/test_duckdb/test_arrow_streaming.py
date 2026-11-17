@@ -254,3 +254,33 @@ def test_load_from_arrow_maps_columns_by_name_not_position() -> None:
 
         rows = driver.execute("SELECT id, email, name FROM reordered_target").get_data()
         assert rows == [{"id": 1, "email": "ada@example.com", "name": "Ada"}]
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize(
+    ("arrow_columns", "expected_row"),
+    [
+        pytest.param(
+            {"ident": [1], "label": ["Ada"], "contact": ["ada@example.com"]},
+            {"id": 1, "email": "Ada", "name": "ada@example.com"},
+            id="mismatched-names-load-by-position",
+        ),
+        pytest.param(
+            {"name": ["Ada"], "id": [1], "email": ["ada@example.com"]},
+            {"id": 1, "email": "ada@example.com", "name": "Ada"},
+            id="reordered-names-load-by-name",
+        ),
+    ],
+)
+def test_load_from_arrow_column_mapping_is_the_same_with_and_without_overwrite(
+    overwrite: bool, arrow_columns: "dict[str, list[Any]]", expected_row: "dict[str, Any]"
+) -> None:
+    seeded_row = {"id": 0, "email": "seed@example.com", "name": "Seed"}
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE mapped_target (id INTEGER, email VARCHAR, name VARCHAR)")
+        driver.execute("INSERT INTO mapped_target VALUES (0, 'seed@example.com', 'Seed')")
+
+        driver.load_from_arrow("mapped_target", pa.table(arrow_columns), overwrite=overwrite)
+
+        rows = driver.execute("SELECT id, email, name FROM mapped_target ORDER BY id").get_data()
+        assert rows == ([expected_row] if overwrite else [seeded_row, expected_row])

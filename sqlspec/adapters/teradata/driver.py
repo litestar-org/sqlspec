@@ -423,7 +423,7 @@ class TeradataDriver(SyncDriverAdapterBase):
             msg = "Teradata Arrow export uses chunked DB-API conversion"
             raise ImproperConfigurationError(msg)
         size = batch_size if batch_size is not None else int(self.driver_features.get("arraysize", 2048))
-        if isinstance(size, bool) or size < 1:
+        if isinstance(batch_size, bool) or size < 1:
             msg = "batch_size must be >= 1"
             raise ImproperConfigurationError(msg)
         fast = bool(self.driver_features.get("enable_fastexport", False))
