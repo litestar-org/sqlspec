@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 from sqlglot import parse_one
 
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteCursor, SqliteDriver
 from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config, resolve_lastrowid
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import json_converter, register_type_handlers, unregister_type_handlers
@@ -529,3 +529,24 @@ def test_cached_select_maps_errors_raised_while_fetching_rows() -> None:
                 session.execute(statement)
     finally:
         config.close_pool()
+
+
+def test_cursor_context_closes_the_cursor_and_ignores_a_failing_close() -> None:
+    closed: list[str] = []
+
+    class FailingCursor:
+        def close(self) -> None:
+            closed.append("close")
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+
+    class Connection:
+        def cursor(self) -> FailingCursor:
+            return FailingCursor()
+
+    with SqliteCursor(cast("Any", Connection())) as cursor:
+        assert isinstance(cursor, FailingCursor)
+    assert closed == ["close"]
+
+    with pytest.raises(ValueError, match="statement failed"), SqliteCursor(cast("Any", Connection())):
+        raise ValueError("statement failed")
+    assert closed == ["close", "close"]

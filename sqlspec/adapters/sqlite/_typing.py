@@ -4,7 +4,6 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-import contextlib
 import sqlite3 as sqlite_module
 from typing import TYPE_CHECKING, Any
 
@@ -69,9 +68,12 @@ class SqliteCursor:
             exc_val: Exception value if an exception occurred
             exc_tb: Exception traceback if an exception occurred
         """
-        if self.cursor is not None:
-            with contextlib.suppress(Exception):
-                self.cursor.close()
+        cursor = self.cursor
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                return
 
 
 class SqliteSessionContext(SyncDriverSessionContext):
