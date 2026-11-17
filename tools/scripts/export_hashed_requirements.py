@@ -34,16 +34,6 @@ REQUIREMENT_PROFILES: dict[str, tuple[str, ...]] = {
     "runtime": ("typing-extensions", "sqlglot", "mypy-extensions", "rich-click"),
     "build": ("hatch-mypyc", "hatchling", "typing-extensions", "sqlglot", "mypy-extensions", "rich-click"),
     "pgo": ("anyio", "pyarrow", "aiosqlite", "duckdb", "adbc-driver-sqlite", "adbc-driver-manager"),
-    "pgo-validate": (
-        "anyio",
-        "pyarrow",
-        "oracledb",
-        "asyncpg",
-        "aiosqlite",
-        "duckdb",
-        "adbc-driver-sqlite",
-        "adbc-driver-manager",
-    ),
     "test": ("aiosqlite", "pymssql", "cloud-sql-python-connector", "google-cloud-alloydb-connector"),
     "smoke": ("obstore", "pyarrow"),
 }

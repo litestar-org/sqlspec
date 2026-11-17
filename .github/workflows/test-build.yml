@@ -313,32 +313,30 @@ jobs:
             PGO_DIR=/tmp/sqlspec-pgo &&
             BUILD_DIR=/tmp/sqlspec-mypyc-build &&
             mkdir -p "$PGO_DIR" "$BUILD_DIR" &&
-            CFLAGS="-fprofile-generate=$PGO_DIR"
+            CFLAGS="-DNDEBUG -fno-strict-overflow -fno-semantic-interposition -fprofile-generate=$PGO_DIR"
+            LDFLAGS="-Wl,-Bsymbolic-functions"
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
             pip install --no-build-isolation --no-deps "{package}" &&
             pip install --require-hashes -r "{project}/.build-requirements/pgo.txt" &&
-            python "{project}/tools/scripts/pgo_training.py" &&
+            PYTHONSAFEPATH=1 python "{project}/tools/scripts/pgo_training.py" &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 
           CIBW_ENVIRONMENT_LINUX: >-
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR=/tmp/sqlspec-mypyc-build
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
-            CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+            CFLAGS="-DNDEBUG -fno-strict-overflow -fno-semantic-interposition -flto=auto -fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
+            LDFLAGS="-Wl,-Bsymbolic-functions -flto=auto"
 
           # macOS + Windows: plain mypyc, no PGO. macOS PGO needs filter
           # deps absent from BEFORE_BUILD; MSVC PGO isn't validated.
           CIBW_ENVIRONMENT_MACOS: >-
             HATCH_BUILD_HOOKS_ENABLE=1
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
 
           CIBW_ENVIRONMENT_WINDOWS: >-
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR=C:/b
-            MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

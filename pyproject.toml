@@ -357,7 +357,7 @@ require-runtime-features = ["mypyc"]
 
 [tool.hatch.build.targets.wheel.hooks.mypyc.options]
 debug_level = "0" # No debug info in production (0-2)
-multi_file = true # Enable cross-module optimization
+multi_file = true # One C file per module to bound compile memory; Stage-3 LTO (-flto=auto) inlines across TUs
 opt_level = "3"   # Maximum optimization (0-3)
 
 

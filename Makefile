@@ -454,17 +454,21 @@ bench-analyze:                                      ## Analyze saved profile dat
 
 PGO_DIR := /tmp/sqlspec-pgo
 PGO_BUILD_DIR := /tmp/sqlspec-mypyc-build
+PGO_BASE_CFLAGS := -DNDEBUG -fno-strict-overflow -fno-semantic-interposition
+PGO_BASE_LDFLAGS := -Wl,-Bsymbolic-functions
 
 .PHONY: pgo-verify
 pgo-verify:                                         ## Verify CFLAGS reach the C compiler through hatch-mypyc
 	@echo "${INFO} Testing CFLAGS passthrough to C compiler..."
-	@CFLAGS="-DPGO_CANARY=1" uv run python -c "\
+	@CFLAGS="-DPGO_CANARY=1" LDFLAGS="-Wl,-Bsymbolic-functions" uv run --no-sync python -c "\
 	from distutils.sysconfig import customize_compiler; \
 	from distutils.ccompiler import new_compiler; \
 	cc = new_compiler(); customize_compiler(cc); \
 	cmd = ' '.join(cc.compiler_so); \
+	ld_cmd = ' '.join(cc.linker_so); \
 	assert 'PGO_CANARY' in cmd, f'CFLAGS not found in: {cmd}'; \
-	print('CFLAGS reach compiler: ' + cmd)" 2>/dev/null
+	assert '-Wl,-Bsymbolic-functions' in ld_cmd, f'LDFLAGS not found in: {ld_cmd}'; \
+	print('CFLAGS reach compiler: ' + cmd + ' | LDFLAGS: ' + ld_cmd)" 2>/dev/null
 	@echo "${OK} CFLAGS passthrough verified"
 
 .PHONY: pgo-local
@@ -473,17 +477,19 @@ pgo-local:                                          ## Run full three-stage PGO 
 	@rm -rf $(PGO_DIR) $(PGO_BUILD_DIR) dist/
 	@mkdir -p $(PGO_DIR) $(PGO_BUILD_DIR)
 	@echo "${INFO} Stage 1: Building instrumented wheel..."
-	@CFLAGS="-fprofile-generate=$(PGO_DIR)" \
+	@CFLAGS="$(PGO_BASE_CFLAGS) -fprofile-generate=$(PGO_DIR)" \
+		LDFLAGS="$(PGO_BASE_LDFLAGS)" \
 		HATCH_MYPYC_BUILD_DIR=$(PGO_BUILD_DIR) \
 		HATCH_BUILD_HOOKS_ENABLE=1 uv build --wheel >/dev/null 2>&1
 	@echo "${OK} Instrumented wheel built"
 	@echo "${INFO} Stage 2: Running training workload..."
 	@uv pip install dist/*.whl --force-reinstall --no-deps >/dev/null 2>&1
-	@.venv/bin/python tools/scripts/pgo_training.py
+	@PYTHONSAFEPATH=1 .venv/bin/python tools/scripts/pgo_training.py
 	@echo "${OK} Training complete"
 	@rm -rf dist/ $(PGO_BUILD_DIR)/build $(PGO_BUILD_DIR)/tmp
 	@echo "${INFO} Stage 3: Building PGO-optimized wheel..."
-	@CFLAGS="-fprofile-use=$(PGO_DIR) -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch" \
+	@CFLAGS="$(PGO_BASE_CFLAGS) -flto=auto -fprofile-use=$(PGO_DIR) -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch" \
+		LDFLAGS="$(PGO_BASE_LDFLAGS) -flto=auto" \
 		HATCH_MYPYC_BUILD_DIR=$(PGO_BUILD_DIR) \
 		HATCH_BUILD_HOOKS_ENABLE=1 uv build --wheel >/dev/null 2>&1
 	@echo "${OK} PGO-optimized wheel built: $$(ls dist/*.whl)"
