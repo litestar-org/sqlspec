@@ -52,7 +52,7 @@ jobs:
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
             pip install --no-build-isolation --no-deps "{package}" &&
             pip install --require-hashes -r "{project}/.build-requirements/pgo.txt" &&
-            PYTHONSAFEPATH=1 python "{project}/tools/scripts/pgo_training.py" &&
+            PYTHONSAFEPATH=1 python "{project}/tools/scripts/pgo_training.py" --strict &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 

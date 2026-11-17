@@ -4,16 +4,33 @@ Exercises hot paths to generate compiler profile data for Profile-Guided Optimiz
 This script runs against compiled modules and should not be packaged with the library.
 
 Run as: python tools/scripts/pgo_training.py
+
+Pass ``--strict`` when the environment is expected to provide every optional SDK the workloads use,
+so that a skipped workload fails the run.
 """
 
+import argparse
 import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 __all__ = ("main",)
+
+_OPTIONAL_SDK_MODULES: frozenset[str] = frozenset({
+    "adbc_driver_manager",
+    "adbc_driver_sqlite",
+    "aiosqlite",
+    "anyio",
+    "duckdb",
+    "pyarrow",
+})
 
 
 @dataclass(slots=True)
@@ -542,8 +559,34 @@ def _train_adbc_sqlite() -> None:
         Path(tmp_name).unlink()
 
 
-def main() -> None:
-    """Run all PGO training workloads."""
+def _missing_optional_sdk(exc: ImportError) -> str | None:
+    """Return the missing module name when an import failed because an optional SDK is absent.
+
+    Any other import failure, including one raised for a ``sqlspec`` module or by an installed SDK,
+    returns ``None``.
+    """
+    if not isinstance(exc, ModuleNotFoundError) or not exc.name:
+        return None
+    return exc.name if exc.name.partition(".")[0] in _OPTIONAL_SDK_MODULES else None
+
+
+def main(argv: "Sequence[str] | None" = None) -> None:
+    """Run all PGO training workloads.
+
+    A workload whose optional SDK is not installed is skipped, or fails the run with ``--strict``.
+    Every other import failure propagates.
+
+    Args:
+        argv: Command-line arguments, defaulting to ``sys.argv[1:]``.
+
+    Raises:
+        RuntimeError: If ``--strict`` is set and a workload's optional SDK is not installed.
+    """
+    parser = argparse.ArgumentParser(description="Run the PGO training workloads.")
+    parser.add_argument(
+        "--strict", action="store_true", help="Fail instead of skipping a workload whose optional SDK is not installed."
+    )
+    args = parser.parse_args(argv)
     start = time.perf_counter()
 
     workloads = [
@@ -567,8 +610,13 @@ def main() -> None:
         try:
             fn()
         except ImportError as exc:
-            elapsed = time.perf_counter() - t0
-            print(f"  {name}: skipped ({exc.name} not installed)")  # noqa: T201
+            missing = _missing_optional_sdk(exc)
+            if missing is None:
+                raise
+            if args.strict:
+                msg = f"workload {name} requires {missing}, which is not installed"
+                raise RuntimeError(msg) from exc
+            print(f"  {name}: skipped ({missing} not installed)")  # noqa: T201
             continue
         elapsed = time.perf_counter() - t0
         print(f"  {name}: {elapsed:.2f}s")  # noqa: T201

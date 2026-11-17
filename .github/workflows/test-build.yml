@@ -319,7 +319,7 @@ jobs:
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
             pip install --no-build-isolation --no-deps "{package}" &&
             pip install --require-hashes -r "{project}/.build-requirements/pgo.txt" &&
-            PYTHONSAFEPATH=1 python "{project}/tools/scripts/pgo_training.py" &&
+            PYTHONSAFEPATH=1 python "{project}/tools/scripts/pgo_training.py" --strict &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 
@@ -387,7 +387,7 @@ jobs:
         shell: bash
         env:
           PYTHON_VERSION: ${{ matrix.python-version }}
-        run: uv run --no-project --python "$PYTHON_VERSION" python tools/scripts/export_hashed_requirements.py --profile runtime --profile smoke --output-dir .build-requirements
+        run: uv run --no-project --python "$PYTHON_VERSION" python tools/scripts/export_hashed_requirements.py --profile runtime --profile smoke --profile drivers --output-dir .build-requirements
 
       - name: Download standard wheel artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -428,7 +428,12 @@ jobs:
           else
             echo "::warning::obstore or pyarrow binary wheel unavailable for Python ${PYTHON_VERSION}; the obstore smoke check will be skipped"
           fi
-          uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py --require-compiled
+          smoke_args=(--require-compiled)
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            uv pip install --no-config --python test-mypyc --require-hashes --only-binary :all: -r .build-requirements/drivers.txt
+            smoke_args+=(--require-sdk-profile)
+          fi
+          uv run --no-project --python test-mypyc python -I tools/scripts/mypyc_smoke.py "${smoke_args[@]}"
 
   verify-packages:
     name: Verify package integrity

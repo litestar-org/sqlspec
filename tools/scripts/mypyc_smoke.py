@@ -15,9 +15,110 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
-__all__ = ("SMOKE_IMPORTS", "SmokeImport", "is_compiled_module", "main", "run_construction_checks", "run_smoke")
+__all__ = (
+    "SDK_PROFILE_DEPENDENCIES",
+    "SMOKE_IMPORTS",
+    "SmokeImport",
+    "is_compiled_module",
+    "main",
+    "run_construction_checks",
+    "run_smoke",
+)
 
 COMPILED_SUFFIXES: tuple[str, ...] = tuple(dict.fromkeys((*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".pyd")))
+
+SDK_PROFILE_DEPENDENCIES: tuple[str, ...] = (
+    "adbc_driver_manager",
+    "aiomysql",
+    "aiosqlite",
+    "asyncmy",
+    "asyncpg",
+    "duckdb",
+    "mysql.connector",
+    "oracledb",
+    "psqlpy",
+    "psycopg",
+    "psycopg_pool",
+    "pyarrow",
+    "pymssql",
+    "pymysql",
+)
+"""Importable SDKs installed by the ``drivers`` requirement profile on the Linux wheel-test job."""
+
+_BEHAVIOUR_PROBE_TIMEOUT_SECONDS = 30
+
+_BEHAVIOUR_PROBE_PRELUDE = """
+import asyncio
+import json
+import os
+import sys
+from importlib.machinery import EXTENSION_SUFFIXES
+
+SCENARIO_TIMEOUT_SECONDS = 5.0
+failures = []
+loop_errors = []
+
+
+class ScenarioHung(Exception):
+    pass
+
+
+def record_loop_error(loop, context):
+    loop_errors.append(repr(context.get("exception") or context.get("message")))
+
+
+async def settle(awaitable, label, *, cancel_when=None):
+    asyncio.get_running_loop().set_exception_handler(record_loop_error)
+    task = asyncio.ensure_future(awaitable)
+    if cancel_when is not None:
+        started = asyncio.ensure_future(cancel_when.wait())
+        await asyncio.wait({task, started}, timeout=SCENARIO_TIMEOUT_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+        started.cancel()
+        if task.done():
+            return task
+        if not cancel_when.is_set():
+            failures.append(f"{label}: statement did not start within {SCENARIO_TIMEOUT_SECONDS}s")
+            raise ScenarioHung(label)
+        task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=SCENARIO_TIMEOUT_SECONDS)
+    if not done:
+        detail = f" after event loop error {loop_errors[-1]}" if loop_errors else ""
+        failures.append(f"{label}: task still pending after {SCENARIO_TIMEOUT_SECONDS}s{detail}")
+        raise ScenarioHung(label)
+    return task
+
+
+def expect(task, label, expected):
+    if task.cancelled():
+        actual = "CancelledError"
+    elif task.exception() is not None:
+        actual = type(task.exception()).__name__
+    else:
+        actual = "result"
+    if actual != expected:
+        detail = "" if task.cancelled() or task.exception() is None else f": {task.exception()}"
+        failures.append(f"{label}: expected {expected}, got {actual}{detail}")
+
+
+def report(*module_names):
+    compiled = all(sys.modules[name].__file__.endswith(tuple(EXTENSION_SUFFIXES)) for name in module_names)
+    print(json.dumps({"compiled": compiled, "failures": failures}))
+    sys.stdout.flush()
+    os._exit(1 if failures else 0)
+
+
+def run_probe(main, *module_names):
+    async def guarded():
+        try:
+            await main()
+        except ScenarioHung:
+            pass
+        except Exception as exc:
+            failures.append(f"probe raised {type(exc).__name__}: {exc}")
+        report(*module_names)
+
+    asyncio.run(guarded())
+"""
 
 
 class SmokeImport(NamedTuple):
@@ -178,8 +279,14 @@ def is_compiled_module(module: Any) -> bool:
     return module_file.endswith(COMPILED_SUFFIXES)
 
 
-def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
-    """Import the compiled-wheel smoke matrix and return per-entry results."""
+def run_smoke(*, require_compiled: bool = False, require_sdk_profile: bool = False) -> list[dict[str, Any]]:
+    """Import the compiled-wheel smoke matrix and return per-entry results.
+
+    Args:
+        require_compiled: Fail when a compiled-surface module imports from Python source.
+        require_sdk_profile: Fail instead of skipping when a missing dependency is one of
+            ``SDK_PROFILE_DEPENDENCIES``.
+    """
     results: list[dict[str, Any]] = []
     for entry in SMOKE_IMPORTS:
         result: dict[str, Any] = {
@@ -207,6 +314,8 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
             if _is_missing_optional_dependency(missing_name, optional_dependency):
                 if require_compiled and entry.require_compiled and not _has_compiled_module_file(entry.module):
                     result["error"] = "compiled extension is missing from the installed package"
+                elif require_sdk_profile and optional_dependency in SDK_PROFILE_DEPENDENCIES:
+                    result["error"] = f"required SDK profile dependency is missing: {missing_name}"
                 else:
                     result["skipped"] = True
                     result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
@@ -244,6 +353,20 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
         _check_fastapi_filter_construction(require_compiled=require_compiled),
         _check_litestar_filter_construction(require_compiled=require_compiled),
+        _check_sqlite_migration_lock(require_compiled=require_compiled),
+        _check_duckdb_migration_lock(require_compiled=require_compiled),
+        _check_deferred_session_dialect(require_compiled=require_compiled),
+        _check_aiosqlite_load_failure(require_compiled=require_compiled),
+        _check_asyncpg_execute_stack(require_compiled=require_compiled),
+        _check_psycopg_execute_stack(require_compiled=require_compiled),
+        *[
+            _check_mysql_observed_tuple_rows(adapter, driver_name, require_compiled=require_compiled)
+            for adapter, driver_name in (
+                ("pymysql", "PyMysqlDriver"),
+                ("aiomysql", "AiomysqlDriver"),
+                ("asyncmy", "AsyncmyDriver"),
+            )
+        ],
     ]
 
 
@@ -253,10 +376,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--require-compiled", action="store_true", help="Fail when compiled-surface modules import from Python source."
     )
+    parser.add_argument(
+        "--require-sdk-profile",
+        action="store_true",
+        help="Fail when an SDK installed by the Linux wheel-test driver profile is missing instead of skipping.",
+    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
     args = parser.parse_args(argv)
 
-    results = run_smoke(require_compiled=args.require_compiled)
+    results = run_smoke(require_compiled=args.require_compiled, require_sdk_profile=args.require_sdk_profile)
+    if args.require_sdk_profile:
+        results.append(_check_sdk_profile())
     results.extend(run_construction_checks(require_compiled=args.require_compiled))
     if args.json:
         json.dump({"results": results}, sys.stdout, indent=2, sort_keys=True)
@@ -2285,6 +2415,638 @@ def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[s
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
     return result
+
+
+def _check_sdk_profile() -> dict[str, Any]:
+    """Import every SDK the Linux wheel-test driver profile guarantees."""
+    result = _new_smoke_result(name="sdk_profile", module="sqlspec.adapters", attribute=None)
+    result["imported"] = True
+    missing: list[str] = []
+    for dependency in SDK_PROFILE_DEPENDENCIES:
+        try:
+            importlib.import_module(dependency)
+        except Exception as exc:
+            missing.append(f"{dependency} ({type(exc).__name__}: {exc})")
+    if missing:
+        result["error"] = f"sdk_profile: required SDKs are not importable: {'; '.join(missing)}"
+    return result
+
+
+def _run_behaviour_probe(
+    name: str,
+    module: str,
+    script: str,
+    *,
+    require_compiled: bool,
+    dependencies: tuple[str, ...] = (),
+    scenarios: tuple[str, ...] = ("",),
+    arguments: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Run a behavioural probe script once per scenario, each in a fresh interpreter under a time limit.
+
+    The script runs after ``_BEHAVIOUR_PROBE_PRELUDE`` with the scenario name as its first argument
+    and ends by calling ``report`` or ``run_probe``, which print the failures and exit without waiting
+    for unfinished tasks. Each scenario starts with clean interpreter state.
+    """
+    result = _new_smoke_result(name=name, module=module, attribute=None, compiled_required=require_compiled)
+    for dependency in dependencies:
+        if importlib.util.find_spec(dependency) is None:
+            result["skipped"] = True
+            result["skip_reason"] = f"optional dependency missing: {dependency}"
+            return result
+    child_script = _BEHAVIOUR_PROBE_PRELUDE + script
+    if not require_compiled:
+        source_file = importlib.import_module("sqlspec").__file__
+        if source_file is None:
+            result["error"] = f"{name}: SQLSpec package origin is unavailable"
+            return result
+        source_root = str(Path(source_file).resolve().parent.parent)
+        child_script = f"import sys; sys.path.insert(0, {source_root!r})\n" + child_script
+    failures: list[str] = []
+    compiled = True
+    for scenario in scenarios:
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-I", "-c", child_script, scenario, *arguments],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=_BEHAVIOUR_PROBE_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(f"{scenario or 'probe'} did not finish within {_BEHAVIOUR_PROBE_TIMEOUT_SECONDS}s")
+            break
+        try:
+            payload = json.loads(completed.stdout.splitlines()[-1])
+            failures.extend(str(failure) for failure in payload["failures"])
+            compiled = compiled and bool(payload["compiled"])
+        except (ValueError, IndexError, KeyError, TypeError):
+            failures.append(
+                f"{scenario or 'probe'} exited with return code {completed.returncode}; "
+                f"stdout={completed.stdout!r}; stderr={completed.stderr!r}"
+            )
+    result["imported"] = True
+    result["compiled"] = compiled
+    if failures:
+        result["error"] = f"{name}: {'; '.join(failures)}"
+    elif require_compiled and not compiled:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+    return result
+
+
+def _check_sqlite_migration_lock(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Resolve the SQLite migration lock backend and hold the lock against a second migrator."""
+    script = """
+import tempfile
+from pathlib import Path
+
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.migrations.base import BaseMigrationTracker
+from sqlspec.migrations.tracker import SyncMigrationTracker
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+    database = str(Path(root) / "lock.db")
+    first_config = SqliteConfig(connection_config={"database": database})
+    second_config = SqliteConfig(connection_config={"database": database})
+    try:
+        with first_config.provide_session() as first, second_config.provide_session() as second:
+            second.execute("PRAGMA busy_timeout = 200")
+            backend = BaseMigrationTracker._resolve_lock_backend(first)
+            if backend != "sqlite":
+                failures.append(f"SQLite session resolved lock backend {backend!r}, expected 'sqlite'")
+            with SyncMigrationTracker().acquire_lock(first):
+                try:
+                    with SyncMigrationTracker().acquire_lock(second, timeout_seconds=1):
+                        failures.append("second migrator acquired the SQLite lock while the first held it")
+                except SQLSpecError:
+                    pass
+            try:
+                with SyncMigrationTracker().acquire_lock(second, timeout_seconds=1):
+                    pass
+            except SQLSpecError as exc:
+                failures.append(f"released SQLite lock could not be acquired: {type(exc).__name__}: {exc}")
+    finally:
+        first_config.close_pool()
+        second_config.close_pool()
+
+report("sqlspec.migrations.base", "sqlspec.migrations.tracker", "sqlspec.adapters.sqlite.driver")
+"""
+    return _run_behaviour_probe(
+        "sqlite_migration_lock", "sqlspec.migrations.tracker", script, require_compiled=require_compiled
+    )
+
+
+def _check_duckdb_migration_lock(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Resolve the DuckDB migration lock backend from an open session."""
+    script = """
+from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.migrations.base import BaseMigrationTracker
+
+config = DuckDBConfig(connection_config={"database": ":memory:"})
+try:
+    with config.provide_session() as session:
+        backend = BaseMigrationTracker._resolve_lock_backend(session)
+        if backend != "lease":
+            failures.append(f"DuckDB session resolved lock backend {backend!r}, expected 'lease'")
+finally:
+    config.close_pool()
+
+report("sqlspec.migrations.base", "sqlspec.adapters.duckdb.driver")
+"""
+    return _run_behaviour_probe(
+        "duckdb_migration_lock",
+        "sqlspec.migrations.base",
+        script,
+        require_compiled=require_compiled,
+        dependencies=("duckdb",),
+    )
+
+
+def _check_deferred_session_dialect(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Read ``dialect`` from a deferred session before its connection is opened."""
+    script = """
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.driver._deferred import DeferredAsyncSession
+
+opened = []
+
+
+async def open_session():
+    opened.append(True)
+    raise AssertionError("the request connection must stay closed")
+
+
+session = DeferredAsyncSession(
+    AiosqliteConfig(connection_config={"database": ":memory:"}), open_session, lambda: None, "db_session"
+)
+try:
+    dialect = session.dialect
+except Exception as exc:
+    failures.append(f"dialect before the connection opens raised {type(exc).__name__}: {exc}")
+else:
+    if dialect != "sqlite":
+        failures.append(f"dialect before the connection opens was {dialect!r}, expected 'sqlite'")
+if opened:
+    failures.append("reading dialect opened the request connection")
+
+report("sqlspec.driver._deferred", "sqlspec.adapters.aiosqlite.driver")
+"""
+    return _run_behaviour_probe(
+        "deferred_session_dialect",
+        "sqlspec.driver._deferred",
+        script,
+        require_compiled=require_compiled,
+        dependencies=("aiosqlite",),
+    )
+
+
+def _check_aiosqlite_load_failure(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Fail and cancel aiosqlite Arrow loads that run inside a cursor context."""
+    script = """
+import tempfile
+import time
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+scenario = sys.argv[1]
+operation, _, outcome = scenario.partition(" ")
+
+
+async def main():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+        rows = pa.table({"id": [1, 2] if outcome == "cancelled" else [1, 1], "name": ["a", "b"]})
+        source = Path(directory) / "rows.parquet"
+        pq.write_table(rows, source)
+        config = AiosqliteConfig(connection_config={"database": str(Path(directory) / "load.db")})
+        context = config.provide_session()
+        session = await context.__aenter__()
+        await session.execute_script("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+        started = None
+        if outcome == "cancelled":
+            loop = asyncio.get_running_loop()
+            started = asyncio.Event()
+            seen = []
+
+            def mark_insert():
+                if not seen:
+                    seen.append(True)
+                    loop.call_soon_threadsafe(started.set)
+                    time.sleep(0.2)
+                return 1
+
+            await session.connection.create_function("probe_mark_insert", 0, mark_insert)
+            await session.execute_script(
+                "CREATE TRIGGER items_probe AFTER INSERT ON items BEGIN SELECT probe_mark_insert(); END"
+            )
+        if operation == "load_from_storage":
+            load = session.load_from_storage("items", source, file_format="parquet")
+        else:
+            load = session.load_from_arrow("items", rows, drop_indexes=True)
+        task = await settle(load, scenario, cancel_when=started)
+        expect(task, scenario, "CancelledError" if outcome == "cancelled" else "UniqueViolationError")
+        await context.__aexit__(None, None, None)
+        await config.close_pool()
+
+
+run_probe(main, "sqlspec.adapters.aiosqlite.driver", "sqlspec.storage._ingest", "sqlspec.driver._async")
+"""
+    return _run_behaviour_probe(
+        "aiosqlite_load_failure",
+        "sqlspec.adapters.aiosqlite.driver",
+        script,
+        require_compiled=require_compiled,
+        dependencies=("aiosqlite", "pyarrow"),
+        scenarios=(
+            "load_from_storage duplicate-key",
+            "load_from_arrow duplicate-key",
+            "load_from_storage cancelled",
+            "load_from_arrow cancelled",
+        ),
+    )
+
+
+def _check_asyncpg_execute_stack(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Fail and cancel asyncpg ``execute_stack`` inside transaction and savepoint scopes whose exits suspend."""
+    script = """
+import sqlspec.adapters.asyncpg.driver as asyncpg_driver
+from sqlspec.core.stack import StatementStack
+
+scenario = sys.argv[1]
+scope, _, mode = scenario.partition(" ")
+
+
+class FakeTransaction:
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def __aenter__(self):
+        self.connection.in_transaction = True
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
+        self.connection.in_transaction = False
+        self.connection.log.append("COMMIT" if exc_type is None else "ROLLBACK")
+
+
+class FakeConnection:
+    def __init__(self):
+        self.in_transaction = scope == "savepoint"
+        self.log = []
+        self.started = asyncio.Event()
+
+    def is_in_transaction(self):
+        return self.in_transaction
+
+    def transaction(self):
+        return FakeTransaction(self)
+
+    async def execute(self, sql, *args, **kwargs):
+        if sql.startswith(("SAVEPOINT", "ROLLBACK", "RELEASE")):
+            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
+            self.log.append(sql.split()[0])
+            return "OK"
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        if mode == "committed":
+            loop.call_later(0.01, future.set_result, "INSERT 0 1")
+        elif mode == "failing":
+            loop.call_later(0.01, future.set_exception, RuntimeError("statement failed through a future"))
+        self.started.set()
+        return await future
+
+    fetch = execute
+
+
+async def main():
+    connection = FakeConnection()
+    driver = asyncpg_driver.AsyncpgDriver(connection)
+    stack = StatementStack().push_execute("INSERT INTO items VALUES ($1)", (1,))
+    task = await settle(
+        driver.execute_stack(stack, continue_on_error=scope == "savepoint"),
+        scenario,
+        cancel_when=connection.started if mode == "cancelled" else None,
+    )
+    if mode == "cancelled":
+        expect(task, scenario, "CancelledError")
+    elif scope == "savepoint":
+        expect(task, scenario, "result")
+        if task.exception() is None:
+            errors = [type(entry.error).__name__ for entry in task.result()]
+            if errors != ["StackExecutionError"] or connection.log != ["SAVEPOINT", "ROLLBACK", "RELEASE"]:
+                failures.append(f"{scenario}: operation errors were {errors}, statements were {connection.log}")
+    else:
+        expect(task, scenario, "result" if mode == "committed" else "StackExecutionError")
+        expected_log = ["COMMIT"] if mode == "committed" else ["ROLLBACK"]
+        if connection.log != expected_log:
+            failures.append(f"{scenario}: transaction ended with {connection.log}, expected {expected_log}")
+
+
+run_probe(main, "sqlspec.adapters.asyncpg.driver", "sqlspec.driver._async")
+"""
+    return _run_behaviour_probe(
+        "asyncpg_execute_stack",
+        "sqlspec.adapters.asyncpg.driver",
+        script,
+        require_compiled=require_compiled,
+        dependencies=("asyncpg",),
+        scenarios=(
+            "transaction committed",
+            "transaction failing",
+            "transaction cancelled",
+            "savepoint failing",
+            "savepoint cancelled",
+        ),
+    )
+
+
+def _check_psycopg_execute_stack(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Prepare psycopg stack parameters and fail or cancel a pipeline whose exit suspends."""
+    script = """
+import contextlib
+
+import sqlspec.adapters.psycopg.driver as psycopg_driver
+from sqlspec.core.stack import StatementStack
+
+scenario = sys.argv[1]
+
+
+class FakeInfo:
+    transaction_status = 0
+
+
+class FakeCursor:
+    description = None
+    rowcount = 1
+    statusmessage = "INSERT 0 1"
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, sql, params=None):
+        self.connection.sent.append(params)
+        return self
+
+    def fetchall(self):
+        return []
+
+    def close(self):
+        pass
+
+
+class FakeAsyncCursor(FakeCursor):
+    async def execute(self, sql, params=None):
+        self.connection.sent.append(params)
+        if scenario == "parameters":
+            return self
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        if scenario == "pipeline failing":
+            loop.call_later(0.01, future.set_exception, RuntimeError("statement failed through a future"))
+        self.connection.started.set()
+        return await future
+
+    async def fetchall(self):
+        return []
+
+    async def close(self):
+        pass
+
+
+class FakePipeline:
+    def sync(self):
+        pass
+
+
+class FakeAsyncPipeline:
+    async def sync(self):
+        pass
+
+
+class FakeConnection:
+    def __init__(self):
+        self.autocommit = True
+        self.info = FakeInfo()
+        self.sent = []
+        self.events = []
+
+    def cursor(self):
+        return FakeCursor(self)
+
+    @contextlib.contextmanager
+    def pipeline(self):
+        yield FakePipeline()
+
+    def commit(self):
+        self.events.append("commit")
+
+    def rollback(self):
+        self.events.append("rollback")
+
+
+class FakeAsyncConnection:
+    def __init__(self):
+        self.autocommit = True
+        self.info = FakeInfo()
+        self.sent = []
+        self.events = []
+        self.started = asyncio.Event()
+
+    def cursor(self):
+        return FakeAsyncCursor(self)
+
+    @contextlib.asynccontextmanager
+    async def pipeline(self):
+        try:
+            yield FakeAsyncPipeline()
+        finally:
+            await asyncio.sleep(0)
+            await asyncio.sleep(0.01)
+            self.events.append("pipeline-exit")
+
+    async def commit(self):
+        self.events.append("commit")
+
+    async def rollback(self):
+        self.events.append("rollback")
+
+    async def set_autocommit(self, value):
+        self.autocommit = value
+
+
+PARAMETER_CASES = (
+    ("tuple parameters", "INSERT INTO items (id) VALUES (%s)", ((1,),), {}),
+    ("list parameters", "INSERT INTO items (id) VALUES (%s)", ([1],), {}),
+    ("scalar parameter", "INSERT INTO items (id) VALUES (%s)", (1,), {}),
+    ("named parameters", "INSERT INTO items (id) VALUES (:id)", (), {"id": 1}),
+    ("no parameters", "INSERT INTO items (id) VALUES (1)", (), {}),
+)
+
+
+def check_rows(label, results, connection):
+    rows = [entry.rows_affected for entry in results]
+    if rows != [1] or len(connection.sent) != 1 or connection.events[-1:] != ["commit"]:
+        failures.append(f"{label}: rows={rows}, statements sent={len(connection.sent)}, events={connection.events}")
+
+
+async def check_parameters():
+    for case, sql, args, kwargs in PARAMETER_CASES:
+        label = f"sync stack with {case}"
+        connection = FakeConnection()
+        try:
+            results = psycopg_driver.PsycopgSyncDriver(connection).execute_stack(
+                StatementStack().push_execute(sql, *args, **kwargs)
+            )
+        except Exception as exc:
+            failures.append(f"{label}: {type(exc).__name__}: {exc.__cause__ or exc}")
+        else:
+            check_rows(label, results, connection)
+    for case, sql, args, kwargs in PARAMETER_CASES:
+        label = f"async stack with {case}"
+        connection = FakeAsyncConnection()
+        task = await settle(
+            psycopg_driver.PsycopgAsyncDriver(connection).execute_stack(
+                StatementStack().push_execute(sql, *args, **kwargs)
+            ),
+            label,
+        )
+        if task.cancelled() or task.exception() is not None:
+            exc = None if task.cancelled() else task.exception()
+            failures.append(f"{label}: {type(exc).__name__}: {exc.__cause__ or exc}" if exc else f"{label}: cancelled")
+        else:
+            check_rows(label, task.result(), connection)
+
+
+async def check_pipeline_exit():
+    connection = FakeAsyncConnection()
+    task = await settle(
+        psycopg_driver.PsycopgAsyncDriver(connection).execute_stack(
+            StatementStack().push_execute("INSERT INTO items (id) VALUES (:id)", id=1)
+        ),
+        scenario,
+        cancel_when=connection.started if scenario == "pipeline cancelled" else None,
+    )
+    expect(task, scenario, "CancelledError" if scenario == "pipeline cancelled" else "StackExecutionError")
+    if "pipeline-exit" not in connection.events:
+        failures.append(f"{scenario}: pipeline did not exit, events were {connection.events}")
+
+
+run_probe(
+    check_parameters if scenario == "parameters" else check_pipeline_exit,
+    "sqlspec.adapters.psycopg.driver",
+    "sqlspec.adapters.psycopg.core",
+)
+"""
+    return _run_behaviour_probe(
+        "psycopg_execute_stack",
+        "sqlspec.adapters.psycopg.driver",
+        script,
+        require_compiled=require_compiled,
+        dependencies=("psycopg", "psycopg_pool"),
+        scenarios=("parameters", "pipeline failing", "pipeline cancelled"),
+    )
+
+
+def _check_mysql_observed_tuple_rows(
+    adapter: str, driver_name: str, *, require_compiled: bool = False
+) -> dict[str, Any]:
+    """Repeat an observed SELECT on a MySQL driver whose cursor returns a tuple from ``fetchall``."""
+    script = """
+import importlib
+
+from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+adapter, driver_name = sys.argv[2:4]
+driver_module = importlib.import_module(f"sqlspec.adapters.{adapter}.driver")
+asynchronous = adapter != "pymysql"
+
+
+class FakeCursor:
+    description = (("a", 3, None, None, None, None, None),)
+    rowcount = 2
+    lastrowid = 0
+
+    def execute(self, sql, params=None):
+        return 2
+
+    def fetchall(self):
+        return ((1,), (2,))
+
+    def close(self):
+        pass
+
+
+class FakeAsyncCursor(FakeCursor):
+    async def execute(self, sql, params=None):
+        return 2
+
+    async def fetchall(self):
+        return ((1,), (2,))
+
+    async def close(self):
+        pass
+
+
+class FakeConnection:
+    server_status = 0
+
+    def cursor(self, *args, **kwargs):
+        return FakeAsyncCursor() if asynchronous else FakeCursor()
+
+    def get_autocommit(self):
+        return True
+
+    def get_transaction_status(self):
+        return False
+
+
+class FakeAiomysqlConnection(FakeConnection):
+    async def cursor(self, *args, **kwargs):
+        return FakeAsyncCursor()
+
+
+async def main():
+    connection = FakeAiomysqlConnection() if adapter == "aiomysql" else FakeConnection()
+    driver = getattr(driver_module, driver_name)(connection=connection)
+    observed = []
+    driver.attach_observability(
+        ObservabilityRuntime(ObservabilityConfig(statement_observers=(observed.append,)), config_name="smoke")
+    )
+    for attempt in ("first", "second", "third"):
+        label = f"{attempt} observed SELECT"
+        try:
+            result = driver.execute("SELECT a FROM items WHERE id = %s", (1,))
+            if asynchronous:
+                result = (await settle(result, label)).result()
+            rows = result.get_data()
+        except ScenarioHung:
+            raise
+        except Exception as exc:
+            failures.append(f"{label}: {type(exc).__name__}: {exc}")
+            continue
+        if rows != [{"a": 1}, {"a": 2}]:
+            failures.append(f"{label}: rows were {rows}")
+    if not observed:
+        failures.append("statement observer was not called")
+
+
+run_probe(main, driver_module.__name__, "sqlspec.driver._async" if asynchronous else "sqlspec.driver._sync")
+"""
+    return _run_behaviour_probe(
+        f"{adapter}_observed_tuple_rows",
+        f"sqlspec.adapters.{adapter}.driver",
+        script,
+        require_compiled=require_compiled,
+        dependencies=(adapter, "pymysql") if adapter == "aiomysql" else (adapter,),
+        arguments=(adapter, driver_name),
+    )
 
 
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

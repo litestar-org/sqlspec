@@ -36,6 +36,25 @@ REQUIREMENT_PROFILES: dict[str, tuple[str, ...]] = {
     "pgo": ("anyio", "pyarrow", "aiosqlite", "duckdb", "adbc-driver-sqlite", "adbc-driver-manager"),
     "test": ("aiosqlite", "pymssql", "cloud-sql-python-connector", "google-cloud-alloydb-connector"),
     "smoke": ("obstore", "pyarrow"),
+    "drivers": (
+        "adbc-driver-manager",
+        "adbc-driver-postgresql",
+        "adbc-driver-sqlite",
+        "aiomysql",
+        "aiosqlite",
+        "asyncmy",
+        "asyncpg",
+        "duckdb",
+        "mysql-connector-python",
+        "oracledb",
+        "psqlpy",
+        "psycopg",
+        "psycopg-binary",
+        "psycopg-pool",
+        "pyarrow",
+        "pymssql",
+        "pymysql",
+    ),
 }
 
 
