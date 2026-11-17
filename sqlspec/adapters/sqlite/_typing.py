@@ -79,6 +79,10 @@ class SqliteSessionContext(SyncDriverSessionContext):
 
     __slots__ = ()
 
+    if TYPE_CHECKING:
+
+        def __enter__(self) -> "SqliteDriver": ...
+
     def _resolve_driver_class(self) -> "type[SqliteDriver]":
         from sqlspec.adapters.sqlite.driver import SqliteDriver
 

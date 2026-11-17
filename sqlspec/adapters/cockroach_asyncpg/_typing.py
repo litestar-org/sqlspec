@@ -44,6 +44,10 @@ class CockroachAsyncpgSessionContext(AsyncDriverSessionContext):
 
     __slots__ = ()
 
+    if TYPE_CHECKING:
+
+        async def __aenter__(self) -> "CockroachAsyncpgDriver": ...
+
     def _resolve_driver_class(self) -> "type[CockroachAsyncpgDriver]":
         from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
 

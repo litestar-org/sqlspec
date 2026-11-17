@@ -124,6 +124,10 @@ class AiomysqlSessionContext(AsyncDriverSessionContext):
 
     __slots__ = ()
 
+    if TYPE_CHECKING:
+
+        async def __aenter__(self) -> "AiomysqlDriver": ...
+
     def _resolve_driver_class(self) -> "type[AiomysqlDriver]":
         from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
 

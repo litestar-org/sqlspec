@@ -95,6 +95,10 @@ class PyMysqlSessionContext(SyncDriverSessionContext):
 
     __slots__ = ()
 
+    if TYPE_CHECKING:
+
+        def __enter__(self) -> "PyMysqlDriver": ...
+
     def _resolve_driver_class(self) -> "type[PyMysqlDriver]":
         from sqlspec.adapters.pymysql.driver import PyMysqlDriver
 

@@ -48,6 +48,10 @@ class SnowflakeSessionContext(SyncDriverSessionContext):
 
     __slots__ = ()
 
+    if TYPE_CHECKING:
+
+        def __enter__(self) -> "SnowflakeDriver": ...
+
     def _resolve_driver_class(self) -> "type[SnowflakeDriver]":
         from sqlspec.adapters.snowflake.driver import SnowflakeDriver
 

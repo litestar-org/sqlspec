@@ -65,6 +65,10 @@ class AiosqliteSessionContext(AsyncDriverSessionContext):
 
     __slots__ = ()
 
+    if TYPE_CHECKING:
+
+        async def __aenter__(self) -> "AiosqliteDriver": ...
+
     def _resolve_driver_class(self) -> "type[AiosqliteDriver]":
         from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 

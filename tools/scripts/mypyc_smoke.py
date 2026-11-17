@@ -113,16 +113,30 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "StoredSession", True, "google.adk"),
     SmokeImport("adk_table_utils", "sqlspec.extensions.adk._table_utils", None, True),
     SmokeImport("events_buffer", "sqlspec.extensions.events._buffer", None, True),
-    SmokeImport("starlette_state", "sqlspec.extensions.starlette._state", "SQLSpecConfigState", True),
-    SmokeImport("starlette_utils", "sqlspec.extensions.starlette._utils", "get_or_create_db_session", True),
-    SmokeImport("flask_state", "sqlspec.extensions.flask._state", "FlaskConfigState", True),
-    SmokeImport("flask_utils", "sqlspec.extensions.flask._utils", "get_or_create_db_session", True),
-    SmokeImport("flask_portal", "sqlspec.extensions.flask._portal", "PortalSession", True),
-    SmokeImport("litestar_utils", "sqlspec.extensions.litestar._utils", "request_session_scope", True),
-    SmokeImport("sanic_state", "sqlspec.extensions.sanic._state", "SanicConfigState", True),
-    SmokeImport("sanic_utils", "sqlspec.extensions.sanic._utils", "get_or_create_db_session", True),
-    SmokeImport("snowflake_migrations", "sqlspec.adapters.snowflake.migrations", "SnowflakeSyncMigrationTracker", True),
-    SmokeImport("teradata_migrations", "sqlspec.adapters.teradata.migrations", "TeradataSyncMigrationTracker", True),
+    SmokeImport("starlette_state", "sqlspec.extensions.starlette._state", "SQLSpecConfigState", True, "starlette"),
+    SmokeImport(
+        "starlette_utils", "sqlspec.extensions.starlette._utils", "get_or_create_db_session", True, "starlette"
+    ),
+    SmokeImport("flask_state", "sqlspec.extensions.flask._state", "FlaskConfigState", True, "flask"),
+    SmokeImport("flask_utils", "sqlspec.extensions.flask._utils", "get_or_create_db_session", True, "flask"),
+    SmokeImport("flask_portal", "sqlspec.extensions.flask._portal", "PortalSession", True, "flask"),
+    SmokeImport("litestar_utils", "sqlspec.extensions.litestar._utils", "request_session_scope", True, "litestar"),
+    SmokeImport("sanic_state", "sqlspec.extensions.sanic._state", "SanicConfigState", True, "sanic"),
+    SmokeImport("sanic_utils", "sqlspec.extensions.sanic._utils", "get_or_create_db_session", True, "sanic"),
+    SmokeImport(
+        "snowflake_migrations",
+        "sqlspec.adapters.snowflake.migrations",
+        "SnowflakeSyncMigrationTracker",
+        True,
+        "snowflake.connector",
+    ),
+    SmokeImport(
+        "teradata_migrations",
+        "sqlspec.adapters.teradata.migrations",
+        "TeradataSyncMigrationTracker",
+        True,
+        "teradatasql",
+    ),
     SmokeImport("driver_session", "sqlspec.driver._session", "SyncDriverSessionContext", True),
     *(
         SmokeImport(f"{adapter}_driver", f"sqlspec.adapters.{adapter}.driver", None, True, dependency)
@@ -133,7 +147,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
             ("arrow_odbc", "arrow_odbc"),
             ("asyncmy", "asyncmy"),
             ("asyncpg", "asyncpg"),
-            ("bigquery", "google.cloud.bigquery"),
+            ("bigquery", "google"),
             ("cockroach_asyncpg", "asyncpg"),
             ("cockroach_psycopg", "psycopg"),
             ("db2", "ibm_db"),
@@ -145,12 +159,12 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
             ("psycopg", "psycopg"),
             ("pymssql", "pymssql"),
             ("pymysql", "pymysql"),
-            ("snowflake", None),
-            ("spanner", "google.cloud.spanner"),
+            ("snowflake", "snowflake.connector"),
+            ("spanner", "google"),
             ("sqlanywhere", "sqlanydb"),
             ("sqlite", None),
             ("sybase", "pymssql"),
-            ("teradata", None),
+            ("teradata", "teradatasql"),
         )
     ),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
@@ -281,13 +295,20 @@ def _has_compiled_module_file(module_name: str) -> bool:
     )
 
 
+_OPTIONAL_COMPANIONS: dict[str, tuple[str, ...]] = {
+    "aiomysql": ("pymysql",),
+    "ibm_db": ("ibm_db_dbi",),
+    "psycopg": ("psycopg_pool",),
+}
+
+
 def _is_missing_optional_dependency(missing_name: str, optional_dependency: str | None) -> bool:
     if optional_dependency is None or not missing_name:
         return False
-    return (
-        missing_name == optional_dependency
-        or missing_name.startswith(f"{optional_dependency}.")
-        or optional_dependency.startswith(f"{missing_name}.")
+    candidates = (optional_dependency, *_OPTIONAL_COMPANIONS.get(optional_dependency, ()))
+    return any(
+        missing_name == dep or missing_name.startswith(f"{dep}.") or dep.startswith(f"{missing_name}.")
+        for dep in candidates
     )
 
 

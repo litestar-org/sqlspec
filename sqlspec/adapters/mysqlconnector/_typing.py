@@ -180,6 +180,10 @@ class MysqlConnectorSyncSessionContext(SyncDriverSessionContext):
 
     __slots__ = ()
 
+    if TYPE_CHECKING:
+
+        def __enter__(self) -> "MysqlConnectorSyncDriver": ...
+
     def _resolve_driver_class(self) -> "type[MysqlConnectorSyncDriver]":
         from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorSyncDriver
 
@@ -190,6 +194,10 @@ class MysqlConnectorAsyncSessionContext(AsyncDriverSessionContext):
     """Async context manager for mysql-connector sessions."""
 
     __slots__ = ()
+
+    if TYPE_CHECKING:
+
+        async def __aenter__(self) -> "MysqlConnectorAsyncDriver": ...
 
     def _resolve_driver_class(self) -> "type[MysqlConnectorAsyncDriver]":
         from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver

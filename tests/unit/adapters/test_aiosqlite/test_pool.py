@@ -918,11 +918,12 @@ async def test_end_transaction_skips_worker_hop_on_clean_idle_commit(monkeypatch
     try:
         async with pool.get_connection() as conn:
             await conn.execute("SELECT 1")
+            original_worker_hop = aiosqlite_core.run_on_worker_thread
 
             async def _counting_worker_hop(connection: Any, fn: Any, *args: Any, **kwargs: Any) -> Any:
                 nonlocal worker_calls
                 worker_calls += 1
-                return await conn._execute(fn, *args, **kwargs)
+                return await original_worker_hop(connection, fn, *args, **kwargs)
 
             monkeypatch.setattr(aiosqlite_core, "run_on_worker_thread", _counting_worker_hop)
             await aiosqlite_core.end_transaction(conn, commit=True)

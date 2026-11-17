@@ -205,6 +205,10 @@ class AsyncmySessionContext(AsyncDriverSessionContext):
 
     __slots__ = ()
 
+    if TYPE_CHECKING:
+
+        async def __aenter__(self) -> "AsyncmyDriver": ...
+
     def _resolve_driver_class(self) -> "type[AsyncmyDriver]":
         from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
 
