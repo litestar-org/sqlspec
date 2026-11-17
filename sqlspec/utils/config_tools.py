@@ -62,7 +62,10 @@ def discover_config_from_pyproject() -> str | None:
     if pyproject_path is None:
         return None
 
-    return parse_pyproject_config(pyproject_path)
+    data = _load_trusted_pyproject(pyproject_path)
+    if data is None:
+        return None
+    return _config_from_pyproject_data(data, pyproject_path)
 
 
 def find_pyproject_toml() -> "Path | None":
@@ -123,6 +126,48 @@ def parse_pyproject_config(pyproject_path: "Path") -> str | None:
         msg = f"Failed to parse {pyproject_path}: {e}"
         raise ValueError(msg) from e
 
+    return _config_from_pyproject_data(data, pyproject_path)
+
+
+def _load_trusted_pyproject(pyproject_path: "Path") -> "dict[str, Any] | None":
+    """Read a discovered pyproject.toml, applying the ownership test to the file that was opened.
+
+    The file is opened once, and its ownership and permissions are read from the open
+    descriptor before its content is parsed, so the file that is checked is the file that is read.
+
+    Args:
+        pyproject_path: Path returned by ``find_pyproject_toml``.
+
+    Returns:
+        The parsed document, or None when the opened file is not trusted.
+
+    Raises:
+        ValueError: If the file cannot be read or parsed.
+    """
+    current_uid: int | None = os.getuid() if hasattr(os, "getuid") else None
+    try:
+        with pyproject_path.open("rb") as f:
+            if current_uid is not None and not _is_trusted_file_stat(pyproject_path, os.fstat(f.fileno()), current_uid):
+                return None
+            return tomllib.load(f)
+    except Exception as e:
+        msg = f"Failed to parse {pyproject_path}: {e}"
+        raise ValueError(msg) from e
+
+
+def _config_from_pyproject_data(data: "dict[str, Any]", pyproject_path: "Path") -> str | None:
+    """Return the ``[tool.sqlspec].config`` value of a parsed pyproject document.
+
+    Args:
+        data: Parsed pyproject.toml content.
+        pyproject_path: Path the content was read from, used in error messages.
+
+    Returns:
+        Config path(s) as string (converts list to comma-separated), or None if not found.
+
+    Raises:
+        ValueError: If [tool.sqlspec].config has invalid type (not str or list[str]).
+    """
     tool_section = data.get("tool", {})
     if not isinstance(tool_section, dict):
         return None
@@ -590,16 +635,28 @@ def _inspect_path_trust(path: Path, current_uid: int | None) -> "bool | None":
             return False
     if current_uid is None:
         return True
-    for owner_uid in (link_stat.st_uid, target_stat.st_uid):
-        if owner_uid not in {current_uid, 0}:
-            logger.warning("Refusing %s: it is owned by another user (uid %s)", path, owner_uid)
-            return False
+    if link_stat.st_uid not in {current_uid, 0}:
+        logger.warning("Refusing %s: it is owned by another user (uid %s)", path, link_stat.st_uid)
+        return False
+    return _is_trusted_file_stat(path, target_stat, current_uid)
+
+
+def _is_trusted_file_stat(path: Path, file_stat: Any, current_uid: int) -> bool:
+    """Return True when ``file_stat``, the status of the file at ``path``, passes the ownership test.
+
+    The current user or root must own the file. Inside a shared world-writable directory the
+    file must also be singly linked unless it is a directory, and must not be world-writable.
+    """
+    if file_stat.st_uid not in {current_uid, 0}:
+        logger.warning("Refusing %s: it is owned by another user (uid %s)", path, file_stat.st_uid)
+        return False
     if not _is_shared_directory(path.parent, current_uid):
         return True
-    if not stat.S_ISDIR(link_mode) and getattr(link_stat, "st_nlink", 1) > 1:
+    mode = getattr(file_stat, "st_mode", 0)
+    if not stat.S_ISDIR(mode) and getattr(file_stat, "st_nlink", 1) > 1:
         logger.warning("Refusing %s: it has several hard links inside a shared world-writable directory", path)
         return False
-    if getattr(target_stat, "st_mode", 0) & stat.S_IWOTH:
+    if mode & stat.S_IWOTH:
         logger.warning("Refusing %s: it is world-writable inside a shared world-writable directory", path)
         return False
     return True

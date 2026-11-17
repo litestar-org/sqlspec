@@ -515,3 +515,26 @@ def test_find_pyproject_in_sticky_world_writable_ancestor_requires_private_confi
         assert find_pyproject_toml() is None
         assert str(pyproject) in caplog.text
         assert reason in caplog.text
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+def test_discovery_refuses_config_swapped_for_a_foreign_file_before_reading(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", caplog: "pytest.LogCaptureFixture"
+) -> None:
+    """The ownership test applies to the file that is opened, not only to the path that was found."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[tool.sqlspec]\nconfig = "myapp.config:get_configs"\n')
+    monkeypatch.chdir(tmp_path)
+    foreign_uid = os.getuid() + 1000
+    real_fstat = os.fstat
+
+    def _foreign_fstat(descriptor: int) -> Any:
+        result = real_fstat(descriptor)
+        return SimpleNamespace(st_uid=foreign_uid, st_mode=result.st_mode, st_nlink=result.st_nlink)
+
+    assert discover_config_from_pyproject() == "myapp.config:get_configs"
+
+    monkeypatch.setattr(os, "fstat", _foreign_fstat)
+
+    assert discover_config_from_pyproject() is None
+    assert f"Refusing {pyproject}: it is owned by another user (uid {foreign_uid})" in caplog.text
