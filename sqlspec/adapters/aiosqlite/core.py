@@ -350,25 +350,26 @@ def resolve_lastrowid(
         eligibility_cache: Driver-local eligibility cache, keyed by ``(schema, table)`` target and
             by compiled SQL text.
         compiled_sql: Optional compiled SQL text used to key eligibility lookups without AST walks.
-            Text that ends with a comment is looked up by target only, so per-request comments
-            do not add entries.
+            Text that ends with a comment is resolved by target and never stored, so per-request
+            comments do not add entries.
 
     Returns:
         Integer lastrowid when the current target is a rowid table, otherwise None.
     """
     if operation_type != "INSERT" or rowcount <= 0:
         return None
-    if compiled_sql is None or compiled_sql.endswith("*/"):
-        supports_rowid = _target_rowid_eligibility(connection, expression, eligibility_cache)
-    else:
+    if compiled_sql is not None:
         supports_rowid = eligibility_cache.get(compiled_sql)
         if supports_rowid is None:
             supports_rowid = _target_rowid_eligibility(connection, expression, eligibility_cache)
-            if supports_rowid is not None:
+            if supports_rowid is not None and not compiled_sql.endswith("*/"):
                 if len(eligibility_cache) >= _ROWID_ELIGIBILITY_CACHE_SIZE:
                     eligibility_cache.clear()
                 eligibility_cache[compiled_sql] = supports_rowid
-    if not supports_rowid:
+        if not supports_rowid:
+            return None
+        return normalize_lastrowid(cursor, operation_type, rowcount)
+    if not _target_rowid_eligibility(connection, expression, eligibility_cache):
         return None
     return normalize_lastrowid(cursor, operation_type, rowcount)
 
