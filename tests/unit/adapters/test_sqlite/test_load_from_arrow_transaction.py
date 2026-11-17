@@ -45,6 +45,8 @@ class _FakeConnection:
 
     def execute(self, sql: str, *args: Any) -> "_FakeCursor":
         self.events.append(sql)
+        if sql.startswith("BEGIN"):
+            self.in_transaction = True
         return self._cursor
 
     def cursor(self) -> "_FakeCursor":
@@ -52,9 +54,11 @@ class _FakeConnection:
 
     def commit(self) -> None:
         self.events.append("COMMIT")
+        self.in_transaction = False
 
     def rollback(self) -> None:
         self.events.append("ROLLBACK")
+        self.in_transaction = False
 
 
 def _driver(conn: "_FakeConnection") -> SqliteDriver:

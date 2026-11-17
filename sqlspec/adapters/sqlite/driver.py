@@ -209,8 +209,6 @@ class SqliteDriver(SyncDriverAdapterBase):
             if not self.connection.in_transaction:
                 stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
                 cursor = self.connection.execute(stmt)
-                with contextlib.suppress(AttributeError, TypeError):
-                    self.connection.in_transaction = True
                 if cursor is not None:
                     with contextlib.suppress(Exception):
                         cursor.close()
@@ -225,8 +223,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         try:
             end_transaction(self.connection, commit=True, supports_autocommit=self._in_autocommit_mode())
-            with contextlib.suppress(AttributeError, TypeError):
-                self.connection.in_transaction = False
         except sqlite3.Error as e:
             raise with_cause(create_mapped_exception(e), e) from e
 
@@ -238,8 +234,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         try:
             end_transaction(self.connection, commit=False, supports_autocommit=self._in_autocommit_mode())
-            with contextlib.suppress(AttributeError, TypeError):
-                self.connection.in_transaction = False
             self._rowid_target_cache.clear()
         except sqlite3.Error as e:
             self._rowid_target_cache.clear()
