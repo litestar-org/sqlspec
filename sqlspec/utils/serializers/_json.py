@@ -98,11 +98,11 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
     def __ne__(self, other: object) -> bool:
         return not self == other
 
-    def __or__(self, other: "dict[Any, Any]", /) -> "dict[Any, Any]":
+    def __or__(self, other: Any, /) -> Any:
         self._ensure_loaded()
         return super().__or__(other)
 
-    def __ror__(self, other: "dict[Any, Any]", /) -> "dict[Any, Any]":
+    def __ror__(self, other: Any, /) -> Any:
         self._ensure_loaded()
         return super().__ror__(other)
 
@@ -114,7 +114,7 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
         self._ensure_loaded()
         super().__setitem__(key, value)
 
-    def __ior__(self, other: Any) -> "Self":  # type: ignore[misc,override]
+    def __ior__(self, other: Any) -> "Self":  # type: ignore[override]
         self._ensure_loaded()
         super().__ior__(other)
         return self
