@@ -1,6 +1,7 @@
 """Tests for config discovery functionality."""
 
 import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -8,6 +9,25 @@ from typing import Any
 import pytest
 
 from sqlspec.utils.config_tools import discover_config_from_pyproject, find_pyproject_toml, parse_pyproject_config
+
+requires_posix_ownership = pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership model required")
+
+
+def _override_stat(monkeypatch: "pytest.MonkeyPatch", overrides: "dict[tuple[Path, bool], dict[str, int]]") -> None:
+    """Replace selected ``os.stat`` fields, keyed by ``(path, follow_symlinks)``."""
+    real_stat = os.stat
+
+    def _fake_stat(path: Any, *args: Any, **kwargs: Any) -> Any:
+        result = real_stat(path, *args, **kwargs)
+        if not isinstance(path, (str, os.PathLike)):
+            return result
+        fields = overrides.get((Path(path), kwargs.get("follow_symlinks", True)))
+        if fields is None:
+            return result
+        base = {"st_uid": result.st_uid, "st_mode": result.st_mode, "st_nlink": result.st_nlink}
+        return SimpleNamespace(**{**base, **fields})
+
+    monkeypatch.setattr(os, "stat", _fake_stat)
 
 
 def test_discover_from_pyproject_single(tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -343,49 +363,155 @@ def test_find_pyproject_allows_root_owned_ancestor_directory(
     assert find_pyproject_toml() == root_pyproject
 
 
-def test_find_pyproject_refuses_symlink_and_world_writable_paths(
+def test_find_pyproject_treats_symlinked_git_as_repository_boundary(
     tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
 ) -> None:
-    """Discovery rejects symlinked config/markers and stops before world-writable or root-temp directories."""
-    target_cfg = tmp_path / "real_pyproject.toml"
-    target_cfg.write_text('[tool.sqlspec]\nconfig = "evil:load"\n', encoding="utf-8")
-
-    sym_dir = tmp_path / "sym_case"
-    sym_dir.mkdir()
-    (sym_dir / "pyproject.toml").symlink_to(target_cfg)
-    monkeypatch.chdir(sym_dir)
-    assert find_pyproject_toml() is None
-
-    git_sym_dir = tmp_path / "git_sym_case"
-    git_sym_dir.mkdir()
+    """A symlinked .git entry ends discovery before the parent configuration is reached."""
     (tmp_path / "pyproject.toml").write_text('[tool.sqlspec]\nconfig = "outer:load"\n', encoding="utf-8")
-    (git_sym_dir / ".git").symlink_to(tmp_path)
-    monkeypatch.chdir(git_sym_dir)
+    work_dir = tmp_path / "checkout"
+    work_dir.mkdir()
+    (work_dir / ".git").symlink_to(tmp_path)
+    monkeypatch.chdir(work_dir)
+
     assert find_pyproject_toml() is None
-    (tmp_path / "pyproject.toml").unlink()
 
-    world_parent = tmp_path / "world_parent"
-    app_child = world_parent / "app"
-    app_child.mkdir(parents=True)
-    (world_parent / "pyproject.toml").write_text('[tool.sqlspec]\nconfig = "evil:load"\n', encoding="utf-8")
-    os.chmod(world_parent, 0o777)
+
+def test_find_pyproject_accepts_symlinked_config_owned_by_user(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """A symlinked pyproject.toml is returned when the link and its target belong to the current user."""
+    shared_config = tmp_path / "shared" / "pyproject.toml"
+    shared_config.parent.mkdir()
+    shared_config.write_text('[tool.sqlspec]\nconfig = "myapp.config:get_configs"\n', encoding="utf-8")
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    (work_dir / "pyproject.toml").symlink_to(shared_config)
+    monkeypatch.chdir(work_dir)
+
+    assert find_pyproject_toml() == work_dir / "pyproject.toml"
+    assert discover_config_from_pyproject() == "myapp.config:get_configs"
+
+
+@requires_posix_ownership
+@pytest.mark.parametrize("follow_symlinks", [False, True], ids=["foreign-link", "foreign-target"])
+def test_find_pyproject_refuses_symlinked_config_owned_by_other_uid(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", caplog: "pytest.LogCaptureFixture", follow_symlinks: bool
+) -> None:
+    """A symlinked pyproject.toml is refused when another user owns the link or its target."""
+    target = tmp_path / "real_pyproject.toml"
+    target.write_text('[tool.sqlspec]\nconfig = "evil:load"\n', encoding="utf-8")
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    link = work_dir / "pyproject.toml"
+    link.symlink_to(target)
+    monkeypatch.chdir(work_dir)
+    foreign_uid = os.getuid() + 1000
+    _override_stat(monkeypatch, {(link, follow_symlinks): {"st_uid": foreign_uid}})
+
+    assert find_pyproject_toml() is None
+    assert f"Refusing {link}: it is owned by another user (uid {foreign_uid})" in caplog.text
+
+
+@pytest.mark.parametrize("config_mode", [0o644, 0o666], ids=["private-file", "world-writable-file"])
+def test_find_pyproject_discovers_through_user_owned_world_writable_ancestors(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", config_mode: int
+) -> None:
+    """Discovery from a subdirectory reaches pyproject.toml when the user's own tree is mode 0777."""
+    project = tmp_path / "project"
+    work_dir = project / "src" / "app"
+    work_dir.mkdir(parents=True)
+    pyproject = project / "pyproject.toml"
+    pyproject.write_text('[tool.sqlspec]\nconfig = "myapp.config:get_configs"\n', encoding="utf-8")
+    world_writable = [project, project / "src", work_dir]
+    for directory in world_writable:
+        os.chmod(directory, 0o777)
+    os.chmod(pyproject, config_mode)
+    monkeypatch.chdir(work_dir)
+
     try:
-        monkeypatch.chdir(app_child)
-        assert find_pyproject_toml() is None
+        assert find_pyproject_toml() == pyproject
     finally:
-        os.chmod(world_parent, 0o755)
+        for directory in world_writable:
+            os.chmod(directory, 0o755)
 
-    if hasattr(os, "getuid"):
-        monkeypatch.setattr(os, "getuid", lambda: 1000)
-        real_stat = os.stat
-        resolved_sym = sym_dir.resolve()
 
-        def _fake_root_tmp(path: "str | os.PathLike[str]", *args: Any, **kwargs: Any) -> Any:
-            candidate = Path(path)
-            if candidate == sym_dir or candidate == resolved_sym:
-                return SimpleNamespace(st_uid=0, st_mode=0o041777)
-            return real_stat(path, *args, **kwargs)
+def test_find_pyproject_discovers_through_ancestors_without_posix_ownership(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Without os.getuid, mode bits are ignored and discovery walks through 0777 ancestors."""
+    project = tmp_path / "project"
+    work_dir = project / "src"
+    work_dir.mkdir(parents=True)
+    pyproject = project / "pyproject.toml"
+    pyproject.write_text('[tool.sqlspec]\nconfig = "myapp.config:get_configs"\n', encoding="utf-8")
+    monkeypatch.chdir(work_dir)
+    monkeypatch.delattr(os, "getuid", raising=False)
+    world_writable_dir = {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o777}
+    _override_stat(
+        monkeypatch,
+        {
+            (work_dir, False): world_writable_dir,
+            (project, False): world_writable_dir,
+            (pyproject, False): {"st_uid": 0, "st_mode": stat.S_IFREG | 0o666},
+        },
+    )
 
-        monkeypatch.setattr(os, "stat", _fake_root_tmp)
-        monkeypatch.chdir(sym_dir)
+    assert find_pyproject_toml() == pyproject
+
+
+@requires_posix_ownership
+def test_find_pyproject_refuses_foreign_config_in_world_writable_ancestor(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch", caplog: "pytest.LogCaptureFixture"
+) -> None:
+    """A pyproject.toml planted by another user in a world-writable ancestor is refused and logged."""
+    shared = tmp_path / "shared"
+    work_dir = shared / "app"
+    work_dir.mkdir(parents=True)
+    planted = shared / "pyproject.toml"
+    planted.write_text('[tool.sqlspec]\nconfig = "evil:load"\n', encoding="utf-8")
+    monkeypatch.chdir(work_dir)
+    foreign_uid = os.getuid() + 1000
+    _override_stat(
+        monkeypatch, {(shared, False): {"st_mode": stat.S_IFDIR | 0o777}, (planted, False): {"st_uid": foreign_uid}}
+    )
+
+    assert find_pyproject_toml() is None
+    assert f"Refusing {planted}: it is owned by another user (uid {foreign_uid})" in caplog.text
+
+
+@requires_posix_ownership
+@pytest.mark.parametrize(
+    ("config_fields", "reason"),
+    [
+        ({}, None),
+        ({"st_mode": stat.S_IFREG | 0o666}, "world-writable inside a shared world-writable directory"),
+        ({"st_nlink": 2}, "several hard links inside a shared world-writable directory"),
+    ],
+    ids=["private-file", "world-writable-file", "hard-linked-file"],
+)
+def test_find_pyproject_in_sticky_world_writable_ancestor_requires_private_config(
+    tmp_path: "Path",
+    monkeypatch: "pytest.MonkeyPatch",
+    caplog: "pytest.LogCaptureFixture",
+    config_fields: "dict[str, int]",
+    reason: "str | None",
+) -> None:
+    """In a root-owned sticky directory, only a singly linked, non-world-writable user config is used."""
+    sticky = tmp_path / "sticky"
+    work_dir = sticky / "app"
+    work_dir.mkdir(parents=True)
+    pyproject = sticky / "pyproject.toml"
+    pyproject.write_text('[tool.sqlspec]\nconfig = "myapp.config:get_configs"\n', encoding="utf-8")
+    monkeypatch.chdir(work_dir)
+    _override_stat(
+        monkeypatch,
+        {(sticky, False): {"st_uid": 0, "st_mode": stat.S_IFDIR | 0o1777}, (pyproject, False): config_fields},
+    )
+
+    if reason is None:
+        assert find_pyproject_toml() == pyproject
+        assert caplog.text == ""
+    else:
         assert find_pyproject_toml() is None
+        assert str(pyproject) in caplog.text
+        assert reason in caplog.text

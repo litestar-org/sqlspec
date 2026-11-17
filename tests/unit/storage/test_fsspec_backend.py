@@ -1261,3 +1261,119 @@ def test_fsspec_prefers_cat_file_and_rm_file_for_glob_chars() -> None:
     backend.delete_sync("dir", recursive=True)
 
     assert calls == [("cat_file", "dir/[meta].bin"), ("rm_file", "dir/[meta].bin"), ("rm:True", "dir")]
+
+
+async def _call_store(store: "FSSpecBackend", operation: str, use_async: bool, *args: Any, **kwargs: Any) -> Any:
+    """Invoke ``<operation>_async`` or ``<operation>_sync`` on ``store``."""
+    if use_async:
+        return await getattr(store, f"{operation}_async")(*args, **kwargs)
+    return getattr(store, f"{operation}_sync")(*args, **kwargs)
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("protocol_kind", ["file", "memory"])
+@pytest.mark.parametrize("key", ["t/[ab].bin", "t/*.bin", "t/?.bin"], ids=["brackets", "star", "question"])
+async def test_fsspec_copy_move_delete_treat_glob_characters_literally(
+    tmp_path: Path, protocol_kind: str, key: str, use_async: bool
+) -> None:
+    """Copy, move, and delete act on the one literal key and leave glob-matching siblings alone."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    base = str(tmp_path) if protocol_kind == "file" else f"/literal_{tmp_path.name}"
+    store = FSSpecBackend(protocol_kind, base_path=base)
+    store.write_bytes_sync("t/a.bin", b"sibling-a")
+    store.write_bytes_sync("t/b.bin", b"sibling-b")
+    store.write_bytes_sync(key, b"literal")
+    siblings = {"t/a.bin": b"sibling-a", "t/b.bin": b"sibling-b"}
+    if protocol_kind == "file":
+        (tmp_path / "out").mkdir()
+
+    await _call_store(store, "copy", use_async, key, "out/copy.bin")
+    assert store.read_bytes_sync("out/copy.bin") == b"literal"
+    assert len(store.list_objects_sync("out")) == 1
+
+    await _call_store(store, "move", use_async, key, key)
+    assert store.read_bytes_sync(key) == b"literal"
+
+    await _call_store(store, "move", use_async, key, "out/moved.bin")
+    assert store.read_bytes_sync("out/moved.bin") == b"literal"
+    assert not store.exists_sync(key)
+    assert {name: store.read_bytes_sync(name) for name in siblings} == siblings
+
+    store.write_bytes_sync(key, b"literal")
+    await _call_store(store, "delete", use_async, key)
+    assert not store.exists_sync(key)
+    assert {name: store.read_bytes_sync(name) for name in siblings} == siblings
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("protocol_kind", ["file", "memory"])
+@pytest.mark.parametrize("prefix", ["tenants/*", "tenants/[ot]??", "tenants/?ne"], ids=["star", "brackets", "question"])
+async def test_fsspec_recursive_delete_treats_glob_characters_literally(
+    tmp_path: Path, protocol_kind: str, prefix: str, use_async: bool
+) -> None:
+    """Recursive delete removes only the literal prefix, not the prefixes its glob characters would match."""
+    from sqlspec.exceptions import FileNotFoundInStorageError
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    base = str(tmp_path) if protocol_kind == "file" else f"/literal_tree_{tmp_path.name}"
+    store = FSSpecBackend(protocol_kind, base_path=base)
+    store.write_bytes_sync("tenants/one/data.bin", b"one")
+    store.write_bytes_sync("tenants/two/nested/data.bin", b"two")
+    store.write_bytes_sync(f"{prefix}/data.bin", b"literal")
+    store.write_bytes_sync(f"{prefix}/nested/data.bin", b"literal-nested")
+
+    await _call_store(store, "delete", use_async, prefix, recursive=True)
+
+    assert not store.exists_sync(prefix)
+    assert store.read_bytes_sync("tenants/one/data.bin") == b"one"
+    assert store.read_bytes_sync("tenants/two/nested/data.bin") == b"two"
+    assert len(store.list_objects_sync("tenants")) == 2
+    if protocol_kind == "memory":
+        with pytest.raises(FileNotFoundInStorageError):
+            await _call_store(store, "delete", use_async, prefix, recursive=True)
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_fsspec_delete_and_move_fall_back_to_rm_without_rm_file(tmp_path: Path) -> None:
+    """Delete and move work on a filesystem that implements ``rm`` but not ``rm_file``."""
+    from fsspec.implementations.memory import MemoryFileSystem
+
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    class _RmOnlyFileSystem(MemoryFileSystem):  # type: ignore[misc]
+        def rm_file(self, path: str) -> None:
+            raise NotImplementedError
+
+        def rm(self, path: Any, recursive: bool = False, maxdepth: "int | None" = None) -> None:
+            self._rm(path)
+
+    store = FSSpecBackend("memory", base_path=f"/rm_only_{tmp_path.name}")
+    store.fs = _RmOnlyFileSystem()
+    store.write_bytes_sync("plain.bin", b"plain")
+    store.write_bytes_sync("glob[1].bin", b"glob")
+
+    store.delete_sync("plain.bin")
+    assert not store.exists_sync("plain.bin")
+
+    store.move_sync("glob[1].bin", "moved.bin")
+    assert store.read_bytes_sync("moved.bin") == b"glob"
+    assert not store.exists_sync("glob[1].bin")
+
+
+@pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
+def test_fsspec_staged_stream_publishes_under_prefix_with_glob_characters(tmp_path: Path) -> None:
+    """A staged write stream publishes to a destination whose parent prefix contains glob characters."""
+    from sqlspec.storage.backends.fsspec import FSSpecBackend
+
+    store = FSSpecBackend("memory", base_path=f"/staged_glob_{tmp_path.name}")
+    store.write_bytes_sync("part/a/keep.bin", b"keep")
+
+    with store.open_write_stream_sync("part/[ab]/out.bin") as sink:
+        sink.write(b"payload")
+
+    assert store.read_bytes_sync("part/[ab]/out.bin") == b"payload"
+    assert store.read_bytes_sync("part/a/keep.bin") == b"keep"
+    assert _fsspec_stage_entries(store) == []

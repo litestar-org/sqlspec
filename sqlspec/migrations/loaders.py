@@ -20,6 +20,7 @@ from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.version import extract_migration_version
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import await_
 from sqlspec.utils.uuids import uuid4
 
@@ -36,6 +37,8 @@ __all__ = (
     "temporary_project_path",
 )
 
+logger = get_logger("sqlspec.migrations.loaders")
+
 PROJECT_ROOT_MARKERS: Final[list[str]] = ["pyproject.toml", ".git", "setup.cfg", "setup.py"]
 
 ReconcileCallable = Callable[[MigrationContext], Awaitable[None] | None]
@@ -43,6 +46,13 @@ ReconcileCallable = Callable[[MigrationContext], Awaitable[None] | None]
 
 def find_project_root(start_path: Path) -> Path:
     """Search upward from start_path for a project marker file within trusted ownership bounds.
+
+    On POSIX the search stops at the first directory owned by another non-root user, and a
+    marker counts only when the current user or root owns it and, for a symbolic link, its
+    target. Inside a shared world-writable directory (sticky, or owned by a different user) a
+    marker must also be singly linked unless it is a directory, and must not be world-writable;
+    such a directory is never used as the fallback root. Every refusal is logged at warning
+    level. Platforms without ``os.getuid`` skip the ownership and permission tests.
 
     Args:
         start_path: Directory to start searching from.
@@ -52,14 +62,15 @@ def find_project_root(start_path: Path) -> Path:
     """
     resolved_start = start_path.resolve()
     current_uid = os.getuid() if hasattr(os, "getuid") else None
-    allowed_uids = {current_uid, 0} if current_uid is not None else None
     current_path = resolved_start
+    untrusted_path: Path | None = None
 
     while current_path != current_path.parent:
-        if not _is_trusted_root_dir(current_path, allowed_uids, is_start=(current_path == resolved_start)):
+        if not _is_trusted_root_dir(current_path, current_uid):
+            untrusted_path = current_path
             break
         for marker in PROJECT_ROOT_MARKERS:
-            marker_status = _is_trusted_marker(current_path / marker, allowed_uids)
+            marker_status = _is_trusted_marker(current_path / marker, current_uid)
             if marker_status is True:
                 return current_path
             if marker_status is False:
@@ -67,46 +78,93 @@ def find_project_root(start_path: Path) -> Path:
         current_path = current_path.parent
 
     fallback = resolved_start.parent
-    if not _is_trusted_root_dir(fallback, allowed_uids, is_start=False, allow_missing=True):
+    if fallback == untrusted_path or not _is_trusted_root_dir(fallback, current_uid, allow_missing=True):
+        return resolved_start
+    if current_uid is not None and _is_shared_directory(fallback, current_uid):
+        logger.warning(
+            "Using %s as the project root: parent directory %s is a shared world-writable directory",
+            resolved_start,
+            fallback,
+        )
         return resolved_start
     return fallback
 
 
-def _is_trusted_root_dir(
-    path: Path, allowed_uids: "set[int] | None", *, is_start: bool, allow_missing: bool = False
-) -> bool:
-    """Return True when a traversed root directory is non-symlinked, trusted-UID, and safe."""
+def _is_trusted_root_dir(path: Path, current_uid: "int | None", *, allow_missing: bool = False) -> bool:
+    """Return True when ``path`` is a non-symlinked directory that the current user or root owns."""
     try:
         path_stat = path.stat(follow_symlinks=False)
     except FileNotFoundError:
         return allow_missing
-    except OSError:
+    except OSError as exc:
+        logger.warning("Stopping project root discovery at %s: directory cannot be inspected (%s)", path, exc)
         return False
-    mode = getattr(path_stat, "st_mode", 0)
-    if stat.S_ISLNK(mode):
+    if stat.S_ISLNK(getattr(path_stat, "st_mode", 0)):
+        logger.warning("Stopping project root discovery at %s: directory is a symbolic link", path)
         return False
-    if allowed_uids is not None and path_stat.st_uid not in allowed_uids:
+    if current_uid is not None and path_stat.st_uid not in {current_uid, 0}:
+        logger.warning(
+            "Stopping project root discovery at %s: directory is owned by another user (uid %s)", path, path_stat.st_uid
+        )
         return False
-    if mode & stat.S_IWOTH:
-        if not is_start:
-            return False
-        if allowed_uids is not None and allowed_uids != {0} and path_stat.st_uid == 0:
-            return False
     return True
 
 
-def _is_trusted_marker(path: Path, allowed_uids: "set[int] | None") -> "bool | None":
-    """Return True if a project marker exists and is trusted, False if untrusted, None if absent."""
+def _is_shared_directory(path: Path, current_uid: int) -> bool:
+    """Return True when ``path`` is world-writable and either sticky or owned by a different user."""
     try:
-        marker_stat = path.stat(follow_symlinks=False)
+        path_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    mode = getattr(path_stat, "st_mode", 0)
+    if not mode & stat.S_IWOTH:
+        return False
+    return bool(mode & stat.S_ISVTX) or path_stat.st_uid != current_uid
+
+
+def _is_trusted_marker(path: Path, current_uid: "int | None") -> "bool | None":
+    """Return True if a project marker exists and is trusted, False if untrusted, None if absent.
+
+    On POSIX the current user or root must own ``path`` and, for a symbolic link, its target.
+    Inside a shared world-writable directory ``path`` must also be singly linked unless it is
+    a directory, and its target must not be world-writable.
+    """
+    try:
+        link_stat = path.stat(follow_symlinks=False)
     except FileNotFoundError:
         return None
-    except OSError:
+    except OSError as exc:
+        logger.warning("Refusing project marker %s: it cannot be inspected (%s)", path, exc)
         return False
-    mode = getattr(marker_stat, "st_mode", 0)
-    if stat.S_ISLNK(mode):
+    link_mode = getattr(link_stat, "st_mode", 0)
+    target_stat = link_stat
+    if stat.S_ISLNK(link_mode):
+        try:
+            target_stat = path.stat()
+        except OSError as exc:
+            logger.warning("Refusing project marker %s: symbolic link target cannot be inspected (%s)", path, exc)
+            return False
+    if current_uid is None:
+        return True
+    for owner_uid in (link_stat.st_uid, target_stat.st_uid):
+        if owner_uid not in {current_uid, 0}:
+            logger.warning("Refusing project marker %s: it is owned by another user (uid %s)", path, owner_uid)
+            return False
+    if not _is_shared_directory(path.parent, current_uid):
+        return True
+    if not stat.S_ISDIR(link_mode) and getattr(link_stat, "st_nlink", 1) > 1:
+        logger.warning(
+            "Refusing project marker %s: it has several hard links inside a shared world-writable directory", path
+        )
         return False
-    return not (allowed_uids is not None and marker_stat.st_uid not in allowed_uids)
+    if getattr(target_stat, "st_mode", 0) & stat.S_IWOTH:
+        logger.warning(
+            "Refusing project marker %s: it is world-writable inside a shared world-writable directory", path
+        )
+        return False
+    return True
 
 
 @contextmanager

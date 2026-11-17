@@ -11,12 +11,14 @@ import os
 import stat
 import tomllib
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import async_, await_
 from sqlspec.utils.type_guards import (
@@ -35,6 +37,7 @@ __all__ = (
     "discover_config_from_pyproject",
     "find_pyproject_toml",
     "normalize_connection_config",
+    "normalize_extension_status_codes",
     "parse_mysql_dsn",
     "parse_odbc_connection_string",
     "parse_pyproject_config",
@@ -42,6 +45,8 @@ __all__ = (
     "resolve_config_sync",
     "resolve_extension_commit_mode",
 )
+
+logger = get_logger("sqlspec.utils.config_tools")
 
 
 def discover_config_from_pyproject() -> str | None:
@@ -65,18 +70,22 @@ def find_pyproject_toml() -> "Path | None":
 
     Starts from current working directory and walks up to filesystem root.
     Stops at .git directory boundary (repository root) if found. On POSIX,
-    stops at the first directory owned by another non-root user and refuses
-    configuration files owned by another non-root user.
+    stops at the first directory owned by another non-root user and refuses a
+    configuration file that another non-root user owns. A symlinked
+    configuration file is accepted when the link and its target both pass the
+    ownership test. Inside a shared world-writable directory (sticky, or owned
+    by a different user) the file must also be singly linked and not
+    world-writable. Every refusal is logged at warning level. Platforms
+    without ``os.getuid`` skip the ownership and permission tests.
 
     Returns:
         Path to pyproject.toml, or None if not found.
     """
     current_uid: int | None = os.getuid() if hasattr(os, "getuid") else None
-    start = Path.cwd()
-    current = start
+    current = Path.cwd()
 
     while True:
-        if not _is_safe_directory(current, current_uid, is_start=(current == start)):
+        if not _is_safe_directory(current, current_uid):
             return None
 
         pyproject = current / "pyproject.toml"
@@ -525,37 +534,94 @@ def _is_owned_by_user_or_root(path: Path, current_uid: int | None) -> bool:
     return path_stat.st_uid in {current_uid, 0}
 
 
-def _is_safe_directory(path: Path, current_uid: int | None, *, is_start: bool) -> bool:
-    """Return True when ``path`` is a trusted, non-symlinked, non-world-writable directory."""
+def _is_safe_directory(path: Path, current_uid: int | None) -> bool:
+    """Return True when ``path`` is a non-symlinked directory that the current user or root owns."""
     try:
         path_stat = path.stat(follow_symlinks=False)
-    except OSError:
+    except OSError as exc:
+        logger.warning("Stopping pyproject.toml discovery at %s: directory cannot be inspected (%s)", path, exc)
         return False
-    mode = getattr(path_stat, "st_mode", 0)
-    if stat.S_ISLNK(mode):
+    if stat.S_ISLNK(getattr(path_stat, "st_mode", 0)):
+        logger.warning("Stopping pyproject.toml discovery at %s: directory is a symbolic link", path)
         return False
     if current_uid is not None and path_stat.st_uid not in {current_uid, 0}:
+        logger.warning(
+            "Stopping pyproject.toml discovery at %s: directory is owned by another user (uid %s)",
+            path,
+            path_stat.st_uid,
+        )
         return False
-    if mode & stat.S_IWOTH:
-        if not is_start:
-            return False
-        if current_uid is not None and current_uid != 0 and path_stat.st_uid == 0:
-            return False
     return True
 
 
-def _inspect_path_trust(path: Path, current_uid: int | None) -> "bool | None":
-    """Return True if present and trusted, False if present and untrusted, or None if missing."""
+def _is_shared_directory(path: Path, current_uid: int) -> bool:
+    """Return True when ``path`` is world-writable and either sticky or owned by a different user."""
     try:
         path_stat = path.stat(follow_symlinks=False)
+    except OSError:
+        return True
+    mode = getattr(path_stat, "st_mode", 0)
+    if not mode & stat.S_IWOTH:
+        return False
+    return bool(mode & stat.S_ISVTX) or path_stat.st_uid != current_uid
+
+
+def _inspect_path_trust(path: Path, current_uid: int | None) -> "bool | None":
+    """Return True if present and trusted, False if present and untrusted, or None if missing.
+
+    On POSIX the current user or root must own ``path`` and, for a symbolic link, its target.
+    Inside a shared world-writable directory ``path`` must also be singly linked unless it is
+    a directory, and its target must not be world-writable.
+    """
+    try:
+        link_stat = path.stat(follow_symlinks=False)
     except FileNotFoundError:
         return None
-    except OSError:
+    except OSError as exc:
+        logger.warning("Refusing %s: it cannot be inspected (%s)", path, exc)
         return False
-    mode = getattr(path_stat, "st_mode", 0)
-    if stat.S_ISLNK(mode):
+    link_mode = getattr(link_stat, "st_mode", 0)
+    target_stat = link_stat
+    if stat.S_ISLNK(link_mode):
+        try:
+            target_stat = path.stat()
+        except OSError as exc:
+            logger.warning("Refusing %s: symbolic link target cannot be inspected (%s)", path, exc)
+            return False
+    if current_uid is None:
+        return True
+    for owner_uid in (link_stat.st_uid, target_stat.st_uid):
+        if owner_uid not in {current_uid, 0}:
+            logger.warning("Refusing %s: it is owned by another user (uid %s)", path, owner_uid)
+            return False
+    if not _is_shared_directory(path.parent, current_uid):
+        return True
+    if not stat.S_ISDIR(link_mode) and getattr(link_stat, "st_nlink", 1) > 1:
+        logger.warning("Refusing %s: it has several hard links inside a shared world-writable directory", path)
         return False
-    return not (current_uid is not None and path_stat.st_uid not in {current_uid, 0})
+    if getattr(target_stat, "st_mode", 0) & stat.S_IWOTH:
+        logger.warning("Refusing %s: it is world-writable inside a shared world-writable directory", path)
+        return False
+    return True
+
+
+def normalize_extension_status_codes(value: Any) -> Any:
+    """Return framework status-code overrides as a ``set``, treating empty values as unset.
+
+    Args:
+        value: The configured ``extra_commit_statuses`` or ``extra_rollback_statuses`` value.
+
+    Returns:
+        ``None`` for unset or empty values, a ``set`` for any set-like value, and any other
+        value unchanged.
+    """
+    if value is None or isinstance(value, set):
+        return value
+    if not value:
+        return None
+    if isinstance(value, AbstractSet):
+        return set(value)
+    return value
 
 
 def resolve_extension_commit_mode(

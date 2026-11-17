@@ -22,6 +22,7 @@ from sqlspec.storage._arrow_payload import (
 )
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
 from sqlspec.storage._paths import (
+    _GLOB_MAGIC,
     check_local_delete_target,
     ensure_path_within_root,
     is_file_destination,
@@ -314,11 +315,10 @@ class FSSpecBackend:
         resolved_path = self._resolve_path(path)
         if self.protocol in _LOCAL_PROTOCOLS:
             check_local_delete_target(resolved_path, self.base_path, recursive=recursive)
-        rm_file_fn = None if recursive else getattr(self.fs, "rm_file", None)
         delete_fn = (
-            partial(rm_file_fn, resolved_path, **kwargs)
-            if callable(rm_file_fn)
-            else partial(self.fs.rm, resolved_path, recursive=recursive, **kwargs)
+            partial(_delete_fsspec_tree, self.fs, resolved_path, kwargs, self.protocol in _LOCAL_PROTOCOLS)
+            if recursive
+            else partial(_delete_fsspec_object, self.fs, resolved_path, kwargs)
         )
         execute_sync_storage_operation(delete_fn, backend=self.backend_type, operation="delete", path=resolved_path)
         log_storage_event(
@@ -334,7 +334,7 @@ class FSSpecBackend:
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
-            partial(self.fs.copy, source_path, dest_path, **kwargs),
+            partial(_copy_fsspec_object, self.fs, source_path, dest_path, kwargs),
             backend=self.backend_type,
             operation="copy",
             path=f"{source_path}->{dest_path}",
@@ -353,7 +353,7 @@ class FSSpecBackend:
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         execute_sync_storage_operation(
-            partial(self.fs.mv, source_path, dest_path, **kwargs),
+            partial(_move_fsspec_object, self.fs, source_path, dest_path, kwargs, self.protocol in _LOCAL_PROTOCOLS),
             backend=self.backend_type,
             operation="move",
             path=f"{source_path}->{dest_path}",
@@ -802,6 +802,79 @@ def _is_within_local_root(candidate: str | Path, root: str | Path) -> bool:
     return resolved == root_obj or root_obj in resolved.parents
 
 
+def _delete_fsspec_object(fs: Any, path: str, options: "dict[str, Any]") -> None:
+    """Delete one object by its literal key, using ``rm`` when the filesystem has no ``rm_file``."""
+    rm_file = getattr(fs, "rm_file", None)
+    if callable(rm_file):
+        try:
+            rm_file(path, **options)
+        except NotImplementedError:
+            pass
+        else:
+            return
+    fs.rm(path, recursive=False, **options)
+
+
+def _delete_fsspec_tree(fs: Any, path: str, options: "dict[str, Any]", literal_rm: bool) -> None:
+    """Delete ``path`` and everything beneath it, never expanding glob characters in the key.
+
+    Args:
+        fs: The fsspec filesystem.
+        path: Resolved key or prefix to delete.
+        options: Additional options forwarded to the filesystem.
+        literal_rm: Whether ``fs.rm`` already treats every path literally.
+
+    Raises:
+        FileNotFoundError: If nothing exists at ``path``.
+    """
+    if literal_rm or _GLOB_MAGIC.search(path) is None:
+        fs.rm(path, recursive=True, **options)
+        return
+    entries = fs.find(path, withdirs=True, detail=True)
+    if not entries:
+        raise FileNotFoundError(path)
+    for member in sorted(entries, reverse=True):
+        if entries[member].get("type") == "directory":
+            with contextlib.suppress(FileNotFoundError, FileExistsError, NotImplementedError):
+                fs.rmdir(member)
+        else:
+            _delete_fsspec_object(fs, member, options)
+
+
+def _copy_fsspec_object(fs: Any, source: str, destination: str, options: "dict[str, Any]") -> None:
+    """Copy one object, treating a source key that contains glob characters literally."""
+    if _GLOB_MAGIC.search(source) is None:
+        fs.copy(source, destination, **options)
+        return
+    try:
+        fs.cp_file(source, destination, **options)
+    except NotImplementedError:
+        fs.copy(source, destination, **options)
+
+
+def _move_fsspec_object(fs: Any, source: str, destination: str, options: "dict[str, Any]", literal_mv: bool) -> None:
+    """Move one object, treating a source key that contains glob characters literally.
+
+    Args:
+        fs: The fsspec filesystem.
+        source: Resolved source key.
+        destination: Resolved destination key.
+        options: Additional options forwarded to the filesystem.
+        literal_mv: Whether ``fs.mv`` already treats every path literally.
+    """
+    if literal_mv or _GLOB_MAGIC.search(source) is None:
+        fs.mv(source, destination, **options)
+        return
+    if source == destination:
+        return
+    try:
+        fs.cp_file(source, destination, **options)
+    except NotImplementedError:
+        fs.mv(source, destination, **options)
+        return
+    _delete_fsspec_object(fs, source, {})
+
+
 def _resolve_fsspec_write_options(
     protocol: str, overwrite: bool, kwargs: "dict[str, Any]"
 ) -> "tuple[str, dict[str, Any]]":
@@ -988,11 +1061,11 @@ def _close_and_publish_fsspec_stream(
     assert stage is not None
     try:
         file_obj.close()
-        fs.mv(stage, destination)
+        _move_fsspec_object(fs, stage, destination, {}, False)
     finally:
         with contextlib.suppress(Exception):
             if fs.exists(stage):
-                fs.rm(stage)
+                _delete_fsspec_object(fs, stage, {})
 
 
 def _abort_fsspec_stream(strategy: "_FsspecStrategy", fs: Any, stage: "str | None", file_obj: Any) -> None:
@@ -1017,7 +1090,7 @@ def _abort_fsspec_stream(strategy: "_FsspecStrategy", fs: Any, stage: "str | Non
         file_obj.close()
     if stage is not None:
         with contextlib.suppress(Exception):
-            fs.rm(stage)
+            _delete_fsspec_object(fs, stage, {})
 
 
 async def _abort_fsspec_stream_async(strategy: "_FsspecStrategy", fs: Any, stage: "str | None", file_obj: Any) -> None:
