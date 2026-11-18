@@ -96,6 +96,36 @@ def test_msgspec_optional_and_collection_fields() -> None:
     )
 
 
+def test_msgspec_opt_in_normalizes_declared_nested_fields() -> None:
+    child = {"item_name": "python", "itemName": "encoded", "item_count": 1}
+    row = {"child": child, "children": [child], "children_by_key": {"arbitrary_key": child}}
+    expected = CamelChild(item_name="encoded", item_count=1)
+
+    with pytest.raises(msgspec.ValidationError, match="itemCount"):
+        to_schema(row, schema_type=OptionalCollectionEnvelope)
+
+    assert to_schema(row, schema_type=OptionalCollectionEnvelope, normalize_nested=True) == OptionalCollectionEnvelope(
+        child=expected, children=(expected,), children_by_key={"arbitrary_key": expected}
+    )
+    assert child == {"item_name": "python", "itemName": "encoded", "item_count": 1}
+
+
+def test_msgspec_opt_in_normalizes_nested_list_in_batch() -> None:
+    row = {"child_rows": [{"item_name": "a", "itemCount": 1}]}
+
+    assert to_schema([row], schema_type=KebabEnvelope, normalize_nested=True) == [
+        KebabEnvelope(child_rows=[CamelChild(item_name="a", item_count=1)])
+    ]
+
+
+def test_msgspec_opt_in_respects_explicit_nested_alias() -> None:
+    row = {"child": {"display_name": "Ada"}, "item_count": 1}
+
+    assert to_schema(row, schema_type=CallableAliasEnvelope, normalize_nested=True) == CallableAliasEnvelope(
+        child=ExplicitAliasChild(display_name="Ada"), item_count=1
+    )
+
+
 def test_msgspec_optional_field_accepts_none() -> None:
     result = to_schema({"child": None, "children": [], "children_by_key": {}}, schema_type=OptionalCollectionEnvelope)
 

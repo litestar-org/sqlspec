@@ -7,6 +7,15 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.72.1 - Nested msgspec schema mapping
+
+* `to_schema(..., normalize_nested=True)` accepts Python field names in nested
+  msgspec Structs from trusted SQL projections. By default, nested values still
+  use the Struct's encoded field names.
+* Query builder cache keys distinguish filters attached to different levels of
+  a nested query.
+* Query builder predicate pushdown works with SQLGlot 30.33.
+
 ### v0.72.0 - Read replicas, database tenant isolation, Snowflake and Teradata adapters, extension schema reconciliation, and query builder validation
 
 **Added:**

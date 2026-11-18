@@ -79,16 +79,18 @@ def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]
 
 
 @overload
-def to_schema(data: "list[DataT]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+def to_schema(
+    data: "list[DataT]", *, schema_type: "type[SchemaT]", normalize_nested: bool = False
+) -> "list[SchemaT]": ...
 @overload
-def to_schema(data: "list[DataT]", *, schema_type: None = None) -> "list[DataT]": ...
+def to_schema(data: "list[DataT]", *, schema_type: None = None, normalize_nested: bool = False) -> "list[DataT]": ...
 @overload
-def to_schema(data: "DataT", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+def to_schema(data: "DataT", *, schema_type: "type[SchemaT]", normalize_nested: bool = False) -> "SchemaT": ...
 @overload
-def to_schema(data: "DataT", *, schema_type: None = None) -> "DataT": ...
+def to_schema(data: "DataT", *, schema_type: None = None, normalize_nested: bool = False) -> "DataT": ...
 
 
-def to_schema(data: Any, *, schema_type: Any = None) -> Any:
+def to_schema(data: Any, *, schema_type: Any = None, normalize_nested: bool = False) -> Any:
     """Convert data to a specified schema type.
 
     Supports transformation to various schema types including:
@@ -101,6 +103,8 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
     Args:
         data: Input data to convert (dict, list of dicts, or other)
         schema_type: Target schema type for conversion. If None, returns data unchanged.
+        normalize_nested: Accept Python field names inside nested msgspec Structs in trusted input.
+            Defaults to False. Only applies to msgspec Struct targets.
 
     Returns:
         Converted data in the specified schema type, or original data if schema_type is None
@@ -116,6 +120,8 @@ def to_schema(data: Any, *, schema_type: Any = None) -> Any:
         msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
         raise SQLSpecError(msg)
 
+    if normalize_nested and conv is _convert_msgspec:
+        return _convert_msgspec(data, schema_type, normalize_nested=True)
     return conv(data, schema_type)
 
 
@@ -498,15 +504,16 @@ def _get_numpy_recursive_dispatcher() -> "TypeDispatcher[Callable[[Any], Any]]":
     return _NUMPY_RECURSIVE_DISPATCHER
 
 
-def _convert_msgspec(data: Any, schema_type: Any) -> Any:
+def _convert_msgspec(data: Any, schema_type: Any, *, normalize_nested: bool = False) -> Any:
     """Convert data to msgspec Struct."""
+    is_batch = _is_sequence_input(data)
     transformed_data = (
-        [_normalize_msgspec_input(item, schema_type) for item in data]
-        if _is_sequence_input(data)
-        else _normalize_msgspec_input(data, schema_type)
+        [_normalize_msgspec_struct(item, schema_type, normalize_nested=normalize_nested) for item in data]
+        if is_batch
+        else _normalize_msgspec_struct(data, schema_type, normalize_nested=normalize_nested)
     )
 
-    target_type = list[schema_type] if _is_sequence_input(transformed_data) else schema_type
+    target_type = list[schema_type] if is_batch else schema_type
 
     try:
         return convert(
@@ -528,7 +535,7 @@ def _normalize_msgspec_input(data: Any, target_type: Any) -> Any:
         return data
 
     if is_msgspec_struct(target_type):
-        return _normalize_msgspec_struct(data, cast("type", target_type))
+        return _normalize_msgspec_struct(data, cast("type", target_type), normalize_nested=True)
 
     origin = get_origin(target_type)
     args = get_args(target_type)
@@ -555,7 +562,7 @@ def _normalize_msgspec_input(data: Any, target_type: Any) -> Any:
     return data
 
 
-def _normalize_msgspec_struct(data: Any, schema_type: type) -> Any:
+def _normalize_msgspec_struct(data: Any, schema_type: type, *, normalize_nested: bool) -> Any:
     if not isinstance(data, Mapping):
         return data
 
@@ -567,6 +574,11 @@ def _normalize_msgspec_struct(data: Any, schema_type: type) -> Any:
             normalized[encode_name] = data[encode_name]
         elif name in data:
             normalized[encode_name] = data[name]
+
+    if normalize_nested:
+        for _, encode_name, field_type in fields:
+            if encode_name in normalized:
+                normalized[encode_name] = _normalize_msgspec_input(normalized[encode_name], field_type)
 
     return normalized
 

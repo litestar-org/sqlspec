@@ -281,8 +281,8 @@ def _expression_digest(expr: "exp.Expr") -> str:
 
     The walk is iterative, so nesting depth is bounded by memory, not by the interpreter's recursion
     limit. Every node contributes its type, comments, NULL-ordering markers, and each set argument in
-    name order; leaf values are length-prefixed so adjacent values cannot run together. A node reached
-    a second time contributes a reference to its first visit, which also ends cyclic trees.
+    name order. Argument counts preserve node boundaries, and leaf lengths delimit adjacent values.
+    Repeat visits contribute a reference to the first visit, which also ends cyclic trees.
     """
     hasher = hashlib.blake2b(digest_size=16)
     update = hasher.update
@@ -307,6 +307,7 @@ def _expression_digest(expr: "exp.Expr") -> str:
                 update(b"d")
             if has_explicit_nulls(node):
                 update(b"x")
+            pending = len(stack)
             comments = node.comments
             if comments:
                 stack.append(comments)
@@ -318,6 +319,7 @@ def _expression_digest(expr: "exp.Expr") -> str:
                     continue
                 stack.append(value)
                 stack.append(_ArgKey(name))
+            update(b"A%d;" % ((len(stack) - pending) // 2))
         elif type(node) is _ArgKey:
             update(b"K")
             update(node.name.encode())

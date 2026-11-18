@@ -447,8 +447,12 @@ def test_hash_optimized_expression_matches_equal_trees_built_separately() -> Non
         ("SELECT id FROM job FOR UPDATE", "SELECT id FROM job FOR SHARE"),
         ('SELECT "Id" FROM users', "SELECT Id FROM users"),
         ("SELECT a FROM t WHERE x = 1 AND y = 2", "SELECT a FROM t WHERE (x = 1 AND y = 2)"),
+        (
+            "SELECT x FROM (SELECT x + 1 AS x FROM (SELECT 1 AS x)) WHERE x = 1",
+            "SELECT x FROM (SELECT x + 1 AS x FROM (SELECT 1 AS x) WHERE x = 1)",
+        ),
     ],
-    ids=["table", "literal-type", "comment", "lock-wait", "lock-mode", "quoting", "parentheses"],
+    ids=["table", "literal-type", "comment", "lock-wait", "lock-mode", "quoting", "parentheses", "subquery-scope"],
 )
 def test_hash_optimized_expression_separates_statements_that_render_differently(left: str, right: str) -> None:
     """Statements that differ in any rendered detail get different optimizer cache keys."""
