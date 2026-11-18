@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import cast
 
 import pytest
+from sqlglot import parse_one
 from sqlglot.optimizer import RULES
 from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
 from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
@@ -180,3 +181,47 @@ def test_predicate_pushdown_without_simplify_removes_pushed_where_true_and_keeps
     assert '"orders"."status" = \'open\'' in rendered
     assert 'NOT "users"."b" < 1 AND NOT "users"."b" <= 1' in rendered
     assert "TRUE" not in rendered
+
+
+def test_predicate_pushdown_keeps_from_source_available_to_join() -> None:
+    built = (
+        Select("users.id", "orders.total")
+        .from_("users")
+        .join("orders", "users.id = orders.user_id")
+        .where("orders.total > users.credit_limit")
+        .build(dialect="sqlite")
+    )
+    rendered = " ".join(built.sql.split())
+
+    assert 'ON "users"."id" = "orders"."user_id" AND "orders"."total" > "users"."credit_limit"' in rendered
+    assert " WHERE " not in rendered
+
+
+def test_predicate_pushdown_keeps_disjunctive_filter_after_join() -> None:
+    statuses = ("open", "pending", "paid", "shipped", "returned")
+    condition = " OR ".join(
+        f"(orders.total > users.credit_limit AND orders.status = '{status}')" for status in statuses
+    )
+    built = (
+        Select("users.id", "orders.total")
+        .from_("users")
+        .join("orders", "users.id = orders.user_id")
+        .where(condition)
+        .build(dialect="sqlite")
+    )
+    join, where = built.sql.split("WHERE", 1)
+
+    for status in statuses:
+        comparison = f'"orders"."status" = \'{status}\''
+        assert comparison in join
+        assert comparison in where
+
+
+def test_predicate_pushdown_preserves_filter_after_asof_join() -> None:
+    statement = "SELECT u.id, o.price FROM users u ASOF JOIN orders o ON u.ts >= o.ts WHERE o.price > 10"
+    builder = Select("*", dialect="duckdb")
+    builder.set_expression(parse_one(statement, read="duckdb"))
+
+    rendered = " ".join(builder.build().sql.split())
+
+    assert 'ON "u"."ts" >= "o"."ts" WHERE "o"."price" > 10' in rendered

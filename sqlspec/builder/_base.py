@@ -1662,30 +1662,38 @@ def _pushdown_predicates_without_simplify(expression: exp.Expr, dialect: Dialect
         where_node = select.args.get("where")
         joins: list[exp.Join] = select.args.get("joins") or []
 
-        if any(join.args.get("nearest") for join in joins):
+        if any(
+            join.method in ("ASOF", "POSITIONAL") or join.kind in ("ASOF", "ANY", "PASTE") or join.args.get("nearest")
+            for join in scope.find_all(exp.Join)
+        ):
             continue
 
         if isinstance(where_node, exp.Where) and where_node.this is not None:
             selected_sources: dict[str, tuple[exp.Selectable, exp.Table | Scope]] = dict(scope.selected_sources)
-            join_index = {join.alias_or_name: i for i, join in enumerate(joins)}
+            source_positions: dict[str, int] = {}
             last_null_extending = max((i for i, join in enumerate(joins) if join.side in ("RIGHT", "FULL")), default=-1)
             pushdown_allowed = True
             reachable: dict[str, tuple[exp.Selectable, exp.Table | Scope]] = {}
             for name, (node, source) in selected_sources.items():
                 parent = node.find_ancestor(exp.Join, exp.From)
+                if parent is None or parent.parent is not select:
+                    continue
                 if isinstance(parent, exp.Join):
                     if isinstance(node, exp.Unnest) and unnest_requires_cross_join:
                         pushdown_allowed = False
                         break
-                    position = join_index.get(parent.alias_or_name, -1)
+                    position = parent.index
+                    if position is None:
+                        continue
                 else:
                     position = -1
+                source_positions[name] = position
                 if position >= last_null_extending:
                     reachable[name] = (node, source)
 
             if pushdown_allowed:
                 preserved_true_ids = {id(node) for node in where_node.this.find_all(exp.Boolean) if node.this is True}
-                _pushdown_condition_without_simplify(where_node.this, reachable, scope_ref_count, join_index=join_index)
+                _pushdown_condition_without_simplify(where_node.this, reachable, scope_ref_count, source_positions)
                 updated_where = where_node.args.get("this")
                 if isinstance(updated_where, exp.Expr):
                     pruned_where = _prune_pushed_true(updated_where, preserved_true_ids)
@@ -1717,17 +1725,18 @@ def _pushdown_condition_without_simplify(
     condition: exp.Expr,
     sources: "Mapping[str, tuple[exp.Selectable, exp.Table | Scope]]",
     scope_ref_count: "Mapping[int, int]",
-    join_index: "Mapping[str, int] | None" = None,
+    source_positions: "Mapping[str, int] | None" = None,
 ) -> None:
+    """Push down a predicate using the position map accepted by SQLGlot's CNF and DNF rules."""
     unwrapped = condition
     while isinstance(unwrapped, exp.Paren):
         unwrapped = unwrapped.this
     cnf_like = _is_normalized_condition(unwrapped) or not _is_normalized_condition(unwrapped, dnf=True)
     predicates = list(unwrapped.flatten() if isinstance(unwrapped, exp.And if cnf_like else exp.Or) else [unwrapped])
     if cnf_like:
-        _pushdown_cnf(predicates, sources, scope_ref_count, join_index=join_index)
+        _pushdown_cnf(predicates, sources, scope_ref_count, source_positions)
     else:
-        _pushdown_dnf(predicates, sources, scope_ref_count, join_index=join_index)
+        _pushdown_dnf(predicates, sources, scope_ref_count, source_positions)
 
 
 def _prune_pushed_true(condition: exp.Expr, preserved_true_ids: set[int]) -> exp.Expr | None:
