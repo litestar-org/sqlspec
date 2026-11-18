@@ -205,6 +205,7 @@ def test_registry_primary_scope_helpers_and_schema_mapping(routing_config: Sqlit
         ]
         assert session.convert_to_dialect("SELECT 1", "postgres", pretty=False) == "SELECT 1"
         assert session.to_schema({"origin": "primary"}, schema_type=Note) == Note("primary")
+        assert session.to_schema([{"origin": "primary"}], schema_type=Note, normalize_nested=False) == [Note("primary")]
         assert session.select_one("SELECT origin FROM notes WHERE id=1", schema_type=Note) == Note("primary")
         assert session.select_one_or_none("SELECT origin FROM notes WHERE id=1", schema_type=Note) == Note("primary")
         assert session.select_value_or_none("SELECT id FROM notes WHERE id=1", value_type=int) == 1

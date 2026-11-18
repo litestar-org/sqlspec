@@ -7,6 +7,13 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.72.2 - Driver nested msgspec normalization
+
+* `CommonDriverAttributesMixin.to_schema()` and `RoutingSession.to_schema()` now
+  accept `normalize_nested` and default to `True`, so driver-level SQL row
+  mapping normalizes nested `msgspec.Struct` field names automatically while
+  allowing `normalize_nested=False` opt-out.
+
 ### v0.72.1 - Nested msgspec schema mapping
 
 * `to_schema(..., normalize_nested=True)` accepts Python field names in nested

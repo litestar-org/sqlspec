@@ -98,14 +98,14 @@ Schema mapping matches SQL result column names to schema field names:
 - Enterprise engines that return unquoted column identifiers in uppercase (`Oracle`, `IBM Db2`, and `ADBC` over Oracle/Db2) enable `driver_features={"enable_lowercase_column_names": True}` in SQLSpec so `SELECT id, email FROM accounts` maps cleanly onto lowercase `id` and `email` Python fields without quoting every alias.
 - For camelCase JSON APIs backed by `snake_case` SQL columns, configure `rename="camel"` on your `msgspec.Struct` or an alias generator on `BaseModel` while keeping SQL column projections in `snake_case`. By default, msgspec requires encoded field names inside nested values.
 
-For trusted SQL projections with nested values that use Python field names, fetch
-the raw rows and pass `normalize_nested=True` to `to_schema()`. For example, DuckDB
-returns `item_name` inside the struct in this query.
+For trusted SQL projections with nested values that use Python field names, use
+`driver.to_schema()` (which normalizes nested `msgspec.Struct` fields by
+default; pass `normalize_nested=False` to require encoded names) or pass
+`normalize_nested=True` to `sqlspec.utils.schema.to_schema()`. For example,
+DuckDB returns `item_name` inside the struct in this query.
 
 ```python
 import msgspec
-
-from sqlspec.utils.schema import to_schema
 
 
 class Item(msgspec.Struct, rename="camel"):
@@ -116,8 +116,8 @@ class InventoryRow(msgspec.Struct):
     item: Item
 
 
-row = session.select_one("SELECT struct_pack(item_name := ?) AS item", "Pencil")
-inventory = to_schema(row, schema_type=InventoryRow, normalize_nested=True)
+rows = session.select("SELECT struct_pack(item_name := ?) AS item", "Pencil")
+inventory = session.to_schema(rows, schema_type=InventoryRow)
 ```
 
 The option follows declared Struct fields through optional fields, lists, tuples,

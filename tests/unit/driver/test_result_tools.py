@@ -424,3 +424,22 @@ def test_performance_no_conversion_when_not_needed() -> None:
 
     # Should be the same object (no conversion overhead)
     assert result is numpy_array
+
+
+def test_driver_to_schema_normalizes_nested_msgspec_by_default() -> None:
+    """Driver to_schema normalizes nested Python field names by default and supports opt-out."""
+
+    class NestedDetail(msgspec.Struct, rename="camel"):
+        item_name: str
+        item_count: int
+
+    class DetailRow(msgspec.Struct, rename="camel"):
+        row_id: int
+        detail: NestedDetail
+
+    payload = {"row_id": 1, "detail": {"item_name": "pencil", "item_count": 3}}
+    mapped = CommonDriverAttributesMixin.to_schema(payload, schema_type=DetailRow)
+    assert mapped == DetailRow(row_id=1, detail=NestedDetail(item_name="pencil", item_count=3))
+
+    with pytest.raises(msgspec.ValidationError, match="itemName"):
+        CommonDriverAttributesMixin.to_schema(payload, schema_type=DetailRow, normalize_nested=False)
