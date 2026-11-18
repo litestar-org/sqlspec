@@ -1989,24 +1989,32 @@ class CommonDriverAttributesMixin:
 
     @overload
     @staticmethod
-    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+    def to_schema(
+        data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]", normalize_nested: bool = True
+    ) -> "list[SchemaT]": ...
     @overload
     @staticmethod
-    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+    def to_schema(
+        data: "list[dict[str, Any]]", *, schema_type: None = None, normalize_nested: bool = True
+    ) -> "list[dict[str, Any]]": ...
     @overload
     @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+    def to_schema(
+        data: "dict[str, Any]", *, schema_type: "type[SchemaT]", normalize_nested: bool = True
+    ) -> "SchemaT": ...
     @overload
     @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
+    def to_schema(
+        data: "dict[str, Any]", *, schema_type: None = None, normalize_nested: bool = True
+    ) -> "dict[str, Any]": ...
     @overload
     @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
+    def to_schema(data: Any, *, schema_type: "type[SchemaT]", normalize_nested: bool = True) -> Any: ...
     @overload
     @staticmethod
-    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
+    def to_schema(data: Any, *, schema_type: None = None, normalize_nested: bool = True) -> Any: ...
     @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
+    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None, normalize_nested: bool = True) -> Any:
         """Convert data to a specified schema type.
 
         Supports transformation to various schema types including:
@@ -2019,11 +2027,14 @@ class CommonDriverAttributesMixin:
         Args:
             data: Input data to convert (dict, list of dicts, or other).
             schema_type: Target schema type for conversion. If None, returns data unchanged.
+            normalize_nested: Accept Python field names inside nested msgspec Structs.
+                Defaults to True for driver-level SQL mapping; pass False to require
+                encoded field names in nested structs.
 
         Returns:
             Converted data in the specified schema type, or original data if schema_type is None.
         """
-        return _to_schema_impl(data, schema_type=schema_type)
+        return _to_schema_impl(data, schema_type=schema_type, normalize_nested=normalize_nested)
 
     def create_execution_result(
         self,

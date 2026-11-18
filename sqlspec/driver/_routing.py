@@ -104,26 +104,34 @@ class _RoutingSessionState:
 
     @overload
     @staticmethod
-    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+    def to_schema(
+        data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]", normalize_nested: bool = True
+    ) -> "list[SchemaT]": ...
     @overload
     @staticmethod
-    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+    def to_schema(
+        data: "list[dict[str, Any]]", *, schema_type: None = None, normalize_nested: bool = True
+    ) -> "list[dict[str, Any]]": ...
     @overload
     @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+    def to_schema(
+        data: "dict[str, Any]", *, schema_type: "type[SchemaT]", normalize_nested: bool = True
+    ) -> "SchemaT": ...
     @overload
     @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
+    def to_schema(
+        data: "dict[str, Any]", *, schema_type: None = None, normalize_nested: bool = True
+    ) -> "dict[str, Any]": ...
     @overload
     @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
+    def to_schema(data: Any, *, schema_type: "type[SchemaT]", normalize_nested: bool = True) -> Any: ...
     @overload
     @staticmethod
-    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
+    def to_schema(data: Any, *, schema_type: None = None, normalize_nested: bool = True) -> Any: ...
     @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
+    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None, normalize_nested: bool = True) -> Any:
         """Map records to a public schema without checking out a connection."""
-        return CommonDriverAttributesMixin.to_schema(data, schema_type=schema_type)
+        return CommonDriverAttributesMixin.to_schema(data, schema_type=schema_type, normalize_nested=normalize_nested)
 
     def storage_capabilities(self) -> "StorageCapabilities":
         """Return primary driver storage capabilities without acquiring a connection."""
