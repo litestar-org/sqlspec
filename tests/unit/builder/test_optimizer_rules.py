@@ -197,6 +197,26 @@ def test_predicate_pushdown_keeps_from_source_available_to_join() -> None:
     assert " WHERE " not in rendered
 
 
+def test_predicate_pushdown_keeps_disjunctive_filter_after_join() -> None:
+    statuses = ("open", "pending", "paid", "shipped", "returned")
+    condition = " OR ".join(
+        f"(orders.total > users.credit_limit AND orders.status = '{status}')" for status in statuses
+    )
+    built = (
+        Select("users.id", "orders.total")
+        .from_("users")
+        .join("orders", "users.id = orders.user_id")
+        .where(condition)
+        .build(dialect="sqlite")
+    )
+    join, where = built.sql.split("WHERE", 1)
+
+    for status in statuses:
+        comparison = f'"orders"."status" = \'{status}\''
+        assert comparison in join
+        assert comparison in where
+
+
 def test_predicate_pushdown_preserves_filter_after_asof_join() -> None:
     statement = "SELECT u.id, o.price FROM users u ASOF JOIN orders o ON u.ts >= o.ts WHERE o.price > 10"
     builder = Select("*", dialect="duckdb")
