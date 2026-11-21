@@ -381,6 +381,9 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "cloud_sql_instance",
         "cloud_sql_enable_iam_auth",
         "cloud_sql_ip_type",
+        "connector_retry_count",
+        "connector_retry_delay",
+        "connector_retry_max_delay",
     ),
     "spanner": (
         "on_connection_create",

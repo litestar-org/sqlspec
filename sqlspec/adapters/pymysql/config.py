@@ -1,7 +1,10 @@
 """PyMySQL database configuration."""
 
 import contextlib
+import logging
+import math
 import ssl
+import time
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
@@ -16,9 +19,14 @@ from sqlspec.adapters.pymysql._typing import (
     PyMysqlSSCursor,
 )
 from sqlspec.adapters.pymysql.core import (
+    DEFAULT_CONNECTOR_RETRY_COUNT,
+    DEFAULT_CONNECTOR_RETRY_DELAY,
+    DEFAULT_CONNECTOR_RETRY_MAX_DELAY,
     apply_driver_features,
+    calculate_connector_backoff_seconds,
     create_mapped_exception,
     default_statement_config,
+    is_transient_connector_error,
     merge_derive_overrides,
     parse_mysql_replica_shorthand,
 )
@@ -38,6 +46,7 @@ from sqlspec.exceptions import (
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import CLOUD_SQL_CONNECTOR_INSTALLED
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
@@ -55,6 +64,8 @@ __all__ = (
     "build_connection_config",
 )
 
+
+logger = get_logger("sqlspec.adapters.pymysql")
 
 PyMysqlConverter = Mapping[int | type[Any], Callable[..., Any]]
 PyMysqlTimeout = int | float
@@ -213,6 +224,12 @@ class PyMysqlDriverFeatures(TypedDict):
     """Use IAM database authentication with the Cloud SQL Python Connector."""
     cloud_sql_ip_type: NotRequired[str]
     """Cloud SQL network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
+    connector_retry_count: NotRequired[int]
+    """Maximum retry attempts on transient Cloud SQL connector errors (defaults to ``3``; ``0`` disables retries)."""
+    connector_retry_delay: NotRequired[float]
+    """Initial delay in seconds before jittered exponential connector retries (defaults to ``0.5``)."""
+    connector_retry_max_delay: NotRequired[float]
+    """Upper bound in seconds on the delay between connector retry attempts (defaults to ``5.0``)."""
 
 
 _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((
@@ -293,7 +310,33 @@ class _PyMysqlCloudSqlConnector:
         if self._database is not None:
             conn_kwargs["database"] = self._database
 
-        return cast("PyMysqlConnection", connector.connect(**conn_kwargs))
+        max_retries = int(self._config.driver_features.get("connector_retry_count", DEFAULT_CONNECTOR_RETRY_COUNT))
+        base_delay = float(self._config.driver_features.get("connector_retry_delay", DEFAULT_CONNECTOR_RETRY_DELAY))
+        max_delay = float(
+            self._config.driver_features.get("connector_retry_max_delay", DEFAULT_CONNECTOR_RETRY_MAX_DELAY)
+        )
+        attempt = 0
+        while True:
+            try:
+                return cast("PyMysqlConnection", connector.connect(**conn_kwargs))
+            except Exception as exc:
+                if attempt >= max_retries or not is_transient_connector_error(exc):
+                    raise
+                retry_delay = calculate_connector_backoff_seconds(attempt, base_delay, max_delay)
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "connector.retry",
+                    adapter="pymysql",
+                    connector="cloud_sql",
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_seconds=round(retry_delay, 3),
+                    error_type=type(exc).__name__,
+                )
+            if retry_delay > 0.0:
+                time.sleep(retry_delay)
+            attempt += 1
 
 
 class PyMysqlConnectionContext(SyncPoolConnectionContext):
@@ -456,6 +499,30 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def _validate_connector_config(self) -> None:
         """Validate Google Cloud SQL connector configuration."""
+        raw_retry_count = self.driver_features.get("connector_retry_count", DEFAULT_CONNECTOR_RETRY_COUNT)
+        if isinstance(raw_retry_count, bool) or not isinstance(raw_retry_count, int) or raw_retry_count < 0:
+            msg = "connector_retry_count must be a non-negative integer"
+            raise ImproperConfigurationError(msg)
+
+        delays: list[float] = []
+        for key, default in (
+            ("connector_retry_delay", DEFAULT_CONNECTOR_RETRY_DELAY),
+            ("connector_retry_max_delay", DEFAULT_CONNECTOR_RETRY_MAX_DELAY),
+        ):
+            raw_value = self.driver_features.get(key, default)
+            if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+                msg = f"{key} must be a finite non-negative number"
+                raise ImproperConfigurationError(msg)
+            value = float(raw_value)
+            if not math.isfinite(value) or value < 0.0:
+                msg = f"{key} must be a finite non-negative number"
+                raise ImproperConfigurationError(msg)
+            delays.append(value)
+
+        if delays[1] < delays[0]:
+            msg = "connector_retry_max_delay must be greater than or equal to connector_retry_delay"
+            raise ImproperConfigurationError(msg)
+
         if not self.driver_features.get("enable_cloud_sql", False):
             return
 

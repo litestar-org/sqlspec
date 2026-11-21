@@ -607,17 +607,17 @@ async def test_cloud_sql_connector_cleaned_up_when_create_pool_fails(mock_cloud_
             assert config._cloud_sql_connector is None
 
 
-class _FakePoolConnection(asyncpg.Connection):
-    """Minimal asyncpg.Connection subclass for pool lifecycle tests."""
+class _StubConnection(asyncpg.Connection):
+    """Connection stand-in that asyncpg.Pool accepts without opening a socket."""
 
     def __init__(self) -> None:
-        self._closed = False
-        self._protocol = None
-        self._pool_holder = None
-        self._proxy = None
+        self.closed = False
+
+    def __del__(self) -> None:
+        return None
 
     def is_closed(self) -> bool:
-        return self._closed
+        return self.closed
 
     def is_in_transaction(self) -> bool:
         return False
@@ -633,13 +633,10 @@ class _FakePoolConnection(asyncpg.Connection):
 
     async def close(self, *, timeout: float | None = None) -> None:
         _ = timeout
-        self._closed = True
+        self.closed = True
 
     def terminate(self) -> None:
-        self._closed = True
-
-    def _set_proxy(self, _proxy: Any) -> None:
-        return None
+        self.closed = True
 
 
 class _FakeGrpcStatusError(Exception):
@@ -719,10 +716,10 @@ def test_connector_retry_config_validation_runs_even_when_disabled(features: dic
 async def test_real_asyncpg_create_pool_with_connector_wrapper(connector_kind: str) -> None:
     """Real asyncpg.create_pool invokes managed connector wrappers with pool kwargs without TypeError."""
     captured: list[dict[str, Any]] = []
-    fake_conn = _FakePoolConnection()
+    fake_conn = _StubConnection()
     mock_connector = MagicMock()
 
-    async def fake_connect(**kwargs: Any) -> _FakePoolConnection:
+    async def fake_connect(**kwargs: Any) -> Any:
         captured.append(kwargs)
         return fake_conn
 
@@ -752,7 +749,7 @@ async def test_real_asyncpg_create_pool_with_connector_wrapper(connector_kind: s
             connect=cast("Any", wrapper),
             min_size=1,
             max_size=1,
-            connection_class=_FakePoolConnection,
+            connection_class=_StubConnection,
             timeout=12,
             statement_cache_size=0,
             command_timeout=15,
@@ -767,7 +764,7 @@ async def test_real_asyncpg_create_pool_with_connector_wrapper(connector_kind: s
             assert call_kwargs["user"] == "u"
             assert call_kwargs["password"] == "p"
             assert call_kwargs["db"] == "d"
-            assert call_kwargs["connection_class"] is _FakePoolConnection
+            assert call_kwargs["connection_class"] is _StubConnection
             assert call_kwargs["loop"] is asyncio.get_running_loop()
             assert call_kwargs["record_class"] is asyncpg.Record
             assert call_kwargs["timeout"] == 12
@@ -850,10 +847,10 @@ async def test_create_connection_forwards_options_to_alloydb_and_keeps_custom_co
     mock_alloydb_module: MagicMock,
 ) -> None:
     """create_connection forwards safe options to managed connector wrappers but calls custom connect() with no args."""
-    fake_conn = _FakePoolConnection()
+    fake_conn = _StubConnection()
     captured: list[dict[str, Any]] = []
 
-    async def fake_connect(**kwargs: Any) -> _FakePoolConnection:
+    async def fake_connect(**kwargs: Any) -> Any:
         captured.append(kwargs)
         return fake_conn
 
@@ -881,7 +878,7 @@ async def test_create_connection_forwards_options_to_alloydb_and_keeps_custom_co
 
     custom_calls = 0
 
-    async def custom_zero_arg_connect() -> _FakePoolConnection:
+    async def custom_zero_arg_connect() -> Any:
         nonlocal custom_calls
         custom_calls += 1
         return fake_conn
@@ -1059,8 +1056,14 @@ def test_is_transient_connector_error_handles_cause_chains_and_module_qualified_
     assert is_transient_connector_error(wrapped_transient) is True
 
     cyclic_retry = api_exc.RetryError("cyclic", cause=None)
-    cyclic_retry._cause = cyclic_retry
+    cyclic_retry.__cause__ = cyclic_retry
     assert is_transient_connector_error(cyclic_retry) is True
+
+    first_link = RuntimeError("first")
+    second_link = RuntimeError("second")
+    first_link.__cause__ = second_link
+    second_link.__cause__ = first_link
+    assert is_transient_connector_error(first_link) is False
 
     cloud_sql_exc = pytest.importorskip("google.cloud.sql.connector.exceptions")
 
@@ -1118,7 +1121,7 @@ def test_calculate_connector_backoff_seconds_bounds() -> None:
 @pytest.mark.parametrize("connector_kind", ["cloud_sql", "alloydb"])
 async def test_connector_retries_transient_error_and_recovers(connector_kind: str) -> None:
     """Transient connector failures retry with backoff and return the established connection."""
-    fake_conn = _FakePoolConnection()
+    fake_conn = _StubConnection()
     sleep_delays: list[float] = []
 
     async def fake_sleep(delay: float) -> None:
@@ -1239,3 +1242,112 @@ def test_asyncpg_adapter_import_does_not_eagerly_load_google_or_aiohttp() -> Non
     )
     proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False, timeout=30)
     assert proc.returncode == 0, proc.stderr
+
+
+class _StatusError(Exception):
+    """Error exposing a gRPC-style status through ``grpc_status_code`` or ``code()``."""
+
+    def __init__(self, status: Any = None, *, attribute: Any = None, code_requires_argument: bool = False) -> None:
+        super().__init__("status")
+        self._status = status
+        self._code_requires_argument = code_requires_argument
+        if attribute is not None:
+            self.grpc_status_code = attribute
+
+    def code(self, *args: Any) -> Any:
+        if self._code_requires_argument and not args:
+            msg = "code() requires an argument"
+            raise TypeError(msg)
+        return self._status
+
+
+@pytest.mark.parametrize(
+    ("make_error", "expected"),
+    [
+        (lambda: _StatusError(attribute="UNAVAILABLE"), True),
+        (lambda: _StatusError("StatusCode.PERMISSION_DENIED"), False),
+        (lambda: _StatusError("NOT_A_KNOWN_STATUS"), False),
+        (lambda: _StatusError(14), False),
+        (lambda: _StatusError(code_requires_argument=True), False),
+    ],
+    ids=["attribute-string", "dotted-permanent", "unknown-name", "numeric-status", "code-needs-argument"],
+)
+def test_is_transient_connector_error_reads_status_shapes(
+    make_error: Callable[[], BaseException], expected: bool
+) -> None:
+    """Status names are read from an attribute or ``code()`` and unknown shapes are not retried."""
+    assert is_transient_connector_error(make_error()) is expected
+
+
+def test_is_transient_connector_error_follows_implicit_context() -> None:
+    """An implicit ``__context__`` is followed unless the raise suppressed it."""
+    implicit = RuntimeError("wrapper")
+    implicit.__context__ = TimeoutError("inner timeout")
+    assert is_transient_connector_error(implicit) is True
+
+    suppressed = RuntimeError("wrapper")
+    suppressed.__context__ = TimeoutError("inner timeout")
+    suppressed.__suppress_context__ = True
+    assert is_transient_connector_error(suppressed) is False
+
+
+def test_is_transient_connector_error_without_optional_modules() -> None:
+    """Built-in and status-based checks still work when no connector libraries are loaded."""
+    absent = dict.fromkeys((
+        "google.cloud.sql.connector.exceptions",
+        "google.cloud.alloydbconnector.exceptions",
+        "google.api_core.exceptions",
+        "google.auth.exceptions",
+        "aiohttp",
+    ))
+    with patch.dict(sys.modules, absent):
+        assert is_transient_connector_error(TimeoutError("timed out")) is True
+        assert is_transient_connector_error(_StatusError("UNAVAILABLE")) is True
+        assert is_transient_connector_error(RuntimeError("unknown")) is False
+
+
+@pytest.mark.parametrize("connector_kind", ["cloud_sql", "alloydb"])
+async def test_connector_wrapper_requires_initialized_connector(connector_kind: str) -> None:
+    """Calling a wrapper before its connector exists raises a configuration error."""
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    wrapper: Any = (
+        _AsyncpgCloudSqlConnector(config, None, None, None)
+        if connector_kind == "cloud_sql"
+        else _AsyncpgAlloydbConnector(config, None, None, None)
+    )
+
+    with pytest.raises(ImproperConfigurationError, match="connector is not initialized"):
+        await wrapper()
+
+
+@pytest.mark.parametrize("connector_kind", ["cloud_sql", "alloydb"])
+async def test_connector_wrapper_omits_unset_credentials(connector_kind: str) -> None:
+    """Unset user, password, and database are left for the connector to resolve."""
+    mock_connector = MagicMock()
+    mock_connector.connect = AsyncMock(return_value=_StubConnection())
+    mock_connector.connect_async = AsyncMock(return_value=_StubConnection())
+
+    if connector_kind == "cloud_sql":
+        with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
+            config = AsyncpgConfig(
+                connection_config={}, driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "p:r:i"}
+            )
+        config._cloud_sql_connector = mock_connector
+        await _AsyncpgCloudSqlConnector(config, None, None, None)()
+        call_kwargs = mock_connector.connect_async.await_args.kwargs
+    else:
+        with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
+            config = AsyncpgConfig(
+                connection_config={},
+                driver_features={
+                    "enable_alloydb": True,
+                    "alloydb_instance_uri": "projects/p/locations/l/clusters/c/instances/i",
+                },
+            )
+        config._alloydb_connector = mock_connector
+        await _AsyncpgAlloydbConnector(config, None, None, None)()
+        call_kwargs = mock_connector.connect.await_args.kwargs
+
+    assert "user" not in call_kwargs
+    assert "password" not in call_kwargs
+    assert "db" not in call_kwargs

@@ -1002,7 +1002,8 @@ async def _connect_with_retry(
     max_backoff_seconds: float,
 ) -> "AsyncpgConnection":
     """Invoke a connector coroutine with bounded backoff on transient failures."""
-    for attempt in range(max_retries + 1):
+    attempt = 0
+    while True:
         try:
             return cast("AsyncpgConnection", await connect_fn(**conn_kwargs))
         except Exception as exc:
@@ -1022,5 +1023,4 @@ async def _connect_with_retry(
             )
         if retry_delay > 0.0:
             await asyncio.sleep(retry_delay)
-    msg = f"Exhausted {connector_name} connector retry attempts"
-    raise ImproperConfigurationError(msg)
+        attempt += 1

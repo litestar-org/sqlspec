@@ -317,6 +317,9 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `cloud_sql_instance` | `str` | - | Cloud SQL instance connection string in `project:region:instance` format. |
     | `cloud_sql_enable_iam_auth` | `bool` | - | Use IAM database authentication with the Cloud SQL Python Connector. |
     | `cloud_sql_ip_type` | `str` | `PRIVATE` | Cloud SQL network path (`PUBLIC`, `PRIVATE`, or `PSC`; defaults to `PRIVATE`). |
+    | `connector_retry_count` | `int` | `3` | Maximum retry attempts on transient Cloud SQL connector errors (defaults to `3`; `0` disables retries). |
+    | `connector_retry_delay` | `float` | `0.5` | Initial delay in seconds before jittered exponential connector retries (defaults to `0.5`). |
+    | `connector_retry_max_delay` | `float` | `5.0` | Upper bound in seconds on the delay between connector retry attempts (defaults to `5.0`). |
     <!-- GENERATED:END config-table:sqlspec.adapters.pymysql.config.PyMysqlDriverFeatures -->
 
 === "MySQL Connector"
