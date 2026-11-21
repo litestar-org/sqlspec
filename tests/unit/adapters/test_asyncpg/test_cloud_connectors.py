@@ -688,25 +688,25 @@ def _build_aiohttp_error(factory: Callable[[Any], BaseException]) -> BaseExcepti
 def test_connector_retry_defaults() -> None:
     """Retry defaults are populated on AsyncpgConfig.driver_features."""
     config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
-    assert config.driver_features["connector_max_retries"] == 3
-    assert config.driver_features["connector_retry_backoff_seconds"] == 0.5
-    assert config.driver_features["connector_retry_max_backoff_seconds"] == 5.0
+    assert config.driver_features["connector_retry_count"] == 3
+    assert config.driver_features["connector_retry_delay"] == 0.5
+    assert config.driver_features["connector_retry_max_delay"] == 5.0
 
 
 @pytest.mark.parametrize(
     ("features", "message"),
     [
-        ({"connector_max_retries": -1}, "connector_max_retries"),
-        ({"connector_max_retries": True}, "connector_max_retries"),
-        ({"connector_max_retries": "3"}, "connector_max_retries"),
-        ({"connector_retry_backoff_seconds": -0.1}, "connector_retry_backoff_seconds"),
-        ({"connector_retry_backoff_seconds": True}, "connector_retry_backoff_seconds"),
-        ({"connector_retry_backoff_seconds": math.nan}, "connector_retry_backoff_seconds"),
-        ({"connector_retry_backoff_seconds": math.inf}, "connector_retry_backoff_seconds"),
-        ({"connector_retry_max_backoff_seconds": -1.0}, "connector_retry_max_backoff_seconds"),
-        ({"connector_retry_max_backoff_seconds": False}, "connector_retry_max_backoff_seconds"),
-        ({"connector_retry_max_backoff_seconds": math.nan}, "connector_retry_max_backoff_seconds"),
-        ({"connector_retry_backoff_seconds": 4.0, "connector_retry_max_backoff_seconds": 2.0}, "greater than or equal"),
+        ({"connector_retry_count": -1}, "connector_retry_count"),
+        ({"connector_retry_count": True}, "connector_retry_count"),
+        ({"connector_retry_count": "3"}, "connector_retry_count"),
+        ({"connector_retry_delay": -0.1}, "connector_retry_delay"),
+        ({"connector_retry_delay": True}, "connector_retry_delay"),
+        ({"connector_retry_delay": math.nan}, "connector_retry_delay"),
+        ({"connector_retry_delay": math.inf}, "connector_retry_delay"),
+        ({"connector_retry_max_delay": -1.0}, "connector_retry_max_delay"),
+        ({"connector_retry_max_delay": False}, "connector_retry_max_delay"),
+        ({"connector_retry_max_delay": math.nan}, "connector_retry_max_delay"),
+        ({"connector_retry_delay": 4.0, "connector_retry_max_delay": 2.0}, "greater than or equal"),
     ],
 )
 def test_connector_retry_config_validation_runs_even_when_disabled(features: dict[str, Any], message: str) -> None:
@@ -1138,9 +1138,9 @@ async def test_connector_retries_transient_error_and_recovers(connector_kind: st
                     driver_features={
                         "enable_cloud_sql": True,
                         "cloud_sql_instance": "p:r:i",
-                        "connector_max_retries": 3,
-                        "connector_retry_backoff_seconds": 0.2,
-                        "connector_retry_max_backoff_seconds": 1.0,
+                        "connector_retry_count": 3,
+                        "connector_retry_delay": 0.2,
+                        "connector_retry_max_delay": 1.0,
                     },
                 )
                 config._cloud_sql_connector = mock_connector
@@ -1155,9 +1155,9 @@ async def test_connector_retries_transient_error_and_recovers(connector_kind: st
                     driver_features={
                         "enable_alloydb": True,
                         "alloydb_instance_uri": "projects/p/locations/l/clusters/c/instances/i",
-                        "connector_max_retries": 3,
-                        "connector_retry_backoff_seconds": 0.2,
-                        "connector_retry_max_backoff_seconds": 1.0,
+                        "connector_retry_count": 3,
+                        "connector_retry_delay": 0.2,
+                        "connector_retry_max_delay": 1.0,
                     },
                 )
                 config._alloydb_connector = mock_connector
@@ -1186,9 +1186,9 @@ async def test_alloydb_connector_exhausts_retries_and_reraises(max_retries: int)
             driver_features={
                 "enable_alloydb": True,
                 "alloydb_instance_uri": "projects/p/locations/l/clusters/c/instances/i",
-                "connector_max_retries": max_retries,
-                "connector_retry_backoff_seconds": 0.0,
-                "connector_retry_max_backoff_seconds": 0.0,
+                "connector_retry_count": max_retries,
+                "connector_retry_delay": 0.0,
+                "connector_retry_max_delay": 0.0,
             },
         )
         config._alloydb_connector = mock_connector
@@ -1216,7 +1216,7 @@ async def test_alloydb_connector_fails_fast_on_permanent_error() -> None:
             driver_features={
                 "enable_alloydb": True,
                 "alloydb_instance_uri": "projects/p/locations/l/clusters/c/instances/i",
-                "connector_max_retries": 3,
+                "connector_retry_count": 3,
             },
         )
         config._alloydb_connector = mock_connector

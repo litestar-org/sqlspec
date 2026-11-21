@@ -169,7 +169,7 @@ if TYPE_CHECKING:
 __all__ = (
     "VERSION_GROUPS_MIN_FOR_MINOR",
     "VERSION_GROUPS_MIN_FOR_PATCH",
-    "AsyncCacheHitExecutor",
+    "AsyncCachedStatementExecutor",
     "AsyncExceptionHandler",
     "CachedQuery",
     "CommonDriverAttributesMixin",
@@ -177,7 +177,7 @@ __all__ = (
     "DataDictionaryMixin",
     "ExecutionResult",
     "StackExecutionObserver",
-    "SyncCacheHitExecutor",
+    "SyncCachedStatementExecutor",
     "SyncExceptionHandler",
     "cache_hit_hooks_unchanged",
     "describe_stack_statement",
@@ -277,13 +277,12 @@ class AsyncExceptionHandler(Protocol):
     def pending_exception(self) -> Exception | None: ...
 
 
-class SyncCacheHitExecutor(Protocol):
-    """Protocol for single-call synchronous cache-hit executors.
+class SyncCachedStatementExecutor(Protocol):
+    """Protocol for callables that run a cached statement on a synchronous driver.
 
-    Invoked positionally by the driver's statement cache fast path with
-    ``(connection, sql, params, cached, statement_config, state)``. Returning
-    ``None`` declines the fast path and falls back to the driver's hook-based
-    cache-hit execution path.
+    Called positionally with ``(connection, sql, params, cached, statement_config, state)``
+    when a statement is found in the driver's statement cache. Returning ``None``
+    hands the call back to the driver's own cached execution methods.
     """
 
     def __call__(
@@ -298,13 +297,13 @@ class SyncCacheHitExecutor(Protocol):
     ) -> SQLResult | None: ...
 
 
-class AsyncCacheHitExecutor(Protocol):
-    """Protocol for single-call asynchronous cache-hit executors.
+class AsyncCachedStatementExecutor(Protocol):
+    """Protocol for callables that run a cached statement on an asynchronous driver.
 
-    Invoked positionally by the driver's statement cache fast path with
-    ``(connection, sql, params, cached, statement_config, state)``. Returning
-    ``None`` (either directly or when awaited) declines the fast path and falls
-    back to the driver's hook-based cache-hit execution path.
+    Called positionally with ``(connection, sql, params, cached, statement_config, state)``
+    when a statement is found in the driver's statement cache. Returning ``None``
+    (directly or when awaited) hands the call back to the driver's own cached
+    execution methods.
     """
 
     def __call__(
@@ -1978,26 +1977,6 @@ class CommonDriverAttributesMixin:
         """Return True when native stack execution is disabled for this driver."""
         return bool(self.driver_features.get("stack_native_disabled", False))
 
-    @property
-    def cache_hit_executor(
-        self,
-    ) -> (
-        Callable[[Any, str, Any, CachedQuery, StatementConfig, Any], SQLResult | Awaitable[SQLResult | None] | None]
-        | None
-    ):
-        """Return the registered single-call cache-hit executor, or ``None`` if unset."""
-        return self._cache_hit_executor
-
-    @property
-    def cache_hit_state(self) -> Any:
-        """Return the state object forwarded to the registered cache-hit executor."""
-        return self._cache_hit_state
-
-    def clear_cache_hit_executor(self) -> None:
-        """Clear any registered single-call cache-hit executor and its state."""
-        self._cache_hit_executor = None
-        self._cache_hit_state = None
-
     def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
         """Resolve the last inserted row identifier for the direct execution path.
 
@@ -2713,20 +2692,28 @@ class CommonDriverAttributesMixin:
         )
         return self._execute_cached_statement(prepared)
 
-    def _register_cache_hit_executor(
-        self, executor: "SyncCacheHitExecutor | AsyncCacheHitExecutor", state: Any, owner: "type[Any] | None"
+    def _set_cached_statement_executor(
+        self,
+        executor: "SyncCachedStatementExecutor | AsyncCachedStatementExecutor | None",
+        state: Any,
+        owner: "type[Any] | None",
     ) -> bool:
-        """Install a cache-hit executor after verifying hook-override safety."""
+        """Install or clear the cached statement executor.
+
+        A mismatched ``owner`` leaves the current executor and state unchanged.
+        """
+        if executor is None:
+            self._cache_hit_executor = None
+            self._cache_hit_state = None
+            return True
         if not callable(executor):
-            msg = "Cache-hit executor must be callable"
+            msg = "Cached statement executor must be callable"
             raise TypeError(msg)
         if owner is not None:
             if not isinstance(owner, type) or not isinstance(self, owner):
-                msg = f"Cache-hit executor owner {owner!r} must be a class matching {type(self).__name__}"
+                msg = f"Cached statement executor owner {owner!r} must be a class matching {type(self).__name__}"
                 raise TypeError(msg)
             if not cache_hit_hooks_unchanged(type(self), owner):
-                self._cache_hit_executor = None
-                self._cache_hit_state = state
                 return False
         self._cache_hit_executor = executor
         self._cache_hit_state = state

@@ -2,7 +2,7 @@
 
 ```python
 from sqlspec.driver import (
-    AsyncCacheHitExecutor,
+    AsyncCachedStatementExecutor,
     AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
     AsyncExceptionHandler,
@@ -11,13 +11,12 @@ from sqlspec.driver import (
     DataDictionaryMixin,
     DriverAdapterProtocol,
     ExecutionResult,
-    SyncCacheHitExecutor,
+    SyncCachedStatementExecutor,
     SyncDataDictionaryBase,
     SyncDriverAdapterBase,
     SyncExceptionHandler,
     SyncRowStream,
     SyncRoutingSession,
-    cache_hit_hooks_unchanged,
 )
 ```
 
@@ -29,7 +28,7 @@ Base driver adapter classes, row streaming iterators, exception handler context 
 | --- | --- | --- |
 | [Synchronous Driver (`SyncDriverAdapterBase`)](sync.md) | `SyncDriverAdapterBase`, `SyncDataDictionaryBase`, `SyncPoolConnectionContext`, `SyncPoolSessionFactory`, `SyncRowStream` | Base synchronous execution, selection, pagination, transaction, and Arrow methods inherited by all synchronous adapters. |
 | [Asynchronous Driver (`AsyncDriverAdapterBase`)](async.md) | `AsyncDriverAdapterBase`, `AsyncDataDictionaryBase`, `AsyncPoolConnectionContext`, `AsyncPoolSessionFactory`, `AsyncRowStream` | Base asynchronous execution, selection, pagination, transaction, and Arrow methods inherited by all asynchronous adapters. |
-| [Shared Driver Types (`common`)](common.md) | `ExecutionResult`, `SyncCacheHitExecutor`, `AsyncCacheHitExecutor`, `cache_hit_hooks_unchanged`, `SyncExceptionHandler`, `AsyncExceptionHandler`, `DataDictionaryMixin`, `CommonDriverAttributesMixin`, `CachedQuery`, `StackExecutionObserver` | Shared execution metadata, cache-hit executor protocols, exception handler protocols, query cache entries, and helper functions. |
+| [Shared Driver Types (`common`)](common.md) | `ExecutionResult`, `SyncCachedStatementExecutor`, `AsyncCachedStatementExecutor`, `SyncExceptionHandler`, `AsyncExceptionHandler`, `DataDictionaryMixin`, `CommonDriverAttributesMixin`, `CachedQuery`, `StackExecutionObserver` | Shared execution metadata, cached statement executor protocols, exception handler protocols, query cache entries, and helper functions. |
 
 ## Routing Session Wrappers
 

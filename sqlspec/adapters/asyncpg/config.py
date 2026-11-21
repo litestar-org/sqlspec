@@ -28,9 +28,9 @@ from sqlspec.adapters.asyncpg._typing import AsyncpgPoolConnectionProxyMeta as P
 from sqlspec.adapters.asyncpg._typing import AsyncpgRawConnection as Connection
 from sqlspec.adapters.asyncpg._typing import AsyncpgRecord as Record
 from sqlspec.adapters.asyncpg.core import (
-    DEFAULT_CONNECTOR_MAX_RETRIES,
-    DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS,
-    DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS,
+    DEFAULT_CONNECTOR_RETRY_COUNT,
+    DEFAULT_CONNECTOR_RETRY_DELAY,
+    DEFAULT_CONNECTOR_RETRY_MAX_DELAY,
     apply_driver_features,
     build_connection_config,
     calculate_connector_backoff_seconds,
@@ -250,11 +250,11 @@ class AsyncpgDriverFeatures(TypedDict):
     """Use IAM database authentication with the AlloyDB Python Connector."""
     alloydb_ip_type: NotRequired[str]
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
-    connector_max_retries: NotRequired[int]
+    connector_retry_count: NotRequired[int]
     """Maximum retry attempts on transient Cloud SQL or AlloyDB connector errors (defaults to ``3``; ``0`` disables retries)."""
-    connector_retry_backoff_seconds: NotRequired[float]
+    connector_retry_delay: NotRequired[float]
     """Initial backoff delay in seconds before jittered exponential connector retries (defaults to ``0.5``)."""
-    connector_retry_max_backoff_seconds: NotRequired[float]
+    connector_retry_max_delay: NotRequired[float]
     """Upper bound in seconds on exponential backoff between connector retry attempts (defaults to ``5.0``)."""
     enable_alloydb_columnar: NotRequired[bool]
     """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
@@ -719,13 +719,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         return self._alloydb_connector
 
     def _connector_retry_settings(self) -> "tuple[int, float, float]":
-        max_retries = int(self.driver_features.get("connector_max_retries", DEFAULT_CONNECTOR_MAX_RETRIES))
-        base_backoff = float(
-            self.driver_features.get("connector_retry_backoff_seconds", DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS)
-        )
-        max_backoff = float(
-            self.driver_features.get("connector_retry_max_backoff_seconds", DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS)
-        )
+        max_retries = int(self.driver_features.get("connector_retry_count", DEFAULT_CONNECTOR_RETRY_COUNT))
+        base_backoff = float(self.driver_features.get("connector_retry_delay", DEFAULT_CONNECTOR_RETRY_DELAY))
+        max_backoff = float(self.driver_features.get("connector_retry_max_delay", DEFAULT_CONNECTOR_RETRY_MAX_DELAY))
         return max_retries, base_backoff, max_backoff
 
     def _validate_connector_config(self) -> None:
@@ -735,15 +731,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             ImproperConfigurationError: If configuration is invalid.
             MissingDependencyError: If required connector packages are not installed.
         """
-        raw_max_retries = self.driver_features.get("connector_max_retries", DEFAULT_CONNECTOR_MAX_RETRIES)
+        raw_max_retries = self.driver_features.get("connector_retry_count", DEFAULT_CONNECTOR_RETRY_COUNT)
         if isinstance(raw_max_retries, bool) or not isinstance(raw_max_retries, int) or raw_max_retries < 0:
-            msg = "connector_max_retries must be a non-negative integer"
+            msg = "connector_retry_count must be a non-negative integer"
             raise ImproperConfigurationError(msg)
 
         backoff_values: list[float] = []
         for key, default in (
-            ("connector_retry_backoff_seconds", DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS),
-            ("connector_retry_max_backoff_seconds", DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS),
+            ("connector_retry_delay", DEFAULT_CONNECTOR_RETRY_DELAY),
+            ("connector_retry_max_delay", DEFAULT_CONNECTOR_RETRY_MAX_DELAY),
         ):
             raw_value = self.driver_features.get(key, default)
             if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
@@ -756,7 +752,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             backoff_values.append(value)
 
         if backoff_values[1] < backoff_values[0]:
-            msg = "connector_retry_max_backoff_seconds must be greater than or equal to connector_retry_backoff_seconds"
+            msg = "connector_retry_max_delay must be greater than or equal to connector_retry_delay"
             raise ImproperConfigurationError(msg)
 
         enable_cloud_sql = self.driver_features.get("enable_cloud_sql", False)

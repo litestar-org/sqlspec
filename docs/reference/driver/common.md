@@ -2,7 +2,7 @@
 
 ```python
 from sqlspec.driver import (
-    AsyncCacheHitExecutor,
+    AsyncCachedStatementExecutor,
     AsyncExceptionHandler,
     BaseAsyncExceptionHandler,
     BaseSyncExceptionHandler,
@@ -12,9 +12,8 @@ from sqlspec.driver import (
     DataDictionaryMixin,
     ExecutionResult,
     StackExecutionObserver,
-    SyncCacheHitExecutor,
+    SyncCachedStatementExecutor,
     SyncExceptionHandler,
-    cache_hit_hooks_unchanged,
     convert_to_dialect,
     rows_to_dicts,
     validate_savepoint_name,
@@ -40,19 +39,15 @@ Shared driver execution results, exception handler protocols and base classes, m
       heading_level: 3
       members: false
 
-::: sqlspec.driver._common.SyncCacheHitExecutor
+::: sqlspec.driver._common.SyncCachedStatementExecutor
     options:
       heading_level: 3
       members: false
 
-::: sqlspec.driver._common.AsyncCacheHitExecutor
+::: sqlspec.driver._common.AsyncCachedStatementExecutor
     options:
       heading_level: 3
       members: false
-
-::: sqlspec.driver._common.cache_hit_hooks_unchanged
-    options:
-      heading_level: 4
 
 ## Exception Handlers
 
@@ -86,9 +81,6 @@ Shared driver execution results, exception handler protocols and base classes, m
         - compile_statement
         - build_statement_result
         - create_execution_result
-        - cache_hit_executor
-        - cache_hit_state
-        - clear_cache_hit_executor
         - resolve_last_inserted_id
 
 ::: sqlspec.driver._common.DataDictionaryMixin

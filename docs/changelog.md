@@ -7,12 +7,12 @@ important operational fixes.
 
 ## Recent Updates
 
-### v0.73.0 - Public cache-hit executor API, cached insert row IDs, and AsyncPG cloud connector retries
+### v0.73.0 - Cached statement executors for external adapters, cached insert row IDs, and AsyncPG cloud connector retries
 
 **Added:**
 
-* Export `SyncCacheHitExecutor`, `AsyncCacheHitExecutor`, and `cache_hit_hooks_unchanged` from `sqlspec.driver`, add `cache_hit_executor`, `cache_hit_state`, `clear_cache_hit_executor()`, and `resolve_last_inserted_id(cursor)` on `CommonDriverAttributesMixin`, and expose typed `register_cache_hit_executor()` methods on `SyncDriverAdapterBase` and `AsyncDriverAdapterBase` so external adapters can register single-call cache-hit executors without assigning private attributes. ([#927](https://github.com/litestar-org/sqlspec/issues/927))
-* Add `connector_max_retries` (`3`), `connector_retry_backoff_seconds` (`0.5`), and `connector_retry_max_backoff_seconds` (`5.0`) configuration keys to `AsyncpgDriverFeatures` with eager validation and `apply_driver_features` defaults, plus compiled `is_transient_connector_error()` and `calculate_connector_backoff_seconds()` helpers in `sqlspec.adapters.asyncpg.core`. ([#929](https://github.com/litestar-org/sqlspec/issues/929))
+* Add `set_cached_statement_executor()` on `SyncDriverAdapterBase` and `AsyncDriverAdapterBase`, with the `SyncCachedStatementExecutor` and `AsyncCachedStatementExecutor` protocols exported from `sqlspec.driver`, so external adapters can run cached statements through one compiled function without assigning private attributes. Add the `resolve_last_inserted_id(cursor)` method on `CommonDriverAttributesMixin` for adapters with their own row-identifier rules. ([#927](https://github.com/litestar-org/sqlspec/issues/927))
+* Add `connector_retry_count` (`3`), `connector_retry_delay` (`0.5`), and `connector_retry_max_delay` (`5.0`) configuration keys to `AsyncpgDriverFeatures` with eager validation and `apply_driver_features` defaults, plus compiled `is_transient_connector_error()` and `calculate_connector_backoff_seconds()` helpers in `sqlspec.adapters.asyncpg.core`. ([#929](https://github.com/litestar-org/sqlspec/issues/929))
 
 **Changed:**
 

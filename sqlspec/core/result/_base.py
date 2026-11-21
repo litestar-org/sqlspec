@@ -522,7 +522,7 @@ class SQLResult(StatementResult):
     ) -> "SQLResult":
         """Construct a fast-path SELECT result with deferred SQL statement materialization.
 
-        Intended for cache-hit executors registered via ``register_cache_hit_executor``
+        Intended for executors installed with ``set_cached_statement_executor``
         and internal driver fast paths that build row-returning results without eagerly
         constructing an ``SQL`` wrapper object.
 

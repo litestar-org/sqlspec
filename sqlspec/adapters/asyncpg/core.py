@@ -55,9 +55,9 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import SQL, StatementConfig
 
 __all__ = (
-    "DEFAULT_CONNECTOR_MAX_RETRIES",
-    "DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS",
-    "DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS",
+    "DEFAULT_CONNECTOR_RETRY_COUNT",
+    "DEFAULT_CONNECTOR_RETRY_DELAY",
+    "DEFAULT_CONNECTOR_RETRY_MAX_DELAY",
     "AsyncpgStreamSource",
     "NormalizedStackOperation",
     "apply_driver_features",
@@ -88,9 +88,9 @@ _PGVECTOR_MISSING_LOGGED = False
 _JSONB_BINARY_VERSION = b"\x01"
 _SYSTEM_RANDOM: Final[secrets.SystemRandom] = secrets.SystemRandom()
 _MAX_CONNECTOR_ERROR_DEPTH: Final[int] = 8
-DEFAULT_CONNECTOR_MAX_RETRIES: Final[int] = 3
-DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS: Final[float] = 0.5
-DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS: Final[float] = 5.0
+DEFAULT_CONNECTOR_RETRY_COUNT: Final[int] = 3
+DEFAULT_CONNECTOR_RETRY_DELAY: Final[float] = 0.5
+DEFAULT_CONNECTOR_RETRY_MAX_DELAY: Final[float] = 5.0
 _TRANSIENT_HTTP_STATUS_CODES: Final[frozenset[int]] = frozenset({429, 500, 502, 503, 504})
 _TRANSIENT_GRPC_STATUS_NAMES: Final[frozenset[str]] = frozenset({
     "ABORTED",
@@ -348,9 +348,9 @@ def apply_driver_features(
     processed_features.setdefault("enable_pg_textsearch", True)
     processed_features.setdefault("enable_cloud_sql", False)
     processed_features.setdefault("enable_alloydb", False)
-    processed_features.setdefault("connector_max_retries", DEFAULT_CONNECTOR_MAX_RETRIES)
-    processed_features.setdefault("connector_retry_backoff_seconds", DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS)
-    processed_features.setdefault("connector_retry_max_backoff_seconds", DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS)
+    processed_features.setdefault("connector_retry_count", DEFAULT_CONNECTOR_RETRY_COUNT)
+    processed_features.setdefault("connector_retry_delay", DEFAULT_CONNECTOR_RETRY_DELAY)
+    processed_features.setdefault("connector_retry_max_delay", DEFAULT_CONNECTOR_RETRY_MAX_DELAY)
     processed_features.setdefault("enable_events", True)
     processed_features.setdefault("events_backend", "notify")
     raw_pooler_mode = processed_features.get("pooler_mode")

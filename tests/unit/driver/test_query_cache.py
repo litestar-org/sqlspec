@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlglot import parse_one
 
+import sqlspec.driver as driver_package
 from sqlspec import ObservabilityConfig
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -47,15 +48,19 @@ from sqlspec.core.parameters._declared import ParameterDeclaration
 from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
 from sqlspec.core.result import DMLResult, SQLResult
 from sqlspec.driver import (
-    AsyncCacheHitExecutor,
+    AsyncCachedStatementExecutor,
     BaseAsyncExceptionHandler,
     BaseSyncExceptionHandler,
     ExecutionResult,
-    SyncCacheHitExecutor,
-    cache_hit_hooks_unchanged,
+    SyncCachedStatementExecutor,
 )
 from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import _callable_cache_key, _check_declared_parameters, run_cached_execution
+from sqlspec.driver._common import (
+    _callable_cache_key,
+    _check_declared_parameters,
+    cache_hit_hooks_unchanged,
+    run_cached_execution,
+)
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.observability import LoggingConfig, ObservabilityRuntime, StatementEvent
@@ -2380,11 +2385,11 @@ class _ExternalAsyncDriver(AsyncDriverAdapterBase):
         return False
 
 
-def test_public_cache_hit_driver_and_core_exports() -> None:
-    """Public driver and core modules expose cache-hit registration protocols and helpers."""
-    assert SyncCacheHitExecutor is not None
-    assert AsyncCacheHitExecutor is not None
-    assert callable(cache_hit_hooks_unchanged)
+def test_cached_statement_executor_driver_and_core_exports() -> None:
+    """Driver and core modules expose the executor protocols and result builders."""
+    assert SyncCachedStatementExecutor is not None
+    assert AsyncCachedStatementExecutor is not None
+    assert "cache_hit_hooks_unchanged" not in driver_package.__all__
     assert callable(SQLResult.create_cached_select)
     assert DMLResult("INSERT", 1, 7).last_inserted_id == 7
     assert cache_hit_hooks_unchanged(int, str) is False
@@ -2555,7 +2560,7 @@ def test_sync_end_to_end_cached_insert_matches_uncached_last_inserted_id() -> No
     assert isinstance(second, DMLResult)
 
 
-def test_register_sync_cache_hit_executor_public_api() -> None:
+def test_set_sync_cached_statement_executor() -> None:
     """External sync adapters can register, inspect, run, decline, observe, and clear executors."""
     calls: list[tuple[Any, str, Any, Any]] = []
 
@@ -2575,11 +2580,11 @@ def test_register_sync_cache_hit_executor_public_api() -> None:
     state_marker = {"tag": "sync-state"}
     cursor = _ExternalSyncCursor(rowcount=1, lastrowid=55, rows=[(3,)])
     driver = _ExternalSyncDriver(connection, cursor=cursor)
-    registered = driver.register_cache_hit_executor(custom_executor, state=state_marker, owner=_ExternalSyncDriver)
+    registered = driver.set_cached_statement_executor(custom_executor, state=state_marker, owner=_ExternalSyncDriver)
 
     assert registered is True
-    assert driver.cache_hit_executor is custom_executor
-    assert driver.cache_hit_state is state_marker
+    assert driver._cache_hit_executor is custom_executor
+    assert driver._cache_hit_state is state_marker
 
     driver.execute("SELECT ? AS v", ("warm",))
     hit = driver.execute("SELECT ? AS v", ("fast",))
@@ -2609,13 +2614,13 @@ def test_register_sync_cache_hit_executor_public_api() -> None:
     assert len(calls) == 3
     assert len(observed_events) == 1
 
-    driver.clear_cache_hit_executor()
-    assert driver.cache_hit_executor is None
-    assert driver.cache_hit_state is None
+    assert driver.set_cached_statement_executor(None) is True
+    assert driver._cache_hit_executor is None
+    assert driver._cache_hit_state is None
 
 
 @pytest.mark.anyio
-async def test_register_async_cache_hit_executor_public_api() -> None:
+async def test_set_async_cached_statement_executor() -> None:
     """External async adapters can register single-call executors, handle declines, and route observability."""
     calls: list[tuple[str, Any, Any]] = []
 
@@ -2633,11 +2638,11 @@ async def test_register_async_cache_hit_executor_public_api() -> None:
     state_marker = ("async-state",)
     cursor = _ExternalAsyncCursor(rowcount=1, lastrowid=1, rows=[(4,)])
     driver = _ExternalAsyncDriver(object(), cursor=cursor)
-    registered = driver.register_cache_hit_executor(custom_executor, state=state_marker, owner=_ExternalAsyncDriver)
+    registered = driver.set_cached_statement_executor(custom_executor, state=state_marker, owner=_ExternalAsyncDriver)
 
     assert registered is True
-    assert driver.cache_hit_executor is custom_executor
-    assert driver.cache_hit_state is state_marker
+    assert driver._cache_hit_executor is custom_executor
+    assert driver._cache_hit_state is state_marker
 
     await driver.execute("SELECT ? AS v", ("warm",))
     hit = await driver.execute("SELECT ? AS v", ("fast",))
@@ -2673,8 +2678,8 @@ async def test_register_async_cache_hit_executor_public_api() -> None:
         "_execute_cache_hit_with_cursor",
     ],
 )
-def test_register_cache_hit_executor_respects_subclass_hook_overrides(hook_name: str) -> None:
-    """Subclass overriding any watched cache-hit hook causes owner-checked registration to decline."""
+def test_set_cached_statement_executor_respects_subclass_hook_overrides(hook_name: str) -> None:
+    """A subclass overriding a watched method keeps its executor and state when the owner check fails."""
 
     def dummy_executor(*_args: Any) -> SQLResult | None:
         return None
@@ -2685,35 +2690,42 @@ def test_register_cache_hit_executor_respects_subclass_hook_overrides(hook_name:
     sub_cls = type(f"Sub_{hook_name}", (_ExternalSyncDriver,), {hook_name: dummy_override})
     driver = sub_cls(object())
 
-    assert driver.register_cache_hit_executor(dummy_executor, state="kept", owner=_ExternalSyncDriver) is False
-    assert driver.cache_hit_executor is None
-    assert driver.cache_hit_state == "kept"
+    assert driver.set_cached_statement_executor(dummy_executor, state="ignored", owner=_ExternalSyncDriver) is False
+    assert driver._cache_hit_executor is None
+    assert driver._cache_hit_state is None
 
-    assert driver.register_cache_hit_executor(dummy_executor, state="own", owner=sub_cls) is True
-    assert driver.cache_hit_executor is dummy_executor
-    assert driver.cache_hit_state == "own"
+    assert driver.set_cached_statement_executor(dummy_executor, state="own", owner=sub_cls) is True
+    assert driver._cache_hit_executor is dummy_executor
+    assert driver._cache_hit_state == "own"
 
-    driver.clear_cache_hit_executor()
-    assert driver.register_cache_hit_executor(dummy_executor, state="direct") is True
-    assert driver.cache_hit_executor is dummy_executor
-    assert driver.cache_hit_state == "direct"
+    assert driver.set_cached_statement_executor(dummy_executor, state="ignored", owner=_ExternalSyncDriver) is False
+    assert driver._cache_hit_executor is dummy_executor
+    assert driver._cache_hit_state == "own"
+
+    assert driver.set_cached_statement_executor(None) is True
+    assert driver._cache_hit_executor is None
+    assert driver._cache_hit_state is None
+
+    assert driver.set_cached_statement_executor(dummy_executor, state="direct") is True
+    assert driver._cache_hit_executor is dummy_executor
+    assert driver._cache_hit_state == "direct"
 
 
-def test_register_cache_hit_executor_validates_arguments() -> None:
+def test_set_cached_statement_executor_validates_arguments() -> None:
     """Non-callable executors or mismatched owner classes raise TypeError."""
     driver = _ExternalSyncDriver(object())
 
     with pytest.raises(TypeError, match="callable"):
-        driver.register_cache_hit_executor(cast("Any", "not_callable"))
+        driver.set_cached_statement_executor(cast("Any", "not_callable"))
 
     def valid_executor(*_args: Any) -> SQLResult | None:
         return None
 
     with pytest.raises(TypeError, match="owner"):
-        driver.register_cache_hit_executor(valid_executor, owner=cast("Any", SqliteDriver))
+        driver.set_cached_statement_executor(valid_executor, owner=cast("Any", SqliteDriver))
 
     with pytest.raises(TypeError, match="owner"):
-        driver.register_cache_hit_executor(valid_executor, owner=cast("Any", "not_a_class"))
+        driver.set_cached_statement_executor(valid_executor, owner=cast("Any", "not_a_class"))
 
 
 def test_pymssql_and_sybase_resolve_last_inserted_id_returns_none() -> None:

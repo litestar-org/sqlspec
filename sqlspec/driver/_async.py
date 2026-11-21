@@ -38,7 +38,7 @@ from sqlspec.data_dictionary._types import (
 )
 from sqlspec.driver._common import (
     _CLOSED_CONNECTION,
-    AsyncCacheHitExecutor,
+    AsyncCachedStatementExecutor,
     AsyncExceptionHandler,
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -492,50 +492,47 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
 
-    def register_cache_hit_executor(
+    def set_cached_statement_executor(
         self,
-        executor: "AsyncCacheHitExecutor",
+        executor: "AsyncCachedStatementExecutor | None",
         *,
         state: Any = None,
         owner: "type[AsyncDriverAdapterBase] | None" = None,
     ) -> bool:
-        """Register a single-call cache-hit executor for asynchronous queries.
+        """Set the callable that runs statements found in the statement cache.
 
-        When ``owner`` is supplied, the executor is only activated if ``type(self)``
-        inherits every cache-hit hook from ``owner`` unchanged (via
-        :func:`cache_hit_hooks_unchanged`). Subclasses overriding ``with_cursor``,
-        ``collect_rows``, ``resolve_rowcount``, ``resolve_last_inserted_id``,
-        ``handle_database_exceptions``, ``build_cached_select_result``,
-        ``_execute_cache_hit``, or ``_execute_cache_hit_with_cursor`` fall back
-        to the hook-based method path unless they register their own executor with
-        ``owner=Subclass`` or omit ``owner`` for direct per-instance registration.
+        An adapter calls this from ``__init__`` to run cached statements through
+        one compiled function instead of the driver's cursor, row, and exception
+        methods. Passing ``None`` removes the executor and its state.
 
-        When declined because a subclass overrode a watched hook on ``owner``,
-        any previously registered executor is cleared to ``None`` and ``state``
-        is stored on :attr:`cache_hit_state`.
+        When ``owner`` is given, the executor is installed only if ``type(self)``
+        inherits ``with_cursor``, ``collect_rows``, ``resolve_rowcount``,
+        ``resolve_last_inserted_id``, ``handle_database_exceptions``,
+        ``build_cached_select_result``, ``_execute_cache_hit``, and
+        ``_execute_cache_hit_with_cursor`` unchanged from ``owner``. A subclass
+        that overrides any of them keeps its current executor and state, and its
+        overrides keep running. Omit ``owner`` to install the executor regardless.
 
-        Active observability hooks, observers, and spans automatically bypass the
-        registered executor and route through the observed cache-hit path.
+        Statements run through the driver's observed path while observers or
+        spans are active, so the executor is skipped for those calls.
 
         Args:
-            executor: Single-call callable matching :class:`AsyncCacheHitExecutor`.
-                Returning ``None`` (directly or when awaited) declines the fast
-                path for that call and falls back to the driver's hook-based
-                cache-hit execution path.
-            state: Optional driver-local state forwarded as the sixth positional
-                argument to ``executor``.
-            owner: Driver class the executor was written for. Omit (``None``) to
-                install the callable unconditionally on this instance.
+            executor: Callable matching :class:`AsyncCachedStatementExecutor`, or
+                ``None`` to remove the current one. An executor that returns
+                ``None`` (directly or when awaited) hands that call back to the
+                driver's own methods.
+            state: Object passed to ``executor`` as its sixth positional argument.
+            owner: Driver class the executor was written for.
 
         Returns:
-            ``True`` when the executor was activated; ``False`` when declined
-            because a subclass overrode a cache-hit hook on ``owner``.
+            ``True`` when the executor was installed or removed; ``False`` when
+            a subclass of ``owner`` overrides one of the listed methods.
 
         Raises:
             TypeError: If ``executor`` is not callable or ``owner`` is not a class
                 matching ``self``.
         """
-        return self._register_cache_hit_executor(executor, state, owner)
+        return self._set_cached_statement_executor(executor, state, owner)
 
     @abstractmethod
     async def begin(self) -> None:
