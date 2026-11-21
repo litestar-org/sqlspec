@@ -467,6 +467,11 @@ class SybaseDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "SybaseRawCursor") -> int:
         return resolve_rowcount(cursor)
 
+    def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
+        """Return ``None`` to stay aligned with ``dispatch_execute`` and compiled cache hits."""
+        _ = cursor
+        return None
+
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":

@@ -16,13 +16,16 @@ if TYPE_CHECKING:
         AsyncPoolSessionFactory,
     )
     from sqlspec.driver._common import (
+        AsyncCacheHitExecutor,
         AsyncExceptionHandler,
         CommonDriverAttributesMixin,
         DataDictionaryDialectMixin,
         DataDictionaryMixin,
         ExecutionResult,
         StackExecutionObserver,
+        SyncCacheHitExecutor,
         SyncExceptionHandler,
+        cache_hit_hooks_unchanged,
         describe_stack_statement,
         hash_stack_operations,
         parameter_value_needs_processing,
@@ -47,6 +50,7 @@ if TYPE_CHECKING:
     DriverAdapterProtocol: TypeAlias = SyncDriverAdapterBase | AsyncDriverAdapterBase
 
 __all__ = (
+    "AsyncCacheHitExecutor",
     "AsyncDataDictionaryBase",
     "AsyncDriverAdapterBase",
     "AsyncDriverSessionContext",
@@ -66,6 +70,7 @@ __all__ = (
     "DriverAdapterProtocol",
     "ExecutionResult",
     "StackExecutionObserver",
+    "SyncCacheHitExecutor",
     "SyncDataDictionaryBase",
     "SyncDriverAdapterBase",
     "SyncDriverSessionContext",
@@ -75,6 +80,7 @@ __all__ = (
     "SyncRoutingSession",
     "SyncRowStream",
     "SyncTenantLease",
+    "cache_hit_hooks_unchanged",
     "convert_to_dialect",
     "describe_stack_statement",
     "hash_stack_operations",
@@ -87,6 +93,7 @@ __all__ = (
 )
 
 _EXPORTS: dict[str, tuple[str, str]] = {
+    "AsyncCacheHitExecutor": ("sqlspec.driver._common", "AsyncCacheHitExecutor"),
     "AsyncDataDictionaryBase": ("sqlspec.driver._async", "AsyncDataDictionaryBase"),
     "AsyncDriverAdapterBase": ("sqlspec.driver._async", "AsyncDriverAdapterBase"),
     "AsyncDriverSessionContext": ("sqlspec.driver._session", "AsyncDriverSessionContext"),
@@ -105,6 +112,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "DeferredAsyncSession": ("sqlspec.driver._deferred", "DeferredAsyncSession"),
     "ExecutionResult": ("sqlspec.driver._common", "ExecutionResult"),
     "StackExecutionObserver": ("sqlspec.driver._common", "StackExecutionObserver"),
+    "SyncCacheHitExecutor": ("sqlspec.driver._common", "SyncCacheHitExecutor"),
     "SyncDataDictionaryBase": ("sqlspec.driver._sync", "SyncDataDictionaryBase"),
     "SyncDriverAdapterBase": ("sqlspec.driver._sync", "SyncDriverAdapterBase"),
     "SyncDriverSessionContext": ("sqlspec.driver._session", "SyncDriverSessionContext"),
@@ -114,6 +122,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "SyncRoutingSession": ("sqlspec.driver._routing", "SyncRoutingSession"),
     "SyncRowStream": ("sqlspec.driver._stream", "SyncRowStream"),
     "SyncTenantLease": ("sqlspec.driver._tenant", "SyncTenantLease"),
+    "cache_hit_hooks_unchanged": ("sqlspec.driver._common", "cache_hit_hooks_unchanged"),
     "convert_to_dialect": ("sqlspec.driver._sql_helpers", "convert_to_dialect"),
     "describe_stack_statement": ("sqlspec.driver._common", "describe_stack_statement"),
     "hash_stack_operations": ("sqlspec.driver._common", "hash_stack_operations"),

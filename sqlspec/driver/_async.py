@@ -38,6 +38,7 @@ from sqlspec.data_dictionary._types import (
 )
 from sqlspec.driver._common import (
     _CLOSED_CONNECTION,
+    AsyncCacheHitExecutor,
     AsyncExceptionHandler,
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -490,6 +491,51 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
+
+    def register_cache_hit_executor(
+        self,
+        executor: "AsyncCacheHitExecutor",
+        *,
+        state: Any = None,
+        owner: "type[AsyncDriverAdapterBase] | None" = None,
+    ) -> bool:
+        """Register a single-call cache-hit executor for asynchronous queries.
+
+        When ``owner`` is supplied, the executor is only activated if ``type(self)``
+        inherits every cache-hit hook from ``owner`` unchanged (via
+        :func:`cache_hit_hooks_unchanged`). Subclasses overriding ``with_cursor``,
+        ``collect_rows``, ``resolve_rowcount``, ``resolve_last_inserted_id``,
+        ``handle_database_exceptions``, ``build_cached_select_result``,
+        ``_execute_cache_hit``, or ``_execute_cache_hit_with_cursor`` fall back
+        to the hook-based method path unless they register their own executor with
+        ``owner=Subclass`` or omit ``owner`` for direct per-instance registration.
+
+        When declined because a subclass overrode a watched hook on ``owner``,
+        any previously registered executor is cleared to ``None`` and ``state``
+        is stored on :attr:`cache_hit_state`.
+
+        Active observability hooks, observers, and spans automatically bypass the
+        registered executor and route through the observed cache-hit path.
+
+        Args:
+            executor: Single-call callable matching :class:`AsyncCacheHitExecutor`.
+                Returning ``None`` (directly or when awaited) declines the fast
+                path for that call and falls back to the driver's hook-based
+                cache-hit execution path.
+            state: Optional driver-local state forwarded as the sixth positional
+                argument to ``executor``.
+            owner: Driver class the executor was written for. Omit (``None``) to
+                install the callable unconditionally on this instance.
+
+        Returns:
+            ``True`` when the executor was activated; ``False`` when declined
+            because a subclass overrode a cache-hit hook on ``owner``.
+
+        Raises:
+            TypeError: If ``executor`` is not callable or ``owner`` is not a class
+                matching ``self``.
+        """
+        return self._register_cache_hit_executor(executor, state, owner)
 
     @abstractmethod
     async def begin(self) -> None:
@@ -2141,7 +2187,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         )
                     else:
                         affected_rows = self.resolve_rowcount(cursor)
-                        result = DMLResult(cached.operation_type, affected_rows)
+                        last_inserted_id = (
+                            self.resolve_last_inserted_id(cursor)
+                            if cached.operation_type == "INSERT" and affected_rows > 0
+                            else None
+                        )
+                        result = DMLResult(cached.operation_type, affected_rows, last_inserted_id)
                 else:
                     direct_statement = self._cached_statement(
                         sql, params, cached, params, params_are_simple=True, compiled_sql=wire_sql
@@ -2156,7 +2207,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                             and execution_result.rowcount_override >= 0
                             else 0
                         )
-                        result = DMLResult(cached.operation_type, affected_rows)
+                        last_inserted_id = (
+                            execution_result.last_inserted_id
+                            if cached.operation_type == "INSERT" and affected_rows > 0
+                            else None
+                        )
+                        result = DMLResult(cached.operation_type, affected_rows, last_inserted_id)
             except BaseException as caught:
                 cursor_error = caught
             await exit_async_context(cursor_context, cursor_error)

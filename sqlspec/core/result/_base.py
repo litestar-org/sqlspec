@@ -520,7 +520,27 @@ class SQLResult(StatementResult):
         row_format: RowFormat = "dict",
         last_inserted_id: int | str | None = None,
     ) -> "SQLResult":
-        """Construct a fast-path SELECT result with deferred SQL statement materialization."""
+        """Construct a fast-path SELECT result with deferred SQL statement materialization.
+
+        Intended for cache-hit executors registered via ``register_cache_hit_executor``
+        and internal driver fast paths that build row-returning results without eagerly
+        constructing an ``SQL`` wrapper object.
+
+        Args:
+            sql: Raw SQL string passed by the caller.
+            config: Active :class:`~sqlspec.core.StatementConfig` used to rebuild the statement lazily.
+            cached_state: Compiled :class:`~sqlspec.core.ProcessedState` from the cache entry.
+            compiled_sql: Wire SQL string sent to the database driver.
+            params: Parameters bound for this execution.
+            data: Fetched row sequence in the format specified by ``row_format``.
+            column_names: Ordered result column names.
+            rows_affected: Number of returned rows.
+            row_format: Storage shape of each row inside ``data`` (``"dict"``, ``"tuple"``, or ``"record"``).
+            last_inserted_id: Optional last inserted row identifier (for ``INSERT ... RETURNING``).
+
+        Returns:
+            An :class:`SQLResult` exposing the fetched rows with lazy ``.statement`` access.
+        """
         return CachedSelectResult(
             sql=sql,
             config=config,

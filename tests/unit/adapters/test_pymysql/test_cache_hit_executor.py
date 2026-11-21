@@ -157,3 +157,38 @@ def test_execute_cache_hit_matches_driver_cache_hit_method() -> None:
     assert result.column_names == expected.column_names
     assert result.rows_affected == expected.rows_affected
     assert cursor.execute.call_args_list[0] == cursor.execute.call_args_list[1]
+
+
+@pytest.mark.parametrize(
+    ("operation", "sql", "rowcount", "lastrowid", "expected_rows_affected", "expected_last_id"),
+    [
+        ("INSERT", "INSERT INTO items VALUES (%s)", 1, 42, 1, 42),
+        ("INSERT", "INSERT INTO items VALUES (%s)", 2, 0, 2, 0),
+        ("INSERT", "INSERT INTO items VALUES (%s)", 0, 42, 0, None),
+        ("INSERT", "INSERT INTO items VALUES (%s)", 1, True, 1, None),
+        ("INSERT", "INSERT INTO items VALUES (%s)", True, 42, 0, None),
+        ("UPDATE", "UPDATE items SET active = %s", 1, 42, 1, None),
+        ("DELETE", "DELETE FROM items WHERE active = %s", 1, 42, 1, None),
+    ],
+    ids=["insert-rowid", "insert-zero-id", "insert-no-rows", "insert-bool-id", "insert-bool-rc", "update", "delete"],
+)
+def test_execute_cache_hit_preserves_insert_last_inserted_id(
+    operation: str, sql: str, rowcount: Any, lastrowid: Any, expected_rows_affected: int, expected_last_id: Any
+) -> None:
+    """Cached DML populates last_inserted_id only for non-bool successful INSERT operations."""
+    cursor = MagicMock()
+    cursor.rowcount = rowcount
+    cursor.lastrowid = lastrowid
+    connection = _connection(cursor)
+    cached = _cached(sql, operation, returns_rows=False, param_count=1)
+
+    result = execute_cache_hit(connection, sql, (1,), cached, default_statement_config, STATE)
+
+    assert result is not None
+    assert type(result.rows_affected) is int
+    assert result.rows_affected == expected_rows_affected
+    assert (
+        result.last_inserted_id is expected_last_id
+        if expected_last_id is None
+        else result.last_inserted_id == expected_last_id
+    )

@@ -452,7 +452,7 @@ def resolve_rowcount(cursor: Any) -> int:
     if not has_rowcount(cursor):
         return 0
     rowcount = cursor.rowcount
-    if isinstance(rowcount, int) and rowcount >= 0:
+    if isinstance(rowcount, int) and not isinstance(rowcount, bool) and rowcount >= 0:
         return rowcount
     return 0
 
@@ -474,12 +474,12 @@ def normalize_lastrowid(cursor: Any) -> int | None:
     if not has_rowcount(cursor):
         return None
     rowcount = cursor.rowcount
-    if not isinstance(rowcount, int) or rowcount <= 0:
+    if isinstance(rowcount, bool) or not isinstance(rowcount, int) or rowcount <= 0:
         return None
     if not has_lastrowid(cursor):
         return None
     last_id = cursor.lastrowid
-    return last_id if isinstance(last_id, int) else None
+    return last_id if isinstance(last_id, int) and not isinstance(last_id, bool) else None
 
 
 def execute_cache_hit(
@@ -522,7 +522,11 @@ def execute_cache_hit(
             else:
                 cursor.execute(compiled_sql)
             if not cached.operation_profile.returns_rows:
-                return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+                affected_rows = resolve_rowcount(cursor)
+                last_inserted_id = (
+                    normalize_lastrowid(cursor) if cached.operation_type == "INSERT" and affected_rows > 0 else None
+                )
+                return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
             fetched_data = cursor.fetchall()
             rows, column_names, _row_format = collect_rows(
                 fetched_data, resolve_row_plan(cursor.description or None, json_type_codes), deserializer, logger=logger

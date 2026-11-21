@@ -35,6 +35,10 @@ Base asynchronous driver adapter class inherited by all asynchronous SQLSpec dat
         - commit
         - rollback
         - transaction
+        - register_cache_hit_executor
+        - resolve_rowcount
+
+See [`CommonDriverAttributesMixin`](common.md) for inherited cache-hit helpers (`cache_hit_executor`, `cache_hit_state`, `clear_cache_hit_executor`, and `resolve_last_inserted_id`).
 
 ## Asynchronous Data Dictionary & Streaming
 
