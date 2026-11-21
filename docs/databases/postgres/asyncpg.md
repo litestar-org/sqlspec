@@ -112,6 +112,9 @@ Pass `AsyncpgDriverFeatures` keys inside `driver_features={...}` on `AsyncpgConf
 | `alloydb_instance_uri` | `str` | - | AlloyDB instance resource URI (`projects/.../locations/.../clusters/.../instances/...`). |
 | `enable_alloydb_iam_auth` | `bool` | - | Use IAM database authentication with the AlloyDB Python Connector. |
 | `alloydb_ip_type` | `str` | `PRIVATE` | AlloyDB network path (`PUBLIC`, `PRIVATE`, or `PSC`; defaults to `PRIVATE`). |
+| `connector_max_retries` | `int` | `3` | Maximum retry attempts on transient Cloud SQL or AlloyDB connector errors (defaults to `3`; `0` disables retries). |
+| `connector_retry_backoff_seconds` | `float` | `0.5` | Initial backoff delay in seconds before jittered exponential connector retries (defaults to `0.5`). |
+| `connector_retry_max_backoff_seconds` | `float` | `5.0` | Upper bound in seconds on exponential backoff between connector retry attempts (defaults to `5.0`). |
 | `enable_alloydb_columnar` | `bool` | - | Enable `google_columnar_engine.enable_columnar_scan=on` at session startup or per transaction. |
 | `enable_pgcopy_binary` | `bool` | - | Enable binary COPY format for Arrow table ingestion. |
 | `enable_events` | `bool` | `True` | Enable SQLSpec event channel pub/sub support (defaults to `True` when `events` is configured). |

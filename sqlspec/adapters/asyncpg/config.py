@@ -1,6 +1,8 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
 import asyncio
+import logging
+import math
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast, overload
@@ -26,10 +28,15 @@ from sqlspec.adapters.asyncpg._typing import AsyncpgPoolConnectionProxyMeta as P
 from sqlspec.adapters.asyncpg._typing import AsyncpgRawConnection as Connection
 from sqlspec.adapters.asyncpg._typing import AsyncpgRecord as Record
 from sqlspec.adapters.asyncpg.core import (
+    DEFAULT_CONNECTOR_MAX_RETRIES,
+    DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS,
+    DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS,
     apply_driver_features,
     build_connection_config,
+    calculate_connector_backoff_seconds,
     create_mapped_exception,
     default_statement_config,
+    is_transient_connector_error,
     register_json_codecs,
     register_pgvector_support,
 )
@@ -48,7 +55,7 @@ from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyErro
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED
 from sqlspec.utils.config_tools import normalize_connection_config
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.tenant import TenantContextPayload
 
@@ -92,6 +99,22 @@ _SESSION_RESET_SQL: Final[str] = (
 _CLOUD_SQL_INSTANCE_PARTS: Final[int] = 3
 _ALLOYDB_URI_PARTS: Final[int] = 8
 _AUTH_TOKEN_DEFAULT_INACTIVE_LIFETIME: Final[float] = 1800.0
+_CONNECTOR_EXCLUDED_CONNECT_KWARGS: Final[frozenset[str]] = frozenset({
+    "database",
+    "db",
+    "direct_tls",
+    "driver",
+    "dsn",
+    "enable_iam_auth",
+    "host",
+    "instance_connection_string",
+    "instance_uri",
+    "ip_type",
+    "password",
+    "port",
+    "ssl",
+    "user",
+})
 _ASYNCPG_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
     "dsn",
     "conninfo",
@@ -227,6 +250,12 @@ class AsyncpgDriverFeatures(TypedDict):
     """Use IAM database authentication with the AlloyDB Python Connector."""
     alloydb_ip_type: NotRequired[str]
     """AlloyDB network path (``PUBLIC``, ``PRIVATE``, or ``PSC``; defaults to ``PRIVATE``)."""
+    connector_max_retries: NotRequired[int]
+    """Maximum retry attempts on transient Cloud SQL or AlloyDB connector errors (defaults to ``3``; ``0`` disables retries)."""
+    connector_retry_backoff_seconds: NotRequired[float]
+    """Initial backoff delay in seconds before jittered exponential connector retries (defaults to ``0.5``)."""
+    connector_retry_max_backoff_seconds: NotRequired[float]
+    """Upper bound in seconds on exponential backoff between connector retry attempts (defaults to ``5.0``)."""
     enable_alloydb_columnar: NotRequired[bool]
     """Enable ``google_columnar_engine.enable_columnar_scan=on`` at session startup or per transaction."""
     enable_pgcopy_binary: NotRequired[bool]
@@ -260,24 +289,32 @@ class _AsyncpgCloudSqlConnector:
         self._password = password
         self._database = database
 
-    async def __call__(self) -> "AsyncpgConnection":
+    async def __call__(self, *args: Any, **kwargs: Any) -> "AsyncpgConnection":
+        _ = args
         connector = self._config._get_cloud_sql_connector()
         if connector is None:
             msg = "Cloud SQL connector is not initialized"
             raise ImproperConfigurationError(msg)
-        conn_kwargs: dict[str, Any] = {
-            "instance_connection_string": self._config.driver_features["cloud_sql_instance"],
-            "driver": "asyncpg",
-            "enable_iam_auth": self._config.driver_features.get("cloud_sql_enable_iam_auth", False),
-            "ip_type": self._config.driver_features.get("cloud_sql_ip_type", "PRIVATE"),
-        }
+        conn_kwargs: dict[str, Any] = _filter_connector_connect_kwargs(kwargs)
+        conn_kwargs["instance_connection_string"] = self._config.driver_features["cloud_sql_instance"]
+        conn_kwargs["driver"] = "asyncpg"
+        conn_kwargs["enable_iam_auth"] = self._config.driver_features.get("cloud_sql_enable_iam_auth", False)
+        conn_kwargs["ip_type"] = self._config.driver_features.get("cloud_sql_ip_type", "PRIVATE")
         if self._user:
             conn_kwargs["user"] = self._user
         if self._password:
             conn_kwargs["password"] = self._password
         if self._database:
             conn_kwargs["db"] = self._database
-        return cast("AsyncpgConnection", await connector.connect_async(**conn_kwargs))
+        max_retries, base_backoff, max_backoff = self._config._connector_retry_settings()
+        return await _connect_with_retry(
+            connector.connect_async,
+            conn_kwargs,
+            connector_name="cloud_sql",
+            max_retries=max_retries,
+            base_backoff_seconds=base_backoff,
+            max_backoff_seconds=max_backoff,
+        )
 
 
 class _AsyncpgAlloydbConnector:
@@ -289,24 +326,32 @@ class _AsyncpgAlloydbConnector:
         self._password = password
         self._database = database
 
-    async def __call__(self) -> "AsyncpgConnection":
+    async def __call__(self, *args: Any, **kwargs: Any) -> "AsyncpgConnection":
+        _ = args
         connector = self._config._get_alloydb_connector()
         if connector is None:
             msg = "AlloyDB connector is not initialized"
             raise ImproperConfigurationError(msg)
-        conn_kwargs: dict[str, Any] = {
-            "instance_uri": self._config.driver_features["alloydb_instance_uri"],
-            "driver": "asyncpg",
-            "enable_iam_auth": self._config.driver_features.get("enable_alloydb_iam_auth", False),
-            "ip_type": self._config.driver_features.get("alloydb_ip_type", "PRIVATE"),
-        }
+        conn_kwargs: dict[str, Any] = _filter_connector_connect_kwargs(kwargs)
+        conn_kwargs["instance_uri"] = self._config.driver_features["alloydb_instance_uri"]
+        conn_kwargs["driver"] = "asyncpg"
+        conn_kwargs["enable_iam_auth"] = self._config.driver_features.get("enable_alloydb_iam_auth", False)
+        conn_kwargs["ip_type"] = self._config.driver_features.get("alloydb_ip_type", "PRIVATE")
         if self._user:
             conn_kwargs["user"] = self._user
         if self._password:
             conn_kwargs["password"] = self._password
         if self._database:
             conn_kwargs["db"] = self._database
-        return cast("AsyncpgConnection", await connector.connect(**conn_kwargs))
+        max_retries, base_backoff, max_backoff = self._config._connector_retry_settings()
+        return await _connect_with_retry(
+            connector.connect,
+            conn_kwargs,
+            connector_name="alloydb",
+            max_retries=max_retries,
+            base_backoff_seconds=base_backoff,
+            max_backoff_seconds=max_backoff,
+        )
 
 
 class _AsyncpgSessionFactory(AsyncPoolSessionFactory):
@@ -472,7 +517,12 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             self._setup_alloydb_connector(config)
 
         connect = config.pop("connect", None)
-        connection = await connect() if connect is not None else await asyncpg_connect(**config)
+        if connect is None:
+            connection = await asyncpg_connect(**config)
+        elif isinstance(connect, (_AsyncpgCloudSqlConnector, _AsyncpgAlloydbConnector)):
+            connection = await connect(**config)
+        else:
+            connection = await connect()
         user_init = self.connection_config.get("init")
         try:
             await self._init_connection(connection)
@@ -668,6 +718,16 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """Return the configured AlloyDB connector instance."""
         return self._alloydb_connector
 
+    def _connector_retry_settings(self) -> "tuple[int, float, float]":
+        max_retries = int(self.driver_features.get("connector_max_retries", DEFAULT_CONNECTOR_MAX_RETRIES))
+        base_backoff = float(
+            self.driver_features.get("connector_retry_backoff_seconds", DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS)
+        )
+        max_backoff = float(
+            self.driver_features.get("connector_retry_max_backoff_seconds", DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS)
+        )
+        return max_retries, base_backoff, max_backoff
+
     def _validate_connector_config(self) -> None:
         """Validate Google Cloud connector configuration.
 
@@ -675,6 +735,30 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             ImproperConfigurationError: If configuration is invalid.
             MissingDependencyError: If required connector packages are not installed.
         """
+        raw_max_retries = self.driver_features.get("connector_max_retries", DEFAULT_CONNECTOR_MAX_RETRIES)
+        if isinstance(raw_max_retries, bool) or not isinstance(raw_max_retries, int) or raw_max_retries < 0:
+            msg = "connector_max_retries must be a non-negative integer"
+            raise ImproperConfigurationError(msg)
+
+        backoff_values: list[float] = []
+        for key, default in (
+            ("connector_retry_backoff_seconds", DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS),
+            ("connector_retry_max_backoff_seconds", DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS),
+        ):
+            raw_value = self.driver_features.get(key, default)
+            if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+                msg = f"{key} must be a finite non-negative number"
+                raise ImproperConfigurationError(msg)
+            value = float(raw_value)
+            if not math.isfinite(value) or value < 0.0:
+                msg = f"{key} must be a finite non-negative number"
+                raise ImproperConfigurationError(msg)
+            backoff_values.append(value)
+
+        if backoff_values[1] < backoff_values[0]:
+            msg = "connector_retry_max_backoff_seconds must be greater than or equal to connector_retry_backoff_seconds"
+            raise ImproperConfigurationError(msg)
+
         enable_cloud_sql = self.driver_features.get("enable_cloud_sql", False)
         enable_alloydb = self.driver_features.get("enable_alloydb", False)
 
@@ -901,3 +985,46 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         if self._alloydb_connector is not None:
             await self._alloydb_connector.close()
             self._alloydb_connector = None
+
+
+def _filter_connector_connect_kwargs(kwargs: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Return non-``None`` asyncpg connect kwargs not managed by the cloud connector."""
+    return {
+        key: value
+        for key, value in kwargs.items()
+        if value is not None and key not in _CONNECTOR_EXCLUDED_CONNECT_KWARGS
+    }
+
+
+async def _connect_with_retry(
+    connect_fn: "Callable[..., Awaitable[Any]]",
+    conn_kwargs: "dict[str, Any]",
+    *,
+    connector_name: str,
+    max_retries: int,
+    base_backoff_seconds: float,
+    max_backoff_seconds: float,
+) -> "AsyncpgConnection":
+    """Invoke a connector coroutine with bounded backoff on transient failures."""
+    for attempt in range(max_retries + 1):
+        try:
+            return cast("AsyncpgConnection", await connect_fn(**conn_kwargs))
+        except Exception as exc:
+            if attempt >= max_retries or not is_transient_connector_error(exc):
+                raise
+            retry_delay = calculate_connector_backoff_seconds(attempt, base_backoff_seconds, max_backoff_seconds)
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "connector.retry",
+                adapter="asyncpg",
+                connector=connector_name,
+                attempt=attempt + 1,
+                max_retries=max_retries,
+                delay_seconds=round(retry_delay, 3),
+                error_type=type(exc).__name__,
+            )
+        if retry_delay > 0.0:
+            await asyncio.sleep(retry_delay)
+    msg = f"Exhausted {connector_name} connector retry attempts"
+    raise ImproperConfigurationError(msg)

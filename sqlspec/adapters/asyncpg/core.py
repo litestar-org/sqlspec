@@ -4,13 +4,14 @@ import asyncio
 import contextlib
 import datetime as dt
 import re
+import secrets
 import sys
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.adapters.asyncpg._typing import AsyncpgPostgresError
+from sqlspec.adapters.asyncpg._typing import AsyncpgInterfaceError, AsyncpgPostgresError
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
 from sqlspec.core.parameters._registry import build_statement_config_from_profile
@@ -23,6 +24,7 @@ from sqlspec.exceptions import (
     ForeignKeyViolationError,
     ImproperConfigurationError,
     IntegrityError,
+    MissingDependencyError,
     NotNullViolationError,
     OperationalError,
     OperationCancelledError,
@@ -53,6 +55,9 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import SQL, StatementConfig
 
 __all__ = (
+    "DEFAULT_CONNECTOR_MAX_RETRIES",
+    "DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS",
+    "DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS",
     "AsyncpgStreamSource",
     "NormalizedStackOperation",
     "apply_driver_features",
@@ -60,12 +65,14 @@ __all__ = (
     "build_postgres_storage_params_sql",
     "build_profile",
     "build_statement_config",
+    "calculate_connector_backoff_seconds",
     "collect_rows",
     "configure_parameter_serializers",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
     "execute_cache_hit",
+    "is_transient_connector_error",
     "parse_status",
     "register_json_codecs",
     "register_pgvector_support",
@@ -79,6 +86,71 @@ EXPECTED_REGEX_GROUPS = 3
 logger = get_logger("sqlspec.adapters.asyncpg.core")
 _PGVECTOR_MISSING_LOGGED = False
 _JSONB_BINARY_VERSION = b"\x01"
+_SYSTEM_RANDOM: Final[secrets.SystemRandom] = secrets.SystemRandom()
+_MAX_CONNECTOR_ERROR_DEPTH: Final[int] = 8
+DEFAULT_CONNECTOR_MAX_RETRIES: Final[int] = 3
+DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS: Final[float] = 0.5
+DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS: Final[float] = 5.0
+_TRANSIENT_HTTP_STATUS_CODES: Final[frozenset[int]] = frozenset({429, 500, 502, 503, 504})
+_TRANSIENT_GRPC_STATUS_NAMES: Final[frozenset[str]] = frozenset({
+    "ABORTED",
+    "DEADLINE_EXCEEDED",
+    "RESOURCE_EXHAUSTED",
+    "UNAVAILABLE",
+})
+_PERMANENT_GRPC_STATUS_NAMES: Final[frozenset[str]] = frozenset({
+    "ALREADY_EXISTS",
+    "CANCELLED",
+    "DATA_LOSS",
+    "FAILED_PRECONDITION",
+    "INVALID_ARGUMENT",
+    "NOT_FOUND",
+    "OUT_OF_RANGE",
+    "PERMISSION_DENIED",
+    "UNAUTHENTICATED",
+    "UNIMPLEMENTED",
+})
+_PERMANENT_API_CORE_ERROR_NAMES: Final[tuple[str, ...]] = (
+    "AlreadyExists",
+    "BadRequest",
+    "Cancelled",
+    "Conflict",
+    "DataLoss",
+    "DuplicateCredentialArgs",
+    "FailedPrecondition",
+    "Forbidden",
+    "InvalidArgument",
+    "MethodNotAllowed",
+    "MethodNotImplemented",
+    "NotFound",
+    "OutOfRange",
+    "PermissionDenied",
+    "PreconditionFailed",
+    "Unauthenticated",
+    "Unauthorized",
+)
+_TRANSIENT_API_CORE_ERROR_NAMES: Final[tuple[str, ...]] = (
+    "Aborted",
+    "BadGateway",
+    "DeadlineExceeded",
+    "GatewayTimeout",
+    "InternalServerError",
+    "ResourceExhausted",
+    "ServiceUnavailable",
+    "TooManyRequests",
+)
+_PERMANENT_CLOUD_SQL_ERROR_NAMES: Final[tuple[str, ...]] = (
+    "AutoIAMAuthNotSupported",
+    "CacheClosedError",
+    "ClosedConnectorError",
+    "CloudSQLIPTypeError",
+    "ConnectorLoopError",
+    "DnsLoopError",
+    "IncompatibleDriverError",
+    "PlatformNotSupportedError",
+    "TLSVersionError",
+)
+_PERMANENT_ALLOYDB_ERROR_NAMES: Final[tuple[str, ...]] = ("ClosedConnectorError", "IPTypeNotFoundError")
 
 
 class NormalizedStackOperation(NamedTuple):
@@ -276,6 +348,9 @@ def apply_driver_features(
     processed_features.setdefault("enable_pg_textsearch", True)
     processed_features.setdefault("enable_cloud_sql", False)
     processed_features.setdefault("enable_alloydb", False)
+    processed_features.setdefault("connector_max_retries", DEFAULT_CONNECTOR_MAX_RETRIES)
+    processed_features.setdefault("connector_retry_backoff_seconds", DEFAULT_CONNECTOR_RETRY_BACKOFF_SECONDS)
+    processed_features.setdefault("connector_retry_max_backoff_seconds", DEFAULT_CONNECTOR_RETRY_MAX_BACKOFF_SECONDS)
     processed_features.setdefault("enable_events", True)
     processed_features.setdefault("events_backend", "notify")
     raw_pooler_mode = processed_features.get("pooler_mode")
@@ -325,6 +400,65 @@ def parse_status(status: Any) -> int:
                 pass
 
     return 0
+
+
+def is_transient_connector_error(error: BaseException) -> bool:
+    """Return whether a Cloud SQL or AlloyDB connector error is transient and retryable.
+
+    Inspects loaded optional connector/RPC modules via ``sys.modules`` to avoid eager
+    imports when cloud connectors are unused. Walks bounded causal links
+    (``cause``, ``raw_error``, ``__cause__``, and unsuppressed ``__context__``) and
+    fails fast on permanent configuration, authentication, permission, not-found,
+    closed-connector, cancellation, and PostgreSQL protocol errors.
+
+    Args:
+        error: Exception raised while establishing a connector-backed connection.
+
+    Returns:
+        ``True`` if the failure is transient and safe to retry, otherwise ``False``.
+    """
+    stack: list[BaseException] = [error]
+    seen: set[int] = set()
+    depth = 0
+    default_verdict = False
+    while stack and depth < _MAX_CONNECTOR_ERROR_DEPTH:
+        current = stack.pop()
+        obj_id = id(current)
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        depth += 1
+
+        verdict = _classify_connector_error(current)
+        if verdict is not None:
+            return verdict
+        if _is_retryable_connector_wrapper(current):
+            default_verdict = True
+
+        next_candidates = _next_connector_error_causes(current)
+        stack.extend(candidate for candidate in reversed(next_candidates) if id(candidate) not in seen)
+    return default_verdict
+
+
+def calculate_connector_backoff_seconds(attempt: int, base_delay_seconds: float, max_delay_seconds: float) -> float:
+    """Calculate jittered exponential backoff delay in seconds for connector retries.
+
+    Caps the exponential term before applying half-jitter so retries spread across
+    the upper half of ``[0, capped]`` when competing callers start concurrently.
+
+    Args:
+        attempt: Zero-based retry attempt index (``0`` before the first retry).
+        base_delay_seconds: Initial delay in seconds before capping/jitter.
+        max_delay_seconds: Upper bound in seconds for any single retry delay.
+
+    Returns:
+        Non-negative delay in seconds.
+    """
+    if base_delay_seconds <= 0.0 or max_delay_seconds <= 0.0:
+        return 0.0
+    exponent = min(max(attempt, 0), 30)
+    capped = min(base_delay_seconds * (2**exponent), max_delay_seconds)
+    return _SYSTEM_RANDOM.uniform(capped / 2.0, capped)
 
 
 def resolve_many_rowcount(parameter_sets: Any, *, fallback_count: "int | None" = None) -> int:
@@ -790,6 +924,147 @@ def _create_postgres_error(
     exc = error_class(msg)
     exc.__cause__ = error
     return exc
+
+
+def _instance_of_module_attrs(error: BaseException, module: Any, names: "tuple[str, ...]") -> bool:
+    for name in names:
+        candidate = getattr(module, name, None)
+        if isinstance(candidate, type) and isinstance(error, candidate):
+            return True
+    return False
+
+
+def _extract_grpc_status_name(error: BaseException) -> "str | None":
+    raw_status: Any = getattr(error, "grpc_status_code", None)
+    if raw_status is None:
+        code_attr = getattr(error, "code", None)
+        if callable(code_attr):
+            try:
+                raw_status = code_attr()
+            except TypeError:
+                raw_status = None
+    if raw_status is None:
+        return None
+    status_name = getattr(raw_status, "name", None)
+    if isinstance(status_name, str) and status_name:
+        return status_name.strip().upper()
+    if isinstance(raw_status, str) and raw_status:
+        normalized = raw_status.strip().upper()
+        if "." in normalized:
+            normalized = normalized.rsplit(".", maxsplit=1)[-1]
+        return normalized
+    return None
+
+
+def _classify_connector_error(error: BaseException) -> "bool | None":
+    if not isinstance(error, Exception):
+        return False
+    if isinstance(
+        error,
+        (
+            ImproperConfigurationError,
+            MissingDependencyError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AsyncpgPostgresError,
+            AsyncpgInterfaceError,
+        ),
+    ):
+        return False
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return True
+
+    cloud_sql_exc_mod = sys.modules.get("google.cloud.sql.connector.exceptions")
+    if cloud_sql_exc_mod is not None:
+        if _instance_of_module_attrs(error, cloud_sql_exc_mod, _PERMANENT_CLOUD_SQL_ERROR_NAMES):
+            return False
+        if _instance_of_module_attrs(error, cloud_sql_exc_mod, ("ResourceExhaustedError",)):
+            return None
+
+    alloydb_exc_mod = sys.modules.get("google.cloud.alloydbconnector.exceptions")
+    if alloydb_exc_mod is not None and _instance_of_module_attrs(
+        error, alloydb_exc_mod, _PERMANENT_ALLOYDB_ERROR_NAMES
+    ):
+        return False
+
+    api_core_exc_mod = sys.modules.get("google.api_core.exceptions")
+    if api_core_exc_mod is not None:
+        if _instance_of_module_attrs(error, api_core_exc_mod, ("RetryError",)):
+            return None
+        if _instance_of_module_attrs(error, api_core_exc_mod, _TRANSIENT_API_CORE_ERROR_NAMES):
+            return True
+        if _instance_of_module_attrs(error, api_core_exc_mod, _PERMANENT_API_CORE_ERROR_NAMES):
+            return False
+
+    auth_exc_mod = sys.modules.get("google.auth.exceptions")
+    if auth_exc_mod is not None:
+        if _instance_of_module_attrs(error, auth_exc_mod, ("DefaultCredentialsError", "OAuthError")):
+            return False
+        if _instance_of_module_attrs(error, auth_exc_mod, ("TransportError",)):
+            return True
+        if (
+            _instance_of_module_attrs(error, auth_exc_mod, ("RefreshError",))
+            and getattr(error, "retryable", False) is True
+        ):
+            return True
+
+    aiohttp_mod = sys.modules.get("aiohttp")
+    if aiohttp_mod is not None:
+        if _instance_of_module_attrs(
+            error,
+            aiohttp_mod,
+            (
+                "ClientSSLError",
+                "ClientConnectorCertificateError",
+                "ClientConnectorSSLError",
+                "ServerFingerprintMismatch",
+            ),
+        ):
+            return False
+        if _instance_of_module_attrs(error, aiohttp_mod, ("ClientResponseError",)):
+            status = getattr(error, "status", None)
+            return isinstance(status, int) and not isinstance(status, bool) and status in _TRANSIENT_HTTP_STATUS_CODES
+        if _instance_of_module_attrs(
+            error,
+            aiohttp_mod,
+            ("ServerTimeoutError", "ClientConnectionError", "ServerDisconnectedError", "ClientConnectorError"),
+        ):
+            return True
+
+    grpc_status_name = _extract_grpc_status_name(error)
+    if grpc_status_name is not None:
+        if grpc_status_name in _PERMANENT_GRPC_STATUS_NAMES:
+            return False
+        if grpc_status_name in _TRANSIENT_GRPC_STATUS_NAMES:
+            return True
+
+    return None
+
+
+def _is_retryable_connector_wrapper(error: BaseException) -> bool:
+    cloud_sql_exc_mod = sys.modules.get("google.cloud.sql.connector.exceptions")
+    if cloud_sql_exc_mod is not None and _instance_of_module_attrs(
+        error, cloud_sql_exc_mod, ("ResourceExhaustedError",)
+    ):
+        return True
+    api_core_exc_mod = sys.modules.get("google.api_core.exceptions")
+    return api_core_exc_mod is not None and _instance_of_module_attrs(error, api_core_exc_mod, ("RetryError",))
+
+
+def _next_connector_error_causes(error: BaseException) -> "list[BaseException]":
+    causes: list[BaseException] = []
+    retry_cause = getattr(error, "cause", None)
+    if isinstance(retry_cause, BaseException):
+        causes.append(retry_cause)
+    raw_error = getattr(error, "raw_error", None)
+    if isinstance(raw_error, BaseException):
+        causes.append(raw_error)
+    if error.__cause__ is not None:
+        causes.append(error.__cause__)
+    if error.__context__ is not None and not error.__suppress_context__:
+        causes.append(error.__context__)
+    return causes
 
 
 driver_profile = build_profile()
