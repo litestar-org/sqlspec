@@ -35,6 +35,10 @@ Base synchronous driver adapter class inherited by all synchronous SQLSpec datab
         - commit
         - rollback
         - transaction
+        - set_cached_statement_executor
+        - resolve_rowcount
+
+See [`CommonDriverAttributesMixin`](common.md) for the inherited `resolve_last_inserted_id` method.
 
 ## Synchronous Data Dictionary & Streaming
 

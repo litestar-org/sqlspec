@@ -35,6 +35,10 @@ Base asynchronous driver adapter class inherited by all asynchronous SQLSpec dat
         - commit
         - rollback
         - transaction
+        - set_cached_statement_executor
+        - resolve_rowcount
+
+See [`CommonDriverAttributesMixin`](common.md) for the inherited `resolve_last_inserted_id` method.
 
 ## Asynchronous Data Dictionary & Streaming
 

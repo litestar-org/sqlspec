@@ -33,6 +33,7 @@ Result containers for row dictionaries, hydrated schema models, scalar values, A
       heading_level: 3
       members:
         - all
+        - create_cached_select
         - one
         - one_or_none
         - scalar

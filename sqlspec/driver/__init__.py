@@ -16,12 +16,14 @@ if TYPE_CHECKING:
         AsyncPoolSessionFactory,
     )
     from sqlspec.driver._common import (
+        AsyncCachedStatementExecutor,
         AsyncExceptionHandler,
         CommonDriverAttributesMixin,
         DataDictionaryDialectMixin,
         DataDictionaryMixin,
         ExecutionResult,
         StackExecutionObserver,
+        SyncCachedStatementExecutor,
         SyncExceptionHandler,
         describe_stack_statement,
         hash_stack_operations,
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
     DriverAdapterProtocol: TypeAlias = SyncDriverAdapterBase | AsyncDriverAdapterBase
 
 __all__ = (
+    "AsyncCachedStatementExecutor",
     "AsyncDataDictionaryBase",
     "AsyncDriverAdapterBase",
     "AsyncDriverSessionContext",
@@ -66,6 +69,7 @@ __all__ = (
     "DriverAdapterProtocol",
     "ExecutionResult",
     "StackExecutionObserver",
+    "SyncCachedStatementExecutor",
     "SyncDataDictionaryBase",
     "SyncDriverAdapterBase",
     "SyncDriverSessionContext",
@@ -87,6 +91,7 @@ __all__ = (
 )
 
 _EXPORTS: dict[str, tuple[str, str]] = {
+    "AsyncCachedStatementExecutor": ("sqlspec.driver._common", "AsyncCachedStatementExecutor"),
     "AsyncDataDictionaryBase": ("sqlspec.driver._async", "AsyncDataDictionaryBase"),
     "AsyncDriverAdapterBase": ("sqlspec.driver._async", "AsyncDriverAdapterBase"),
     "AsyncDriverSessionContext": ("sqlspec.driver._session", "AsyncDriverSessionContext"),
@@ -105,6 +110,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "DeferredAsyncSession": ("sqlspec.driver._deferred", "DeferredAsyncSession"),
     "ExecutionResult": ("sqlspec.driver._common", "ExecutionResult"),
     "StackExecutionObserver": ("sqlspec.driver._common", "StackExecutionObserver"),
+    "SyncCachedStatementExecutor": ("sqlspec.driver._common", "SyncCachedStatementExecutor"),
     "SyncDataDictionaryBase": ("sqlspec.driver._sync", "SyncDataDictionaryBase"),
     "SyncDriverAdapterBase": ("sqlspec.driver._sync", "SyncDriverAdapterBase"),
     "SyncDriverSessionContext": ("sqlspec.driver._session", "SyncDriverSessionContext"),

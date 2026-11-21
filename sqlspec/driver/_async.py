@@ -38,6 +38,7 @@ from sqlspec.data_dictionary._types import (
 )
 from sqlspec.driver._common import (
     _CLOSED_CONNECTION,
+    AsyncCachedStatementExecutor,
     AsyncExceptionHandler,
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -490,6 +491,48 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
+
+    def set_cached_statement_executor(
+        self,
+        executor: "AsyncCachedStatementExecutor | None",
+        *,
+        state: Any = None,
+        owner: "type[AsyncDriverAdapterBase] | None" = None,
+    ) -> bool:
+        """Set the callable that runs statements found in the statement cache.
+
+        An adapter calls this from ``__init__`` to run cached statements through
+        one compiled function instead of the driver's cursor, row, and exception
+        methods. Passing ``None`` removes the executor and its state.
+
+        When ``owner`` is given, the executor is installed only if ``type(self)``
+        inherits ``with_cursor``, ``collect_rows``, ``resolve_rowcount``,
+        ``resolve_last_inserted_id``, ``handle_database_exceptions``,
+        ``build_cached_select_result``, ``_execute_cache_hit``, and
+        ``_execute_cache_hit_with_cursor`` unchanged from ``owner``. A subclass
+        that overrides any of them keeps its current executor and state, and its
+        overrides keep running. Omit ``owner`` to install the executor regardless.
+
+        Statements run through the driver's observed path while observers or
+        spans are active, so the executor is skipped for those calls.
+
+        Args:
+            executor: Callable matching :class:`AsyncCachedStatementExecutor`, or
+                ``None`` to remove the current one. An executor that returns
+                ``None`` (directly or when awaited) hands that call back to the
+                driver's own methods.
+            state: Object passed to ``executor`` as its sixth positional argument.
+            owner: Driver class the executor was written for.
+
+        Returns:
+            ``True`` when the executor was installed or removed; ``False`` when
+            a subclass of ``owner`` overrides one of the listed methods.
+
+        Raises:
+            TypeError: If ``executor`` is not callable or ``owner`` is not a class
+                matching ``self``.
+        """
+        return self._set_cached_statement_executor(executor, state, owner)
 
     @abstractmethod
     async def begin(self) -> None:
@@ -2141,7 +2184,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         )
                     else:
                         affected_rows = self.resolve_rowcount(cursor)
-                        result = DMLResult(cached.operation_type, affected_rows)
+                        last_inserted_id = (
+                            self.resolve_last_inserted_id(cursor)
+                            if cached.operation_type == "INSERT" and affected_rows > 0
+                            else None
+                        )
+                        result = DMLResult(cached.operation_type, affected_rows, last_inserted_id)
                 else:
                     direct_statement = self._cached_statement(
                         sql, params, cached, params, params_are_simple=True, compiled_sql=wire_sql
@@ -2156,7 +2204,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                             and execution_result.rowcount_override >= 0
                             else 0
                         )
-                        result = DMLResult(cached.operation_type, affected_rows)
+                        last_inserted_id = (
+                            execution_result.last_inserted_id
+                            if cached.operation_type == "INSERT" and affected_rows > 0
+                            else None
+                        )
+                        result = DMLResult(cached.operation_type, affected_rows, last_inserted_id)
             except BaseException as caught:
                 cursor_error = caught
             await exit_async_context(cursor_context, cursor_error)

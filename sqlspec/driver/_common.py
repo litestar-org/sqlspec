@@ -10,7 +10,7 @@ import hashlib
 import inspect
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from itertools import count as _itertools_count
@@ -148,7 +148,6 @@ from sqlspec.utils.type_guards import (
 
 if TYPE_CHECKING:
     from collections import OrderedDict, abc
-    from collections.abc import Awaitable
     from types import TracebackType
 
     from sqlspec.core.compiler import OperationType
@@ -170,6 +169,7 @@ if TYPE_CHECKING:
 __all__ = (
     "VERSION_GROUPS_MIN_FOR_MINOR",
     "VERSION_GROUPS_MIN_FOR_PATCH",
+    "AsyncCachedStatementExecutor",
     "AsyncExceptionHandler",
     "CachedQuery",
     "CommonDriverAttributesMixin",
@@ -177,6 +177,7 @@ __all__ = (
     "DataDictionaryMixin",
     "ExecutionResult",
     "StackExecutionObserver",
+    "SyncCachedStatementExecutor",
     "SyncExceptionHandler",
     "cache_hit_hooks_unchanged",
     "describe_stack_statement",
@@ -274,6 +275,47 @@ class AsyncExceptionHandler(Protocol):
     ) -> bool: ...
     @property
     def pending_exception(self) -> Exception | None: ...
+
+
+class SyncCachedStatementExecutor(Protocol):
+    """Protocol for callables that run a cached statement on a synchronous driver.
+
+    Called positionally with ``(connection, sql, params, cached, statement_config, state)``
+    when a statement is found in the driver's statement cache. Returning ``None``
+    hands the call back to the driver's own cached execution methods.
+    """
+
+    def __call__(
+        self,
+        connection: Any,
+        sql: str,
+        params: Any,
+        cached: CachedQuery,
+        statement_config: StatementConfig,
+        state: Any,
+        /,
+    ) -> SQLResult | None: ...
+
+
+class AsyncCachedStatementExecutor(Protocol):
+    """Protocol for callables that run a cached statement on an asynchronous driver.
+
+    Called positionally with ``(connection, sql, params, cached, statement_config, state)``
+    when a statement is found in the driver's statement cache. Returning ``None``
+    (directly or when awaited) hands the call back to the driver's own cached
+    execution methods.
+    """
+
+    def __call__(
+        self,
+        connection: Any,
+        sql: str,
+        params: Any,
+        cached: CachedQuery,
+        statement_config: StatementConfig,
+        state: Any,
+        /,
+    ) -> Awaitable[SQLResult | None] | SQLResult | None: ...
 
 
 class ExecutionResult(NamedTuple):
@@ -1899,9 +1941,7 @@ class CommonDriverAttributesMixin:
         self._stmt_cache_rebind_processor: ParameterProcessor = self._cache_holder.rebind_processor
         self._stmt_cache_enabled = False
         self._cache_hit_executor: (
-            abc.Callable[
-                [Any, str, Any, CachedQuery, StatementConfig, Any], SQLResult | Awaitable[SQLResult | None] | None
-            ]
+            Callable[[Any, str, Any, CachedQuery, StatementConfig, Any], SQLResult | Awaitable[SQLResult | None] | None]
             | None
         ) = None
         self._cache_hit_state: Any = None
@@ -1936,6 +1976,27 @@ class CommonDriverAttributesMixin:
     def stack_native_disabled(self) -> bool:
         """Return True when native stack execution is disabled for this driver."""
         return bool(self.driver_features.get("stack_native_disabled", False))
+
+    def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
+        """Resolve the last inserted row identifier for the direct execution path.
+
+        Called on cached ``INSERT`` statements that affect at least one row. The
+        default implementation returns ``cursor.lastrowid`` when it is an ``int``
+        (excluding ``bool``) or ``str``, else ``None``. Adapters with custom
+        row-identifier semantics may override this method.
+
+        Args:
+            cursor: Database cursor with optional ``lastrowid`` metadata.
+
+        Returns:
+            Last inserted identifier, or ``None`` when unavailable.
+        """
+        last_id = getattr(cursor, "lastrowid", None)
+        if isinstance(last_id, bool):
+            return None
+        if isinstance(last_id, (int, str)):
+            return last_id
+        return None
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Attach or replace the observability runtime."""
@@ -2630,6 +2691,33 @@ class CommonDriverAttributesMixin:
             sql, params, cached, params, params_are_simple=True, compiled_sql=self._format_wire_sql(cached.compiled_sql)
         )
         return self._execute_cached_statement(prepared)
+
+    def _set_cached_statement_executor(
+        self,
+        executor: "SyncCachedStatementExecutor | AsyncCachedStatementExecutor | None",
+        state: Any,
+        owner: "type[Any] | None",
+    ) -> bool:
+        """Install or clear the cached statement executor.
+
+        A mismatched ``owner`` leaves the current executor and state unchanged.
+        """
+        if executor is None:
+            self._cache_hit_executor = None
+            self._cache_hit_state = None
+            return True
+        if not callable(executor):
+            msg = "Cached statement executor must be callable"
+            raise TypeError(msg)
+        if owner is not None:
+            if not isinstance(owner, type) or not isinstance(self, owner):
+                msg = f"Cached statement executor owner {owner!r} must be a class matching {type(self).__name__}"
+                raise TypeError(msg)
+            if not cache_hit_hooks_unchanged(type(self), owner):
+                return False
+        self._cache_hit_executor = executor
+        self._cache_hit_state = state
+        return True
 
     def _execute_cache_hit_observed(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
@@ -3715,6 +3803,7 @@ _CACHE_HIT_HOOKS: Final[tuple[str, ...]] = (
     "build_cached_select_result",
     "collect_rows",
     "handle_database_exceptions",
+    "resolve_last_inserted_id",
     "resolve_rowcount",
     "with_cursor",
 )
@@ -3731,10 +3820,15 @@ def cache_hit_hooks_unchanged(driver_type: type, owner: type) -> bool:
         owner: Adapter driver class the executor was written for.
 
     Returns:
-        True when ``driver_type`` is ``owner`` or inherits every cache-hit method from it unchanged.
+        True when ``driver_type`` is ``owner`` or a subclass inheriting every cache-hit
+        hook from ``owner`` unchanged.
     """
+    if not isinstance(driver_type, type) or not isinstance(owner, type):
+        return False
     if driver_type is owner:
         return True
+    if not issubclass(driver_type, owner):
+        return False
     return all(getattr(driver_type, name, None) is getattr(owner, name, None) for name in _CACHE_HIT_HOOKS)
 
 

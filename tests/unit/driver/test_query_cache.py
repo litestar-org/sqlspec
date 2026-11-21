@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlglot import parse_one
 
+import sqlspec.driver as driver_package
 from sqlspec import ObservabilityConfig
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
@@ -45,12 +46,24 @@ from sqlspec.core.cache import CachedQuery, QueryCache
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.parameters._declared import ParameterDeclaration
 from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
-from sqlspec.core.result import SQLResult
+from sqlspec.core.result import DMLResult, SQLResult
+from sqlspec.driver import (
+    AsyncCachedStatementExecutor,
+    BaseAsyncExceptionHandler,
+    BaseSyncExceptionHandler,
+    ExecutionResult,
+    SyncCachedStatementExecutor,
+)
 from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import _callable_cache_key, _check_declared_parameters, run_cached_execution
+from sqlspec.driver._common import (
+    _callable_cache_key,
+    _check_declared_parameters,
+    cache_hit_hooks_unchanged,
+    run_cached_execution,
+)
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.observability import LoggingConfig, StatementEvent
+from sqlspec.observability import LoggingConfig, ObservabilityRuntime, StatementEvent
 
 
 def _make_cached(
@@ -2158,3 +2171,569 @@ def test_open_session_cached_statements_see_query_hooks_registered_later() -> No
             session.execute("SELECT ?", (1,))
 
     assert seen == ["q", "q", "q"]
+
+
+class _NoopSyncExceptionHandler(BaseSyncExceptionHandler):
+    def _handle_exception(self, exc_type: type[BaseException] | None, exc_val: BaseException) -> bool:
+        _ = (exc_type, exc_val)
+        return False
+
+
+class _NoopAsyncExceptionHandler(BaseAsyncExceptionHandler):
+    def _handle_exception(self, exc_type: type[BaseException] | None, exc_val: BaseException) -> bool:
+        _ = (exc_type, exc_val)
+        return False
+
+
+class _ExternalSyncCursor:
+    def __init__(self, rowcount: int, lastrowid: Any, rows: list[tuple[Any, ...]] | None = None) -> None:
+        self.rowcount = rowcount
+        self.lastrowid = lastrowid
+        self._rows = rows or []
+        self.executed: list[tuple[str, Any]] = []
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        self.executed.append((sql, params))
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._rows)
+
+
+class _ExternalAsyncCursor:
+    def __init__(self, rowcount: int, lastrowid: Any, rows: list[tuple[Any, ...]] | None = None) -> None:
+        self.rowcount = rowcount
+        self.lastrowid = lastrowid
+        self._rows = rows or []
+        self.executed: list[tuple[str, Any]] = []
+
+    async def execute(self, sql: str, params: Any = None) -> None:
+        self.executed.append((sql, params))
+
+    async def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._rows)
+
+
+class _ExternalSyncDriver(SyncDriverAdapterBase):
+    """Minimal synchronous external adapter implementing the abstract driver surface."""
+
+    dialect = "sqlite"
+
+    def __init__(
+        self,
+        connection: Any,
+        *,
+        cursor: Any | None = None,
+        fallback_rowcount: int = 1,
+        fallback_last_id: int | str | None = None,
+    ) -> None:
+        config = StatementConfig(
+            dialect="sqlite",
+            enable_caching=True,
+            parameter_config=ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK,
+                supported_parameter_styles={ParameterStyle.QMARK},
+                default_execution_parameter_style=ParameterStyle.QMARK,
+                supported_execution_parameter_styles={ParameterStyle.QMARK},
+            ),
+        )
+        super().__init__(connection=connection, statement_config=config)
+        self._cursor = cursor
+        self._fallback_rowcount = fallback_rowcount
+        self._fallback_last_id = fallback_last_id
+        self.cursor_used = 0
+        self.dispatch_calls = 0
+
+    @property
+    def data_dictionary(self) -> Any:
+        return cast("Any", None)
+
+    @contextmanager
+    def with_cursor(self, connection: Any) -> Generator[Any, None, None]:
+        self.cursor_used += 1
+        yield connection if self._cursor is None else self._cursor
+
+    def handle_database_exceptions(self) -> _NoopSyncExceptionHandler:
+        return _NoopSyncExceptionHandler()
+
+    def collect_rows(self, cursor: Any, fetched: list[Any]) -> tuple[list[Any], list[str], int]:
+        _ = cursor
+        return fetched, ["v"], len(fetched)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        return int(cursor.rowcount) if isinstance(cursor.rowcount, int) and cursor.rowcount >= 0 else 0
+
+    def dispatch_execute(self, cursor: Any, statement: SQL) -> ExecutionResult:
+        self.dispatch_calls += 1
+        self._compiled_sql(statement, self.statement_config)
+        if statement.returns_rows():
+            return self.create_execution_result(
+                cursor,
+                selected_data=[(1,)],
+                column_names=["v"],
+                data_row_count=1,
+                is_select_result=True,
+                row_format="tuple",
+            )
+        return self.create_execution_result(
+            cursor, rowcount_override=self._fallback_rowcount, last_inserted_id=self._fallback_last_id
+        )
+
+    def dispatch_execute_many(self, cursor: Any, statement: SQL) -> ExecutionResult:
+        _ = statement
+        return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
+
+    def dispatch_execute_script(self, cursor: Any, statement: SQL) -> ExecutionResult:
+        _ = statement
+        return self.create_execution_result(cursor, statement_count=1, successful_statements=1, is_script_result=True)
+
+    def begin(self) -> None:
+        return None
+
+    def commit(self) -> None:
+        return None
+
+    def rollback(self) -> None:
+        return None
+
+    def _connection_in_transaction(self) -> bool:
+        return False
+
+
+class _ExternalAsyncDriver(AsyncDriverAdapterBase):
+    """Minimal asynchronous external adapter implementing the abstract driver surface."""
+
+    dialect = "sqlite"
+
+    def __init__(
+        self,
+        connection: Any,
+        *,
+        cursor: Any | None = None,
+        fallback_rowcount: int = 1,
+        fallback_last_id: int | str | None = None,
+    ) -> None:
+        config = StatementConfig(
+            dialect="sqlite",
+            enable_caching=True,
+            parameter_config=ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK,
+                supported_parameter_styles={ParameterStyle.QMARK},
+                default_execution_parameter_style=ParameterStyle.QMARK,
+                supported_execution_parameter_styles={ParameterStyle.QMARK},
+            ),
+        )
+        super().__init__(connection=connection, statement_config=config)
+        self._cursor = cursor
+        self._fallback_rowcount = fallback_rowcount
+        self._fallback_last_id = fallback_last_id
+        self.cursor_used = 0
+        self.dispatch_calls = 0
+
+    @property
+    def data_dictionary(self) -> Any:
+        return cast("Any", None)
+
+    @asynccontextmanager
+    async def with_cursor(self, connection: Any) -> AsyncGenerator[Any, None]:
+        self.cursor_used += 1
+        yield connection if self._cursor is None else self._cursor
+
+    def handle_database_exceptions(self) -> _NoopAsyncExceptionHandler:
+        return _NoopAsyncExceptionHandler()
+
+    def collect_rows(self, cursor: Any, fetched: list[Any]) -> tuple[list[Any], list[str], int]:
+        _ = cursor
+        return fetched, ["v"], len(fetched)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        return int(cursor.rowcount) if isinstance(cursor.rowcount, int) and cursor.rowcount >= 0 else 0
+
+    async def dispatch_execute(self, cursor: Any, statement: SQL) -> ExecutionResult:
+        self.dispatch_calls += 1
+        self._compiled_sql(statement, self.statement_config)
+        if statement.returns_rows():
+            return self.create_execution_result(
+                cursor,
+                selected_data=[(1,)],
+                column_names=["v"],
+                data_row_count=1,
+                is_select_result=True,
+                row_format="tuple",
+            )
+        return self.create_execution_result(
+            cursor, rowcount_override=self._fallback_rowcount, last_inserted_id=self._fallback_last_id
+        )
+
+    async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> ExecutionResult:
+        _ = statement
+        return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
+
+    async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> ExecutionResult:
+        _ = statement
+        return self.create_execution_result(cursor, statement_count=1, successful_statements=1, is_script_result=True)
+
+    async def begin(self) -> None:
+        return None
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
+
+    def _connection_in_transaction(self) -> bool:
+        return False
+
+
+def test_cached_statement_executor_driver_and_core_exports() -> None:
+    """Driver and core modules expose the executor protocols and result builders."""
+    assert SyncCachedStatementExecutor is not None
+    assert AsyncCachedStatementExecutor is not None
+    assert "cache_hit_hooks_unchanged" not in driver_package.__all__
+    assert callable(SQLResult.create_cached_select)
+    assert DMLResult("INSERT", 1, 7).last_inserted_id == 7
+    assert cache_hit_hooks_unchanged(int, str) is False
+    assert cache_hit_hooks_unchanged(cast("Any", "not_a_type"), _ExternalSyncDriver) is False
+    assert cache_hit_hooks_unchanged(_ExternalSyncDriver, _ExternalSyncDriver) is True
+
+
+@pytest.mark.parametrize(
+    ("operation", "sql", "rowcount", "lastrowid", "expected_last_id"),
+    [
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, 42, 42),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, "row-9", "row-9"),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 0, 42, None),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, True, None),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, object(), None),
+        ("UPDATE", "UPDATE items SET name = ?", 2, 42, None),
+        ("DELETE", "DELETE FROM items WHERE name = ?", 1, 42, None),
+    ],
+    ids=["insert-int", "insert-str", "insert-zero-rc", "insert-bool", "insert-object", "update", "delete"],
+)
+def test_sync_cache_hit_direct_cursor_preserves_last_inserted_id(
+    operation: OperationType, sql: str, rowcount: int, lastrowid: Any, expected_last_id: int | str | None
+) -> None:
+    """Generic sync cache-hit direct cursor path preserves last_inserted_id only on successful INSERT."""
+    cursor = _ExternalSyncCursor(rowcount=rowcount, lastrowid=lastrowid)
+    driver = _ExternalSyncDriver(object(), cursor=cursor)
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type=operation,
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+    )
+
+    result = driver._execute_cache_hit_with_cursor(sql, ("alpha",), cached)
+
+    assert isinstance(result, DMLResult)
+    assert result.rows_affected == rowcount
+    assert result.last_inserted_id == expected_last_id
+
+
+@pytest.mark.parametrize(
+    ("operation", "sql", "rowcount", "last_id", "expected_last_id"),
+    [
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, 11, 11),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, "abc-1", "abc-1"),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 0, 11, None),
+        ("UPDATE", "UPDATE items SET name = ?", 2, 11, None),
+    ],
+    ids=["insert-int", "insert-str", "insert-zero-rc", "update"],
+)
+def test_sync_cache_hit_dispatch_fallback_preserves_last_inserted_id(
+    operation: OperationType, sql: str, rowcount: int, last_id: int | str | None, expected_last_id: int | str | None
+) -> None:
+    """Generic sync cache-hit dispatch_execute fallback preserves execution_result.last_inserted_id on INSERT."""
+    driver = _ExternalSyncDriver(object(), fallback_rowcount=rowcount, fallback_last_id=last_id)
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type=operation,
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+    )
+
+    result = driver._execute_cache_hit_with_cursor(sql, ("alpha",), cached)
+
+    assert isinstance(result, DMLResult)
+    assert driver.dispatch_calls == 1
+    assert result.rows_affected == rowcount
+    assert result.last_inserted_id == expected_last_id
+
+
+def test_sync_cache_hit_custom_resolve_last_inserted_id_hook() -> None:
+    """Overriding resolve_last_inserted_id controls last_inserted_id on the generic sync cache-hit path."""
+
+    class _CustomLastIdDriver(_ExternalSyncDriver):
+        def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
+            _ = cursor
+            return "custom-id"
+
+    cursor = _ExternalSyncCursor(rowcount=1, lastrowid=99)
+    driver = _CustomLastIdDriver(object(), cursor=cursor)
+    cached = _make_cached(
+        compiled_sql="INSERT INTO items (name) VALUES (?)",
+        param_count=1,
+        operation_type="INSERT",
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+    )
+
+    result = driver._execute_cache_hit_with_cursor("INSERT INTO items (name) VALUES (?)", ("alpha",), cached)
+
+    assert result.last_inserted_id == "custom-id"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("operation", "sql", "rowcount", "lastrowid", "expected_last_id"),
+    [
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, 42, 42),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, "row-9", "row-9"),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 0, 42, None),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, True, None),
+        ("UPDATE", "UPDATE items SET name = ?", 2, 42, None),
+        ("DELETE", "DELETE FROM items WHERE name = ?", 1, 42, None),
+    ],
+    ids=["insert-int", "insert-str", "insert-zero-rc", "insert-bool", "update", "delete"],
+)
+async def test_async_cache_hit_direct_cursor_preserves_last_inserted_id(
+    operation: OperationType, sql: str, rowcount: int, lastrowid: Any, expected_last_id: int | str | None
+) -> None:
+    """Generic async cache-hit direct cursor path preserves last_inserted_id only on successful INSERT."""
+    cursor = _ExternalAsyncCursor(rowcount=rowcount, lastrowid=lastrowid)
+    driver = _ExternalAsyncDriver(object(), cursor=cursor)
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type=operation,
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+    )
+
+    result = await driver._execute_cache_hit_with_cursor(sql, ("alpha",), cached)
+
+    assert isinstance(result, DMLResult)
+    assert result.rows_affected == rowcount
+    assert result.last_inserted_id == expected_last_id
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("operation", "sql", "rowcount", "last_id", "expected_last_id"),
+    [
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, 19, 19),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, "async-id", "async-id"),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 0, 19, None),
+        ("UPDATE", "UPDATE items SET name = ?", 2, 19, None),
+    ],
+    ids=["insert-int", "insert-str", "insert-zero-rc", "update"],
+)
+async def test_async_cache_hit_dispatch_fallback_preserves_last_inserted_id(
+    operation: OperationType, sql: str, rowcount: int, last_id: int | str | None, expected_last_id: int | str | None
+) -> None:
+    """Generic async cache-hit dispatch_execute fallback preserves execution_result.last_inserted_id on INSERT."""
+    driver = _ExternalAsyncDriver(object(), fallback_rowcount=rowcount, fallback_last_id=last_id)
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type=operation,
+        operation_profile=OperationProfile(returns_rows=False, modifies_rows=True),
+    )
+
+    result = await driver._execute_cache_hit_with_cursor(sql, ("alpha",), cached)
+
+    assert isinstance(result, DMLResult)
+    assert driver.dispatch_calls == 1
+    assert result.rows_affected == rowcount
+    assert result.last_inserted_id == expected_last_id
+
+
+def test_sync_end_to_end_cached_insert_matches_uncached_last_inserted_id() -> None:
+    """Repeated INSERT executions preserve last_inserted_id on both cache miss and cache hit."""
+    cursor = _ExternalSyncCursor(rowcount=1, lastrowid=101)
+    driver = _ExternalSyncDriver(object(), cursor=cursor, fallback_rowcount=1, fallback_last_id=101)
+
+    first = driver.execute("INSERT INTO items (name) VALUES (?)", ("first",))
+    cursor.lastrowid = 102
+    second = driver.execute("INSERT INTO items (name) VALUES (?)", ("second",))
+
+    assert first.last_inserted_id == 101
+    assert second.last_inserted_id == 102
+    assert isinstance(second, DMLResult)
+
+
+def test_set_sync_cached_statement_executor() -> None:
+    """External sync adapters can register, inspect, run, decline, observe, and clear executors."""
+    calls: list[tuple[Any, str, Any, Any]] = []
+
+    def custom_executor(
+        conn: Any, raw_sql: str, params: Any, cached_entry: CachedQuery, cfg: StatementConfig, custom_state: Any
+    ) -> SQLResult | None:
+        calls.append((conn, raw_sql, params, custom_state))
+        if params == ("decline",):
+            return None
+        if not cached_entry.operation_profile.returns_rows:
+            return DMLResult(cached_entry.operation_type, 1, 777)
+        return SQLResult.create_cached_select(
+            raw_sql, cfg, cached_entry.processed_state, cached_entry.compiled_sql, params, [(9,)], ["v"], 1, "tuple"
+        )
+
+    connection = object()
+    state_marker = {"tag": "sync-state"}
+    cursor = _ExternalSyncCursor(rowcount=1, lastrowid=55, rows=[(3,)])
+    driver = _ExternalSyncDriver(connection, cursor=cursor)
+    registered = driver.set_cached_statement_executor(custom_executor, state=state_marker, owner=_ExternalSyncDriver)
+
+    assert registered is True
+    assert driver._cache_hit_executor is custom_executor
+    assert driver._cache_hit_state is state_marker
+
+    driver.execute("SELECT ? AS v", ("warm",))
+    hit = driver.execute("SELECT ? AS v", ("fast",))
+    assert hit.get_data() == [{"v": 9}]
+    assert len(calls) == 1
+    assert calls[0][0] is connection
+    assert calls[0][3] is state_marker
+
+    driver.execute("INSERT INTO items (name) VALUES (?)", ("warm",))
+    insert_hit = driver.execute("INSERT INTO items (name) VALUES (?)", ("fast-insert",))
+    assert isinstance(insert_hit, DMLResult)
+    assert insert_hit.last_inserted_id == 777
+    assert len(calls) == 2
+
+    fallback = driver.execute("SELECT ? AS v", ("decline",))
+    assert fallback.get_data() == [{"v": 3}]
+    assert len(calls) == 3
+
+    observed_events: list[StatementEvent] = []
+    driver.attach_observability(
+        ObservabilityRuntime(
+            config=ObservabilityConfig(statement_observers=(observed_events.append,)), config_name="external"
+        )
+    )
+    observed = driver.execute("SELECT ? AS v", ("obs",))
+    assert observed.get_data() == [{"v": 3}]
+    assert len(calls) == 3
+    assert len(observed_events) == 1
+
+    assert driver.set_cached_statement_executor(None) is True
+    assert driver._cache_hit_executor is None
+    assert driver._cache_hit_state is None
+
+
+@pytest.mark.anyio
+async def test_set_async_cached_statement_executor() -> None:
+    """External async adapters can register single-call executors, handle declines, and route observability."""
+    calls: list[tuple[str, Any, Any]] = []
+
+    async def custom_executor(
+        conn: Any, raw_sql: str, params: Any, cached_entry: CachedQuery, cfg: StatementConfig, custom_state: Any
+    ) -> SQLResult | None:
+        _ = conn
+        calls.append((raw_sql, params, custom_state))
+        if params == ("decline",):
+            return None
+        return SQLResult.create_cached_select(
+            raw_sql, cfg, cached_entry.processed_state, cached_entry.compiled_sql, params, [(8,)], ["v"], 1, "tuple"
+        )
+
+    state_marker = ("async-state",)
+    cursor = _ExternalAsyncCursor(rowcount=1, lastrowid=1, rows=[(4,)])
+    driver = _ExternalAsyncDriver(object(), cursor=cursor)
+    registered = driver.set_cached_statement_executor(custom_executor, state=state_marker, owner=_ExternalAsyncDriver)
+
+    assert registered is True
+    assert driver._cache_hit_executor is custom_executor
+    assert driver._cache_hit_state is state_marker
+
+    await driver.execute("SELECT ? AS v", ("warm",))
+    hit = await driver.execute("SELECT ? AS v", ("fast",))
+    assert hit.get_data() == [{"v": 8}]
+    assert calls == [("SELECT ? AS v", ("fast",), state_marker)]
+
+    fallback = await driver.execute("SELECT ? AS v", ("decline",))
+    assert fallback.get_data() == [{"v": 4}]
+    assert len(calls) == 2
+
+    observed_events: list[StatementEvent] = []
+    driver.attach_observability(
+        ObservabilityRuntime(
+            config=ObservabilityConfig(statement_observers=(observed_events.append,)), config_name="external-async"
+        )
+    )
+    observed = await driver.execute("SELECT ? AS v", ("obs",))
+    assert observed.get_data() == [{"v": 4}]
+    assert len(calls) == 2
+    assert len(observed_events) == 1
+
+
+@pytest.mark.parametrize(
+    "hook_name",
+    [
+        "with_cursor",
+        "collect_rows",
+        "resolve_rowcount",
+        "resolve_last_inserted_id",
+        "handle_database_exceptions",
+        "build_cached_select_result",
+        "_execute_cache_hit",
+        "_execute_cache_hit_with_cursor",
+    ],
+)
+def test_set_cached_statement_executor_respects_subclass_hook_overrides(hook_name: str) -> None:
+    """A subclass overriding a watched method keeps its executor and state when the owner check fails."""
+
+    def dummy_executor(*_args: Any) -> SQLResult | None:
+        return None
+
+    def dummy_override(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return getattr(_ExternalSyncDriver, hook_name)(self, *args, **kwargs)
+
+    sub_cls = type(f"Sub_{hook_name}", (_ExternalSyncDriver,), {hook_name: dummy_override})
+    driver = sub_cls(object())
+
+    assert driver.set_cached_statement_executor(dummy_executor, state="ignored", owner=_ExternalSyncDriver) is False
+    assert driver._cache_hit_executor is None
+    assert driver._cache_hit_state is None
+
+    assert driver.set_cached_statement_executor(dummy_executor, state="own", owner=sub_cls) is True
+    assert driver._cache_hit_executor is dummy_executor
+    assert driver._cache_hit_state == "own"
+
+    assert driver.set_cached_statement_executor(dummy_executor, state="ignored", owner=_ExternalSyncDriver) is False
+    assert driver._cache_hit_executor is dummy_executor
+    assert driver._cache_hit_state == "own"
+
+    assert driver.set_cached_statement_executor(None) is True
+    assert driver._cache_hit_executor is None
+    assert driver._cache_hit_state is None
+
+    assert driver.set_cached_statement_executor(dummy_executor, state="direct") is True
+    assert driver._cache_hit_executor is dummy_executor
+    assert driver._cache_hit_state == "direct"
+
+
+def test_set_cached_statement_executor_validates_arguments() -> None:
+    """Non-callable executors or mismatched owner classes raise TypeError."""
+    driver = _ExternalSyncDriver(object())
+
+    with pytest.raises(TypeError, match="callable"):
+        driver.set_cached_statement_executor(cast("Any", "not_callable"))
+
+    def valid_executor(*_args: Any) -> SQLResult | None:
+        return None
+
+    with pytest.raises(TypeError, match="owner"):
+        driver.set_cached_statement_executor(valid_executor, owner=cast("Any", SqliteDriver))
+
+    with pytest.raises(TypeError, match="owner"):
+        driver.set_cached_statement_executor(valid_executor, owner=cast("Any", "not_a_class"))
+
+
+def test_pymssql_and_sybase_resolve_last_inserted_id_returns_none() -> None:
+    """Pymssql and Sybase drivers return None from resolve_last_inserted_id to match dispatch_execute."""
+    pytest.importorskip("pymssql")
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+    from sqlspec.adapters.sybase.driver import SybaseDriver
+
+    fake_cursor = _ExternalSyncCursor(rowcount=1, lastrowid=99)
+    assert PymssqlDriver(cast("Any", object())).resolve_last_inserted_id(fake_cursor) is None
+    assert SybaseDriver(cast("Any", object())).resolve_last_inserted_id(fake_cursor) is None
