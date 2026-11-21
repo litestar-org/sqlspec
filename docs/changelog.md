@@ -7,6 +7,22 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.73.0 - Public cache-hit executor API, cached insert row IDs, and AsyncPG cloud connector retries
+
+**Added:**
+
+* Export `SyncCacheHitExecutor`, `AsyncCacheHitExecutor`, and `cache_hit_hooks_unchanged` from `sqlspec.driver`, add `cache_hit_executor`, `cache_hit_state`, `clear_cache_hit_executor()`, and `resolve_last_inserted_id(cursor)` on `CommonDriverAttributesMixin`, and expose typed `register_cache_hit_executor()` methods on `SyncDriverAdapterBase` and `AsyncDriverAdapterBase` so external adapters can register single-call cache-hit executors without assigning private attributes. ([#927](https://github.com/litestar-org/sqlspec/issues/927))
+* Add `connector_max_retries` (`3`), `connector_retry_backoff_seconds` (`0.5`), and `connector_retry_max_backoff_seconds` (`5.0`) configuration keys to `AsyncpgDriverFeatures` with eager validation and `apply_driver_features` defaults, plus compiled `is_transient_connector_error()` and `calculate_connector_backoff_seconds()` helpers in `sqlspec.adapters.asyncpg.core`. ([#929](https://github.com/litestar-org/sqlspec/issues/929))
+
+**Changed:**
+
+* Bump `amannn/action-semantic-pull-request` from `6.1.1` to `6.1.2` in the PR title lint workflow. ([#918](https://github.com/litestar-org/sqlspec/pull/918))
+
+**Fixed:**
+
+* Preserve `last_inserted_id` on `DMLResult` for cached `INSERT` executions affecting at least one row across both the direct cursor and `dispatch_execute` fallback paths in `SyncDriverAdapterBase._execute_cache_hit_with_cursor()` and `AsyncDriverAdapterBase._execute_cache_hit_with_cursor()`, as well as compiled `execute_cache_hit()` executors across `pymysql`, `aiomysql`, `asyncmy`, and `mysqlconnector`. Reject `bool` values in MySQL `resolve_rowcount()` and `normalize_lastrowid()`, and override `resolve_last_inserted_id()` to return `None` in `PymssqlDriver` and `SybaseDriver`. ([#928](https://github.com/litestar-org/sqlspec/issues/928))
+* Accept positional and keyword connection arguments passed by `asyncpg.create_pool()` in the Cloud SQL and AlloyDB asyncpg connector wrappers, stripping connector-managed keys and `None` values while forwarding runtime options (`loop`, `connection_class`, `record_class`, `statement_cache_size`, `command_timeout`, `timeout`, `server_settings`), and retry transient control-plane and transport failures with bounded jittered exponential backoff. ([#929](https://github.com/litestar-org/sqlspec/issues/929))
+
 ### v0.72.2 - Driver nested msgspec normalization
 
 * `CommonDriverAttributesMixin.to_schema()` and `RoutingSession.to_schema()` now
