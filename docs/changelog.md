@@ -7,6 +7,26 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.74.0 - Custom storage backends, public extension helpers, shared dialect data dictionaries, and Oracle row IDs
+
+**Added:**
+
+* Add custom `ObjectStoreProtocol` backend support to `StorageRegistry` via `register_backend()`, `unregister_backend()`, `is_backend_registered()`, `list_backends()`, and `clear_backends()`, validating and normalizing backend names, blocking overrides of built-in names (`local`, `obstore`, `fsspec`), and evicting cached instances when overwritten or cleared. Extend `StorageRegistry.register_alias()` and `StorageRegistry.get()` to accept registered backend names, backend classes or factory callables (`StorageBackendFactory`), and pre-configured `ObjectStoreProtocol` instances, and export `StorageBackendFactory` from `sqlspec.storage`. ([#932](https://github.com/litestar-org/sqlspec/issues/932))
+* Export `resolve_backend_name()` lazily from `sqlspec.extensions.events` and export `resolve_adk_config()`, `resolve_adk_store_class()`, `resolve_adk_memory_store_class()`, `resolve_adk_artifact_store_class()`, `adk_sessions_migration_enabled()`, and `adk_memory_migration_enabled()` lazily from `sqlspec.extensions.adk` so extension migration reconcilers and external callers do not depend on private module helpers. ([#933](https://github.com/litestar-org/sqlspec/issues/933))
+* Provide shared `dictionary.py` dialect data-dictionary base classes across the remaining 14 dialects under `sqlspec.data_dictionary.dialects` (`BigQuerySyncDataDictionary`, `CockroachDBSyncDataDictionary`, `CockroachDBAsyncDataDictionary`, `Db2SyncDataDictionary`, `Db2AsyncDataDictionary`, `DuckDBSyncDataDictionary`, `MariaDBSyncDataDictionary`, `MariaDBAsyncDataDictionary`, `MssqlSyncDataDictionary`, `OracleSyncDataDictionary`, `OracleAsyncDataDictionary`, `PostgresSyncDataDictionary`, `PostgresAsyncDataDictionary`, `SnowflakeSyncDataDictionary`, `SpannerSyncDataDictionary`, `SpannerAsyncDataDictionary`, `SqlanywhereSyncDataDictionary`, `SqliteSyncDataDictionary`, `SqliteAsyncDataDictionary`, `SybaseSyncDataDictionary`, and `TeradataSyncDataDictionary`). Re-export `OracleVersionCache`, `resolve_oracle_connection_major()`, and `resolve_oracle_connection_compatible_major()` from `sqlspec.data_dictionary.dialects.oracle.config`, and `format_snowflake_identifier()` from `sqlspec.data_dictionary.dialects.snowflake.config`. ([#934](https://github.com/litestar-org/sqlspec/issues/934))
+
+**Changed:**
+
+* Load data-dictionary base classes lazily via PEP 562 `__getattr__` and `__dir__` across all 15 `sqlspec.data_dictionary.dialects.*` package facades (including `mysql`) so importing dialect configuration helpers no longer imports `dictionary.py` or `sqlspec.driver`. ([#934](https://github.com/litestar-org/sqlspec/issues/934))
+* Replace duplicated per-adapter `data_dictionary.py` implementations with thin subclasses of their shared dialect base classes, decoupling `CockroachAsyncpgDataDictionary` from `AsyncpgDataDictionary`. ([#934](https://github.com/litestar-org/sqlspec/issues/934))
+* Remove legacy underscore-prefixed private helper aliases in `sqlspec.extensions.events._channel` and `sqlspec.extensions.adk._config_utils`, plus unused module-level alias shims in `sqlspec.storage._utils`, `sqlspec.adapters.bigquery.core`, `sqlspec.adapters.aiosqlite.core`, and `sqlspec.adapters.aiosqlite.driver`. ([#933](https://github.com/litestar-org/sqlspec/issues/933))
+
+**Fixed:**
+
+* Preserve `last_inserted_id` (`ROWID` string) from `cursor.lastrowid` via a single `normalize_lastrowid()` lookup in `OracleSyncDriver` and `OracleAsyncDriver` across `dispatch_execute()`, `execute_cache_hit()`, `execute_cache_hit_async()`, and `resolve_last_inserted_id()` for successful `INSERT` statements affecting at least one row. Keep `OracleCacheHitState` on a dedicated `_oracle_cache_hit_state` slot so `_oracle_version_cache` and `_otel_tracing_enabled` remain intact when the compiled cache-hit executor is disabled. ([#931](https://github.com/litestar-org/sqlspec/issues/931))
+* Guard `CommonDriverAttributesMixin.resolve_last_inserted_id()`, `oracledb.core.resolve_rowcount()`, `sqlite.core.normalize_lastrowid()`, and `aiosqlite.core.normalize_lastrowid()` against `bool` and empty-string values. Document why `PymssqlDriver.resolve_last_inserted_id()` and `SybaseDriver.resolve_last_inserted_id()` return `None` without accessing `cursor.lastrowid` (`pymssql` runs `SELECT SCOPE_IDENTITY()` over the network on every access). ([#931](https://github.com/litestar-org/sqlspec/issues/931))
+* Honor `default_dialect` and `dialect_config` overrides in `make_mysql_ddl_result()` and `resolve_mysql_json_type()` so `MariaDBSyncDataDictionary` and `MariaDBAsyncDataDictionary` preserve `"mariadb"` dialect metadata instead of falling back to `"mysql"`. ([#934](https://github.com/litestar-org/sqlspec/issues/934))
+
 ### v0.73.0 - Cached statement executors for external adapters, cached insert row IDs, and AsyncPG cloud connector retries
 
 **Added:**
