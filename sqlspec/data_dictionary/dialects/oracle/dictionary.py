@@ -99,7 +99,6 @@ ORACLE_DDL_WARNINGS = (
 ORACLE_SYSTEM_METADATA_DOMAINS = ("system", "diagnostics", "awr", "ash", "addm", "statspack")
 ORACLE_DISABLED_SYSTEM_METADATA_DOMAINS = ("no_diagnostics", "disabled")
 ORACLE_SYSTEM_REDACTION_FIELDS = ("query_text", "sql_text", "username", "user_name", "session_user")
-_STORAGE_OPTION_FIELD_COUNT = 2
 
 
 class OracleVersionInfo(VersionInfo):

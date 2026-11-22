@@ -4,9 +4,8 @@ from typing import ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary.dialects.db2 import dictionary as db2_dictionary
 from sqlspec.data_dictionary.dialects.db2.config import DB2_CONFIG, Db2VersionInfo
-from sqlspec.data_dictionary.dialects.db2.dictionary import Db2AsyncDataDictionary as _Db2AsyncDataDictionary
-from sqlspec.data_dictionary.dialects.db2.dictionary import Db2SyncDataDictionary as _Db2SyncDataDictionary
 from sqlspec.data_dictionary.dialects.db2.dictionary import (
     build_column_metadata,
     build_foreign_key_metadata,
@@ -27,14 +26,14 @@ __all__ = (
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class Db2SyncDataDictionary(_Db2SyncDataDictionary):
+class Db2SyncDataDictionary(db2_dictionary.Db2SyncDataDictionary):
     """IBM Db2 sync data dictionary for metadata reflection."""
 
     dialect: ClassVar[str] = "db2"
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class Db2AsyncDataDictionary(_Db2AsyncDataDictionary):
+class Db2AsyncDataDictionary(db2_dictionary.Db2AsyncDataDictionary):
     """IBM Db2 async data dictionary for metadata reflection."""
 
     dialect: ClassVar[str] = "db2"

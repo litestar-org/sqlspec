@@ -435,8 +435,6 @@ def _adk_adapter_config_keys(adapter_name: str | None) -> set[str] | None:
 
 def _adk_explicit_store_class(config: Any, store_attr: str) -> type[Any] | None:
     """Return the store class set on a config instance or its class."""
-    if config is None:
-        return None
     explicit_store = None if isinstance(config, type) else getattr(config, store_attr, None)
     if not isinstance(explicit_store, type):
         target_cls = config if isinstance(config, type) else type(config)

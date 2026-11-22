@@ -4,10 +4,8 @@ from typing import ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary.dialects.teradata import dictionary as teradata_dictionary
 from sqlspec.data_dictionary.dialects.teradata.config import TERADATA_CONFIG, TeradataVersionInfo
-from sqlspec.data_dictionary.dialects.teradata.dictionary import (
-    TeradataSyncDataDictionary as _TeradataSyncDataDictionary,
-)
 from sqlspec.data_dictionary.dialects.teradata.dictionary import (
     build_column_metadata,
     build_foreign_key_metadata,
@@ -28,7 +26,7 @@ __all__ = (
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class TeradataSyncDataDictionary(_TeradataSyncDataDictionary):
+class TeradataSyncDataDictionary(teradata_dictionary.TeradataSyncDataDictionary):
     """Synchronous Teradata Vantage data dictionary."""
 
     dialect: ClassVar[str] = "teradata"

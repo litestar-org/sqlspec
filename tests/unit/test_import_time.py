@@ -258,25 +258,6 @@ DRIVER_OWNED_OPTIONAL_IMPORTS: dict[str, frozenset[str]] = {
 }
 """Optional modules the driver SDK imports on its own when installed; sqlspec code does not import them."""
 
-DIALECT_DICTIONARY_PACKAGES: tuple[str, ...] = (
-    "bigquery",
-    "cockroachdb",
-    "db2",
-    "duckdb",
-    "mariadb",
-    "mssql",
-    "mysql",
-    "oracle",
-    "postgres",
-    "snowflake",
-    "spanner",
-    "sqlanywhere",
-    "sqlite",
-    "sybase",
-    "teradata",
-)
-"""Shared data-dictionary dialect packages exposing PEP 562 lazy dictionary exports."""
-
 DIALECT_DICTIONARY_LAZY_EXPORTS: dict[str, tuple[str, ...]] = {
     "bigquery": ("BigQueryMetadataScope", "BigQuerySyncDataDictionary"),
     "cockroachdb": ("CockroachDBAsyncDataDictionary", "CockroachDBSyncDataDictionary"),
@@ -326,6 +307,9 @@ DIALECT_DICTIONARY_LAZY_EXPORTS: dict[str, tuple[str, ...]] = {
     ),
 }
 """Lazy PEP 562 ``dictionary.py`` exports declared by each shared dialect package."""
+
+DIALECT_DICTIONARY_PACKAGES: tuple[str, ...] = tuple(DIALECT_DICTIONARY_LAZY_EXPORTS)
+"""Shared data-dictionary dialect packages exposing PEP 562 lazy dictionary exports."""
 
 
 def test_every_adapter_package_is_registered() -> None:

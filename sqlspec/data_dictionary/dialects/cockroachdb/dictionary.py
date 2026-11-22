@@ -48,9 +48,6 @@ class CockroachDBSyncDataDictionary(SyncDataDictionaryBase):
 
     dialect: ClassVar[str] = "cockroachdb"
 
-    def __init__(self) -> None:
-        super().__init__()
-
     def get_metadata_capabilities(
         self, driver: "SyncDriverAdapterBase", domains: Sequence[str] | None = None
     ) -> MetadataCapabilityProfile:
@@ -285,9 +282,6 @@ class CockroachDBAsyncDataDictionary(AsyncDataDictionaryBase):
     """CockroachDB-specific async data dictionary base."""
 
     dialect: ClassVar[str] = "cockroachdb"
-
-    def __init__(self) -> None:
-        super().__init__()
 
     async def get_metadata_capabilities(
         self, driver: "AsyncDriverAdapterBase", domains: Sequence[str] | None = None

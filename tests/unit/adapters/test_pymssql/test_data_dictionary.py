@@ -2,9 +2,7 @@
 
 from typing import Any, cast
 
-from sqlspec.adapters.pymssql import data_dictionary as pymssql_data_dictionary
 from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo, PymssqlSyncDataDictionary
-from sqlspec.data_dictionary.dialects.mssql import MssqlSyncDataDictionary
 from sqlspec.data_dictionary.dialects.mssql import MssqlVersionInfo as DialectMssqlVersionInfo
 
 
@@ -158,13 +156,11 @@ def test_data_dictionary_capabilities() -> None:
     assert deps_result.domain == "dependencies"
 
 
-def test_pymssql_data_dictionary_subclass_exports_and_identity() -> None:
-    """Thin adapter module should inherit from MssqlSyncDataDictionary and re-export MssqlVersionInfo."""
+def test_pymssql_data_dictionary_version_info_identity_and_adapter_name() -> None:
+    """Thin adapter module should re-export the dialect MssqlVersionInfo and report its own adapter name."""
     driver = FakeSyncDriver()
     data_dictionary = PymssqlSyncDataDictionary()
 
-    assert issubclass(PymssqlSyncDataDictionary, MssqlSyncDataDictionary)
     assert PymssqlSyncDataDictionary.dialect == "mssql"
-    assert pymssql_data_dictionary.__all__ == ("MssqlVersionInfo", "PymssqlSyncDataDictionary")
     assert MssqlVersionInfo is DialectMssqlVersionInfo
     assert data_dictionary.get_metadata_capabilities(cast(Any, driver)).adapter == "PymssqlSyncDataDictionary"

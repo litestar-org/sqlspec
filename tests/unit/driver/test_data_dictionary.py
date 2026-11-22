@@ -5,11 +5,13 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from sqlspec.adapters.adbc import data_dictionary as adbc_data_dictionary_module
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.adapters.asyncmy.data_dictionary import AsyncmyDataDictionary
 from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
+from sqlspec.adapters.bigquery import data_dictionary as bigquery_adapter_data_dictionary_module
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
@@ -28,6 +30,9 @@ from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.adapters.spanner.data_dictionary import SpannerSyncDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.data_dictionary import VersionInfo
+from sqlspec.data_dictionary.dialects import bigquery as bigquery_dialect_module
+from sqlspec.data_dictionary.dialects.bigquery import BigQueryMetadataScope, BigQuerySyncDataDictionary
+from sqlspec.data_dictionary.dialects.bigquery import dictionary as bigquery_data_dictionary_module
 from sqlspec.data_dictionary.dialects.postgres import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import DataDictionaryDialectMixin, DataDictionaryMixin
@@ -700,8 +705,6 @@ def test_bigquery_dialect_formats_unqualified_information_schema_identifiers() -
 
 def test_bigquery_family_uses_dialect_information_schema_helpers(monkeypatch) -> None:
     """BigQuery and ADBC-as-BigQuery should delegate shared INFORMATION_SCHEMA formatting."""
-    from sqlspec.adapters.adbc import data_dictionary as adbc_data_dictionary_module
-    from sqlspec.data_dictionary.dialects.bigquery import dictionary as bigquery_data_dictionary_module
 
     def fake_tables(schema_name: "str | None") -> "tuple[str, str, str]":
         assert schema_name == "project.dataset"
@@ -744,17 +747,13 @@ def test_bigquery_family_uses_dialect_information_schema_helpers(monkeypatch) ->
 
 def test_bigquery_metadata_scope_identity_and_lazy_export() -> None:
     """BigQuery dialect facade lazily exposes the same scope and base class used by the adapter."""
-    from sqlspec.adapters.bigquery import data_dictionary as adapter_module
-    from sqlspec.data_dictionary.dialects import bigquery as dialect_module
-    from sqlspec.data_dictionary.dialects.bigquery import BigQueryMetadataScope, BigQuerySyncDataDictionary
-
-    assert adapter_module.BigQueryMetadataScope is BigQueryMetadataScope
+    assert bigquery_adapter_data_dictionary_module.BigQueryMetadataScope is BigQueryMetadataScope
     assert issubclass(BigQueryDataDictionary, BigQuerySyncDataDictionary)
-    assert "BigQueryMetadataScope" in dir(dialect_module)
-    assert "BigQuerySyncDataDictionary" in dir(dialect_module)
+    assert "BigQueryMetadataScope" in dir(bigquery_dialect_module)
+    assert "BigQuerySyncDataDictionary" in dir(bigquery_dialect_module)
     missing_attr = "_missing_bigquery_export"
     with pytest.raises(AttributeError):
-        getattr(dialect_module, missing_attr)
+        getattr(bigquery_dialect_module, missing_attr)
 
 
 @pytest.mark.parametrize(

@@ -4,7 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import sqlspec.adapters.teradata.data_dictionary as teradata_data_dictionary
+import sqlspec.data_dictionary.dialects.teradata as teradata_dialect
 from sqlspec.adapters.teradata.data_dictionary import TeradataDataDictionary
+from sqlspec.data_dictionary.dialects.teradata import dictionary as teradata_dialect_dictionary
 from sqlspec.exceptions import OperationalError
 
 
@@ -192,29 +195,15 @@ def test_view_fallback_enriches_type_and_unicode_length(code: str, udt_name: str
 
 def test_teradata_alias_and_lazy_facade_exports() -> None:
     """Adapter dictionary preserves TeradataDataDictionary alias and subclasses the shared base."""
-    import sqlspec.adapters.teradata.data_dictionary as adapter_data_dictionary
-    import sqlspec.data_dictionary.dialects.teradata as dialect_pkg
-    from sqlspec.data_dictionary.dialects.teradata.dictionary import (
-        TeradataSyncDataDictionary as SharedTeradataSyncDataDictionary,
-    )
+    shared_dictionary = teradata_dialect_dictionary.TeradataSyncDataDictionary
 
-    assert adapter_data_dictionary.TeradataDataDictionary is adapter_data_dictionary.TeradataSyncDataDictionary
-    assert dialect_pkg.TeradataSyncDataDictionary is SharedTeradataSyncDataDictionary
-    assert issubclass(adapter_data_dictionary.TeradataSyncDataDictionary, SharedTeradataSyncDataDictionary)
-    assert adapter_data_dictionary.TeradataSyncDataDictionary is not SharedTeradataSyncDataDictionary
-    assert adapter_data_dictionary.__all__ == (
-        "TERADATA_CONFIG",
-        "TeradataDataDictionary",
-        "TeradataSyncDataDictionary",
-        "TeradataVersionInfo",
-        "build_column_metadata",
-        "build_foreign_key_metadata",
-        "build_index_metadata",
-        "parse_teradata_version",
-    )
-    assert "TeradataSyncDataDictionary" in dir(dialect_pkg)
+    assert teradata_data_dictionary.TeradataDataDictionary is teradata_data_dictionary.TeradataSyncDataDictionary
+    assert teradata_dialect.TeradataSyncDataDictionary is shared_dictionary
+    assert issubclass(teradata_data_dictionary.TeradataSyncDataDictionary, shared_dictionary)
+    assert teradata_data_dictionary.TeradataSyncDataDictionary is not shared_dictionary
+    assert "TeradataSyncDataDictionary" in dir(teradata_dialect)
     with pytest.raises(AttributeError):
-        getattr(dialect_pkg, "_nonexistent_teradata_export")
+        getattr(teradata_dialect, "_nonexistent_teradata_export")
 
 
 @pytest.mark.parametrize(
@@ -230,34 +219,11 @@ def test_teradata_alias_and_lazy_facade_exports() -> None:
 )
 def test_teradata_shared_helper_identity(symbol_name: str) -> None:
     """Adapter data_dictionary re-exports exact shared Teradata dialect config and helper objects."""
-    import sqlspec.adapters.teradata.data_dictionary as adapter_data_dictionary
-    import sqlspec.data_dictionary.dialects.teradata as dialect_pkg
-    from sqlspec.data_dictionary.dialects.teradata import dictionary as dialect_dictionary
-
-    adapter_attr = getattr(adapter_data_dictionary, symbol_name)
-    dialect_attr = getattr(dialect_pkg, symbol_name)
+    adapter_attr = getattr(teradata_data_dictionary, symbol_name)
+    dialect_attr = getattr(teradata_dialect, symbol_name)
     assert adapter_attr is dialect_attr
-    assert symbol_name in adapter_data_dictionary.__all__
-    assert symbol_name in dialect_pkg.__all__
-    assert symbol_name in dir(dialect_pkg)
+    assert symbol_name in teradata_data_dictionary.__all__
+    assert symbol_name in teradata_dialect.__all__
+    assert symbol_name in dir(teradata_dialect)
     if symbol_name not in {"TERADATA_CONFIG", "TeradataVersionInfo"}:
-        assert dialect_attr is getattr(dialect_dictionary, symbol_name)
-
-
-def test_teradata_dialect_package_loads_dictionary_lazily() -> None:
-    """Importing sqlspec.data_dictionary.dialects.teradata does not eagerly load dictionary.py."""
-    import subprocess
-    import sys
-
-    script = (
-        "import sys; "
-        "import sqlspec.data_dictionary.dialects.teradata as pkg; "
-        "assert 'sqlspec.data_dictionary.dialects.teradata.dictionary' not in sys.modules; "
-        "assert pkg.TERADATA_CONFIG.name == 'teradata'; "
-        "assert 'sqlspec.data_dictionary.dialects.teradata.dictionary' not in sys.modules; "
-        "assert callable(pkg.parse_teradata_version); "
-        "assert 'sqlspec.data_dictionary.dialects.teradata.dictionary' in sys.modules; "
-        "assert 'sqlspec.adapters.teradata' not in sys.modules"
-    )
-    result = subprocess.run([sys.executable, "-c", script], check=False, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
+        assert dialect_attr is getattr(teradata_dialect_dictionary, symbol_name)

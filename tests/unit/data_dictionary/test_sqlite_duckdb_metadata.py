@@ -19,6 +19,7 @@ from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.data_dictionary import DataDictionaryLoader, DependencyMetadata, MetadataSupport, VersionInfo
 from sqlspec.data_dictionary.dialects.duckdb import DuckDBSyncDataDictionary
 from sqlspec.data_dictionary.dialects.sqlite import SqliteAsyncDataDictionary, SqliteSyncDataDictionary
+from sqlspec.data_dictionary.dialects.sqlite import dictionary as sqlite_dictionary_module
 from sqlspec.exceptions import SQLFileNotFoundError
 from tests.conftest import requires_interpreted
 
@@ -442,8 +443,6 @@ def test_sqlite_data_dictionary_missing_query_raises_sql_file_not_found() -> Non
 
 def test_sqlite_generated_column_memoization(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify generated column expressions are parsed once per table."""
-    from sqlspec.data_dictionary.dialects.sqlite import dictionary as dd_module
-
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     driver = SqliteDriver(connection)
@@ -459,14 +458,14 @@ def test_sqlite_generated_column_memoization(monkeypatch: pytest.MonkeyPatch) ->
         """)
 
         call_count = 0
-        original_fn = dd_module.sqlite_generated_expressions
+        original_fn = sqlite_dictionary_module.sqlite_generated_expressions
 
         def counting_parser(sql: str | None) -> dict[str, str]:
             nonlocal call_count
             call_count += 1
             return original_fn(sql)
 
-        monkeypatch.setattr(dd_module, "sqlite_generated_expressions", counting_parser)
+        monkeypatch.setattr(sqlite_dictionary_module, "sqlite_generated_expressions", counting_parser)
 
         cols = driver.data_dictionary.get_columns(driver, table="gen_test")
         assert call_count == 1
@@ -638,7 +637,7 @@ async def test_sqlite_base_version_cache_isolated_per_driver() -> None:
 
 @pytest.mark.parametrize("raw_version", [None, "", "not-a-version"])
 def test_sqlite_sync_base_missing_or_invalid_version_cached(raw_version: str | None) -> None:
-    """Missing or unparseable sync version returns None and avoids re-querying on second call."""
+    """Missing or unparsable sync version returns None and avoids re-querying on second call."""
     driver = Mock()
     driver.select_value_or_none.return_value = raw_version
     dictionary = SqliteSyncDataDictionary()
@@ -650,7 +649,7 @@ def test_sqlite_sync_base_missing_or_invalid_version_cached(raw_version: str | N
 
 @pytest.mark.parametrize("raw_version", [None, "", "not-a-version"])
 async def test_sqlite_async_base_missing_or_invalid_version_cached(raw_version: str | None) -> None:
-    """Missing or unparseable async version returns None and avoids re-querying on second call."""
+    """Missing or unparsable async version returns None and avoids re-querying on second call."""
     driver = Mock()
     driver.select_value_or_none = AsyncMock(return_value=raw_version)
     dictionary = SqliteAsyncDataDictionary()

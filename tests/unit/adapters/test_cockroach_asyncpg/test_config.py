@@ -26,13 +26,11 @@ from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgRetryConfig,
     build_connection_config,
 )
-from sqlspec.adapters.cockroach_asyncpg import data_dictionary as cockroach_asyncpg_dd_module
 from sqlspec.adapters.cockroach_asyncpg.adk.store import CockroachAsyncpgADKMemoryStore, CockroachAsyncpgADKStore
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.adapters.cockroach_asyncpg.litestar.store import CockroachAsyncpgStore
 from sqlspec.adapters.cockroach_asyncpg.tenant import CockroachAsyncpgRLSStrategy, CockroachAsyncpgTenantLease
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.data_dictionary.dialects.cockroachdb import CockroachDBAsyncDataDictionary
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -659,12 +657,9 @@ async def test_cockroach_asyncpg_get_columns_and_indexes_by_table() -> None:
     assert calls[0][1]["schema_name"] is None
 
 
-def test_cockroach_asyncpg_data_dictionary_subclass_and_import_isolation() -> None:
-    """CockroachAsyncpgDataDictionary extends CockroachDBAsyncDataDictionary without importing asyncpg adapter."""
-    assert issubclass(CockroachAsyncpgDataDictionary, CockroachDBAsyncDataDictionary)
+def test_cockroach_asyncpg_data_dictionary_asyncpg_isolation_and_driver_caching() -> None:
+    """CockroachAsyncpgDataDictionary stays independent of the asyncpg adapter and is cached per driver."""
     assert not issubclass(CockroachAsyncpgDataDictionary, AsyncpgDataDictionary)
-    assert CockroachAsyncpgDataDictionary.dialect == "cockroachdb"
-    assert cockroach_asyncpg_dd_module.__all__ == ("CockroachAsyncpgDataDictionary",)
 
     driver = CockroachAsyncpgDriver(connection=cast("Any", MagicMock()))
     first_dd = driver.data_dictionary

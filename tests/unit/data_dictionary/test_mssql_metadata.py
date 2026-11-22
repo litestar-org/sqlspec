@@ -24,6 +24,7 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.data_dictionary.dialects import mssql as mssql_pkg
 from sqlspec.data_dictionary.dialects.mssql import MssqlSyncDataDictionary, MssqlVersionInfo
+from sqlspec.data_dictionary.dialects.mssql.dictionary import MssqlSyncDataDictionary as DirectMssqlSyncDataDictionary
 from sqlspec.driver import SyncDataDictionaryBase
 
 if TYPE_CHECKING:
@@ -284,10 +285,6 @@ def test_mssql_dmvs_redact_sensitive_columns_by_default() -> None:
 
 def test_mssql_sync_dictionary_construction_and_identity() -> None:
     """MssqlSyncDataDictionary constructs directly and matches the lazy package re-export."""
-    from sqlspec.data_dictionary.dialects.mssql.dictionary import (
-        MssqlSyncDataDictionary as DirectMssqlSyncDataDictionary,
-    )
-
     dictionary = MssqlSyncDataDictionary()
 
     assert MssqlSyncDataDictionary is DirectMssqlSyncDataDictionary

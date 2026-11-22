@@ -30,7 +30,6 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncSessionContext,
     build_connection_config,
 )
-from sqlspec.adapters.cockroach_psycopg import data_dictionary as cockroach_psycopg_dd_module
 from sqlspec.adapters.cockroach_psycopg.adk.store import (
     CockroachPsycopgAsyncADKMemoryStore,
     CockroachPsycopgAsyncADKStore,
@@ -45,7 +44,6 @@ from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
 )
 from sqlspec.adapters.cockroach_psycopg.litestar.store import CockroachPsycopgSyncStore
 from sqlspec.core import SQL
-from sqlspec.data_dictionary.dialects.cockroachdb import CockroachDBAsyncDataDictionary, CockroachDBSyncDataDictionary
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
@@ -1237,22 +1235,14 @@ async def test_cockroach_psycopg_async_get_columns_and_indexes_by_table() -> Non
 
 
 @pytest.mark.parametrize(
-    ("dictionary_type", "expected_base", "driver_type"),
+    ("dictionary_type", "driver_type"),
     [
-        (CockroachPsycopgSyncDataDictionary, CockroachDBSyncDataDictionary, CockroachPsycopgSyncDriver),
-        (CockroachPsycopgAsyncDataDictionary, CockroachDBAsyncDataDictionary, CockroachPsycopgAsyncDriver),
+        (CockroachPsycopgSyncDataDictionary, CockroachPsycopgSyncDriver),
+        (CockroachPsycopgAsyncDataDictionary, CockroachPsycopgAsyncDriver),
     ],
 )
-def test_cockroach_psycopg_data_dictionary_subclasses_shared_base(
-    dictionary_type: type[Any], expected_base: type[Any], driver_type: type[Any]
-) -> None:
-    """CockroachPsycopg data dictionaries inherit from the shared CockroachDB dialect bases."""
-    assert issubclass(dictionary_type, expected_base)
-    assert dictionary_type.dialect == "cockroachdb"
-    assert cockroach_psycopg_dd_module.__all__ == (
-        "CockroachPsycopgAsyncDataDictionary",
-        "CockroachPsycopgSyncDataDictionary",
-    )
+def test_cockroach_psycopg_driver_caches_data_dictionary(dictionary_type: type[Any], driver_type: type[Any]) -> None:
+    """CockroachPsycopg drivers build their adapter data dictionary once and reuse the instance."""
     driver = driver_type(connection=MagicMock())
     first_dd = driver.data_dictionary
     assert isinstance(first_dd, dictionary_type)

@@ -53,9 +53,6 @@ class MssqlSyncDataDictionary(SyncDataDictionaryBase):
 
     dialect: ClassVar[str] = "mssql"
 
-    def __init__(self) -> None:
-        super().__init__()
-
     def resolve_connection_schema(self, driver: Any, schema: str | None) -> str | None:
         """Resolve the schema to introspect, defaulting to the connection's current schema."""
         if schema is not None:

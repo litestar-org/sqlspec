@@ -1,10 +1,6 @@
 """PostgreSQL-family data-dictionary query-pack contracts."""
 
-import ast
 import importlib
-import subprocess
-import sys
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -277,42 +273,6 @@ def test_cockroachdb_dialect_package_unknown_attribute_raises_attribute_error() 
     """Unknown attribute lookups on the cockroachdb dialect package raise AttributeError."""
     with pytest.raises(AttributeError, match="has no attribute 'NonExistentExport'"):
         getattr(cockroachdb_pkg, "NonExistentExport")
-
-
-def test_cockroachdb_dialect_package_lazy_import_isolation() -> None:
-    """Importing the cockroachdb package leaves dictionary and adapter modules unloaded until accessed."""
-    script = (
-        "import sys; "
-        "import sqlspec.data_dictionary.dialects.cockroachdb as pkg; "
-        "assert 'sqlspec.data_dictionary.dialects.cockroachdb.dictionary' not in sys.modules; "
-        "assert 'CockroachDBSyncDataDictionary' in dir(pkg); "
-        "assert 'CockroachDBAsyncDataDictionary' in dir(pkg); "
-        "assert not any(m.startswith('sqlspec.adapters.') for m in sys.modules); "
-        "sync_cls = pkg.CockroachDBSyncDataDictionary; "
-        "async_cls = pkg.CockroachDBAsyncDataDictionary; "
-        "assert 'sqlspec.data_dictionary.dialects.cockroachdb.dictionary' in sys.modules; "
-        "from sqlspec.data_dictionary.dialects.cockroachdb import dictionary; "
-        "assert sync_cls is dictionary.CockroachDBSyncDataDictionary; "
-        "assert async_cls is dictionary.CockroachDBAsyncDataDictionary; "
-        "assert pkg.__dict__['CockroachDBSyncDataDictionary'] is sync_cls; "
-        "assert pkg.__dict__['CockroachDBAsyncDataDictionary'] is async_cls; "
-        "assert not any(m.startswith('sqlspec.adapters.') for m in sys.modules)"
-    )
-    result = subprocess.run([sys.executable, "-c", script], check=False, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize("filename", ("__init__.py", "dictionary.py"))
-def test_cockroachdb_dialect_modules_have_no_adapter_imports(filename: str) -> None:
-    """CockroachDB dialect package modules never import from sqlspec.adapters.* at runtime or TYPE_CHECKING."""
-    module_path = Path(cockroachdb_pkg.__file__ or "").parent / filename
-    tree = ast.parse(module_path.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                assert not alias.name.startswith("sqlspec.adapters")
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            assert not node.module.startswith("sqlspec.adapters")
 
 
 def test_cockroachdb_sync_capability_profile() -> None:

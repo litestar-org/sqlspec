@@ -1,7 +1,10 @@
 """Tests for ADK flat-config resolution."""
 
+import importlib
+import sys
 from collections.abc import Callable
-from types import MappingProxyType, SimpleNamespace
+from pathlib import Path
+from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -494,6 +497,14 @@ class _CustomAsyncNoSuffixAdapter:
     is_async = True
 
 
+class _AbsentArtifactAdapter:
+    adapter_name = "custom_absent"
+
+
+class _BrokenArtifactAdapter:
+    adapter_name = "custom_broken"
+
+
 class _SubclassSpannerSyncConfig(SpannerSyncConfig):
     pass
 
@@ -724,57 +735,74 @@ def test_resolve_adk_artifact_store_class_absent_or_unknown_returns_none(target:
 
 
 @pytest.mark.parametrize(
-    "missing_name",
-    ["third_party_sdk", "sqlspec.adapters.sqlite.missing_dependency", None],
+    ("module_source", "missing_name"),
+    [
+        ("import third_party_sdk\n", "third_party_sdk"),
+        (
+            "import sqlspec.adapters.custom_broken.missing_dependency\n",
+            "sqlspec.adapters.custom_broken.missing_dependency",
+        ),
+        ('raise ModuleNotFoundError("No module named None")\n', None),
+    ],
     ids=["third-party-sdk", "missing-internal-sub-dep", "none-module-name"],
 )
 def test_resolve_adk_artifact_store_class_reraises_broken_dependency(
-    monkeypatch: pytest.MonkeyPatch, missing_name: str | None
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, module_source: str, missing_name: str | None
 ) -> None:
-    """Missing transitive dependencies inside artifact_store modules are re-raised."""
+    """Missing transitive dependencies inside artifact_store modules are re-raised.
 
-    def raise_missing(_module_name: str) -> Any:
-        exc = ModuleNotFoundError(f"No module named {missing_name!r}")
-        exc.name = missing_name
-        raise exc
+    The adapter and ``adk`` layers are registered in ``sys.modules`` as packages so the import
+    system executes a real ``artifact_store`` module from ``tmp_path``.
+    """
+    (tmp_path / "artifact_store.py").write_text(module_source, encoding="utf-8")
+    adapter_package = ModuleType("sqlspec.adapters.custom_broken")
+    adapter_package.__path__ = []
+    adk_package = ModuleType("sqlspec.adapters.custom_broken.adk")
+    adk_package.__path__ = [str(tmp_path)]
+    monkeypatch.setitem(sys.modules, adapter_package.__name__, adapter_package)
+    monkeypatch.setitem(sys.modules, adk_package.__name__, adk_package)
 
-    monkeypatch.setattr(_config_utils.importlib, "import_module", raise_missing)
-    with pytest.raises(ModuleNotFoundError):
-        resolve_adk_artifact_store_class(SqliteConfig)
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        resolve_adk_artifact_store_class(_BrokenArtifactAdapter)
+    assert exc_info.value.name == missing_name
 
 
 @pytest.mark.parametrize(
     "missing_name",
     [
         "sqlspec.adapters",
-        "sqlspec.adapters.sqlite",
-        "sqlspec.adapters.sqlite.adk",
-        "sqlspec.adapters.sqlite.adk.artifact_store",
+        "sqlspec.adapters.custom_absent",
+        "sqlspec.adapters.custom_absent.adk",
+        "sqlspec.adapters.custom_absent.adk.artifact_store",
     ],
     ids=["adapters-pkg", "adapter-pkg", "adk-pkg", "artifact-store-mod"],
 )
 def test_resolve_adk_artifact_store_class_ignores_absent_module_chain(
     monkeypatch: pytest.MonkeyPatch, missing_name: str
 ) -> None:
-    """Absent adapter artifact_store package layers return None without raising."""
+    """Absent adapter artifact_store package layers return None without raising.
 
-    def raise_missing(_module_name: str) -> Any:
-        exc = ModuleNotFoundError(f"No module named {missing_name!r}")
-        exc.name = missing_name
-        raise exc
+    A ``None`` entry in ``sys.modules`` for the parent of ``missing_name`` makes the import
+    system report ``missing_name`` itself as the absent module.
+    """
+    monkeypatch.delitem(sys.modules, missing_name, raising=False)
+    monkeypatch.setitem(sys.modules, missing_name.rpartition(".")[0], None)
 
-    monkeypatch.setattr(_config_utils.importlib, "import_module", raise_missing)
-    assert resolve_adk_artifact_store_class(SqliteConfig) is None
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        importlib.import_module("sqlspec.adapters.custom_absent.adk.artifact_store")
+    assert exc_info.value.name == missing_name
+    assert resolve_adk_artifact_store_class(_AbsentArtifactAdapter) is None
 
 
 def test_resolve_adk_artifact_store_class_single_and_mode_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Falls back to single exported store or Async/Sync mode matching when MRO prefix does not match."""
+    module_name = "sqlspec.adapters.custom_dual.adk.artifact_store"
     single_module = SimpleNamespace(
         __all__=("OnlyADKArtifactStore", "ignored_value"),
         OnlyADKArtifactStore=_CustomSingleArtifactStore,
         ignored_value="not_a_type",
     )
-    monkeypatch.setattr(_config_utils.importlib, "import_module", lambda _name: single_module)
+    monkeypatch.setitem(sys.modules, module_name, single_module)
     assert resolve_adk_artifact_store_class(_CustomNoSuffixAdapter()) is _CustomSingleArtifactStore
 
     dual_module = SimpleNamespace(
@@ -782,7 +810,7 @@ def test_resolve_adk_artifact_store_class_single_and_mode_fallbacks(monkeypatch:
         DualSyncADKArtifactStore=_CustomSyncADKArtifactStore,
         DualAsyncADKArtifactStore=_CustomAsyncADKArtifactStore,
     )
-    monkeypatch.setattr(_config_utils.importlib, "import_module", lambda _name: dual_module)
+    monkeypatch.setitem(sys.modules, module_name, dual_module)
     assert resolve_adk_artifact_store_class(_CustomNoSuffixAdapter()) is _CustomSyncADKArtifactStore
     assert resolve_adk_artifact_store_class(_CustomAsyncNoSuffixAdapter()) is _CustomAsyncADKArtifactStore
     assert resolve_adk_artifact_store_class(_CustomNoSuffixAdapter) is _CustomSyncADKArtifactStore

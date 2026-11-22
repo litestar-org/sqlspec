@@ -4,10 +4,8 @@ from typing import ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary.dialects.sqlanywhere import dictionary as sqlanywhere_dictionary
 from sqlspec.data_dictionary.dialects.sqlanywhere.config import SQLANYWHERE_CONFIG, SqlanywhereVersionInfo
-from sqlspec.data_dictionary.dialects.sqlanywhere.dictionary import (
-    SqlanywhereSyncDataDictionary as _SqlanywhereSyncDataDictionary,
-)
 from sqlspec.data_dictionary.dialects.sqlanywhere.dictionary import (
     build_column_metadata,
     build_foreign_key_metadata,
@@ -28,7 +26,7 @@ __all__ = (
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class SqlanywhereSyncDataDictionary(_SqlanywhereSyncDataDictionary):
+class SqlanywhereSyncDataDictionary(sqlanywhere_dictionary.SqlanywhereSyncDataDictionary):
     """Synchronous SAP SQL Anywhere data dictionary."""
 
     dialect: ClassVar[str] = "sqlanywhere"

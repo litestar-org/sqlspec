@@ -4,8 +4,11 @@ from typing import Any, cast
 
 import pytest
 
+import sqlspec.adapters.snowflake.data_dictionary as snowflake_data_dictionary
+import sqlspec.data_dictionary.dialects.snowflake as snowflake_dialect
 from sqlspec.adapters.snowflake import SnowflakeDriver
 from sqlspec.data_dictionary import MetadataSupport, VersionInfo
+from sqlspec.data_dictionary.dialects.snowflake import dictionary as snowflake_dialect_dictionary
 
 _SESSION_SCOPE_SQL = 'SELECT CURRENT_DATABASE() AS "database_name", CURRENT_SCHEMA() AS "schema_name";'
 
@@ -395,20 +398,17 @@ def test_shared_snowflake_dictionary_base_type_mapping(
     snowflake_connection: Any, type_category: str, expected_type: str
 ) -> None:
     """Shared Snowflake base class is directly instantiable and maps logical types."""
-    import sqlspec.data_dictionary.dialects.snowflake as snowflake_dialect
-    from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
-    from sqlspec.data_dictionary.dialects.snowflake.dictionary import (
-        SnowflakeSyncDataDictionary as SharedSnowflakeSyncDataDictionary,
-    )
+    adapter_dictionary = snowflake_data_dictionary.SnowflakeSyncDataDictionary
+    shared_dictionary = snowflake_dialect_dictionary.SnowflakeSyncDataDictionary
 
     driver = SnowflakeDriver(snowflake_connection)
-    dictionary = SharedSnowflakeSyncDataDictionary()
+    dictionary = shared_dictionary()
 
     assert dictionary.dialect == "snowflake"
     assert dictionary.get_optimal_type(driver, type_category) == expected_type
-    assert snowflake_dialect.SnowflakeSyncDataDictionary is SharedSnowflakeSyncDataDictionary
-    assert issubclass(SnowflakeSyncDataDictionary, SharedSnowflakeSyncDataDictionary)
-    assert SnowflakeSyncDataDictionary is not SharedSnowflakeSyncDataDictionary
+    assert snowflake_dialect.SnowflakeSyncDataDictionary is shared_dictionary
+    assert issubclass(adapter_dictionary, shared_dictionary)
+    assert adapter_dictionary is not shared_dictionary
     assert "SnowflakeSyncDataDictionary" in dir(snowflake_dialect)
     with pytest.raises(AttributeError):
         getattr(snowflake_dialect, "_nonexistent_snowflake_export")

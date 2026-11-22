@@ -15,7 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pymssql
 import pytest
 
+import sqlspec.adapters.sybase.data_dictionary as sybase_data_dictionary
 import sqlspec.adapters.sybase.pool as sybase_pool
+import sqlspec.data_dictionary.dialects.sybase as sybase_dialect
 from sqlspec.adapters.sybase import (
     DEFAULT_SYBASE_CONN_PROPERTIES,
     DEFAULT_SYBASE_TDS_VERSION,
@@ -46,6 +48,7 @@ from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.core.result._base import DMLResult
 from sqlspec.data_dictionary.dialects.sybase import SybaseVersionInfo
+from sqlspec.data_dictionary.dialects.sybase import dictionary as sybase_dialect_dictionary
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -2124,43 +2127,25 @@ def test_sybase_cache_hit_declines_empty_parameters_and_literal_percent() -> Non
 )
 def test_sybase_data_dictionary_shared_helper_identity(symbol_name: str) -> None:
     """Adapter data_dictionary re-exports exact shared Sybase dialect config and helper objects."""
-    import sqlspec.adapters.sybase.data_dictionary as adapter_data_dictionary
-    import sqlspec.data_dictionary.dialects.sybase as dialect_pkg
-    from sqlspec.data_dictionary.dialects.sybase import dictionary as dialect_dictionary
-
-    adapter_attr = getattr(adapter_data_dictionary, symbol_name)
-    dialect_attr = getattr(dialect_pkg, symbol_name)
+    adapter_attr = getattr(sybase_data_dictionary, symbol_name)
+    dialect_attr = getattr(sybase_dialect, symbol_name)
     assert adapter_attr is dialect_attr
-    assert symbol_name in adapter_data_dictionary.__all__
-    assert symbol_name in dialect_pkg.__all__
-    assert symbol_name in dir(dialect_pkg)
+    assert symbol_name in sybase_data_dictionary.__all__
+    assert symbol_name in sybase_dialect.__all__
+    assert symbol_name in dir(sybase_dialect)
     if symbol_name not in {"SYBASE_CONFIG", "SybaseVersionInfo"}:
-        assert dialect_attr is getattr(dialect_dictionary, symbol_name)
+        assert dialect_attr is getattr(sybase_dialect_dictionary, symbol_name)
 
 
 def test_sybase_data_dictionary_alias_and_lazy_facade() -> None:
     """Adapter keeps SybaseDataDictionary alias identity and subclasses the shared base."""
-    import sqlspec.adapters.sybase.data_dictionary as adapter_data_dictionary
-    import sqlspec.data_dictionary.dialects.sybase as dialect_pkg
-    from sqlspec.data_dictionary.dialects.sybase.dictionary import (
-        SybaseSyncDataDictionary as SharedSybaseSyncDataDictionary,
-    )
+    shared_dictionary = sybase_dialect_dictionary.SybaseSyncDataDictionary
 
-    assert adapter_data_dictionary.SybaseDataDictionary is adapter_data_dictionary.SybaseSyncDataDictionary
+    assert sybase_data_dictionary.SybaseDataDictionary is sybase_data_dictionary.SybaseSyncDataDictionary
     assert SybaseDataDictionary is SybaseSyncDataDictionary
-    assert dialect_pkg.SybaseSyncDataDictionary is SharedSybaseSyncDataDictionary
-    assert issubclass(adapter_data_dictionary.SybaseSyncDataDictionary, SharedSybaseSyncDataDictionary)
-    assert adapter_data_dictionary.SybaseSyncDataDictionary is not SharedSybaseSyncDataDictionary
-    assert "SybaseSyncDataDictionary" in dir(dialect_pkg)
-    assert set(adapter_data_dictionary.__all__) == {
-        "SYBASE_CONFIG",
-        "SybaseDataDictionary",
-        "SybaseSyncDataDictionary",
-        "SybaseVersionInfo",
-        "build_column_metadata",
-        "build_foreign_key_metadata",
-        "build_index_metadata",
-        "parse_sybase_version",
-    }
+    assert sybase_dialect.SybaseSyncDataDictionary is shared_dictionary
+    assert issubclass(sybase_data_dictionary.SybaseSyncDataDictionary, shared_dictionary)
+    assert sybase_data_dictionary.SybaseSyncDataDictionary is not shared_dictionary
+    assert "SybaseSyncDataDictionary" in dir(sybase_dialect)
     with pytest.raises(AttributeError):
-        getattr(dialect_pkg, "_nonexistent_sybase_export")
+        getattr(sybase_dialect, "_nonexistent_sybase_export")

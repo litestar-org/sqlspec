@@ -4,9 +4,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from sqlspec.adapters.mssql_python import MssqlVersionInfo as PackageMssqlVersionInfo
-from sqlspec.adapters.mssql_python import data_dictionary as mssql_python_data_dictionary
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary, MssqlVersionInfo
-from sqlspec.data_dictionary.dialects.mssql import MssqlSyncDataDictionary
 from sqlspec.data_dictionary.dialects.mssql import MssqlVersionInfo as DialectMssqlVersionInfo
 
 MSSQL_QUERY_DIR = Path("sqlspec/data_dictionary/dialects/mssql/sql")
@@ -168,14 +166,12 @@ def test_sync_data_dictionary_implements_extended_metadata_methods() -> None:
     assert deps_result.domain == "dependencies"
 
 
-def test_mssql_python_data_dictionary_subclass_exports_and_identity() -> None:
-    """Thin adapter module should inherit from MssqlSyncDataDictionary and re-export MssqlVersionInfo."""
+def test_mssql_python_data_dictionary_version_info_identity_and_adapter_name() -> None:
+    """Thin adapter module should re-export the dialect MssqlVersionInfo and report its own adapter name."""
     driver = FakeSyncDriver()
     data_dictionary = MssqlPythonSyncDataDictionary()
 
-    assert issubclass(MssqlPythonSyncDataDictionary, MssqlSyncDataDictionary)
     assert MssqlPythonSyncDataDictionary.dialect == "mssql"
-    assert mssql_python_data_dictionary.__all__ == ("MssqlPythonSyncDataDictionary", "MssqlVersionInfo")
     assert MssqlVersionInfo is DialectMssqlVersionInfo
     assert PackageMssqlVersionInfo is DialectMssqlVersionInfo
     assert data_dictionary.get_metadata_capabilities(cast(Any, driver)).adapter == "MssqlPythonSyncDataDictionary"

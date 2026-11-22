@@ -434,7 +434,7 @@ async def test_postgres_async_base_version_caches_by_connection() -> None:
 
 @pytest.mark.parametrize("version_value", [None, "", "Unknown Engine"])
 def test_postgres_sync_base_missing_or_unparseable_version_caches_none(version_value: str | None) -> None:
-    """Sync get_version caches None for missing or unparseable version values without refetching."""
+    """Sync get_version caches None for missing or unparsable version values without refetching."""
     driver = FakeSyncDriver(version_value=version_value)
     data_dictionary = PostgresSyncDataDictionary()
 
@@ -445,7 +445,7 @@ def test_postgres_sync_base_missing_or_unparseable_version_caches_none(version_v
 
 @pytest.mark.parametrize("version_value", [None, "", "Unknown Engine"])
 async def test_postgres_async_base_missing_or_unparseable_version_caches_none(version_value: str | None) -> None:
-    """Async get_version caches None for missing or unparseable version values without refetching."""
+    """Async get_version caches None for missing or unparsable version values without refetching."""
     driver = FakeAsyncDriver(version_value=version_value)
     data_dictionary = PostgresAsyncDataDictionary()
 

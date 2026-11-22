@@ -39,6 +39,28 @@ from sqlspec.data_dictionary.dialects.mysql import (
 )
 from sqlspec.exceptions import SQLSpecError
 
+MYSQL_DIALECT_PACKAGE_EXPORTS: tuple[str, ...] = (
+    "MARIADB_CONFIG",
+    "MYSQL_CONFIG",
+    "MYSQL_VERSION_PATTERN",
+    "MySQLAsyncDataDictionary",
+    "MySQLEngineVersion",
+    "MySQLSyncDataDictionary",
+    "build_mysql_metadata_capability_profile",
+    "build_mysql_show_create_statement",
+    "build_mysql_system_metadata_capability",
+    "format_mysql_identifier",
+    "make_mysql_ddl_result",
+    "mysql_system_metadata_query_name",
+    "parse_mysql_engine_version",
+    "resolve_mysql_json_type",
+)
+MARIADB_DIALECT_PACKAGE_EXPORTS: tuple[str, ...] = (
+    "MARIADB_CONFIG",
+    "MariaDBAsyncDataDictionary",
+    "MariaDBSyncDataDictionary",
+)
+
 
 class _SyncDDLDriver:
     def __init__(self) -> None:
@@ -380,51 +402,46 @@ async def test_mysql_get_constraints_binds_optional_table_name(
 
 
 @pytest.mark.parametrize(
-    ("package_name", "dictionary_module_name", "expected_classes", "expected_all"),
+    ("package_name", "dictionary_module_name", "class_name", "expected_all"),
     (
         (
             "sqlspec.data_dictionary.dialects.mysql",
             "sqlspec.data_dictionary.dialects.mysql.dictionary",
-            ("MySQLAsyncDataDictionary", "MySQLSyncDataDictionary"),
-            (
-                "MARIADB_CONFIG",
-                "MYSQL_CONFIG",
-                "MYSQL_VERSION_PATTERN",
-                "MySQLAsyncDataDictionary",
-                "MySQLEngineVersion",
-                "MySQLSyncDataDictionary",
-                "build_mysql_metadata_capability_profile",
-                "build_mysql_show_create_statement",
-                "build_mysql_system_metadata_capability",
-                "format_mysql_identifier",
-                "make_mysql_ddl_result",
-                "mysql_system_metadata_query_name",
-                "parse_mysql_engine_version",
-                "resolve_mysql_json_type",
-            ),
+            "MySQLAsyncDataDictionary",
+            MYSQL_DIALECT_PACKAGE_EXPORTS,
+        ),
+        (
+            "sqlspec.data_dictionary.dialects.mysql",
+            "sqlspec.data_dictionary.dialects.mysql.dictionary",
+            "MySQLSyncDataDictionary",
+            MYSQL_DIALECT_PACKAGE_EXPORTS,
         ),
         (
             "sqlspec.data_dictionary.dialects.mariadb",
             "sqlspec.data_dictionary.dialects.mariadb.dictionary",
-            ("MariaDBAsyncDataDictionary", "MariaDBSyncDataDictionary"),
-            ("MARIADB_CONFIG", "MariaDBAsyncDataDictionary", "MariaDBSyncDataDictionary"),
+            "MariaDBAsyncDataDictionary",
+            MARIADB_DIALECT_PACKAGE_EXPORTS,
+        ),
+        (
+            "sqlspec.data_dictionary.dialects.mariadb",
+            "sqlspec.data_dictionary.dialects.mariadb.dictionary",
+            "MariaDBSyncDataDictionary",
+            MARIADB_DIALECT_PACKAGE_EXPORTS,
         ),
     ),
 )
 def test_mysql_and_mariadb_package_lazy_exports(
-    package_name: str, dictionary_module_name: str, expected_classes: tuple[str, str], expected_all: tuple[str, ...]
+    package_name: str, dictionary_module_name: str, class_name: str, expected_all: tuple[str, ...]
 ) -> None:
     """MySQL and MariaDB dialect packages expose lazy PEP 562 dictionary re-exports."""
     package = import_module(package_name)
     dictionary_module = import_module(dictionary_module_name)
 
     assert package.__all__ == expected_all
-    package_dir = dir(package)
-    for class_name in expected_classes:
-        assert class_name in package_dir
-        exported = getattr(package, class_name)
-        assert exported is getattr(dictionary_module, class_name)
-        assert package.__dict__[class_name] is exported
+    assert class_name in dir(package)
+    exported = getattr(package, class_name)
+    assert exported is getattr(dictionary_module, class_name)
+    assert package.__dict__[class_name] is exported
 
     with pytest.raises(AttributeError, match="has no attribute 'NonExistentExport'"):
         getattr(package, "NonExistentExport")

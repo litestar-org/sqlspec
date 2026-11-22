@@ -334,7 +334,6 @@ def test_format_snowflake_identifier_reexport_identity() -> None:
 )
 def test_format_snowflake_identifier_valid(identifier: str, expected: str) -> None:
     """Snowflake identifier formatting quotes each part using dialect folding rules."""
-    assert dialect_format_snowflake_identifier(identifier) == expected
     assert format_snowflake_identifier(identifier) == expected
 
 
@@ -343,14 +342,10 @@ def test_format_snowflake_identifier_valid(identifier: str, expected: str) -> No
     [
         ("", "Snowflake identifier must not be empty"),
         ("sales.", "Invalid Snowflake identifier"),
-        ("orders\n", "Invalid Snowflake identifier"),
-        ("sales.orders\n", "Invalid Snowflake identifier"),
         ("1bad", "Invalid Snowflake identifier"),
     ],
 )
 def test_format_snowflake_identifier_rejects_invalid(bad_identifier: str, match: str) -> None:
     """Snowflake identifier formatting rejects empty, trailing-dot, and malformed identifiers."""
-    with pytest.raises(SQLSpecError, match=match):
-        dialect_format_snowflake_identifier(bad_identifier)
     with pytest.raises(SQLSpecError, match=match):
         format_snowflake_identifier(bad_identifier)

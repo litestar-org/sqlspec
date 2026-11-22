@@ -4,8 +4,8 @@ from typing import ClassVar
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.data_dictionary.dialects.sybase import dictionary as sybase_dictionary
 from sqlspec.data_dictionary.dialects.sybase.config import SYBASE_CONFIG, SybaseVersionInfo
-from sqlspec.data_dictionary.dialects.sybase.dictionary import SybaseSyncDataDictionary as _SybaseSyncDataDictionary
 from sqlspec.data_dictionary.dialects.sybase.dictionary import (
     build_column_metadata,
     build_foreign_key_metadata,
@@ -26,7 +26,7 @@ __all__ = (
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class SybaseSyncDataDictionary(_SybaseSyncDataDictionary):
+class SybaseSyncDataDictionary(sybase_dictionary.SybaseSyncDataDictionary):
     """Sybase ASE sync data dictionary for metadata reflection."""
 
     dialect: ClassVar[str] = "sybase"

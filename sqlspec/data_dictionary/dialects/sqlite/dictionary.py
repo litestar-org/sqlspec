@@ -42,9 +42,6 @@ class SqliteSyncDataDictionary(SyncDataDictionaryBase):
 
     dialect: ClassVar[str] = "sqlite"
 
-    def __init__(self) -> None:
-        super().__init__()
-
     def resolve_schema(self, schema: "str | None") -> "str | None":
         """Return a validated schema name using dialect defaults when missing."""
         if schema is not None:
@@ -283,9 +280,6 @@ class SqliteAsyncDataDictionary(AsyncDataDictionaryBase):
     """SQLite-specific async data dictionary base."""
 
     dialect: ClassVar[str] = "sqlite"
-
-    def __init__(self) -> None:
-        super().__init__()
 
     def resolve_schema(self, schema: "str | None") -> "str | None":
         """Return a validated schema name using dialect defaults when missing."""

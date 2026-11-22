@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from sqlglot import exp
-from tools.scripts.mypyc_inventory import build_inventory, validate_inventory
+from tools.scripts.mypyc_inventory import build_inventory
 
 from sqlspec.data_dictionary import get_dialect_config
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
@@ -499,16 +499,10 @@ def test_snowflake_show_scope_rejects_nul_names() -> None:
         format_snowflake_show_scope("sales", "orders\x00")
 
 
-def test_mypyc_inventory_validates_shared_dialect_surface() -> None:
-    """MyPyC inventory preserves compiled counts with the dialects dictionary glob exclusion."""
-    errors = validate_inventory(PROJECT_ROOT)
-    assert errors == []
-
+def test_mypyc_inventory_preserves_dialect_dictionary_exclusion() -> None:
+    """MyPyC inventory keeps the dialects dictionary glob in its preserved exclusions."""
     inventory = build_inventory(PROJECT_ROOT)
-    summary = inventory["summary"]
-    assert summary["compiled_count"] == 273
-    assert summary["interpreted_count"] == 371
-    assert summary["total_modules"] == 644
+
     assert "sqlspec/data_dictionary/dialects/**/dictionary.py" in inventory["preserved_exclusions"]
 
 

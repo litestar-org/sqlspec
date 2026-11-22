@@ -142,15 +142,11 @@ def resolve_backend_name(config: Any, extension_settings: "dict[str, Any]", adap
     if backend_name is None:
         resolved_adapter = adapter_name if adapter_name is not None else resolve_adapter_name(config)
         return "notify" if resolved_adapter in _POSTGRES_ADAPTERS else "poll_queue"
-    if not isinstance(backend_name, str):
-        valid = ", ".join(sorted(_EVENT_BACKENDS))
-        msg = f"Unknown event backend {backend_name!r}; expected one of: {valid}"
-        raise ImproperConfigurationError(msg)
-    if backend_name in _RETIRED_EVENT_BACKENDS:
+    if isinstance(backend_name, str) and backend_name in _RETIRED_EVENT_BACKENDS:
         replacement = _RETIRED_EVENT_BACKENDS[backend_name]
         msg = f"Event backend {backend_name!r} was removed; use {replacement!r}"
         raise ImproperConfigurationError(msg)
-    if backend_name not in _EVENT_BACKENDS:
+    if not isinstance(backend_name, str) or backend_name not in _EVENT_BACKENDS:
         valid = ", ".join(sorted(_EVENT_BACKENDS))
         msg = f"Unknown event backend {backend_name!r}; expected one of: {valid}"
         raise ImproperConfigurationError(msg)

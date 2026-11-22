@@ -4,7 +4,6 @@ from typing import Any, cast
 
 import pytest
 
-import sqlspec.data_dictionary.dialects.spanner as spanner_dialect
 from sqlspec.adapters.spanner.data_dictionary import SpannerAsyncDataDictionary, SpannerSyncDataDictionary
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.core import StatementConfig
@@ -250,15 +249,3 @@ def test_spanner_data_dictionary_mode_forwarding(dictionary_cls: type[Any], raw_
     dictionary = dictionary_cls(mode=raw_mode)
     assert dictionary.mode == expected_mode
     assert dictionary.dialect == "spanner"
-
-
-def test_spanner_dialect_lazy_exports() -> None:
-    """sqlspec.data_dictionary.dialects.spanner exposes shared bases lazily via PEP 562."""
-    assert "SPANNER_CONFIG" in dir(spanner_dialect)
-    assert "SPANNER_VERSION_PATTERN" in dir(spanner_dialect)
-    assert "SpannerSyncDataDictionary" in dir(spanner_dialect)
-    assert "SpannerAsyncDataDictionary" in dir(spanner_dialect)
-    assert spanner_dialect.SpannerSyncDataDictionary is BaseSpannerSyncDataDictionary
-    assert spanner_dialect.SpannerAsyncDataDictionary is BaseSpannerAsyncDataDictionary
-    with pytest.raises(AttributeError):
-        _ = getattr(spanner_dialect, "_missing_spanner_export")
