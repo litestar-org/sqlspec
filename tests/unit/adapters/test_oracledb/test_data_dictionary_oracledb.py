@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from sqlspec.adapters.oracledb import data_dictionary as oracledb_data_dictionary
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary, OracledbSyncDataDictionary
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.data_dictionary import (
@@ -19,6 +20,9 @@ from sqlspec.data_dictionary import (
     get_data_dictionary_loader,
     get_dialect_config,
 )
+from sqlspec.data_dictionary.dialects import oracle as oracle_dialect
+from sqlspec.data_dictionary.dialects.oracle import config as oracle_config
+from sqlspec.data_dictionary.dialects.oracle import dictionary as oracle_dictionary
 from sqlspec.data_dictionary.dialects.oracle import (
     extract_oracle_version_value,
     list_oracle_available_features,
@@ -827,3 +831,57 @@ async def test_oracle_version_preserves_release_update_and_legacy_query(
     assert cached_version is version
     version_statements = [query for query in connection.statements if "product_component_version" in query]
     assert len(version_statements) == 1
+
+
+@pytest.mark.parametrize(
+    ("symbol_name", "origin_module"),
+    [
+        ("JSONStorageType", "dictionary"),
+        ("OracleVersionInfo", "dictionary"),
+        ("storage_type_from_version", "dictionary"),
+        ("OracleVersionCache", "config"),
+        ("resolve_oracle_connection_compatible_major", "config"),
+        ("resolve_oracle_connection_major", "config"),
+    ],
+)
+def test_oracle_shared_symbol_identity(symbol_name: str, origin_module: str) -> None:
+    """Adapter data_dictionary re-exports share exact identity with dialect package symbols."""
+    adapter_symbol = getattr(oracledb_data_dictionary, symbol_name)
+    dialect_symbol = getattr(oracle_dialect, symbol_name)
+    origin = oracle_dictionary if origin_module == "dictionary" else oracle_config
+    origin_symbol = getattr(origin, symbol_name)
+    assert adapter_symbol is dialect_symbol
+    assert adapter_symbol is origin_symbol
+
+
+@pytest.mark.parametrize(
+    ("dictionary_cls", "expected_adapter"),
+    [
+        (oracle_dictionary.OracleSyncDataDictionary, "OracleSyncDataDictionary"),
+        (OracledbSyncDataDictionary, "OracledbSyncDataDictionary"),
+    ],
+)
+def test_oracle_sync_capability_profile_adapter_tag(
+    dictionary_cls: type[oracle_dictionary.OracleSyncDataDictionary], expected_adapter: str
+) -> None:
+    """Sync capability profile adapter name reflects the concrete dictionary class."""
+    profile = dictionary_cls().get_metadata_capabilities(None)
+    assert profile.dialect == "oracle"
+    assert profile.adapter == expected_adapter
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("dictionary_cls", "expected_adapter"),
+    [
+        (oracle_dictionary.OracleAsyncDataDictionary, "OracleAsyncDataDictionary"),
+        (OracledbAsyncDataDictionary, "OracledbAsyncDataDictionary"),
+    ],
+)
+async def test_oracle_async_capability_profile_adapter_tag(
+    dictionary_cls: type[oracle_dictionary.OracleAsyncDataDictionary], expected_adapter: str
+) -> None:
+    """Async capability profile adapter name reflects the concrete dictionary class."""
+    profile = await dictionary_cls().get_metadata_capabilities(None)
+    assert profile.dialect == "oracle"
+    assert profile.adapter == expected_adapter

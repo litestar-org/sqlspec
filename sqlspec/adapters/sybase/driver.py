@@ -468,7 +468,21 @@ class SybaseDriver(SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
-        """Return ``None`` to stay aligned with ``dispatch_execute`` and compiled cache hits."""
+        """Return ``None`` without reading ``cursor.lastrowid``.
+
+        ``pymssql.Cursor.lastrowid`` delegates to
+        ``_mssql.MSSQLConnection.identity``, which executes a live
+        ``SELECT SCOPE_IDENTITY()`` query on every access. That function is
+        unsupported on SAP ASE (Sybase) and incurs an extra server round-trip
+        on SQL Server, so returning ``None`` avoids server errors and stays
+        aligned with ``dispatch_execute`` and compiled cache hits.
+
+        Args:
+            cursor: Unused ``pymssql`` cursor with optional ``lastrowid`` metadata.
+
+        Returns:
+            Always ``None``.
+        """
         _ = cursor
         return None
 

@@ -175,7 +175,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         version_info = await self.get_version(driver)
 
         if type_category == "json":
-            return resolve_mysql_json_type(version_info)
+            return resolve_mysql_json_type(version_info, config=config)
 
         return config.get_optimal_type(type_category)
 
@@ -272,7 +272,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
             row = await driver.select_one(statement, schema_type=dict)
         except SQLSpecError:
             parsed_version = parse_mysql_engine_version(str(raw_version) if raw_version is not None else "")
-            engine_family = parsed_version.engine_family if parsed_version is not None else "mysql"
+            engine_family = parsed_version.engine_family if parsed_version is not None else type(self).dialect
             identity = ObjectIdentity(
                 name=object_name,
                 object_type=object_type.lower(),
@@ -294,6 +294,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
             str(raw_version) if raw_version is not None else None,
             str(sql_mode) if sql_mode is not None else None,
             str(sql_quote_show_create) if sql_quote_show_create is not None else None,
+            default_dialect=type(self).dialect,
         )
 
     def _resolve_metadata_schema(self, schema: "str | None") -> "str | None":
@@ -474,7 +475,7 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
         version_info = self.get_version(driver)
 
         if type_category == "json":
-            return resolve_mysql_json_type(version_info)
+            return resolve_mysql_json_type(version_info, config=config)
 
         return config.get_optimal_type(type_category)
 
@@ -571,7 +572,7 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
             row = driver.select_one(statement, schema_type=dict)
         except SQLSpecError:
             parsed_version = parse_mysql_engine_version(str(raw_version) if raw_version is not None else "")
-            engine_family = parsed_version.engine_family if parsed_version is not None else "mysql"
+            engine_family = parsed_version.engine_family if parsed_version is not None else type(self).dialect
             identity = ObjectIdentity(
                 name=object_name,
                 object_type=object_type.lower(),
@@ -593,6 +594,7 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
             str(raw_version) if raw_version is not None else None,
             str(sql_mode) if sql_mode is not None else None,
             str(sql_quote_show_create) if sql_quote_show_create is not None else None,
+            default_dialect=type(self).dialect,
         )
 
     def _resolve_metadata_schema(self, schema: "str | None") -> "str | None":

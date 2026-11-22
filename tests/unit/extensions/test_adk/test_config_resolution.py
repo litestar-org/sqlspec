@@ -1,25 +1,38 @@
 """Tests for ADK flat-config resolution."""
 
+import importlib
+import sys
 from collections.abc import Callable
+from pathlib import Path
+from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+import sqlspec.extensions.adk as adk_pkg
+from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.oracledb import OracleSyncConfig
 from sqlspec.adapters.oracledb.adk.store import OracleSyncADKMemoryStore, OracleSyncADKStore
-from sqlspec.adapters.spanner import SpannerSyncConfig
+from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
+from sqlspec.adapters.spanner.adk.artifact_store import SpannerAsyncADKArtifactStore, SpannerSyncADKArtifactStore
 from sqlspec.adapters.spanner.adk.store import SpannerSyncADKMemoryStore, SpannerSyncADKStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError, SQLSpecError
-from sqlspec.extensions.adk import _config_utils
+from sqlspec.extensions.adk import (
+    _config_utils,
+    adk_memory_migration_enabled,
+    adk_sessions_migration_enabled,
+    resolve_adk_artifact_store_class,
+    resolve_adk_config,
+    resolve_adk_memory_store_class,
+    resolve_adk_store_class,
+)
 from sqlspec.extensions.adk._config_utils import (
     _adk_artifact_store_config,
-    _adk_memory_migration_enabled,
     _adk_memory_store_config,
     _adk_session_store_config,
-    _adk_sessions_migration_enabled,
     _ADKSessionStoreConfig,
     _apply_owner_id,
     _ensure_adk_store_registration,
@@ -227,9 +240,9 @@ def test_memory_migration_gate_follows_enable_memory() -> None:
     disabled = _Config({"enable_memory": False})
     defaulted = _Config({})
 
-    assert _adk_memory_migration_enabled(enabled) is True
-    assert _adk_memory_migration_enabled(disabled) is False
-    assert _adk_memory_migration_enabled(defaulted) is True
+    assert adk_memory_migration_enabled(enabled) is True
+    assert adk_memory_migration_enabled(disabled) is False
+    assert adk_memory_migration_enabled(defaulted) is True
 
 
 def test_sessions_migration_gate_follows_enable_sessions() -> None:
@@ -237,9 +250,9 @@ def test_sessions_migration_gate_follows_enable_sessions() -> None:
     disabled = _Config({"enable_sessions": False})
     defaulted = _Config({})
 
-    assert _adk_sessions_migration_enabled(enabled) is True
-    assert _adk_sessions_migration_enabled(disabled) is False
-    assert _adk_sessions_migration_enabled(defaulted) is True
+    assert adk_sessions_migration_enabled(enabled) is True
+    assert adk_sessions_migration_enabled(disabled) is False
+    assert adk_sessions_migration_enabled(defaulted) is True
 
 
 def test_retired_migration_include_keys_are_rejected() -> None:
@@ -265,7 +278,7 @@ def test_store_registration_skips_disabled_feature_store_classes(monkeypatch: py
         resolved.append(store_suffix)
         return object
 
-    monkeypatch.setattr(_config_utils, "_adk_adapter_store_class", record_store_class)
+    monkeypatch.setattr(_config_utils, "resolve_adk_store_class", record_store_class)
 
     _ensure_adk_store_registration(config)
 
@@ -283,16 +296,16 @@ def test_adk_store_resolution_supports_external_subclass_and_explicit_classvars(
         connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
         extension_config={"adk": {"shard_count": 4}},
     )
-    assert _config_utils._adk_adapter_store_class(spanner_config, "ADKStore") is SpannerSyncADKStore
-    assert _config_utils._adk_memory_migration_store_class(spanner_config) is SpannerSyncADKMemoryStore
+    assert resolve_adk_store_class(spanner_config, "ADKStore") is SpannerSyncADKStore
+    assert resolve_adk_memory_store_class(spanner_config) is SpannerSyncADKMemoryStore
 
     class SubclassedSqliteConfig(SqliteConfig):
         pass
 
     SubclassedSqliteConfig.__module__ = "myapp.database.config"
     sqlite_config = SubclassedSqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {}})
-    assert _config_utils._adk_adapter_store_class(sqlite_config, "ADKStore") is SqliteADKStore
-    assert _config_utils._adk_memory_migration_store_class(sqlite_config) is SqliteADKMemoryStore
+    assert resolve_adk_store_class(sqlite_config, "ADKStore") is SqliteADKStore
+    assert resolve_adk_memory_store_class(sqlite_config) is SqliteADKMemoryStore
 
     class CustomThirdPartyConfig:
         adapter_name = "third_party"
@@ -301,8 +314,8 @@ def test_adk_store_resolution_supports_external_subclass_and_explicit_classvars(
         extension_config: dict[str, dict[str, Any]] = {"adk": {}}
 
     third_party_config = CustomThirdPartyConfig()
-    assert _config_utils._adk_adapter_store_class(third_party_config, "ADKStore") is SqliteADKStore
-    assert _config_utils._adk_memory_migration_store_class(third_party_config) is SqliteADKMemoryStore
+    assert resolve_adk_store_class(third_party_config, "ADKStore") is SqliteADKStore
+    assert resolve_adk_memory_store_class(third_party_config) is SqliteADKMemoryStore
 
 
 @pytest.mark.parametrize("config_class", [_DeclaringBuiltinConfig, _ExternalConfig])
@@ -434,3 +447,409 @@ def test_adk_unresolved_external_config_rejects_invalid_migration_mode(invalid_m
     """Unresolved external ADK configs reject invalid migration_mode before the early return."""
     with pytest.raises(MigrationError, match="migration_mode"):
         _adk_session_store_config(_BareExternalConfig({"migration_mode": invalid_mode}))
+
+
+class _RawExtensionConfig:
+    extension_config: Any
+
+    def __init__(self, extension_config: Any) -> None:
+        self.extension_config = extension_config
+
+
+class _BareObject:
+    pass
+
+
+class _ExplicitArtifactStore:
+    pass
+
+
+class _ClassArtifactOverrideConfig:
+    adk_artifact_store_class = _ExplicitArtifactStore
+
+
+class _InstanceArtifactOverrideConfig:
+    adk_artifact_store_class: type[Any] | None = None
+
+    def __init__(self, store_class: type[Any]) -> None:
+        self.adk_artifact_store_class = store_class
+
+
+class _CustomSingleArtifactStore:
+    pass
+
+
+class _CustomSyncADKArtifactStore:
+    pass
+
+
+class _CustomAsyncADKArtifactStore:
+    pass
+
+
+class _CustomNoSuffixAdapter:
+    adapter_name = "custom_dual"
+    is_async = False
+
+
+class _CustomAsyncNoSuffixAdapter:
+    adapter_name = "custom_dual"
+    is_async = True
+
+
+class _AbsentArtifactAdapter:
+    adapter_name = "custom_absent"
+
+
+class _BrokenArtifactAdapter:
+    adapter_name = "custom_broken"
+
+
+class _SubclassSpannerSyncConfig(SpannerSyncConfig):
+    pass
+
+
+class _SubclassSpannerAsyncConfig(SpannerAsyncConfig):
+    pass
+
+
+def test_resolve_adk_config_returns_isolated_mutable_copy() -> None:
+    """Mutating the dict returned by resolve_adk_config does not mutate config.extension_config."""
+    config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {"session_table": "s"}})
+
+    resolved = resolve_adk_config(config)
+    assert resolved == {"session_table": "s"}
+
+    resolved["session_table"] = "mutated"
+    resolved["extra_key"] = "added"
+    assert config.extension_config["adk"] == {"session_table": "s"}
+
+
+def test_resolve_adk_config_copies_readonly_mapping() -> None:
+    """Read-only Mapping instances are copied into a mutable dict."""
+    proxy = MappingProxyType({"adk": MappingProxyType({"session_table": "readonly_sessions"})})
+    config = _RawExtensionConfig(proxy)
+
+    resolved = resolve_adk_config(config)
+    assert resolved == {"session_table": "readonly_sessions"}
+    assert isinstance(resolved, dict)
+    resolved["session_table"] = "updated"
+    assert proxy["adk"]["session_table"] == "readonly_sessions"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        _RawExtensionConfig({}),
+        _RawExtensionConfig({"adk": None}),
+        _RawExtensionConfig(None),
+        _RawExtensionConfig("not-a-mapping"),
+        _BareObject(),
+        None,
+        SqliteConfig,
+    ],
+    ids=[
+        "empty-extension-dict",
+        "adk-none",
+        "extension-config-none",
+        "extension-config-non-mapping",
+        "bare-object-no-attr",
+        "none-config",
+        "config-class",
+    ],
+)
+def test_resolve_adk_config_missing_or_none_returns_empty_dict(config: Any) -> None:
+    """Missing, None, or non-mapping extension_config inputs resolve to an empty dict."""
+    assert resolve_adk_config(config) == {}
+
+
+@pytest.mark.parametrize("bad_value", ["invalid", 42, ["session_table"]], ids=["str", "int", "list"])
+def test_resolve_adk_config_rejects_non_mapping_adk_value(bad_value: Any) -> None:
+    """Non-mapping extension_config['adk'] values raise ImproperConfigurationError."""
+    config = _RawExtensionConfig({"adk": bad_value})
+    with pytest.raises(ImproperConfigurationError, match="expected a mapping"):
+        resolve_adk_config(config)
+
+
+@pytest.mark.parametrize(
+    ("config", "expected_error", "match"),
+    [
+        (_BareSqliteStoreConfig({"unknown_key": 1}), ImproperConfigurationError, "unknown_key"),
+        (_BareExternalConfig({"migration_mode": "bogus"}), MigrationError, "migration_mode"),
+    ],
+    ids=["unknown-key", "invalid-migration-mode"],
+)
+def test_resolve_adk_config_validates_keys_and_migration_mode(
+    config: Any, expected_error: type[Exception], match: str
+) -> None:
+    """resolve_adk_config runs key and migration_mode validation."""
+    with pytest.raises(expected_error, match=match):
+        resolve_adk_config(config)
+
+
+@pytest.mark.parametrize(
+    ("target", "store_suffix", "expected"),
+    [
+        (SqliteConfig(connection_config={"database": ":memory:"}), "ADKStore", SqliteADKStore),
+        (SqliteConfig, "ADKStore", SqliteADKStore),
+        (SqliteConfig(connection_config={"database": ":memory:"}), "ADKMemoryStore", SqliteADKMemoryStore),
+        (SqliteConfig, "ADKMemoryStore", SqliteADKMemoryStore),
+        (
+            SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"}),
+            "ADKStore",
+            SpannerSyncADKStore,
+        ),
+        (SpannerSyncConfig, "ADKStore", SpannerSyncADKStore),
+        (_PlainSubclassConfig, "ADKStore", SqliteADKStore),
+        (_PlainSubclassConfig(connection_config={"database": ":memory:"}), "ADKStore", SqliteADKStore),
+        (_ExternalConfig, "ADKStore", _DeclaringADKStore),
+        (_ExternalConfig, "ADKMemoryStore", _DeclaringADKMemoryStore),
+    ],
+    ids=[
+        "sqlite-instance-session",
+        "sqlite-class-session",
+        "sqlite-instance-memory",
+        "sqlite-class-memory",
+        "spanner-instance-session",
+        "spanner-class-session",
+        "subclass-class-session",
+        "subclass-instance-session",
+        "external-classvar-session",
+        "external-classvar-memory",
+    ],
+)
+def test_resolve_adk_store_class_builtin_subclass_and_classvar(
+    target: Any, store_suffix: str, expected: type[Any]
+) -> None:
+    """resolve_adk_store_class handles instances, classes, subclasses, and explicit ClassVars."""
+    assert resolve_adk_store_class(target, store_suffix) is expected
+
+
+@pytest.mark.parametrize(
+    "target",
+    [_BareObject(), _BareObject, None, _ExternalNoStoreConfig],
+    ids=["bare-instance", "bare-class", "none", "external-missing-module"],
+)
+def test_resolve_adk_store_class_unknown_or_missing_raises(target: Any) -> None:
+    """Unknown or missing adapter store configs raise SQLSpecError."""
+    with pytest.raises(SQLSpecError):
+        resolve_adk_store_class(target, "ADKStore")
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        BigQueryConfig(connection_config={"project": "p"}),
+        BigQueryConfig,
+        _ExternalNoStoreConfig,
+        _BareExternalConfig({}),
+    ],
+    ids=["bigquery-instance", "bigquery-class", "external-no-store-class", "bare-external-instance"],
+)
+def test_resolve_adk_memory_store_class_missing_returns_none(target: Any) -> None:
+    """Adapters without an ADK memory store return None instead of raising ImportError."""
+    assert resolve_adk_memory_store_class(target) is None
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        (SqliteConfig(connection_config={"database": ":memory:"}), SqliteADKMemoryStore),
+        (SqliteConfig, SqliteADKMemoryStore),
+        (SpannerSyncConfig, SpannerSyncADKMemoryStore),
+        (_ExternalConfig, _DeclaringADKMemoryStore),
+    ],
+    ids=["sqlite-instance", "sqlite-class", "spanner-class", "external-classvar"],
+)
+def test_resolve_adk_memory_store_class_resolves_builtin_and_explicit(target: Any, expected: type[Any]) -> None:
+    """resolve_adk_memory_store_class resolves built-in stores and explicit ClassVar overrides."""
+    assert resolve_adk_memory_store_class(target) is expected
+
+
+@pytest.mark.parametrize("target", [_BareObject(), _BareObject, None], ids=["bare-instance", "bare-class", "none"])
+def test_resolve_adk_memory_store_class_unknown_raises(target: Any) -> None:
+    """Bare configs with no adapter_name and no explicit memory store raise SQLSpecError."""
+    with pytest.raises(SQLSpecError):
+        resolve_adk_memory_store_class(target)
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        (
+            SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"}),
+            SpannerSyncADKArtifactStore,
+        ),
+        (SpannerSyncConfig, SpannerSyncADKArtifactStore),
+        (_SubclassSpannerSyncConfig, SpannerSyncADKArtifactStore),
+        (
+            SpannerAsyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"}),
+            SpannerAsyncADKArtifactStore,
+        ),
+        (SpannerAsyncConfig, SpannerAsyncADKArtifactStore),
+        (_SubclassSpannerAsyncConfig, SpannerAsyncADKArtifactStore),
+    ],
+    ids=[
+        "spanner-sync-instance",
+        "spanner-sync-class",
+        "spanner-sync-subclass",
+        "spanner-async-instance",
+        "spanner-async-class",
+        "spanner-async-subclass",
+    ],
+)
+def test_resolve_adk_artifact_store_class_spanner_sync_and_async(target: Any, expected: type[Any]) -> None:
+    """resolve_adk_artifact_store_class resolves Spanner sync and async stores for instances and classes."""
+    assert resolve_adk_artifact_store_class(target) is expected
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        _ClassArtifactOverrideConfig,
+        _ClassArtifactOverrideConfig(),
+        _InstanceArtifactOverrideConfig(_ExplicitArtifactStore),
+    ],
+    ids=["class-override-class", "class-override-instance", "instance-override"],
+)
+def test_resolve_adk_artifact_store_class_explicit_override(target: Any) -> None:
+    """Explicit adk_artifact_store_class overrides take precedence on classes and instances."""
+    assert resolve_adk_artifact_store_class(target) is _ExplicitArtifactStore
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        SqliteConfig(connection_config={"database": ":memory:"}),
+        SqliteConfig,
+        None,
+        _BareObject(),
+        _BareObject,
+        _BareExternalConfig({}),
+    ],
+    ids=["sqlite-instance", "sqlite-class", "none", "bare-instance", "bare-class", "unknown-external"],
+)
+def test_resolve_adk_artifact_store_class_absent_or_unknown_returns_none(target: Any) -> None:
+    """Configs without an artifact store or adapter_name return None."""
+    assert resolve_adk_artifact_store_class(target) is None
+
+
+@pytest.mark.parametrize(
+    ("module_source", "missing_name"),
+    [
+        ("import third_party_sdk\n", "third_party_sdk"),
+        (
+            "import sqlspec.adapters.custom_broken.missing_dependency\n",
+            "sqlspec.adapters.custom_broken.missing_dependency",
+        ),
+        ('raise ModuleNotFoundError("No module named None")\n', None),
+    ],
+    ids=["third-party-sdk", "missing-internal-sub-dep", "none-module-name"],
+)
+def test_resolve_adk_artifact_store_class_reraises_broken_dependency(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, module_source: str, missing_name: str | None
+) -> None:
+    """Missing transitive dependencies inside artifact_store modules are re-raised.
+
+    The adapter and ``adk`` layers are registered in ``sys.modules`` as packages so the import
+    system executes a real ``artifact_store`` module from ``tmp_path``.
+    """
+    (tmp_path / "artifact_store.py").write_text(module_source, encoding="utf-8")
+    adapter_package = ModuleType("sqlspec.adapters.custom_broken")
+    adapter_package.__path__ = []
+    adk_package = ModuleType("sqlspec.adapters.custom_broken.adk")
+    adk_package.__path__ = [str(tmp_path)]
+    monkeypatch.setitem(sys.modules, adapter_package.__name__, adapter_package)
+    monkeypatch.setitem(sys.modules, adk_package.__name__, adk_package)
+
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        resolve_adk_artifact_store_class(_BrokenArtifactAdapter)
+    assert exc_info.value.name == missing_name
+
+
+@pytest.mark.parametrize(
+    "missing_name",
+    [
+        "sqlspec.adapters",
+        "sqlspec.adapters.custom_absent",
+        "sqlspec.adapters.custom_absent.adk",
+        "sqlspec.adapters.custom_absent.adk.artifact_store",
+    ],
+    ids=["adapters-pkg", "adapter-pkg", "adk-pkg", "artifact-store-mod"],
+)
+def test_resolve_adk_artifact_store_class_ignores_absent_module_chain(
+    monkeypatch: pytest.MonkeyPatch, missing_name: str
+) -> None:
+    """Absent adapter artifact_store package layers return None without raising.
+
+    A ``None`` entry in ``sys.modules`` for the parent of ``missing_name`` makes the import
+    system report ``missing_name`` itself as the absent module.
+    """
+    monkeypatch.delitem(sys.modules, missing_name, raising=False)
+    monkeypatch.setitem(sys.modules, missing_name.rpartition(".")[0], None)
+
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        importlib.import_module("sqlspec.adapters.custom_absent.adk.artifact_store")
+    assert exc_info.value.name == missing_name
+    assert resolve_adk_artifact_store_class(_AbsentArtifactAdapter) is None
+
+
+def test_resolve_adk_artifact_store_class_single_and_mode_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Falls back to single exported store or Async/Sync mode matching when MRO prefix does not match."""
+    module_name = "sqlspec.adapters.custom_dual.adk.artifact_store"
+    single_module = SimpleNamespace(
+        __all__=("OnlyADKArtifactStore", "ignored_value"),
+        OnlyADKArtifactStore=_CustomSingleArtifactStore,
+        ignored_value="not_a_type",
+    )
+    monkeypatch.setitem(sys.modules, module_name, single_module)
+    assert resolve_adk_artifact_store_class(_CustomNoSuffixAdapter()) is _CustomSingleArtifactStore
+
+    dual_module = SimpleNamespace(
+        __all__=("DualSyncADKArtifactStore", "DualAsyncADKArtifactStore"),
+        DualSyncADKArtifactStore=_CustomSyncADKArtifactStore,
+        DualAsyncADKArtifactStore=_CustomAsyncADKArtifactStore,
+    )
+    monkeypatch.setitem(sys.modules, module_name, dual_module)
+    assert resolve_adk_artifact_store_class(_CustomNoSuffixAdapter()) is _CustomSyncADKArtifactStore
+    assert resolve_adk_artifact_store_class(_CustomAsyncNoSuffixAdapter()) is _CustomAsyncADKArtifactStore
+    assert resolve_adk_artifact_store_class(_CustomNoSuffixAdapter) is _CustomSyncADKArtifactStore
+    assert resolve_adk_artifact_store_class(_CustomAsyncNoSuffixAdapter) is _CustomAsyncADKArtifactStore
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [({"enable_sessions": True}, True), ({"enable_sessions": False}, False), ({}, True)],
+    ids=["enabled", "disabled", "default-enabled"],
+)
+def test_adk_sessions_migration_enabled_matrix(settings: dict[str, Any], expected: bool) -> None:
+    """adk_sessions_migration_enabled follows enable_sessions and defaults to True."""
+    assert adk_sessions_migration_enabled(_Config(settings)) is expected
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [({"enable_memory": True}, True), ({"enable_memory": False}, False), ({}, True)],
+    ids=["enabled", "disabled", "default-enabled"],
+)
+def test_adk_memory_migration_enabled_matrix(settings: dict[str, Any], expected: bool) -> None:
+    """adk_memory_migration_enabled follows enable_memory and defaults to True."""
+    assert adk_memory_migration_enabled(_Config(settings)) is expected
+
+
+@pytest.mark.parametrize(
+    "export_name",
+    [
+        "adk_memory_migration_enabled",
+        "adk_sessions_migration_enabled",
+        "resolve_adk_artifact_store_class",
+        "resolve_adk_config",
+        "resolve_adk_memory_store_class",
+        "resolve_adk_store_class",
+    ],
+)
+def test_adk_public_config_helpers_exported_lazily_and_identical(export_name: str) -> None:
+    """All six helpers appear in __all__ and dir() and match _config_utils attributes."""
+    assert export_name in adk_pkg.__all__
+    assert export_name in dir(adk_pkg)
+    assert getattr(adk_pkg, export_name) is getattr(_config_utils, export_name)

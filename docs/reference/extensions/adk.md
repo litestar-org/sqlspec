@@ -19,6 +19,8 @@ from sqlspec.extensions.adk import (
     StoredEvent,
     StoredMemory,
     StoredSession,
+    adk_memory_migration_enabled,
+    adk_sessions_migration_enabled,
     prune_artifacts,
     prune_artifacts_sync,
     prune_events,
@@ -29,6 +31,10 @@ from sqlspec.extensions.adk import (
     prune_sessions_sync,
     prune_user_state,
     prune_user_state_sync,
+    resolve_adk_artifact_store_class,
+    resolve_adk_config,
+    resolve_adk_memory_store_class,
+    resolve_adk_store_class,
 )
 ```
 
@@ -193,6 +199,46 @@ Store subclasses can declare extra `extension_config["adk"]` keys through the `e
       show_docstring_parameters: false
 
 ::: sqlspec.extensions.adk.maintenance.prune_user_state_sync
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+## Migration & Configuration Helpers
+
+Public helpers for resolving validated ADK extension settings, adapter store classes, and schema migration flags without importing `google.adk` or `pydantic`.
+
+::: sqlspec.extensions.adk._config_utils.resolve_adk_config
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk._config_utils.resolve_adk_store_class
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk._config_utils.resolve_adk_memory_store_class
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk._config_utils.resolve_adk_artifact_store_class
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk._config_utils.adk_sessions_migration_enabled
+    options:
+      heading_level: 4
+      separate_signature: false
+      show_docstring_parameters: false
+
+::: sqlspec.extensions.adk._config_utils.adk_memory_migration_enabled
     options:
       heading_level: 4
       separate_signature: false

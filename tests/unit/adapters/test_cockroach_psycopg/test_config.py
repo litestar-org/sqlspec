@@ -38,6 +38,10 @@ from sqlspec.adapters.cockroach_psycopg.adk.store import (
 )
 from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 from sqlspec.adapters.cockroach_psycopg.core import build_native_export
+from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
+    CockroachPsycopgAsyncDataDictionary,
+    CockroachPsycopgSyncDataDictionary,
+)
 from sqlspec.adapters.cockroach_psycopg.litestar.store import CockroachPsycopgSyncStore
 from sqlspec.core import SQL
 from sqlspec.driver._common import _CLOSED_CONNECTION
@@ -1228,6 +1232,21 @@ async def test_cockroach_psycopg_async_get_columns_and_indexes_by_table() -> Non
     assert len(calls) == 1
     assert calls[0][1]["table_name"] == "users"
     assert calls[0][1]["schema_name"] is None
+
+
+@pytest.mark.parametrize(
+    ("dictionary_type", "driver_type"),
+    [
+        (CockroachPsycopgSyncDataDictionary, CockroachPsycopgSyncDriver),
+        (CockroachPsycopgAsyncDataDictionary, CockroachPsycopgAsyncDriver),
+    ],
+)
+def test_cockroach_psycopg_driver_caches_data_dictionary(dictionary_type: type[Any], driver_type: type[Any]) -> None:
+    """CockroachPsycopg drivers build their adapter data dictionary once and reuse the instance."""
+    driver = driver_type(connection=MagicMock())
+    first_dd = driver.data_dictionary
+    assert isinstance(first_dd, dictionary_type)
+    assert driver.data_dictionary is first_dd
 
 
 def test_cockroach_psycopg_sync_execute_native_storage_under_active_exception() -> None:

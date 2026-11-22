@@ -2,7 +2,9 @@
 
 import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.data_dictionary._registry import register_dialect
 from sqlspec.data_dictionary._types import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo
@@ -26,6 +28,7 @@ __all__ = (
     "ORACLE_TYPE_MAPPINGS",
     "ORACLE_VERSION_PARTS_COUNT",
     "ORACLE_VERSION_PATTERN",
+    "OracleVersionCache",
     "extract_oracle_version_value",
     "list_oracle_available_features",
     "merge_oracle_table_lists",
@@ -34,6 +37,8 @@ __all__ = (
     "oracle_supports_oson_blob",
     "parse_oracle_compatible_major",
     "parse_oracle_version_components",
+    "resolve_oracle_connection_compatible_major",
+    "resolve_oracle_connection_major",
     "resolve_oracle_feature_flag",
     "resolve_oracle_json_storage",
     "resolve_oracle_json_type",
@@ -104,6 +109,29 @@ ORACLE_CONFIG = DialectConfig(
 )
 
 register_dialect(ORACLE_CONFIG)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class OracleVersionCache:
+    """Pool-scoped cache for the resolved Oracle server version.
+
+    One instance is created per config and shared with every driver spawned from
+    that config's pool, so the server version is resolved once per pool lifetime
+    rather than once per acquired session. The cache lives and dies with the
+    pool; a server upgrade under a live pool is out of scope and picked up on the
+    next pool restart.
+    """
+
+    __slots__ = ("resolved", "version")
+
+    def __init__(self) -> None:
+        self.resolved: bool = False
+        self.version: Any | None = None
+
+    def reset(self) -> None:
+        """Clear the cached version so the next resolution re-queries the server."""
+        self.resolved = False
+        self.version = None
 
 
 def parse_oracle_compatible_major(compatible: "str | None") -> "int | None":
@@ -264,3 +292,36 @@ def merge_oracle_table_lists(
     ordered_names = {item.get("table_name") for item in ordered if item.get("table_name")}
     remainder = [item for item in all_tables if item.get("table_name") not in ordered_names]
     return ordered + remainder
+
+
+def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
+    """Resolve an Oracle server major without issuing a metadata query.
+
+    Pool-scoped data-dictionary metadata is authoritative when it has already
+    been resolved. Otherwise, use the connection callback cache and finally
+    python-oracledb's connection ``version`` string. The final fallback matters
+    for reacquired pool wrappers that do not retain dynamic attributes.
+    """
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        return int(version_cache.version.major)
+    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
+    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
+        return cached_major
+    version = getattr(connection, "version", None)
+    if not version:
+        return None
+    components = parse_oracle_version_components(str(version))
+    return components[0] if components is not None else None
+
+
+def resolve_oracle_connection_compatible_major(
+    connection: Any, version_cache: "OracleVersionCache | None" = None
+) -> "int | None":
+    """Resolve an Oracle server compatible major version without issuing a metadata query."""
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        comp = version_cache.version.compatible_major
+        return int(comp) if comp is not None else None
+    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
+    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
+        return cached_compatible
+    return None

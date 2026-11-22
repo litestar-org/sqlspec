@@ -7,7 +7,7 @@ from typing import Any, Final, cast
 from sqlspec.data_dictionary._registry import register_dialect
 from sqlspec.data_dictionary._types import DialectConfig, FeatureFlags, FeatureVersions, ForeignKeyMetadata
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.text import quote_identifier, resolve_catalog_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier, resolve_catalog_identifier
 
 __all__ = (
     "SNOWFLAKE_CONFIG",
@@ -15,6 +15,7 @@ __all__ = (
     "SNOWFLAKE_FEATURE_VERSIONS",
     "SNOWFLAKE_TYPE_MAPPINGS",
     "SNOWFLAKE_VERSION_PATTERN",
+    "format_snowflake_identifier",
     "format_snowflake_show_scope",
     "match_snowflake_catalog_rows",
     "parse_snowflake_imported_keys",
@@ -25,6 +26,9 @@ __all__ = (
 )
 
 _IDENTIFIER_PART: Final[re.Pattern[str]] = re.compile(r'\s*("(?:[^"]|"")*"|[^."\s]+)\s*(?:\.|$)')
+_QUALIFIED_IDENTIFIER_PART: Final[re.Pattern[str]] = re.compile(
+    r'[ \t]*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)[ \t]*(\.|\Z)'
+)
 SNOWFLAKE_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?")
 SNOWFLAKE_FEATURE_VERSIONS: Final[FeatureVersions] = {}
 
@@ -91,14 +95,6 @@ SNOWFLAKE_CONFIG: Final[DialectConfig] = DialectConfig(
 register_dialect(SNOWFLAKE_CONFIG)
 
 
-def _key_sequence(row: dict[str, Any]) -> int:
-    value = row.get("key_sequence")
-    try:
-        return int(value) if value is not None else 0
-    except (TypeError, ValueError):
-        return 0
-
-
 def parse_snowflake_primary_or_unique_keys(
     rows: Sequence[Mapping[str, Any]], *, unique: bool = False, table_name: str | None = None
 ) -> list[dict[str, Any]]:
@@ -135,12 +131,6 @@ def parse_snowflake_primary_or_unique_keys(
             "columns": columns.copy(),
         })
     return constraints
-
-
-def _referential_action(value: object) -> str | None:
-    if value is None or value == "":
-        return None
-    return str(value).upper().replace("_", " ")
 
 
 def parse_snowflake_imported_keys(
@@ -285,11 +275,34 @@ def match_snowflake_catalog_rows(
     return selected
 
 
-def _quote_catalog_name(name: str) -> str:
-    if not name.strip() or "\x00" in name:
-        msg = "Snowflake identifier must not be empty or contain NUL"
+def format_snowflake_identifier(identifier: str) -> str:
+    """Validate a 1- to 3-part identifier and quote each part under Snowflake folding.
+
+    Args:
+        identifier: Bare or double-quoted identifier, optionally database- and schema-qualified.
+
+    Returns:
+        Dot-joined, double-quoted identifier with bare parts folded to uppercase.
+
+    Raises:
+        SQLSpecError: If the identifier is empty or not a valid identifier sequence.
+    """
+    position = 0
+    parts: list[str] = []
+    while position < len(identifier):
+        matched = _QUALIFIED_IDENTIFIER_PART.match(identifier, position)
+        if matched is None:
+            msg = "Invalid Snowflake identifier"
+            raise SQLSpecError(msg)
+        parts.append(quote_identifier(normalize_identifier(matched.group(1), "snowflake")))
+        position = matched.end()
+        if matched.group(2) == "." and position == len(identifier):
+            msg = "Invalid Snowflake identifier"
+            raise SQLSpecError(msg)
+    if not parts:
+        msg = "Snowflake identifier must not be empty"
         raise SQLSpecError(msg)
-    return quote_identifier(name)
+    return ".".join(parts)
 
 
 def format_snowflake_show_scope(
@@ -319,3 +332,24 @@ def format_snowflake_show_scope(
     if database_name is not None:
         return f"IN DATABASE {_quote_catalog_name(database_name)}"
     return "IN SCHEMA"
+
+
+def _key_sequence(row: dict[str, Any]) -> int:
+    value = row.get("key_sequence")
+    try:
+        return int(value) if value is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _referential_action(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    return str(value).upper().replace("_", " ")
+
+
+def _quote_catalog_name(name: str) -> str:
+    if not name.strip() or "\x00" in name:
+        msg = "Snowflake identifier must not be empty or contain NUL"
+        raise SQLSpecError(msg)
+    return quote_identifier(name)

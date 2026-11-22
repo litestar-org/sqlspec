@@ -23,7 +23,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.11, <4.0"
-version = "0.73.0"
+version = "0.74.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -244,7 +244,7 @@ exclude = [
   "sqlspec/extensions/events/_store.py",    # Adapter-local event stores subclass this base
   "sqlspec/extensions/adk/converters.py",   # Optional ADK Pydantic model reconstruction stays interpreted
   "sqlspec/adapters/**/data_dictionary.py", # Cross-module inheritance causes mypyc segfaults
-  "sqlspec/data_dictionary/dialects/mysql/dictionary.py", # Cross-module inheritance causes mypyc segfaults
+  "sqlspec/data_dictionary/dialects/**/dictionary.py", # Cross-module inheritance causes mypyc segfaults
   "sqlspec/utils/arrow_helpers.py",         # Arrow operations cause segfaults when compiled
   "sqlspec/core/_pagination.py",            # @dataclass mutates class at def time; annotations must survive mypyc for Litestar OpenAPI (#419)
 ]
@@ -365,7 +365,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.73.0"
+current_version = "0.74.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"

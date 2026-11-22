@@ -12,7 +12,9 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 import sqlspec.adapters.sqlanywhere.core as sqlanywhere_core
+import sqlspec.adapters.sqlanywhere.data_dictionary as sqlanywhere_data_dictionary
 import sqlspec.adapters.sqlanywhere.pool as sqlanywhere_pool_module
+import sqlspec.data_dictionary.dialects.sqlanywhere as sqlanywhere_dialect
 from sqlspec.adapters.sqlanywhere import (
     DEFAULT_SQLANYWHERE_PORT,
     SqlanywhereConfig,
@@ -1733,3 +1735,52 @@ def test_sqlanywhere_cache_hit_maps_driver_errors_and_keeps_sqlspec_errors() -> 
         _run_cache_hit_executor(driver, statement, ("Ada", 3))
 
     assert mapped_info.value is already_mapped
+
+
+def test_sqlanywhere_data_dictionary_alias_identity() -> None:
+    """Adapter preserves SqlanywhereDataDictionary alias and subclasses the shared base."""
+    shared_dictionary = sqlanywhere_dialect.SqlanywhereSyncDataDictionary
+
+    assert sqlanywhere_data_dictionary.SqlanywhereDataDictionary is (
+        sqlanywhere_data_dictionary.SqlanywhereSyncDataDictionary
+    )
+    assert sqlanywhere_data_dictionary.SqlanywhereSyncDataDictionary is not shared_dictionary
+    assert issubclass(sqlanywhere_data_dictionary.SqlanywhereSyncDataDictionary, shared_dictionary)
+
+
+@pytest.mark.parametrize(
+    "symbol_name",
+    [
+        "SQLANYWHERE_CONFIG",
+        "SqlanywhereVersionInfo",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_sqlanywhere_version",
+    ],
+)
+def test_sqlanywhere_data_dictionary_shared_helper_identity(symbol_name: str) -> None:
+    """Adapter data dictionary re-exports identical shared helpers from the dialect package."""
+    assert getattr(sqlanywhere_data_dictionary, symbol_name) is getattr(sqlanywhere_dialect, symbol_name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "SqlanywhereSyncDataDictionary",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_sqlanywhere_version",
+    ],
+)
+def test_sqlanywhere_data_dictionary_dialect_package_lazy_exports(name: str) -> None:
+    """Dialect package advertises lazy dictionary exports in __all__ and __dir__."""
+    assert name in sqlanywhere_dialect.__all__
+    assert name in dir(sqlanywhere_dialect)
+
+
+def test_sqlanywhere_data_dictionary_dialect_package_rejects_unknown_attribute() -> None:
+    """Dialect package lazy facade rejects unknown attributes."""
+    with pytest.raises(AttributeError, match="has no attribute 'nonexistent_sqlanywhere_symbol'"):
+        getattr(sqlanywhere_dialect, "nonexistent_sqlanywhere_symbol")

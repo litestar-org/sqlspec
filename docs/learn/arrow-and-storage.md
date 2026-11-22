@@ -1,6 +1,6 @@
 # Arrow and Storage
 
-SQLSpec bridges relational and analytical workloads with first-class **Apache Arrow** query results (`select_to_arrow`), bulk ingestion from Arrow tables, object storage, and Python records (`load_from_arrow`, `load_from_storage`, `load_from_records`), streaming `RecordBatch` pipelines (`read_arrow_batches` / `write_arrow_batches`), pluggable object storage (`StorageRegistry` over local paths, `obstore`, and `fsspec`), and schema-aware JSONL table fixtures.
+SQLSpec bridges relational and analytical workloads with first-class **Apache Arrow** query results (`select_to_arrow`), bulk ingestion from Arrow tables, object storage, and Python records (`load_from_arrow`, `load_from_storage`, `load_from_records`), streaming `RecordBatch` pipelines (`read_arrow_batches` / `write_arrow_batches`), pluggable object storage (`StorageRegistry` over local paths, `obstore`, `fsspec`, and custom backends), and schema-aware JSONL table fixtures.
 
 ## Required Packages
 
@@ -21,7 +21,7 @@ require `pyarrow`. Add only the backend and conversion packages you use.
 ```mermaid
 flowchart LR
     DB[("Database Session")] <-->|"select_to_arrow / load_from_arrow"| Arrow["Arrow Table / RecordBatch Stream"]
-    Arrow <-->|"Sync / AsyncStoragePipeline"| Store["StorageRegistry (local / obstore / fsspec)"]
+    Arrow <-->|"Sync / AsyncStoragePipeline"| Store["StorageRegistry (local / obstore / fsspec / custom)"]
     Arrow -->|"Zero-Copy"| DF["Polars / Pandas / PyArrow"]
 ```
 
@@ -103,7 +103,7 @@ with spec.provide_session(config) as session:
 
 ## Unified Object Storage and StorageRegistry
 
-`storage_registry` resolves local paths and cloud URIs (`s3://`, `gs://`, `az://`, `file://`) behind a consistent `ObjectStoreProtocol` backed by `local`, `obstore` (`obstore` extra), or `fsspec` (`fsspec` extra). In `SyncStoragePipeline` and `AsyncStoragePipeline`, use `write_rows(..., format_hint="jsonl")` for row dictionaries (`"json"` or `"jsonl"`), `write_arrow(..., format_hint="parquet")` for columnar Arrow tables (`"parquet"`, `"arrow-ipc"`, or `"csv"`), and unpack `table, telemetry = pipeline.read_arrow(...)`:
+`storage_registry` resolves local paths and cloud URIs (`s3://`, `gs://`, `az://`, `file://`) behind a consistent `ObjectStoreProtocol` backed by `local`, `obstore` (`obstore` extra), `fsspec` (`fsspec` extra), or custom backends registered via `register_backend` and `register_alias`. In `SyncStoragePipeline` and `AsyncStoragePipeline`, use `write_rows(..., format_hint="jsonl")` for row dictionaries (`"json"` or `"jsonl"`), `write_arrow(..., format_hint="parquet")` for columnar Arrow tables (`"parquet"`, `"arrow-ipc"`, or `"csv"`), and unpack `table, telemetry = pipeline.read_arrow(...)`:
 
 ```python
 from pathlib import Path
@@ -137,7 +137,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     )
 ```
 
-You can also write an `ArrowResult` directly to any storage destination via `arrow_result.write_to_storage_sync("alias://exports/metrics.parquet", write_options={"row_group_size": 10_000}, overwrite=True)` (or `await arrow_result.write_to_storage_async(...)`). `file://` URIs and bare local paths resolve to `LocalStore` (`backend="local"`) by default unless `backend="obstore"` or `backend="fsspec"` is explicitly requested. Across all storage backends (`LocalStore`, `ObStoreBackend`, and `FSSpecBackend`), `write_bytes_sync`, `write_text_sync`, `write_bytes_async`, and `write_text_async` accept `overwrite=False` for atomic create-only writes, raising `FileExistsInStorageError` if the target object already exists.
+You can also write an `ArrowResult` directly to any storage destination via `arrow_result.write_to_storage_sync("alias://exports/metrics.parquet", write_options={"row_group_size": 10_000}, overwrite=True)` (or `await arrow_result.write_to_storage_async(...)`). `file://` URIs and bare local paths resolve to `LocalStore` (`backend="local"`) by default unless a backend override is explicitly requested (`backend="obstore"`, `backend="fsspec"`, a custom registered backend name, or a backend class/factory callable). Across the built-in storage backends (`LocalStore`, `ObStoreBackend`, and `FSSpecBackend`), `write_bytes_sync`, `write_text_sync`, `write_bytes_async`, and `write_text_async` accept `overwrite=False` for atomic create-only writes, raising `FileExistsInStorageError` if the target object already exists.
 
 Local backends (`LocalStore`, `FSSpecBackend` on the `file` protocol, and `ObStoreBackend` on `file://`) never delete their root directory, and `delete_sync(path, recursive=True)` (or `delete_async`) is required to remove a directory; deleting a single file needs no flag. Storage logs and errors omit URI credentials, query strings, and fragments.
 
@@ -259,25 +259,60 @@ On row-streaming adapters, SQLSpec inspects the first batch to pin the Arrow sch
 
 ### Custom Multipart Backends
 
-Custom storage backends opt into zero-buffering Arrow exports by implementing `DirectStreamWriteProtocol` (`supports_direct_arrow_write`, `open_write_stream_sync`, and `open_write_stream_async`). Verify protocol conformance at runtime with `supports_direct_stream_write` and stream Arrow payloads with `encode_arrow_to_sink` or `encode_arrow_to_async_sink`:
+Custom storage backends opt into zero-buffering Arrow exports by implementing `DirectStreamWriteProtocol` (`supports_direct_arrow_write`, `open_write_stream_sync`, and `open_write_stream_async`). To also register a pre-configured store instance with `storage_registry.register_alias(..., backend=store)`, the instance must define the minimal `ObjectStoreProtocol` contract checked by `StorageRegistry`: `protocol` (`str`), `backend_type` (`ClassVar[str]`), `resolve_uri`, `read_bytes_sync`, `write_bytes_sync`, and `exists_sync`. Verify streaming conformance at runtime with `supports_direct_stream_write` and encode Arrow payloads directly to sinks with `encode_arrow_to_sink` or `encode_arrow_to_async_sink`:
 
 ```python
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 import pyarrow as pa
 
+from sqlspec.exceptions import FileExistsInStorageError
 from sqlspec.protocols import AsyncWritableBytesSink, WritableBytesSink
 from sqlspec.storage import StorageFormat, encode_arrow_to_sink
 from sqlspec.utils.type_guards import supports_direct_stream_write
 
 
 class InMemoryMultipartStore:
-    """Minimal custom store demonstrating DirectStreamWriteProtocol."""
+    """Custom in-memory store with direct-stream Arrow write support."""
 
-    def __init__(self) -> None:
+    backend_type: ClassVar[str] = "memory"
+
+    def __init__(self, uri: str = "memory://bucket", **kwargs: Any) -> None:
+        _ = kwargs
+        self.protocol: str = uri.partition("://")[0] or "memory"
+        self.base_uri: str = uri.rstrip("/")
         self.objects: dict[str, bytes] = {}
+
+    def resolve_uri(self, path: str | Path) -> str:
+        key = str(path).lstrip("/")
+        return f"{self.base_uri}/{key}"
+
+    def read_bytes_sync(self, path: str | Path, **kwargs: Any) -> bytes:
+        _ = kwargs
+        key = str(path)
+        if key not in self.objects:
+            raise FileNotFoundError(key)
+        return self.objects[key]
+
+    def write_bytes_sync(
+        self,
+        path: str | Path,
+        data: bytes,
+        *,
+        overwrite: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        _ = kwargs
+        key = str(path)
+        if not overwrite and key in self.objects:
+            raise FileExistsInStorageError(key)
+        self.objects[key] = data
+
+    def exists_sync(self, path: str | Path, **kwargs: Any) -> bool:
+        _ = kwargs
+        return str(path) in self.objects
 
     def supports_direct_arrow_write(
         self, file_format: StorageFormat, *, overwrite: bool = True
@@ -325,6 +360,103 @@ with store.open_write_stream_sync("metrics.parquet") as sink:
     )
 ```
 
+### Registering Custom Backends and Instance Aliases
+
+`StorageRegistry` supports custom backends in three forms alongside the built-in `local`, `fsspec`, and `obstore` backends:
+
+1. **Named custom backends** (`register_backend(name, factory, *, overwrite=False)`): register a class or `StorageBackendFactory` callable once under a name, then address it from `register_alias(..., backend="custom")` or `get(..., backend="custom")`. Names are trimmed and lowercased, so `"  CUSTOM  "` and `"custom"` refer to the same entry. Built-in backend names (`"local"`, `"obstore"`, `"fsspec"`) cannot be overridden or unregistered (`ValueError`).
+2. **Inline classes or factory callables**: pass a class or `StorageBackendFactory` callable directly to `register_alias(alias, uri, backend=...)` or `get(uri, backend=...)` without registering a global name. `get(uri, backend=...)` caches the resolved instance for a backend name or class. A factory callable passed to `get` runs on every call and is never cached, so register it with `register_backend` or bind it to an alias when one shared instance is wanted.
+3. **Pre-configured backend instances**: bind an existing `ObjectStoreProtocol` object directly to an alias with `register_alias("signed-bucket", backend=store)` (`uri` is optional) to retain credentials, signing state, connection clients, or `DirectStreamWriteProtocol` implementations across `SyncStoragePipeline` and `AsyncStoragePipeline` calls.
+
+```python
+import asyncio
+from typing import Any
+import pyarrow as pa
+
+from sqlspec.storage import (
+    AsyncStoragePipeline,
+    SyncStoragePipeline,
+    storage_registry,
+)
+
+
+def make_store(uri: str, **kwargs: Any) -> InMemoryMultipartStore:
+    return InMemoryMultipartStore(uri, **kwargs)
+
+
+storage_registry.register_backend("custom", make_store)
+assert storage_registry.is_backend_registered("CUSTOM")
+assert "custom" in storage_registry.list_backends()
+
+storage_registry.register_alias(
+    "warehouse", "memory://warehouse", backend="custom"
+)
+storage_registry.register_alias(
+    "inline", "memory://inline", backend=InMemoryMultipartStore
+)
+factory_backend = storage_registry.get("memory://scratch", backend="custom")
+inline_backend = storage_registry.get(
+    "memory://scratch", backend=InMemoryMultipartStore
+)
+
+signed_store = InMemoryMultipartStore("memory://signed-bucket")
+storage_registry.register_alias("signed-bucket", backend=signed_store)
+
+sync_pipeline = SyncStoragePipeline(registry=storage_registry)
+rows_table = pa.table({"host": ["web-1"], "cpu_pct": [41.5]})
+sync_pipeline.write_arrow(
+    rows_table,
+    "alias://signed-bucket/metrics.parquet",
+    format_hint="parquet",
+)
+loaded_table, telemetry = sync_pipeline.read_arrow(
+    "alias://signed-bucket/metrics.parquet", file_format="parquet"
+)
+
+
+async def write_async_metrics() -> None:
+    async_pipeline = AsyncStoragePipeline(registry=storage_registry)
+    await async_pipeline.write_arrow(
+        rows_table,
+        "alias://signed-bucket/async_metrics.parquet",
+        format_hint="parquet",
+    )
+
+
+asyncio.run(write_async_metrics())
+
+storage_registry.clear_cache()
+assert storage_registry.get("signed-bucket") is signed_store
+
+assert storage_registry.unregister_alias("signed-bucket") is True
+assert storage_registry.unregister_alias("warehouse") is True
+assert storage_registry.unregister_alias("inline") is True
+assert storage_registry.unregister_backend("custom") is True
+```
+
+Instance-backed aliases are already configured, so `StorageRegistry` rejects overrides with `ImproperConfigurationError`:
+
+- `register_alias(alias, backend=store, base_path=...)` or passing extra keyword arguments to `register_alias` for an instance-backed alias raises `ImproperConfigurationError`.
+- `get(alias, backend=...)` or passing extra keyword arguments to `get` for an instance-backed alias raises `ImproperConfigurationError`.
+- Passing a pre-configured instance to `register_backend()` or `get(..., backend=store)` raises `TypeError`; register instances through `register_alias(..., backend=store)` instead.
+- A non-callable object missing any of `protocol`, `backend_type`, `resolve_uri`, `read_bytes_sync`, `write_bytes_sync`, or `exists_sync` is rejected as a non-store object with `TypeError`.
+
+#### Registry Lifecycle and Clearing Methods
+
+Pre-configured instance aliases are stored separately from the transient backend cache so cache eviction never drops live credentials or in-memory state. Use the targeted cleanup helpers depending on which entries you want to discard:
+
+| Method | Cached transient instances | Config aliases | Pre-configured instance aliases | Custom backend factories |
+| --- | --- | --- | --- | --- |
+| `clear_cache(uri_or_alias=None)` | Cleared (matching entry or all) | Preserved | Preserved | Preserved |
+| `clear_instances()` | Cleared | Preserved | Preserved | Preserved |
+| `clear_aliases()` | Preserved | Cleared | Cleared | Preserved |
+| `clear_backends()` | Evicts entries created with custom backend overrides | Preserved (retains captured factory) | Preserved | Cleared |
+| `clear()` | Cleared | Cleared | Cleared | Cleared |
+| `unregister_alias(alias)` | Clears entries matching `alias` | Removes `alias` if present | Removes `alias` if present | Preserved |
+| `unregister_backend(name)` | Evicts entries created with `name` | Preserved (retains captured factory) | Preserved | Removes `name` if present |
+
+Calling `register_backend(name, new_factory, overwrite=True)` replaces an existing custom backend entry and evicts transient cached instances created with that backend override name. See the [Storage & Pipelines reference](../reference/storage.md) for full `StorageRegistry` and `StorageBackendFactory` signatures.
+
 ## Schema-Aware Table Fixtures
 
 `sqlspec.utils.fixtures` exports and loads per-table `.json`, `.json.gz`, `.jsonl`, and `.jsonl.gz` files while introspecting live column types (`UUID`, ISO timestamps, `Decimal`, base64 `bytes`, `JSON`/`JSONB`, identity columns, and sequence resyncing) via `driver.data_dictionary`:
@@ -371,4 +503,4 @@ with (
 
 - Use `select_to_arrow`, `select_to_storage`, and `load_from_arrow` / `load_from_records` / `load_from_storage` for columnar queries, streaming storage exports, and native bulk loads.
 - Use `pipeline.write_rows(..., format_hint="jsonl")` for JSON/JSONL row payloads, `pipeline.write_arrow(...)` and `pipeline.write_arrow_batches(...)` (with `write_options=...` and `overwrite=False` when create-only protection is needed) for streaming Parquet/Arrow IPC/CSV exports, and unpack `table, telemetry = pipeline.read_arrow(...)`.
-- Register named storage buckets on `storage_registry` (`s3://`, `gs://`, `az://`, or `backend="local"`) or implement `DirectStreamWriteProtocol` on custom backends so application code addresses portable `alias://...` destinations.
+- Register named storage buckets on `storage_registry` (`s3://`, `gs://`, `az://`, `backend="local"`, custom named backends via `register_backend`, backend classes/factories, or pre-configured `ObjectStoreProtocol` instances) and implement `DirectStreamWriteProtocol` on custom backends so application code addresses portable `alias://...` destinations.

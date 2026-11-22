@@ -38,12 +38,20 @@ __all__ = (
     "SyncEventChannel",
     "SyncEventListener",
     "load_native_backend",
+    "resolve_backend_name",
     "resolve_event_poll_interval",
     "resolve_poll_interval",
 )
 
 logger = get_logger("sqlspec.events.channel")
 _LISTENER_SHUTDOWN_TIMEOUT = 0.5
+_POSTGRES_ADAPTERS = frozenset({"asyncpg", "psycopg", "psqlpy"})
+_EVENT_BACKENDS = frozenset({"notify", "notify_queue", "poll_queue", "aq", "txeventq"})
+_RETIRED_EVENT_BACKENDS = {
+    "listen_notify": "notify",
+    "listen_notify_durable": "notify_queue",
+    "table_queue": "poll_queue",
+}
 
 
 @dataclass(slots=True)
@@ -102,6 +110,47 @@ def resolve_event_poll_interval(
         msg = "event_poll_interval must be greater than zero"
         raise ImproperConfigurationError(msg)
     return resolved
+
+
+def resolve_backend_name(config: Any, extension_settings: "dict[str, Any]", adapter_name: "str | None" = None) -> str:
+    """Resolve and validate the event channel backend name.
+
+    Checks ``extension_settings["backend"]`` first, then falls back to
+    ``config.driver_features["events_backend"]`` when ``driver_features`` is a
+    ``dict``. When neither is configured, returns ``"notify"`` for
+    PostgreSQL-family adapters and ``"poll_queue"`` otherwise.
+
+    Args:
+        config: Database configuration instance.
+        extension_settings: Events extension settings for the configuration.
+        adapter_name: Optional pre-resolved canonical adapter name. When
+            ``None``, resolves the adapter name from ``config`` via
+            ``resolve_adapter_name``.
+
+    Returns:
+        Validated event backend name.
+
+    Raises:
+        ImproperConfigurationError: If the configured backend name is retired,
+            unknown, or not a string.
+    """
+    backend_name = extension_settings.get("backend")
+    if backend_name is None:
+        driver_features = getattr(config, "driver_features", {})
+        if isinstance(driver_features, dict):
+            backend_name = driver_features.get("events_backend")
+    if backend_name is None:
+        resolved_adapter = adapter_name if adapter_name is not None else resolve_adapter_name(config)
+        return "notify" if resolved_adapter in _POSTGRES_ADAPTERS else "poll_queue"
+    if isinstance(backend_name, str) and backend_name in _RETIRED_EVENT_BACKENDS:
+        replacement = _RETIRED_EVENT_BACKENDS[backend_name]
+        msg = f"Event backend {backend_name!r} was removed; use {replacement!r}"
+        raise ImproperConfigurationError(msg)
+    if not isinstance(backend_name, str) or backend_name not in _EVENT_BACKENDS:
+        valid = ", ".join(sorted(_EVENT_BACKENDS))
+        msg = f"Unknown event backend {backend_name!r}; expected one of: {valid}"
+        raise ImproperConfigurationError(msg)
+    return backend_name
 
 
 def load_native_backend(
@@ -802,42 +851,6 @@ def _resolve_event_type(payload: "dict[str, Any]", metadata: "dict[str, Any] | N
     return None
 
 
-_POSTGRES_ADAPTERS = frozenset({"asyncpg", "psycopg", "psqlpy"})
-_EVENT_BACKENDS = frozenset({"notify", "notify_queue", "poll_queue", "aq", "txeventq"})
-_RETIRED_EVENT_BACKENDS = {
-    "listen_notify": "notify",
-    "listen_notify_durable": "notify_queue",
-    "table_queue": "poll_queue",
-}
-
-
-def _get_default_backend(adapter_name: "str | None") -> str:
-    """Return the default events backend for an adapter."""
-    if adapter_name in _POSTGRES_ADAPTERS:
-        return "notify"
-    return "poll_queue"
-
-
-def _resolve_backend_name(config: Any, extension_settings: "dict[str, Any]", adapter_name: "str | None") -> str:
-    """Resolve and validate event backend configuration."""
-    backend_name = extension_settings.get("backend")
-    if backend_name is None:
-        driver_features = getattr(config, "driver_features", {})
-        if isinstance(driver_features, dict):
-            backend_name = driver_features.get("events_backend")
-    if backend_name is None:
-        return _get_default_backend(adapter_name)
-    if backend_name in _RETIRED_EVENT_BACKENDS:
-        replacement = _RETIRED_EVENT_BACKENDS[backend_name]
-        msg = f"Event backend {backend_name!r} was removed; use {replacement!r}"
-        raise ImproperConfigurationError(msg)
-    if backend_name not in _EVENT_BACKENDS:
-        valid = ", ".join(sorted(_EVENT_BACKENDS))
-        msg = f"Unknown event backend {backend_name!r}; expected one of: {valid}"
-        raise ImproperConfigurationError(msg)
-    return cast("str", backend_name)
-
-
 def _resolve_event_backend(
     config: Any,
     extension_settings: "dict[str, Any]",
@@ -864,7 +877,7 @@ def _resolve_event_backend(
     """
     _validate_adapter_event_settings(extension_settings, adapter_name, config=config)
     queue_backend = build_queue_backend(config, extension_settings, adapter_name=adapter_name, hints=hints)
-    backend_name = _resolve_backend_name(config, extension_settings, adapter_name)
+    backend_name = resolve_backend_name(config, extension_settings, adapter_name)
     native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=adapter_name)
     if native_backend is None:
         if backend_name not in {None, "poll_queue"}:

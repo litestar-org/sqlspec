@@ -7,7 +7,7 @@ The table and index guards also make this safe after a fresh 0001 installation.
 from typing import TYPE_CHECKING
 
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.extensions.adk._config_utils import _adk_memory_migration_enabled
+from sqlspec.extensions.adk import adk_memory_migration_enabled
 from sqlspec.utils.adapters import resolve_adapter_name
 
 if TYPE_CHECKING:
@@ -22,7 +22,7 @@ async def up(context: "MigrationContext | None" = None) -> list[str]:
         msg = "Migration context must have a config to determine store class"
         raise SQLSpecError(msg)
     config = context.config
-    if not _adk_memory_migration_enabled(config):
+    if not adk_memory_migration_enabled(config):
         return []
     if resolve_adapter_name(config) != "mssql_python":
         return []

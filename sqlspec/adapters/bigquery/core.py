@@ -798,9 +798,6 @@ def resolve_export_format(format_hint: "StorageFormat | None") -> str | None:
     return None
 
 
-_resolve_export_format = resolve_export_format
-
-
 def build_export_statement(sql: str, uri: str, export_format: str, connection: str | None) -> str:
     """Wrap compiled SQL without changing its bound query parameters."""
     connection_clause = ""
@@ -816,9 +813,6 @@ def build_export_statement(sql: str, uri: str, export_format: str, connection: s
     if export_format == "CSV":
         options += ", header=true"
     return f"EXPORT DATA{connection_clause} OPTIONS ({options}) AS {sql}"
-
-
-_build_export_statement = build_export_statement
 
 
 def build_export_uri(uri: str, format_hint: "StorageFormat | None" = None) -> str:
@@ -870,9 +864,6 @@ def build_export_uri(uri: str, format_hint: "StorageFormat | None" = None) -> st
     return f"{scheme}://{authority}{parent}/{leaf}"
 
 
-_build_export_uri = build_export_uri
-
-
 def uses_local_bigquery_endpoint(connection: "BigQueryConnection") -> bool:
     """Return True when a BigQuery client points at a local emulator endpoint."""
     bq_conn = cast("object", getattr(connection, "_connection", None))
@@ -884,9 +875,6 @@ def uses_local_bigquery_endpoint(connection: "BigQueryConnection") -> bool:
     except ValueError:
         return False
     return hostname in LOCAL_BIGQUERY_ENDPOINT_HOSTS
-
-
-_uses_local_bigquery_endpoint = uses_local_bigquery_endpoint
 
 
 def run_query_and_wait(
@@ -923,9 +911,6 @@ def run_query_and_wait(
     if max_results is not None:
         query_kwargs["max_results"] = max_results
     return connection.query_and_wait(sql, **query_kwargs)
-
-
-_run_query_and_wait = run_query_and_wait
 
 
 class _BigQueryRow(Protocol):

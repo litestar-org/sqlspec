@@ -51,6 +51,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Teradata catalog configuration compiles with dialect helpers.",
     },
+    "sqlspec/data_dictionary/dialects/teradata/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
     "sqlspec/dialects/teradata/_generators.py": {
         "classification": "compile_now",
         "reason": "Explicit argument Teradata generator dispatch handlers.",
@@ -143,9 +147,17 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Shared Postgres JSON type helper for ADBC-as-Postgres, asyncpg, psqlpy, and psycopg dictionaries.",
     },
+    "sqlspec/data_dictionary/dialects/postgres/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
     "sqlspec/data_dictionary/dialects/sqlite/config.py": {
         "classification": "compile_now",
         "reason": "Shared SQLite JSON and feature-list helpers for sqlite, aiosqlite, and ADBC-as-SQLite dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/sqlite/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
     },
     "sqlspec/data_dictionary/dialects/mysql/config.py": {
         "classification": "compile_now",
@@ -155,45 +167,89 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "hard_block",
         "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
     },
+    "sqlspec/data_dictionary/dialects/mariadb/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
     "sqlspec/data_dictionary/dialects/cockroachdb/config.py": {
         "classification": "compile_now",
         "reason": "Shared CockroachDB JSON type helper for cockroach_asyncpg, cockroach_psycopg, and ADBC-as-Cockroach dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/cockroachdb/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
     },
     "sqlspec/data_dictionary/dialects/db2/config.py": {
         "classification": "compile_now",
         "reason": "Db2 data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
     },
+    "sqlspec/data_dictionary/dialects/db2/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
     "sqlspec/data_dictionary/dialects/duckdb/config.py": {
         "classification": "compile_now",
         "reason": "DuckDB data-dictionary dialect configuration is in the compiled dialect surface.",
+    },
+    "sqlspec/data_dictionary/dialects/duckdb/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
     },
     "sqlspec/data_dictionary/dialects/mssql/config.py": {
         "classification": "compile_now",
         "reason": "Shared SQL Server version, feature, and JSON helpers compile with the dialect surface.",
     },
+    "sqlspec/data_dictionary/dialects/mssql/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
     "sqlspec/data_dictionary/dialects/oracle/config.py": {
         "classification": "compile_now",
         "reason": "Shared Oracle version, JSON, feature, and table-list helpers for oracledb sync and async dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/oracle/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
     },
     "sqlspec/data_dictionary/dialects/spanner/config.py": {
         "classification": "compile_now",
         "reason": "Spanner data-dictionary dialect configuration is in the compiled dialect surface.",
     },
+    "sqlspec/data_dictionary/dialects/spanner/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
     "sqlspec/data_dictionary/dialects/sqlanywhere/config.py": {
         "classification": "compile_now",
         "reason": "SQL Anywhere data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
+    },
+    "sqlspec/data_dictionary/dialects/sqlanywhere/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
     },
     "sqlspec/data_dictionary/dialects/snowflake/config.py": {
         "classification": "compile_now",
         "reason": "Shared native and ADBC Snowflake catalog configuration and SHOW KEYS parsers.",
     },
+    "sqlspec/data_dictionary/dialects/snowflake/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
     "sqlspec/data_dictionary/dialects/sybase/config.py": {
         "classification": "compile_now",
         "reason": "Sybase ASE data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
     },
+    "sqlspec/data_dictionary/dialects/sybase/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
     "sqlspec/data_dictionary/dialects/bigquery/config.py": {
         "classification": "compile_now",
         "reason": "Shared BigQuery INFORMATION_SCHEMA formatting helpers for native BigQuery and ADBC-as-BigQuery dictionaries.",
+    },
+    "sqlspec/data_dictionary/dialects/bigquery/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
     },
     "sqlspec/dialects/postgres/_generators.py": {
         "classification": "compile_now",
@@ -559,7 +615,7 @@ PRESERVED_EXCLUSIONS: frozenset[str] = frozenset({
     "sqlspec/utils/arrow_helpers.py",
     "sqlspec/storage/_arrow_payload.py",
     "sqlspec/adapters/**/data_dictionary.py",
-    "sqlspec/data_dictionary/dialects/mysql/dictionary.py",
+    "sqlspec/data_dictionary/dialects/**/dictionary.py",
     "sqlspec/migrations/commands.py",
     "sqlspec/extensions/events/_store.py",
     "sqlspec/extensions/adk/converters.py",

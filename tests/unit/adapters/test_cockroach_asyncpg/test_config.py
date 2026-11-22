@@ -16,6 +16,7 @@ import asyncpg
 import asyncpg.connect_utils
 import pytest
 
+from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgConfig,
     CockroachAsyncpgConnectionConfig,
@@ -26,6 +27,7 @@ from sqlspec.adapters.cockroach_asyncpg import (
     build_connection_config,
 )
 from sqlspec.adapters.cockroach_asyncpg.adk.store import CockroachAsyncpgADKMemoryStore, CockroachAsyncpgADKStore
+from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.adapters.cockroach_asyncpg.litestar.store import CockroachAsyncpgStore
 from sqlspec.adapters.cockroach_asyncpg.tenant import CockroachAsyncpgRLSStrategy, CockroachAsyncpgTenantLease
 from sqlspec.core import SQL, StatementConfig
@@ -653,6 +655,29 @@ async def test_cockroach_asyncpg_get_columns_and_indexes_by_table() -> None:
     assert len(calls) == 1
     assert calls[0][1]["table_name"] == "users"
     assert calls[0][1]["schema_name"] is None
+
+
+def test_cockroach_asyncpg_data_dictionary_asyncpg_isolation_and_driver_caching() -> None:
+    """CockroachAsyncpgDataDictionary stays independent of the asyncpg adapter and is cached per driver."""
+    assert not issubclass(CockroachAsyncpgDataDictionary, AsyncpgDataDictionary)
+
+    driver = CockroachAsyncpgDriver(connection=cast("Any", MagicMock()))
+    first_dd = driver.data_dictionary
+    assert isinstance(first_dd, CockroachAsyncpgDataDictionary)
+    assert driver.data_dictionary is first_dd
+
+    source_path = (
+        Path(__file__).resolve().parents[4] / "sqlspec" / "adapters" / "cockroach_asyncpg" / "data_dictionary.py"
+    )
+    source = source_path.read_text(encoding="utf-8")
+    assert "sqlspec.adapters.asyncpg" not in source
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert not node.module.startswith("sqlspec.adapters.asyncpg")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not alias.name.startswith("sqlspec.adapters.asyncpg")
 
 
 async def test_cockroach_asyncpg_cache_hit_with_cursor() -> None:

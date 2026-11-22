@@ -8,6 +8,12 @@ from sqlspec.adapters.spanner.data_dictionary import SpannerAsyncDataDictionary,
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.core import StatementConfig
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
+from sqlspec.data_dictionary.dialects.spanner.dictionary import (
+    SpannerAsyncDataDictionary as BaseSpannerAsyncDataDictionary,
+)
+from sqlspec.data_dictionary.dialects.spanner.dictionary import (
+    SpannerSyncDataDictionary as BaseSpannerSyncDataDictionary,
+)
 
 
 class MockSpannerDriver:
@@ -223,3 +229,23 @@ def test_driver_data_dictionary_dialect_mode_routing() -> None:
     )
     assert isinstance(sync_driver_pg.data_dictionary, SpannerSyncDataDictionary)
     assert sync_driver_pg.data_dictionary.mode == "postgresql"
+
+
+@pytest.mark.parametrize(
+    ("raw_mode", "expected_mode"),
+    [("googlesql", "googlesql"), ("postgresql", "postgresql"), ("google_sql", "googlesql"), ("spangres", "postgresql")],
+)
+@pytest.mark.parametrize(
+    "dictionary_cls",
+    [
+        BaseSpannerSyncDataDictionary,
+        BaseSpannerAsyncDataDictionary,
+        SpannerSyncDataDictionary,
+        SpannerAsyncDataDictionary,
+    ],
+)
+def test_spanner_data_dictionary_mode_forwarding(dictionary_cls: type[Any], raw_mode: str, expected_mode: str) -> None:
+    """Both shared dialect bases and adapter subclasses normalize mode and report spanner dialect."""
+    dictionary = dictionary_cls(mode=raw_mode)
+    assert dictionary.mode == expected_mode
+    assert dictionary.dialect == "spanner"

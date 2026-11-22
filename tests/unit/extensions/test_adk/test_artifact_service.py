@@ -2,7 +2,8 @@
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, ClassVar, cast
 
 import pytest
 from google.adk.errors.input_validation_error import InputValidationError
@@ -10,6 +11,8 @@ from google.genai import types
 
 from sqlspec.extensions.adk.artifact._types import StoredArtifact
 from sqlspec.extensions.adk.artifact.service import _REWIND_TOMBSTONE, SQLSpecArtifactService
+from sqlspec.protocols import ObjectStoreProtocol
+from sqlspec.storage.registry import StorageBackendFactory, StorageRegistry
 
 STORAGE_URI = "file:///artifacts"
 
@@ -451,3 +454,155 @@ async def test_save_artifact_rejects_unsafe_path_components(app_name: str, user_
             session_id="sess-1",
         )
     assert backend.blobs == {}
+
+
+class _InMemoryArtifactStore:
+    """In-memory ObjectStoreProtocol double supporting sync and async artifact storage."""
+
+    protocol: str = "inmem"
+    backend_type: ClassVar[str] = "inmem"
+
+    def __init__(self, base_uri: str = "inmem://artifacts") -> None:
+        self.base_uri = base_uri.rstrip("/")
+        self.blobs: dict[str, bytes] = {}
+        self.operations: list[tuple[str, str]] = []
+
+    def resolve_uri(self, path: str | Path) -> str:
+        return f"{self.base_uri}/{path}"
+
+    def read_bytes_sync(self, path: str | Path, **_kwargs: Any) -> bytes:
+        key = str(path)
+        self.operations.append(("read_bytes_sync", key))
+        return self.blobs[key]
+
+    def write_bytes_sync(self, path: str | Path, data: bytes, *, overwrite: bool = True, **_kwargs: Any) -> None:
+        _ = overwrite
+        key = str(path)
+        self.operations.append(("write_bytes_sync", key))
+        self.blobs[key] = data
+
+    def exists_sync(self, path: str | Path, **_kwargs: Any) -> bool:
+        return str(path) in self.blobs
+
+    async def write_bytes_async(self, path: str | Path, data: bytes, *, overwrite: bool = True, **_kwargs: Any) -> None:
+        _ = overwrite
+        key = str(path)
+        self.operations.append(("write_bytes_async", key))
+        self.blobs[key] = data
+
+    async def read_bytes_async(self, path: str | Path, **_kwargs: Any) -> bytes:
+        key = str(path)
+        self.operations.append(("read_bytes_async", key))
+        return self.blobs[key]
+
+    async def delete_async(self, path: str | Path, *, recursive: bool = False, **_kwargs: Any) -> None:
+        _ = recursive
+        key = str(path)
+        self.operations.append(("delete_async", key))
+        self.blobs.pop(key, None)
+
+
+@pytest.mark.parametrize(
+    ("clear_method", "filename", "payload_text"),
+    [("clear_instances", "report.txt", "artifact payload"), ("clear_cache", "notes.txt", "cached artifact payload")],
+    ids=["clear_instances", "clear_cache"],
+)
+async def test_artifact_service_real_registry_instance_alias_roundtrip(
+    clear_method: str, filename: str, payload_text: str
+) -> None:
+    """SQLSpecArtifactService saves, loads, and deletes through the same pre-configured backend instance."""
+    registry = StorageRegistry()
+    backend = _InMemoryArtifactStore()
+    registered_backend = cast("ObjectStoreProtocol", backend)
+    registry.register_alias("custom_artifacts", backend=registered_backend)
+    store = _RecordingStore()
+    service = SQLSpecArtifactService(cast("Any", store), artifact_storage_uri="custom_artifacts", registry=registry)
+
+    version = await service.save_artifact(
+        app_name="agent_app",
+        user_id="user-1",
+        filename=filename,
+        artifact=types.Part.from_text(text=payload_text),
+        session_id="sess-1",
+    )
+
+    expected_key = f"apps/agent_app/users/user-1/sessions/sess-1/artifacts/{filename}/v0"
+    assert version == 0
+    assert backend.exists_sync(expected_key)
+    saved_record = store.saved_records[("agent_app", "user-1", "sess-1", filename)][0]
+    assert saved_record["canonical_uri"] == f"custom_artifacts/{expected_key}"
+
+    if clear_method == "clear_instances":
+        registry.clear_instances()
+    else:
+        registry.clear_cache()
+
+    assert registry.get("custom_artifacts") is registered_backend
+
+    loaded = await service.load_artifact(app_name="agent_app", user_id="user-1", filename=filename, session_id="sess-1")
+    assert loaded is not None
+    assert loaded.text == payload_text
+
+    store.batches = [[saved_record]]
+    await service.delete_artifact(app_name="agent_app", user_id="user-1", filename=filename, session_id="sess-1")
+
+    assert registry.get("custom_artifacts") is registered_backend
+    assert not backend.exists_sync(expected_key)
+    assert backend.blobs == {}
+    assert backend.operations == [
+        ("write_bytes_async", expected_key),
+        ("read_bytes_async", expected_key),
+        ("delete_async", expected_key),
+    ]
+
+
+async def test_artifact_service_real_registry_named_custom_backend_alias_roundtrip() -> None:
+    """SQLSpecArtifactService saves, loads, and deletes through a named custom backend alias."""
+    registry = StorageRegistry()
+    created_backends: list[_InMemoryArtifactStore] = []
+    factory_calls: list[str] = []
+
+    def make_store(uri: str, **_kwargs: Any) -> ObjectStoreProtocol:
+        factory_calls.append(uri)
+        backend = _InMemoryArtifactStore(base_uri=uri)
+        created_backends.append(backend)
+        return cast("ObjectStoreProtocol", backend)
+
+    registry.register_backend("inmem", cast("StorageBackendFactory", make_store))
+    registry.register_alias("named_artifacts", "inmem://artifacts", backend="inmem")
+
+    store = _RecordingStore()
+    service = SQLSpecArtifactService(cast("Any", store), artifact_storage_uri="named_artifacts", registry=registry)
+
+    version = await service.save_artifact(
+        app_name="agent_app",
+        user_id="user-1",
+        filename="summary.txt",
+        artifact=types.Part.from_text(text="named backend payload"),
+        session_id="sess-1",
+    )
+
+    assert version == 0
+    assert factory_calls == ["inmem://artifacts"]
+    assert len(created_backends) == 1
+    backend = created_backends[0]
+    expected_key = "apps/agent_app/users/user-1/sessions/sess-1/artifacts/summary.txt/v0"
+    assert backend.exists_sync(expected_key)
+
+    loaded = await service.load_artifact(
+        app_name="agent_app", user_id="user-1", filename="summary.txt", session_id="sess-1"
+    )
+    assert loaded is not None
+    assert loaded.text == "named backend payload"
+
+    saved_record = store.saved_records[("agent_app", "user-1", "sess-1", "summary.txt")][0]
+    store.batches = [[saved_record]]
+    await service.delete_artifact(app_name="agent_app", user_id="user-1", filename="summary.txt", session_id="sess-1")
+
+    assert not backend.exists_sync(expected_key)
+    assert factory_calls == ["inmem://artifacts"]
+    assert backend.operations == [
+        ("write_bytes_async", expected_key),
+        ("read_bytes_async", expected_key),
+        ("delete_async", expected_key),
+    ]

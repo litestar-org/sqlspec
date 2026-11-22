@@ -1,6 +1,8 @@
 """SQL Server data-dictionary metadata tests."""
 
 import sqlite3
+import subprocess
+import sys
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
@@ -20,6 +22,9 @@ from sqlspec.data_dictionary import (
     SystemMetadataRequest,
     SystemMetadataResult,
 )
+from sqlspec.data_dictionary.dialects import mssql as mssql_pkg
+from sqlspec.data_dictionary.dialects.mssql import MssqlSyncDataDictionary, MssqlVersionInfo
+from sqlspec.data_dictionary.dialects.mssql.dictionary import MssqlSyncDataDictionary as DirectMssqlSyncDataDictionary
 from sqlspec.driver import SyncDataDictionaryBase
 
 if TYPE_CHECKING:
@@ -194,7 +199,9 @@ def test_mssql_column_and_index_query_shapes_cover_sql_server_specific_metadata(
         assert required_fragment in indexes_text
 
 
-@pytest.mark.parametrize("dictionary_type", [MssqlPythonSyncDataDictionary, PymssqlSyncDataDictionary])
+@pytest.mark.parametrize(
+    "dictionary_type", [MssqlSyncDataDictionary, MssqlPythonSyncDataDictionary, PymssqlSyncDataDictionary]
+)
 def test_sync_data_dictionary_reports_sql_server_metadata_capabilities(dictionary_type: type[Any]) -> None:
     """SQL Server adapters should report generated DDL and permission-sensitive system risks."""
     profile = dictionary_type().get_metadata_capabilities(cast(Any, FakeSyncDriver()))
@@ -274,6 +281,340 @@ def test_mssql_dmvs_redact_sensitive_columns_by_default() -> None:
     assert row["sql_text"] == "[REDACTED]"
     assert row["login_name"] == "[REDACTED]"
     assert row["session_id"] == 57
+
+
+def test_mssql_sync_dictionary_construction_and_identity() -> None:
+    """MssqlSyncDataDictionary constructs directly and matches the lazy package re-export."""
+    dictionary = MssqlSyncDataDictionary()
+
+    assert MssqlSyncDataDictionary is DirectMssqlSyncDataDictionary
+    assert isinstance(dictionary, SyncDataDictionaryBase)
+    assert dictionary.dialect == "mssql"
+    assert getattr(mssql_pkg, "MssqlSyncDataDictionary") is DirectMssqlSyncDataDictionary
+    assert "MssqlSyncDataDictionary" in mssql_pkg.__all__
+    assert "MssqlSyncDataDictionary" in dir(mssql_pkg)
+    assert "supports_native_json" in dictionary.list_available_features()
+
+
+def test_mssql_package_unknown_attribute_raises_attribute_error() -> None:
+    """Accessing an unknown attribute on sqlspec.data_dictionary.dialects.mssql raises AttributeError."""
+    with pytest.raises(AttributeError, match="no attribute 'nonexistent_mssql_export'"):
+        getattr(mssql_pkg, "nonexistent_mssql_export")
+
+
+def test_mssql_package_lazy_export_avoids_eager_dictionary_or_adapter_imports() -> None:
+    """Bare mssql package import keeps dictionary, driver, and optional adapters unloaded."""
+    probe = (
+        "import sys; "
+        "import sqlspec.data_dictionary.dialects.mssql as mssql_pkg; "
+        "assert 'sqlspec.data_dictionary.dialects.mssql.dictionary' not in sys.modules; "
+        "assert 'sqlspec.driver' not in sys.modules; "
+        "assert 'MssqlSyncDataDictionary' in dir(mssql_pkg); "
+        "assert 'MssqlVersionInfo' in dir(mssql_pkg); "
+        "assert mssql_pkg.MssqlVersionInfo is not None; "
+        "assert 'sqlspec.data_dictionary.dialects.mssql.dictionary' not in sys.modules; "
+        "cls = getattr(mssql_pkg, 'MssqlSyncDataDictionary'); "
+        "from sqlspec.data_dictionary.dialects.mssql.dictionary import MssqlSyncDataDictionary as direct; "
+        "assert cls is direct; "
+        "assert mssql_pkg.__dict__['MssqlSyncDataDictionary'] is direct; "
+        "instance = cls(); "
+        "assert instance.dialect == 'mssql'; "
+        "assert not any(name.startswith('sqlspec.adapters.') for name in sys.modules)"
+    )
+    completed = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+class _ConfigurableSyncDriver:
+    """Minimal sync driver double recording calls across SQL Server metadata queries."""
+
+    def __init__(
+        self,
+        *,
+        current_schema: str | None = "dbo",
+        version_row: dict[str, Any] | None = None,
+        query_rows: dict[str, list[dict[str, Any]]] | None = None,
+        driver_features: dict[str, Any] | None = None,
+    ) -> None:
+        self.current_schema = current_schema
+        self.version_row = version_row
+        self.query_rows = query_rows or {}
+        self.driver_features = driver_features or {}
+        self.schema_calls: list[Any] = []
+        self.version_calls: list[Any] = []
+        self.select_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def select_value_or_none(self, statement: Any, **_kwargs: Any) -> str | None:
+        self.schema_calls.append(statement)
+        return self.current_schema
+
+    def select_one_or_none(self, statement: Any, **_kwargs: Any) -> dict[str, Any] | None:
+        self.version_calls.append(statement)
+        return self.version_row
+
+    def select(self, statement: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        query_text = getattr(statement, "raw_sql", str(statement))
+        self.select_calls.append((query_text, kwargs))
+        for marker, rows in self.query_rows.items():
+            if marker in query_text:
+                return list(rows)
+        return []
+
+
+@pytest.mark.parametrize(
+    ("row", "expected_major", "expected_minor", "expected_build", "expected_revision", "expected_json_type"),
+    [
+        (
+            {"product_version": "17.0.1000.7", "edition": "Developer Edition", "engine_edition": 3},
+            17,
+            0,
+            1000,
+            7,
+            "JSON",
+        ),
+        (
+            {"PRODUCT_VERSION": "17.0.1000.7", "EDITION": "Enterprise Edition", "ENGINE_EDITION": 3},
+            17,
+            0,
+            1000,
+            7,
+            "JSON",
+        ),
+        (
+            {"product_version": "16.0.4150.1", "edition": "Developer Edition", "engine_edition": 3},
+            16,
+            0,
+            4150,
+            1,
+            "NVARCHAR(MAX)",
+        ),
+        (
+            {
+                "VERSION_STRING": "Microsoft SQL Server 2022 - 16.0.4150.1 (X64)",
+                "EDITION": "Standard Edition",
+                "ENGINE_EDITION": 2,
+            },
+            16,
+            0,
+            4150,
+            1,
+            "NVARCHAR(MAX)",
+        ),
+    ],
+)
+def test_mssql_sync_dictionary_version_parsing_and_json_optimal_type(
+    row: dict[str, Any],
+    expected_major: int,
+    expected_minor: int,
+    expected_build: int,
+    expected_revision: int,
+    expected_json_type: str,
+) -> None:
+    """Version parsing handles lower/upper keys and selects native JSON on SQL Server 2025+."""
+    dictionary = MssqlSyncDataDictionary()
+    driver = _ConfigurableSyncDriver(version_row=row)
+
+    version_info = dictionary.get_version(cast(Any, driver))
+
+    assert isinstance(version_info, MssqlVersionInfo)
+    assert (version_info.major, version_info.minor, version_info.build, version_info.revision) == (
+        expected_major,
+        expected_minor,
+        expected_build,
+        expected_revision,
+    )
+    assert dictionary.get_optimal_type(cast(Any, driver), "json") == expected_json_type
+    assert dictionary.get_optimal_type(cast(Any, driver), "jsonb") == expected_json_type
+    assert dictionary.get_feature_flag(cast(Any, driver), "supports_native_json") is (expected_major >= 17)
+    assert len(driver.version_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "version_row", [None, {}, {"edition": "Developer Edition"}, {"product_version": None}, {"product_version": ""}]
+)
+def test_mssql_sync_dictionary_caches_none_on_missing_or_empty_version(version_row: dict[str, Any] | None) -> None:
+    """Missing or empty version rows cache None and avoid repeat version queries."""
+    dictionary = MssqlSyncDataDictionary()
+    driver = _ConfigurableSyncDriver(version_row=version_row)
+
+    assert dictionary.get_version(cast(Any, driver)) is None
+    assert dictionary.get_version(cast(Any, driver)) is None
+    assert dictionary.get_optimal_type(cast(Any, driver), "json") == "NVARCHAR(MAX)"
+    assert len(driver.version_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("requested_schema", "current_schema", "expected_schema", "expected_queries"),
+    [
+        ("sales", "tenant_a", "sales", 0),
+        (None, "tenant_a", "tenant_a", 1),
+        (None, None, "dbo", 1),
+        (None, "", "dbo", 1),
+    ],
+)
+def test_mssql_sync_dictionary_resolve_connection_schema(
+    requested_schema: str | None, current_schema: str | None, expected_schema: str, expected_queries: int
+) -> None:
+    """resolve_connection_schema resolves current connection schema and defaults to dbo when empty."""
+    dictionary = MssqlSyncDataDictionary()
+    driver = _ConfigurableSyncDriver(current_schema=current_schema)
+
+    assert dictionary.resolve_connection_schema(driver, requested_schema) == expected_schema
+    assert len(driver.schema_calls) == expected_queries
+
+
+def test_mssql_sync_dictionary_non_table_ddl_returns_unsupported() -> None:
+    """Public get_ddl on non-table objects returns UNSUPPORTED without running table-input queries."""
+    dictionary = MssqlSyncDataDictionary()
+    driver = _ConfigurableSyncDriver()
+
+    result = dictionary.get_ddl(cast(Any, driver), "v_orders", schema="dbo", object_type="view")
+
+    assert isinstance(result, DDLResult)
+    assert result.status == MetadataSupport.UNSUPPORTED
+    assert result.ddl is None
+    assert result.identity.dialect == "mssql"
+    assert result.identity.schema == "dbo"
+    assert result.identity.name == "v_orders"
+    assert not any("ddl_table_inputs" in query_text for query_text, _ in driver.select_calls)
+
+
+def test_mssql_sync_dictionary_table_ddl_skips_index_inputs_when_columns_empty() -> None:
+    """Table DDL returns without issuing ddl index input queries when column inputs are empty."""
+    dictionary = MssqlSyncDataDictionary()
+    driver = _ConfigurableSyncDriver(query_rows={"sqlspec:mssql:ddl_table_inputs": []})
+
+    result = dictionary.get_ddl(cast(Any, driver), "missing_table", schema="dbo", object_type="table")
+
+    assert isinstance(result, DDLResult)
+    assert result.status == MetadataSupport.UNSUPPORTED
+    assert not any("ddl_index_inputs" in query_text for query_text, _ in driver.select_calls)
+
+
+def test_mssql_sync_dictionary_tables_merges_ordered_and_catalog_rows() -> None:
+    """get_tables merges ordered FK-graph rows with unordered catalog rows."""
+    dictionary = MssqlSyncDataDictionary()
+    by_schema_sql = dictionary.get_domain_query("tables", "by_schema").raw_sql
+    all_by_schema_sql = dictionary.get_domain_query("tables", "all_by_schema").raw_sql
+    driver = _ConfigurableSyncDriver(
+        query_rows={
+            by_schema_sql: [{"schema_name": "dbo", "table_name": "parent", "table_type": "BASE TABLE"}],
+            all_by_schema_sql: [
+                {"schema_name": "dbo", "table_name": "parent", "table_type": "BASE TABLE"},
+                {"schema_name": "dbo", "table_name": "orphan", "table_type": "BASE TABLE"},
+            ],
+        }
+    )
+
+    tables = dictionary.get_tables(cast(Any, driver), schema="dbo")
+
+    assert [row["table_name"] for row in tables] == ["parent", "orphan"]
+    assert len(driver.select_calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("rows", "object_name", "expected_count"),
+    [
+        (
+            [
+                {"object_name": "orders", "permission_name": "SELECT"},
+                {"object_name": "accounts", "permission_name": "INSERT"},
+            ],
+            "orders",
+            1,
+        ),
+        (
+            [
+                {"OBJECT_NAME": "orders", "PERMISSION_NAME": "SELECT"},
+                {"OBJECT_NAME": "accounts", "PERMISSION_NAME": "INSERT"},
+            ],
+            "orders",
+            1,
+        ),
+        (
+            [
+                {"object_name": "orders", "permission_name": "SELECT"},
+                {"object_name": "accounts", "permission_name": "INSERT"},
+            ],
+            None,
+            2,
+        ),
+    ],
+)
+def test_mssql_sync_dictionary_privileges_filtering(
+    rows: list[dict[str, Any]], object_name: str | None, expected_count: int
+) -> None:
+    """get_privileges filters matching object rows across lowercase and uppercase keys."""
+    dictionary = MssqlSyncDataDictionary()
+    permissions_sql = dictionary.get_domain_query("permissions", "by_schema").raw_sql
+    driver = _ConfigurableSyncDriver(query_rows={permissions_sql: rows})
+
+    result = dictionary.get_privileges(cast(Any, driver), object_name=object_name, schema="dbo")
+
+    assert len(result.items) == expected_count
+    if object_name is not None:
+        item = cast("dict[str, Any]", result.items[0])
+        assert (item.get("object_name") or item.get("OBJECT_NAME")) == object_name
+
+
+@pytest.mark.parametrize(
+    ("rows", "object_name", "expected_count"),
+    [
+        (
+            [
+                {"referencing_object_name": "orders", "referenced_object_name": "customers"},
+                {"referencing_object_name": "invoices", "referenced_object_name": "orders"},
+            ],
+            "orders",
+            1,
+        ),
+        (
+            [
+                {"REFERENCING_OBJECT_NAME": "orders", "REFERENCED_OBJECT_NAME": "customers"},
+                {"REFERENCING_OBJECT_NAME": "invoices", "REFERENCED_OBJECT_NAME": "orders"},
+            ],
+            "orders",
+            1,
+        ),
+        (
+            [
+                {"referencing_object_name": "orders", "referenced_object_name": "customers"},
+                {"referencing_object_name": "invoices", "referenced_object_name": "orders"},
+            ],
+            None,
+            2,
+        ),
+    ],
+)
+def test_mssql_sync_dictionary_dependencies_filtering(
+    rows: list[dict[str, Any]], object_name: str | None, expected_count: int
+) -> None:
+    """get_dependencies filters matching referencing object rows across key casings."""
+    dictionary = MssqlSyncDataDictionary()
+    dependencies_sql = dictionary.get_domain_query("dependencies", "by_schema").raw_sql
+    driver = _ConfigurableSyncDriver(query_rows={dependencies_sql: rows})
+
+    result = dictionary.get_dependencies(cast(Any, driver), object_name=object_name, schema="dbo")
+
+    assert len(result.items) == expected_count
+    if object_name is not None:
+        item = cast("dict[str, Any]", result.items[0])
+        assert (item.get("referencing_object_name") or item.get("REFERENCING_OBJECT_NAME")) == object_name
+
+
+def test_mssql_sync_dictionary_system_metadata_capabilities_and_gating() -> None:
+    """MssqlSyncDataDictionary exposes system metadata capabilities and enforces opt-in gating."""
+    dictionary = MssqlSyncDataDictionary()
+    driver = FakeSyncDriver()
+
+    capabilities = dictionary.get_system_metadata_capabilities(cast(Any, driver))
+    assert tuple(cap.domain for cap in capabilities) == ("dmv_exec_requests", "query_store_runtime")
+
+    denied = dictionary.get_system_metadata(
+        cast(Any, driver), SystemMetadataRequest("dmv_exec_requests", include_system=True)
+    )
+    assert denied.capability.support == MetadataSupport.UNSUPPORTED
+    assert driver.select_calls == []
 
 
 def _ddl_table_rows() -> list[dict[str, Any]]:

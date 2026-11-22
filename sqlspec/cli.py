@@ -241,12 +241,12 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     def _get_memory_store_class(
         config: "AnyDatabaseConfig",
     ) -> "type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]] | None":
-        from sqlspec.extensions.adk._config_utils import _adk_memory_migration_store_class
+        from sqlspec.extensions.adk import resolve_adk_memory_store_class
 
         try:
             return cast(
                 "type[BaseAsyncADKMemoryStore[Any] | BaseSyncADKMemoryStore[Any]] | None",
-                _adk_memory_migration_store_class(config),
+                resolve_adk_memory_store_class(config),
             )
         except Exception:
             return None

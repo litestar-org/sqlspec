@@ -10,6 +10,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import sqlspec.adapters.db2.data_dictionary as db2_data_dictionary
+import sqlspec.data_dictionary.dialects.db2 as db2_dialect
 from sqlspec.adapters.db2.data_dictionary import (
     DB2_CONFIG,
     Db2AsyncDataDictionary,
@@ -25,6 +27,7 @@ from sqlspec.data_dictionary import (
     MetadataSupport,
     TableMetadata,
 )
+from sqlspec.data_dictionary.dialects.db2 import dictionary as db2_dialect_dictionary
 from sqlspec.exceptions import SQLSpecError
 from tests.unit.adapters.test_db2._fakes import (
     AsyncDriverDouble,
@@ -501,3 +504,26 @@ def test_all_authored_db2_dialect_queries_are_wired() -> None:
     assert dictionary.get_query("tables", "by_schema") is not None
     assert dictionary.get_query("tables", "all_by_schema") is not None
     assert dictionary.get_query("schemas", "by_schema") is not None
+
+
+@pytest.mark.parametrize(
+    "symbol_name",
+    [
+        "DB2_CONFIG",
+        "Db2VersionInfo",
+        "parse_db2_version",
+        "build_column_metadata",
+        "build_index_metadata",
+        "build_foreign_key_metadata",
+    ],
+)
+def test_db2_shared_helper_and_config_identity(symbol_name: str) -> None:
+    """Adapter data_dictionary re-exports exact shared Db2 dialect config and helper objects."""
+    adapter_attr = getattr(db2_data_dictionary, symbol_name)
+    dialect_attr = getattr(db2_dialect, symbol_name)
+    assert adapter_attr is dialect_attr
+    assert symbol_name in db2_data_dictionary.__all__
+    assert symbol_name in db2_dialect.__all__
+    assert symbol_name in dir(db2_dialect)
+    if symbol_name not in {"DB2_CONFIG", "Db2VersionInfo"}:
+        assert dialect_attr is getattr(db2_dialect_dictionary, symbol_name)

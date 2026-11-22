@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import io
 import threading
 from collections.abc import AsyncGenerator, Generator, Iterator
 from decimal import Decimal
@@ -15,13 +16,20 @@ import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.core.result import ArrowResult, SQLResult
-from sqlspec.exceptions import FileExistsInStorageError, StorageCapabilityError
-from sqlspec.protocols import AsyncWritableBytesSink
-from sqlspec.storage import StorageRegistry, get_storage_bridge_metrics, reset_storage_bridge_metrics
+from sqlspec.exceptions import FileExistsInStorageError, ImproperConfigurationError, StorageCapabilityError
+from sqlspec.protocols import AsyncWritableBytesSink, DirectStreamWriteProtocol, ObjectStoreProtocol, WritableBytesSink
+from sqlspec.storage import (
+    ResolvedStorageTarget,
+    StorageBackendFactory,
+    StorageRegistry,
+    get_storage_bridge_metrics,
+    reset_storage_bridge_metrics,
+    supports_direct_stream_write,
+)
 from sqlspec.storage._arrow_payload import decode_arrow_payload, encode_arrow_payload, resolve_parquet_use_dictionary
 from sqlspec.storage.backends.local import LocalStore
 from sqlspec.storage.backends.obstore import ObStoreBackend, _ObstoreSink
-from sqlspec.storage.pipeline import AsyncStoragePipeline, SyncStoragePipeline
+from sqlspec.storage.pipeline import AsyncStoragePipeline, StorageFormat, SyncStoragePipeline
 from sqlspec.utils.arrow_helpers import arrow_batches_from_async_rows, arrow_reader_with_deferred_close
 
 
@@ -528,9 +536,17 @@ async def test_pipeline_write_options_precedence_and_stripping(tmp_path: Path) -
     class _CountingRealRegistry(StorageRegistry):
         def __init__(self) -> None:
             super().__init__()
-            self.calls: list[tuple[str, str | None, dict[str, Any]]] = []
+            self.calls: list[
+                tuple[str, str | type[ObjectStoreProtocol] | StorageBackendFactory | None, dict[str, Any]]
+            ] = []
 
-        def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> Any:
+        def get(
+            self,
+            uri_or_alias: str | Path,
+            *,
+            backend: str | type[ObjectStoreProtocol] | StorageBackendFactory | None = None,
+            **kwargs: Any,
+        ) -> Any:
             self.calls.append((str(uri_or_alias), backend, dict(kwargs)))
             return super().get(uri_or_alias, backend=backend, **kwargs)
 
@@ -860,3 +876,498 @@ async def test_local_and_fsspec_async_write_stream_aenter_cancellation_cleans_st
         await fsspec_task
     assert [p.name for p in fsspec_dir.iterdir() if p.name.startswith(".sqlspec-stage-")] == []
     assert not (fsspec_dir / "cancelled_fs.parquet").exists()
+
+
+class _MemorySyncSink:
+    """In-memory synchronous byte sink implementing WritableBytesSink."""
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+
+    def write(self, data: bytes, /) -> int | None:
+        self.data.extend(data)
+        return len(data)
+
+
+class _MemoryAsyncSink:
+    """In-memory asynchronous byte sink implementing AsyncWritableBytesSink."""
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+
+    async def write(self, data: bytes, /) -> int | None:
+        self.data.extend(data)
+        return len(data)
+
+
+class _CustomDirectStreamStore:
+    """In-memory ObjectStore test double with DirectStreamWriteProtocol support."""
+
+    def __init__(
+        self,
+        uri: str = "custom://bucket",
+        *,
+        protocol: str = "custom",
+        backend_type: str = "custom_direct",
+        auth_token: str = "test-token-placeholder",
+        **kwargs: Any,
+    ) -> None:
+        self.uri = uri.rstrip("/")
+        self.protocol = protocol
+        self.backend_type = backend_type
+        self.auth_token = auth_token
+        self.extra_kwargs = dict(kwargs)
+        self.objects: dict[str, bytes] = {}
+        self.direct_sync_paths: list[str] = []
+        self.direct_async_paths: list[str] = []
+        self.buffered_sync_paths: list[str] = []
+        self.buffered_async_paths: list[str] = []
+
+    def resolve_uri(self, path: str | Path) -> str:
+        """Resolve an object path relative to the configured base URI."""
+        normalized = str(path).lstrip("/")
+        return f"{self.uri}/{normalized}"
+
+    def exists_sync(self, path: str | Path, **kwargs: Any) -> bool:
+        """Return whether an object key has been stored."""
+        return str(path).lstrip("/") in self.objects
+
+    def read_bytes_sync(self, path: str | Path, **kwargs: Any) -> bytes:
+        """Read stored bytes synchronously."""
+        return self.objects[str(path).lstrip("/")]
+
+    async def read_bytes_async(self, path: str | Path, **kwargs: Any) -> bytes:
+        """Read stored bytes asynchronously."""
+        return self.objects[str(path).lstrip("/")]
+
+    def write_bytes_sync(self, path: str | Path, data: bytes, *, overwrite: bool = True, **kwargs: Any) -> None:
+        """Write stored bytes synchronously, honoring overwrite checks."""
+        key = str(path).lstrip("/")
+        if not overwrite and key in self.objects:
+            msg = f"Object already exists: {key}"
+            raise FileExistsInStorageError(msg)
+        self.objects[key] = data
+        self.buffered_sync_paths.append(key)
+
+    async def write_bytes_async(self, path: str | Path, data: bytes, *, overwrite: bool = True, **kwargs: Any) -> None:
+        """Write stored bytes asynchronously, honoring overwrite checks."""
+        key = str(path).lstrip("/")
+        if not overwrite and key in self.objects:
+            msg = f"Object already exists: {key}"
+            raise FileExistsInStorageError(msg)
+        self.objects[key] = data
+        self.buffered_async_paths.append(key)
+
+    def supports_direct_arrow_write(self, file_format: str, *, overwrite: bool = True) -> bool:
+        """Report direct Arrow write support for Parquet, Arrow IPC, and CSV."""
+        return file_format in {"parquet", "arrow-ipc", "csv"}
+
+    @contextlib.contextmanager
+    def open_write_stream_sync(
+        self, path: str | Path, *, overwrite: bool = True, **kwargs: Any
+    ) -> Generator[WritableBytesSink, None, None]:
+        """Open a direct synchronous write stream that commits to ``objects`` on exit."""
+        key = str(path).lstrip("/")
+        if not overwrite and key in self.objects:
+            msg = f"Object already exists: {key}"
+            raise FileExistsInStorageError(msg)
+        sink = _MemorySyncSink()
+        yield sink
+        self.objects[key] = bytes(sink.data)
+        self.direct_sync_paths.append(key)
+
+    @contextlib.asynccontextmanager
+    async def open_write_stream_async(
+        self, path: str | Path, *, overwrite: bool = True, **kwargs: Any
+    ) -> AsyncGenerator[AsyncWritableBytesSink, None]:
+        """Open a direct asynchronous write stream that commits to ``objects`` on exit."""
+        key = str(path).lstrip("/")
+        if not overwrite and key in self.objects:
+            msg = f"Object already exists: {key}"
+            raise FileExistsInStorageError(msg)
+        sink = _MemoryAsyncSink()
+        yield sink
+        self.objects[key] = bytes(sink.data)
+        self.direct_async_paths.append(key)
+
+
+@pytest.mark.parametrize(("file_format", "extension"), [("parquet", "parquet"), ("arrow-ipc", "ipc"), ("csv", "csv")])
+def test_sync_pipeline_instance_alias_direct_stream_write(file_format: StorageFormat, extension: str) -> None:
+    """SyncStoragePipeline routes instance-backed DirectStreamWriteProtocol aliases via open_write_stream_sync."""
+    store = _CustomDirectStreamStore(
+        "custom://tenant-bucket", protocol="custom", backend_type="custom_direct", auth_token="test-token-placeholder"
+    )
+    assert supports_direct_stream_write(store) is True
+    assert isinstance(store, DirectStreamWriteProtocol) is True
+
+    registry = StorageRegistry()
+    registered = cast("ObjectStoreProtocol", store)
+    registry.register_alias("mem", backend=registered)
+    pipeline = SyncStoragePipeline(registry=registry)
+
+    table = pa.table({"id": [1, 2, 3], "name": ["alpha", "beta", "gamma"]})
+    first_dest = f"alias://mem/out.{extension}"
+    telemetry = pipeline.write_arrow(table, first_dest, format_hint=file_format)
+
+    assert telemetry["backend"] == "custom_direct"
+    assert telemetry["format"] == file_format
+    assert telemetry["rows_processed"] == 3
+    assert telemetry["bytes_processed"] == len(store.objects[f"out.{extension}"])
+    assert store.direct_sync_paths == [f"out.{extension}"]
+    assert store.buffered_sync_paths == []
+    assert store.auth_token == "test-token-placeholder"
+
+    registry.clear_instances()
+    pipeline.clear_cache()
+    assert registry.get("mem") is registered
+
+    second_dest = f"alias://mem/batches.{extension}"
+    batch_telemetry = pipeline.write_arrow_batches(second_dest, table.to_batches(), file_format=file_format)
+    assert batch_telemetry["backend"] == "custom_direct"
+    assert batch_telemetry["rows_processed"] == 3
+    assert store.direct_sync_paths == [f"out.{extension}", f"batches.{extension}"]
+    assert store.buffered_sync_paths == []
+    assert store.auth_token == "test-token-placeholder"
+
+    loaded_first, read_telemetry = pipeline.read_arrow(first_dest, file_format=file_format)
+    loaded_second, _ = pipeline.read_arrow(second_dest, file_format=file_format)
+    assert read_telemetry["backend"] == "custom_direct"
+    assert loaded_first.to_pylist() == table.to_pylist()
+    assert loaded_second.to_pylist() == table.to_pylist()
+
+
+@pytest.mark.parametrize(("file_format", "extension"), [("parquet", "parquet"), ("arrow-ipc", "ipc"), ("csv", "csv")])
+async def test_async_pipeline_instance_alias_direct_stream_write(file_format: StorageFormat, extension: str) -> None:
+    """AsyncStoragePipeline routes instance-backed DirectStreamWriteProtocol aliases via open_write_stream_async."""
+    store = _CustomDirectStreamStore(
+        "custom://tenant-bucket", protocol="custom", backend_type="custom_direct", auth_token="test-token-placeholder"
+    )
+    assert supports_direct_stream_write(store) is True
+    assert isinstance(store, DirectStreamWriteProtocol) is True
+
+    registry = StorageRegistry()
+    registered = cast("ObjectStoreProtocol", store)
+    registry.register_alias("mem", backend=registered)
+    pipeline = AsyncStoragePipeline(registry=registry)
+
+    table = pa.table({"id": [10, 20, 30], "name": ["delta", "epsilon", "zeta"]})
+    first_dest = f"alias://mem/out.{extension}"
+    telemetry = await pipeline.write_arrow(table, first_dest, format_hint=file_format)
+
+    assert telemetry["backend"] == "custom_direct"
+    assert telemetry["format"] == file_format
+    assert telemetry["rows_processed"] == 3
+    assert telemetry["bytes_processed"] == len(store.objects[f"out.{extension}"])
+    assert store.direct_async_paths == [f"out.{extension}"]
+    assert store.buffered_async_paths == []
+    assert store.auth_token == "test-token-placeholder"
+
+    registry.clear_instances()
+    pipeline.clear_cache()
+    assert registry.get("mem") is registered
+
+    second_dest = f"alias://mem/batches.{extension}"
+    batch_telemetry = await pipeline.write_arrow_batches_async(second_dest, table.to_batches(), file_format=file_format)
+    assert batch_telemetry["backend"] == "custom_direct"
+    assert batch_telemetry["rows_processed"] == 3
+    assert store.direct_async_paths == [f"out.{extension}", f"batches.{extension}"]
+    assert store.buffered_async_paths == []
+    assert store.auth_token == "test-token-placeholder"
+
+    loaded_first, read_telemetry = await pipeline.read_arrow_async(first_dest, file_format=file_format)
+    loaded_second, _ = await pipeline.read_arrow_async(second_dest, file_format=file_format)
+    assert read_telemetry["backend"] == "custom_direct"
+    assert loaded_first.to_pylist() == table.to_pylist()
+    assert loaded_second.to_pylist() == table.to_pylist()
+
+
+async def test_pipeline_instance_alias_preserves_state_across_sync_async_cache_resets() -> None:
+    """Sync and async pipelines keep identical registered instances across registry and pipeline cache resets."""
+    custom_store = _CustomDirectStreamStore("custom://shared", auth_token="test-token-placeholder")
+    obstore_mem = ObStoreBackend("memory://")
+
+    registry = StorageRegistry()
+    registered_custom = cast("ObjectStoreProtocol", custom_store)
+    registry.register_alias("custom_mem", backend=registered_custom)
+    registry.register_alias("ob_mem", backend=obstore_mem)
+
+    sync_pipeline = SyncStoragePipeline(registry=registry)
+    async_pipeline = AsyncStoragePipeline(registry=registry)
+
+    sync_table = pa.table({"id": [1, 2]})
+    async_table = pa.table({"id": [3, 4]})
+
+    sync_pipeline.write_arrow(sync_table, "alias://custom_mem/from_sync.parquet")
+    sync_pipeline.write_arrow(sync_table, "alias://ob_mem/from_sync.parquet")
+
+    registry.clear_instances()
+    sync_pipeline.clear_cache()
+    async_pipeline.clear_cache()
+
+    await async_pipeline.write_arrow(async_table, "alias://custom_mem/from_async.parquet")
+    await async_pipeline.write_arrow(async_table, "alias://ob_mem/from_async.parquet")
+
+    registry.clear_instances()
+    sync_pipeline.clear_cache()
+    async_pipeline.clear_cache()
+
+    assert registry.get("custom_mem") is registered_custom
+    assert registry.get("ob_mem") is obstore_mem
+    assert custom_store.auth_token == "test-token-placeholder"
+
+    custom_from_async, _ = sync_pipeline.read_arrow("alias://custom_mem/from_async.parquet", file_format="parquet")
+    custom_from_sync, _ = await async_pipeline.read_arrow_async(
+        "alias://custom_mem/from_sync.parquet", file_format="parquet"
+    )
+    assert custom_from_async.to_pylist() == async_table.to_pylist()
+    assert custom_from_sync.to_pylist() == sync_table.to_pylist()
+
+    ob_from_async, _ = sync_pipeline.read_arrow("alias://ob_mem/from_async.parquet", file_format="parquet")
+    ob_from_sync, _ = await async_pipeline.read_arrow_async("alias://ob_mem/from_sync.parquet", file_format="parquet")
+    assert ob_from_async.to_pylist() == async_table.to_pylist()
+    assert ob_from_sync.to_pylist() == sync_table.to_pylist()
+
+
+@pytest.mark.parametrize("mode", ["named_class", "named_factory", "direct_class", "direct_factory"])
+async def test_pipeline_custom_backend_registration_modes(mode: str) -> None:
+    """Pipelines route write_rows, write_arrow, and read_arrow through named, class, and factory custom backends."""
+    registry = StorageRegistry()
+    created: list[_CustomDirectStreamStore] = []
+
+    def _build_store(uri: str, **kwargs: Any) -> ObjectStoreProtocol:
+        instance = _CustomDirectStreamStore(uri, **kwargs)
+        created.append(instance)
+        return cast("ObjectStoreProtocol", instance)
+
+    if mode == "named_class":
+        registry.register_backend("custom_stream", cast("StorageBackendFactory", _CustomDirectStreamStore))
+        registry.register_alias(
+            "stream",
+            "custom://bucket",
+            backend="custom_stream",
+            region="us-east-1",
+            auth_token="test-token-placeholder",
+        )
+    elif mode == "named_factory":
+        registry.register_backend("custom_stream", _build_store)
+        registry.register_alias(
+            "stream",
+            "custom://bucket",
+            backend="custom_stream",
+            region="us-east-1",
+            auth_token="test-token-placeholder",
+        )
+    elif mode == "direct_class":
+        registry.register_alias(
+            "stream",
+            "custom://bucket",
+            backend=cast("StorageBackendFactory", _CustomDirectStreamStore),
+            region="us-east-1",
+            auth_token="test-token-placeholder",
+        )
+    else:
+        registry.register_alias(
+            "stream", "custom://bucket", backend=_build_store, region="us-east-1", auth_token="test-token-placeholder"
+        )
+
+    sync_pipeline = SyncStoragePipeline(registry=registry)
+    async_pipeline = AsyncStoragePipeline(registry=registry)
+
+    sync_rows = [{"id": 1, "label": "one"}, {"id": 2, "label": "two"}]
+    sync_telemetry = sync_pipeline.write_rows(sync_rows, "alias://stream/rows_sync.jsonl", format_hint="jsonl")
+    assert sync_telemetry["backend"] == "custom_direct"
+    assert sync_telemetry["rows_processed"] == 2
+
+    read_sync_table, read_sync_telemetry = sync_pipeline.read_arrow(
+        "alias://stream/rows_sync.jsonl", file_format="jsonl"
+    )
+    assert read_sync_telemetry["backend"] == "custom_direct"
+    assert read_sync_table.to_pylist() == sync_rows
+
+    async_rows = [{"id": 3, "label": "three"}]
+    async_telemetry = await async_pipeline.write_rows(
+        async_rows, "alias://stream/rows_async.jsonl", format_hint="jsonl"
+    )
+    assert async_telemetry["backend"] == "custom_direct"
+    assert async_telemetry["rows_processed"] == 1
+
+    read_async_table, read_async_telemetry = await async_pipeline.read_arrow_async(
+        "alias://stream/rows_async.jsonl", file_format="jsonl"
+    )
+    assert read_async_telemetry["backend"] == "custom_direct"
+    assert read_async_table.to_pylist() == async_rows
+
+    arrow_table = pa.table({"id": [10, 20], "label": ["ten", "twenty"]})
+    pq_sync_telemetry = sync_pipeline.write_arrow(arrow_table, "alias://stream/table_sync.parquet")
+    pq_async_telemetry = await async_pipeline.write_arrow(arrow_table, "alias://stream/table_async.parquet")
+    assert pq_sync_telemetry["backend"] == "custom_direct"
+    assert pq_async_telemetry["backend"] == "custom_direct"
+    loaded_pq, _ = sync_pipeline.read_arrow("alias://stream/table_sync.parquet", file_format="parquet")
+    assert loaded_pq.to_pylist() == arrow_table.to_pylist()
+
+    resolved_sync = sync_pipeline.resolve_destination("alias://stream/dir/file.parquet")
+    resolved_async = async_pipeline.resolve_destination("alias://stream/dir/file.parquet")
+    assert resolved_sync == ResolvedStorageTarget("custom://bucket/dir/file.parquet", "custom")
+    assert resolved_async == ResolvedStorageTarget("custom://bucket/dir/file.parquet", "custom")
+
+    active_store = cast("_CustomDirectStreamStore", registry.get("stream"))
+    assert active_store.extra_kwargs == {"region": "us-east-1"}
+    assert active_store.auth_token == "test-token-placeholder"
+    assert active_store.buffered_sync_paths == ["rows_sync.jsonl"]
+    assert active_store.buffered_async_paths == ["rows_async.jsonl"]
+    assert active_store.direct_sync_paths == ["table_sync.parquet"]
+    assert active_store.direct_async_paths == ["table_async.parquet"]
+    if mode in {"named_factory", "direct_factory"}:
+        assert created == [active_store]
+
+
+def _assert_pipe_delimited_csv(csv_bytes: bytes) -> None:
+    """Assert the payload is the four-row ``id``/``name`` table written with a pipe delimiter."""
+    assert b"|" in csv_bytes
+    parsed = pa_csv.read_csv(io.BytesIO(csv_bytes), parse_options=pa_csv.ParseOptions(delimiter="|"))
+    assert parsed.num_rows == 4
+    assert parsed.column_names == ["id", "name"]
+
+
+@pytest.mark.parametrize("via_pipeline_default", [False, True])
+async def test_pipeline_instance_alias_write_options_stripping(via_pipeline_default: bool) -> None:
+    """Stripped write_options keep instance-backed aliases working for sync and async Arrow writes."""
+    store = _CustomDirectStreamStore("custom://bucket", auth_token="test-token-placeholder")
+    registry = StorageRegistry()
+    registry.register_alias("mem", backend=cast("ObjectStoreProtocol", store))
+
+    default_options = {"write_options": {"delimiter": "|"}} if via_pipeline_default else None
+    call_csv_options = None if via_pipeline_default else {"write_options": {"delimiter": "|"}}
+
+    sync_pipeline = SyncStoragePipeline(registry=registry, storage_options=default_options)
+    async_pipeline = AsyncStoragePipeline(registry=registry, storage_options=default_options)
+
+    table = pa.table({"id": [1, 2, 3, 4], "name": ["a", "b", "c", "d"]})
+
+    t_sync_csv = sync_pipeline.write_arrow(
+        table, "alias://mem/out_sync.csv", format_hint="csv", storage_options=call_csv_options
+    )
+    t_async_csv = await async_pipeline.write_arrow(
+        table, "alias://mem/out_async.csv", format_hint="csv", storage_options=call_csv_options
+    )
+    assert t_sync_csv["backend"] == "custom_direct"
+    assert t_async_csv["backend"] == "custom_direct"
+
+    _assert_pipe_delimited_csv(store.objects["out_sync.csv"])
+    _assert_pipe_delimited_csv(store.objects["out_async.csv"])
+
+    t_sync_pq = sync_pipeline.write_arrow(
+        table,
+        "alias://mem/out_sync.parquet",
+        format_hint="parquet",
+        storage_options={"write_options": {"row_group_size": 2}},
+    )
+    t_async_pq = await async_pipeline.write_arrow(
+        table,
+        "alias://mem/out_async.parquet",
+        format_hint="parquet",
+        storage_options={"write_options": {"row_group_size": 2}},
+    )
+    assert t_sync_pq["backend"] == "custom_direct"
+    assert t_async_pq["backend"] == "custom_direct"
+    assert pq.ParquetFile(pa.BufferReader(store.objects["out_sync.parquet"])).num_row_groups == 2
+    assert pq.ParquetFile(pa.BufferReader(store.objects["out_async.parquet"])).num_row_groups == 2
+
+    assert sync_pipeline.resolve_destination(
+        "alias://mem/dir/out.csv", storage_options={"write_options": {"delimiter": "|"}}
+    ) == ResolvedStorageTarget("custom://bucket/dir/out.csv", "custom")
+    assert async_pipeline.resolve_destination(
+        "alias://mem/dir/out.csv", storage_options={"write_options": {"delimiter": "|"}}
+    ) == ResolvedStorageTarget("custom://bucket/dir/out.csv", "custom")
+
+
+@pytest.mark.parametrize(
+    "bad_options",
+    [
+        {"region": "us-east-1"},
+        {"region": "us-west-2"},
+        {"backend": "local"},
+        {"region": "us-west-2", "write_options": {"delimiter": "|"}},
+        {"backend": "local", "write_options": {"row_group_size": 2}},
+    ],
+)
+async def test_pipeline_instance_alias_rejects_override_options(bad_options: dict[str, Any]) -> None:
+    """Non-empty backend options passed against an instance-backed alias raise ImproperConfigurationError."""
+    store = _CustomDirectStreamStore("custom://bucket", auth_token="test-token-placeholder")
+    registry = StorageRegistry()
+    registry.register_alias("mem", backend=cast("ObjectStoreProtocol", store))
+
+    sync_pipeline = SyncStoragePipeline(registry=registry)
+    async_pipeline = AsyncStoragePipeline(registry=registry)
+    table = pa.table({"id": [1, 2]})
+
+    sync_pipeline.write_arrow(table, "alias://mem/out.parquet")
+    await async_pipeline.write_arrow(table, "alias://mem/out_async.parquet")
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        sync_pipeline.write_arrow(table, "alias://mem/out.parquet", storage_options=bad_options)
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        await async_pipeline.write_arrow(table, "alias://mem/out_async.parquet", storage_options=bad_options)
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        sync_pipeline.write_rows([{"id": 1}], "alias://mem/rows.jsonl", storage_options=bad_options)
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        await async_pipeline.write_rows([{"id": 1}], "alias://mem/rows.jsonl", storage_options=bad_options)
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        sync_pipeline.read_arrow("alias://mem/out.parquet", file_format="parquet", storage_options=bad_options)
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        await async_pipeline.read_arrow_async(
+            "alias://mem/out_async.parquet", file_format="parquet", storage_options=bad_options
+        )
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        sync_pipeline.resolve_destination("alias://mem/dir/file.parquet", storage_options=bad_options)
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        async_pipeline.resolve_destination("alias://mem/dir/file.parquet", storage_options=bad_options)
+
+    bad_sync_pipeline = SyncStoragePipeline(registry=registry, storage_options=bad_options)
+    bad_async_pipeline = AsyncStoragePipeline(registry=registry, storage_options=bad_options)
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        bad_sync_pipeline.write_arrow(table, "alias://mem/default_bad.parquet")
+
+    with pytest.raises(ImproperConfigurationError, match="pre-configured instance"):
+        await bad_async_pipeline.write_arrow(table, "alias://mem/default_bad.parquet")
+
+
+@pytest.mark.parametrize("relative_path", ["out.parquet", "dir/file.parquet", "nested/sub/items.csv"])
+def test_pipeline_resolve_destination_instance_alias(relative_path: str) -> None:
+    """resolve_destination delegates to registered instance alias resolve_uri and protocol."""
+    custom_store = _CustomDirectStreamStore(
+        "custom://archive", protocol="custom", backend_type="custom_direct", auth_token="test-token-placeholder"
+    )
+    obstore_mem = ObStoreBackend("memory://")
+
+    registry = StorageRegistry()
+    registry.register_alias("mem", backend=cast("ObjectStoreProtocol", custom_store))
+    registry.register_alias("ob", backend=obstore_mem)
+
+    sync_pipeline = SyncStoragePipeline(registry=registry)
+    async_pipeline = AsyncStoragePipeline(registry=registry)
+
+    expected_custom = ResolvedStorageTarget(custom_store.resolve_uri(relative_path), custom_store.protocol)
+    expected_ob = ResolvedStorageTarget(obstore_mem.resolve_uri(relative_path), obstore_mem.protocol)
+
+    assert sync_pipeline.resolve_destination(f"alias://mem/{relative_path}") == expected_custom
+    assert async_pipeline.resolve_destination(f"alias://mem/{relative_path}") == expected_custom
+    assert sync_pipeline.resolve_destination(f"alias://ob/{relative_path}") == expected_ob
+    assert async_pipeline.resolve_destination(f"alias://ob/{relative_path}") == expected_ob
+
+    registry.clear_instances()
+    sync_pipeline.clear_cache()
+    async_pipeline.clear_cache()
+
+    assert sync_pipeline.resolve_destination(f"alias://mem/{relative_path}") == expected_custom
+    assert async_pipeline.resolve_destination(f"alias://mem/{relative_path}") == expected_custom
+    assert sync_pipeline.resolve_destination(f"alias://ob/{relative_path}") == expected_ob
+    assert async_pipeline.resolve_destination(f"alias://ob/{relative_path}") == expected_ob

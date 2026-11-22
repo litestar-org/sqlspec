@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError
-from sqlspec.extensions.events._channel import _resolve_backend_name
+from sqlspec.extensions.events import resolve_backend_name
 from sqlspec.migrations.schema import (
     ensure_schema_async,
     ensure_schema_sync,
@@ -11,7 +11,7 @@ from sqlspec.migrations.schema import (
     run_drop_statements_sync,
 )
 from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
-from sqlspec.utils.adapters import resolve_adapter_name, resolve_extension_store_class
+from sqlspec.utils.adapters import resolve_extension_store_class
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -22,10 +22,45 @@ if TYPE_CHECKING:
 __all__ = ("down", "downgrade", "reconcile")
 
 
-def _resolve_backend(config: Any, settings: dict[str, Any]) -> tuple[str, bool]:
+def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
+    """Reconcile durable event queue schema on the migration runner's active driver.
+
+    Args:
+        context: Active migration execution context supplying config and driver.
+
+    Returns:
+        ``None`` for synchronous drivers or an awaitable resolving to ``None`` for async drivers.
+    """
+    store, is_async, backend_name, needs_table = _resolve_store(context)
+    if is_async:
+        return _reconcile_async(context.driver, store, backend_name, needs_table)
+    _reconcile_sync(context.driver, store, backend_name, needs_table)
+    return None
+
+
+def downgrade(context: "MigrationContext") -> "Awaitable[None] | None":
+    """Drop durable event queue schema on the migration runner's active driver.
+
+    Args:
+        context: Active migration execution context supplying config and driver.
+
+    Returns:
+        ``None`` for synchronous drivers or an awaitable resolving to ``None`` for async drivers.
+    """
+    store, is_async, _backend_name, needs_table = _resolve_store(context)
+    if is_async:
+        return _downgrade_async(context.driver, store, needs_table)
+    _downgrade_sync(context.driver, store, needs_table)
+    return None
+
+
+down = downgrade
+
+
+def _resolve_backend(config: Any, settings: dict[str, Any], adapter_name: str) -> tuple[str, bool]:
     """Resolve the configured events backend name and whether it uses the SQL queue table."""
     try:
-        backend_name = _resolve_backend_name(config, settings, resolve_adapter_name(config))
+        backend_name = resolve_backend_name(config, settings, adapter_name)
     except ImproperConfigurationError as exc:
         raise MigrationError(str(exc)) from exc
     return backend_name, backend_name != "notify"
@@ -52,7 +87,7 @@ def _resolve_store(context: "MigrationContext") -> "tuple[BaseEventQueueStore[An
         store: BaseEventQueueStore[Any] = store_cls(context.config)
     except (ImproperConfigurationError, ValueError) as exc:
         raise MigrationError(str(exc)) from exc
-    backend_name, needs_table = _resolve_backend(context.config, store.settings)
+    backend_name, needs_table = _resolve_backend(context.config, store.settings, adapter_name)
     return store, is_async, backend_name, needs_table
 
 
@@ -90,22 +125,6 @@ async def _reconcile_async(
     await store.reconcile_native_backend_async(driver, backend_name, targets, create_schema=create_schema)
 
 
-def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
-    """Reconcile durable event queue schema on the migration runner's active driver.
-
-    Args:
-        context: Active migration execution context supplying config and driver.
-
-    Returns:
-        ``None`` for synchronous drivers or an awaitable resolving to ``None`` for async drivers.
-    """
-    store, is_async, backend_name, needs_table = _resolve_store(context)
-    if is_async:
-        return _reconcile_async(context.driver, store, backend_name, needs_table)
-    _reconcile_sync(context.driver, store, backend_name, needs_table)
-    return None
-
-
 def _downgrade_sync(driver: Any, store: "BaseEventQueueStore[Any]", needs_table: bool) -> None:
     """Drop the events queue table and companion objects on a synchronous driver."""
     if not needs_table:
@@ -124,22 +143,3 @@ async def _downgrade_async(driver: Any, store: "BaseEventQueueStore[Any]", needs
     if not manage_schema:
         return
     await run_drop_statements_async(driver, store.downgrade_drops())
-
-
-def downgrade(context: "MigrationContext") -> "Awaitable[None] | None":
-    """Drop durable event queue schema on the migration runner's active driver.
-
-    Args:
-        context: Active migration execution context supplying config and driver.
-
-    Returns:
-        ``None`` for synchronous drivers or an awaitable resolving to ``None`` for async drivers.
-    """
-    store, is_async, _backend_name, needs_table = _resolve_store(context)
-    if is_async:
-        return _downgrade_async(context.driver, store, needs_table)
-    _downgrade_sync(context.driver, store, needs_table)
-    return None
-
-
-down = downgrade

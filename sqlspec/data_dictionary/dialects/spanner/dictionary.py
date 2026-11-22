@@ -1,0 +1,705 @@
+"""Shared Spanner data dictionary implementations for sync and async drivers."""
+
+import re
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+
+from mypy_extensions import mypyc_attr
+
+from sqlspec.core import SQL, TypedParameter
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    DDLResult,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    MetadataCapability,
+    MetadataCapabilityProfile,
+    MetadataFidelity,
+    MetadataResult,
+    MetadataRisk,
+    MetadataSource,
+    MetadataSupport,
+    ObjectIdentity,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
+    TableMetadata,
+    VersionInfo,
+    ensure_system_metadata_request,
+    system_metadata_gated_result,
+)
+from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+
+__all__ = ("SpannerAsyncDataDictionary", "SpannerSyncDataDictionary")
+
+_DEFAULT_METADATA_DOMAINS = (
+    "schemas",
+    "objects",
+    "tables",
+    "columns",
+    "constraints",
+    "foreign_keys",
+    "indexes",
+    "views",
+    "routines",
+    "privileges",
+    "dependencies",
+    "ddl",
+    "system",
+    "sequences",
+    "change_streams",
+    "property_graphs",
+    "database",
+)
+
+_SPANNER_INFORMATION_SCHEMA_WARNINGS = (
+    "Spanner information schema rows are filtered by IAM and database role privileges.",
+)
+
+_SPANNER_POSTGRESQL_WARNING = "PostgreSQL-dialect Spanner metadata requires live runtime coverage before enablement."
+
+_SPANNER_DDL_WARNINGS = (
+    "Spanner DDL metadata uses the Database Admin API and requires database DDL permissions.",
+    "Pending schema updates might not be reflected in the returned DDL.",
+)
+
+_SPANNER_SYSTEM_WARNINGS = (
+    "Spanner SPANNER_SYS metadata is opt-in, permission-aware, and intended for operational diagnostics.",
+)
+
+_SPANNER_UNSUPPORTED_DOMAINS: Final[frozenset[str]] = frozenset({"schemas", "dependencies"})
+
+
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class SpannerSyncDataDictionary(SyncDataDictionaryBase):
+    """Fetch table, column, and index metadata from Spanner."""
+
+    dialect: ClassVar[str] = "spanner"
+
+    def __init__(self, mode: str = "googlesql") -> None:
+        super().__init__()
+        self.mode = _normalize_spanner_metadata_mode(mode)
+
+    def get_query(self, domain: str, operation: str, *, mode: "str | None" = None) -> SQL:
+        """Return an exact domain query for this dialect."""
+        resolved_mode = self.mode if mode is None else _normalize_spanner_metadata_mode(mode)
+        return super().get_query(domain, operation, mode=resolved_mode)
+
+    def get_version(self, driver: "SyncDriverAdapterBase | None" = None) -> "VersionInfo | None":
+        """Get Spanner version information.
+
+        Args:
+            driver: Sync driver instance.
+
+        Returns:
+            None since Spanner does not expose version information.
+        """
+        _ = driver
+        return None
+
+    def get_feature_flag(self, driver: "SyncDriverAdapterBase | None" = None, feature: str = "") -> bool:
+        """Check if Spanner supports a specific feature.
+
+        Args:
+            driver: Sync driver instance.
+            feature: Feature name to check.
+
+        Returns:
+            True if feature is supported, False otherwise.
+        """
+        _ = driver
+        return self.resolve_feature_flag(feature, None)
+
+    def get_optimal_type(self, driver: "SyncDriverAdapterBase | None" = None, type_category: str = "") -> str:
+        """Get optimal Spanner type for a category.
+
+        Args:
+            driver: Sync driver instance.
+            type_category: Type category.
+
+        Returns:
+            Spanner-specific type name.
+        """
+        _ = driver
+        return self.get_dialect_config().get_optimal_type(type_category)
+
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables using INFORMATION_SCHEMA."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
+        return driver.select(
+            self.get_query("tables", "by_schema", mode=self.mode),
+            schema_name=_typed_str(schema_name),
+            schema_type=TableMetadata,
+        )
+
+    def get_columns(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+            return driver.select(
+                self.get_query("columns", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                schema_type=ColumnMetadata,
+            )
+
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+        return driver.select(
+            self.get_query("columns", "by_table", mode=self.mode),
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
+            schema_type=ColumnMetadata,
+        )
+
+    def get_indexes(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+            return driver.select(
+                self.get_query("indexes", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                schema_type=IndexMetadata,
+            )
+
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
+        return driver.select(
+            self.get_query("indexes", "by_table", mode=self.mode),
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
+            schema_type=IndexMetadata,
+        )
+
+    def get_foreign_keys(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+            return driver.select(
+                self.get_query("foreign_keys", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                schema_type=ForeignKeyMetadata,
+            )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+        return driver.select(
+            self.get_query("foreign_keys", "by_table", mode=self.mode),
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
+            schema_type=ForeignKeyMetadata,
+        )
+
+    def get_constraints(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get constraint metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="constraints")
+            rows = driver.select(
+                self.get_query("constraints", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                table_name=_typed_str(None),
+            )
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="constraints")
+            rows = driver.select(
+                self.get_query("constraints", "by_table", mode=self.mode),
+                table_name=_typed_str(table),
+                schema_name=_typed_str(schema_name),
+            )
+        return self._build_domain_result("constraints", rows)
+
+    def get_sequences(
+        self, driver: "SyncDriverAdapterBase", schema: "str | None" = None, sequence_name: "str | None" = None
+    ) -> MetadataResult:
+        """Get sequence metadata."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="sequences")
+        rows = driver.select(
+            self.get_query("sequences", "by_schema", mode=self.mode),
+            schema_name=schema_name,
+            sequence_name=sequence_name,
+        )
+        return self._build_domain_result("sequences", rows)
+
+    def get_change_streams(
+        self, driver: "SyncDriverAdapterBase", schema: "str | None" = None, stream_name: "str | None" = None
+    ) -> MetadataResult:
+        """Get change stream metadata."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="change_streams")
+        rows = driver.select(
+            self.get_query("change_streams", "list", mode=self.mode),
+            schema_name=schema_name,
+            change_stream_name=stream_name,
+        )
+        return self._build_domain_result("change_streams", rows)
+
+    def get_system_metadata(
+        self, driver: "SyncDriverAdapterBase", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
+        """Get opt-in Spanner system metadata from SPANNER_SYS."""
+        query_kwargs = dict(kwargs)
+        limit = query_kwargs.pop("limit", 100)
+        interval_end_after = query_kwargs.pop("interval_end_after", None)
+        metadata_request = ensure_system_metadata_request(request, **query_kwargs)
+        capability = SystemMetadataCapability(
+            domain=metadata_request.domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.EXPENSIVE),
+            warnings=_SPANNER_SYSTEM_WARNINGS,
+        )
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+
+        query_name = (
+            "table_sizes" if metadata_request.domain in {"table_statistics", "table_sizes"} else "query_stats_top"
+        )
+        parameters: dict[str, Any] = {"interval_end_after": interval_end_after, "limit": limit}
+        if query_name == "table_sizes":
+            parameters["table_name"] = metadata_request.table
+        rows = driver.select(self.get_query("system", query_name, mode=self.mode), **parameters)
+        return SystemMetadataResult.from_rows(
+            metadata_request,
+            capability,
+            rows=tuple(rows) if isinstance(rows, (list, tuple)) else (),
+            source=MetadataSource.SYSTEM_VIEW,
+        )
+
+    def get_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None, *, mode: "str | None" = None
+    ) -> MetadataCapabilityProfile:
+        """Get Spanner data-dictionary capability profile."""
+        _ = driver
+        requested_domains = tuple(domains) if domains is not None else _DEFAULT_METADATA_DOMAINS
+        normalized_mode = _normalize_spanner_metadata_mode(mode or self.mode)
+        capabilities = tuple(
+            _spanner_capability_for_domain(domain, mode=normalized_mode) for domain in requested_domains
+        )
+        return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
+
+    def _get_native_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return Spanner DDL through the Database Admin API."""
+        _ = include_dependencies, redact
+        ddl_statements = _get_spanner_ddl_statements(driver)
+        identity = ObjectIdentity(
+            name=object_name,
+            object_type=object_type,
+            schema=schema,
+            dialect=self.dialect,
+            source=MetadataSource.NATIVE_API,
+        )
+        if not ddl_statements:
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
+        ddl = _select_spanner_ddl_for_object(ddl_statements, object_name, object_type=object_type)
+        if ddl is None:
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.NATIVE_API,
+            ddl=ddl,
+            warnings=_SPANNER_DDL_WARNINGS,
+        )
+
+    def _build_domain_result(self, domain: str, rows: list[Any]) -> MetadataResult:
+        """Wrap domain query rows into a standard MetadataResult envelope."""
+        capability = _spanner_capability_for_domain(domain, mode=self.mode)
+        return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
+
+
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
+    """Fetch table, column, and index metadata from Spanner."""
+
+    dialect: ClassVar[str] = "spanner"
+
+    def __init__(self, mode: str = "googlesql") -> None:
+        super().__init__()
+        self.mode = _normalize_spanner_metadata_mode(mode)
+
+    def get_query(self, domain: str, operation: str, *, mode: "str | None" = None) -> SQL:
+        """Return an exact domain query for this dialect."""
+        resolved_mode = self.mode if mode is None else _normalize_spanner_metadata_mode(mode)
+        return super().get_query(domain, operation, mode=resolved_mode)
+
+    async def get_version(self, driver: "AsyncDriverAdapterBase | None" = None) -> "VersionInfo | None":
+        """Get Spanner version information.
+
+        Args:
+            driver: Async driver instance.
+
+        Returns:
+            None since Spanner does not expose version information.
+        """
+        _ = driver
+        return None
+
+    async def get_feature_flag(self, driver: "AsyncDriverAdapterBase | None" = None, feature: str = "") -> bool:
+        """Check if Spanner supports a specific feature.
+
+        Args:
+            driver: Async driver instance.
+            feature: Feature name to check.
+
+        Returns:
+            True if feature is supported, False otherwise.
+        """
+        _ = driver
+        return self.resolve_feature_flag(feature, None)
+
+    async def get_optimal_type(self, driver: "AsyncDriverAdapterBase | None" = None, type_category: str = "") -> str:
+        """Get optimal Spanner type for a category.
+
+        Args:
+            driver: Async driver instance.
+            type_category: Type category.
+
+        Returns:
+            Spanner-specific type name.
+        """
+        _ = driver
+        return self.get_dialect_config().get_optimal_type(type_category)
+
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables using INFORMATION_SCHEMA."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
+        return await driver.select(
+            self.get_query("tables", "by_schema", mode=self.mode),
+            schema_name=_typed_str(schema_name),
+            schema_type=TableMetadata,
+        )
+
+    async def get_columns(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+            return await driver.select(
+                self.get_query("columns", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                schema_type=ColumnMetadata,
+            )
+
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
+        return await driver.select(
+            self.get_query("columns", "by_table", mode=self.mode),
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
+            schema_type=ColumnMetadata,
+        )
+
+    async def get_indexes(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+            return await driver.select(
+                self.get_query("indexes", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                schema_type=IndexMetadata,
+            )
+
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
+        return await driver.select(
+            self.get_query("indexes", "by_table", mode=self.mode),
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
+            schema_type=IndexMetadata,
+        )
+
+    async def get_foreign_keys(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+            return await driver.select(
+                self.get_query("foreign_keys", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                schema_type=ForeignKeyMetadata,
+            )
+        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
+        return await driver.select(
+            self.get_query("foreign_keys", "by_table", mode=self.mode),
+            table_name=_typed_str(table),
+            schema_name=_typed_str(schema_name),
+            schema_type=ForeignKeyMetadata,
+        )
+
+    async def get_constraints(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> MetadataResult:
+        """Get constraint metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="constraints")
+            rows = await driver.select(
+                self.get_query("constraints", "by_schema", mode=self.mode),
+                schema_name=_typed_str(schema_name),
+                table_name=_typed_str(None),
+            )
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="constraints")
+            rows = await driver.select(
+                self.get_query("constraints", "by_table", mode=self.mode),
+                table_name=_typed_str(table),
+                schema_name=_typed_str(schema_name),
+            )
+        return self._build_domain_result("constraints", rows)
+
+    async def get_sequences(
+        self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None, sequence_name: "str | None" = None
+    ) -> MetadataResult:
+        """Get sequence metadata."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="sequences")
+        rows = await driver.select(
+            self.get_query("sequences", "by_schema", mode=self.mode),
+            schema_name=schema_name,
+            sequence_name=sequence_name,
+        )
+        return self._build_domain_result("sequences", rows)
+
+    async def get_change_streams(
+        self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None, stream_name: "str | None" = None
+    ) -> MetadataResult:
+        """Get change stream metadata."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="change_streams")
+        rows = await driver.select(
+            self.get_query("change_streams", "list", mode=self.mode),
+            schema_name=schema_name,
+            change_stream_name=stream_name,
+        )
+        return self._build_domain_result("change_streams", rows)
+
+    async def get_system_metadata(
+        self, driver: "AsyncDriverAdapterBase", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
+        """Get opt-in Spanner system metadata from SPANNER_SYS."""
+        query_kwargs = dict(kwargs)
+        limit = query_kwargs.pop("limit", 100)
+        interval_end_after = query_kwargs.pop("interval_end_after", None)
+        metadata_request = ensure_system_metadata_request(request, **query_kwargs)
+        capability = SystemMetadataCapability(
+            domain=metadata_request.domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.EXPENSIVE),
+            warnings=_SPANNER_SYSTEM_WARNINGS,
+        )
+        gate_result = system_metadata_gated_result(metadata_request, capability)
+        if gate_result.capability.support != MetadataSupport.SUPPORTED:
+            return gate_result
+
+        query_name = (
+            "table_sizes" if metadata_request.domain in {"table_statistics", "table_sizes"} else "query_stats_top"
+        )
+        parameters: dict[str, Any] = {"interval_end_after": interval_end_after, "limit": limit}
+        if query_name == "table_sizes":
+            parameters["table_name"] = metadata_request.table
+        rows = await driver.select(self.get_query("system", query_name, mode=self.mode), **parameters)
+        return SystemMetadataResult.from_rows(
+            metadata_request,
+            capability,
+            rows=tuple(rows) if isinstance(rows, (list, tuple)) else (),
+            source=MetadataSource.SYSTEM_VIEW,
+        )
+
+    async def get_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None, *, mode: "str | None" = None
+    ) -> MetadataCapabilityProfile:
+        """Get Spanner data-dictionary capability profile."""
+        _ = driver
+        requested_domains = tuple(domains) if domains is not None else _DEFAULT_METADATA_DOMAINS
+        normalized_mode = _normalize_spanner_metadata_mode(mode or self.mode)
+        capabilities = tuple(
+            _spanner_capability_for_domain(domain, mode=normalized_mode) for domain in requested_domains
+        )
+        return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
+
+    async def _get_native_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return Spanner DDL through the Database Admin API."""
+        _ = include_dependencies, redact
+        ddl_statements = await _get_spanner_ddl_statements_async(driver)
+        identity = ObjectIdentity(
+            name=object_name,
+            object_type=object_type,
+            schema=schema,
+            dialect=self.dialect,
+            source=MetadataSource.NATIVE_API,
+        )
+        if not ddl_statements:
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
+        ddl = _select_spanner_ddl_for_object(ddl_statements, object_name, object_type=object_type)
+        if ddl is None:
+            return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.NATIVE_API,
+            ddl=ddl,
+            warnings=_SPANNER_DDL_WARNINGS,
+        )
+
+    def _build_domain_result(self, domain: str, rows: list[Any]) -> MetadataResult:
+        """Wrap domain query rows into a standard MetadataResult envelope."""
+        capability = _spanner_capability_for_domain(domain, mode=self.mode)
+        return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
+
+
+def _typed_str(val: "str | None") -> "str | TypedParameter":
+    if val is None:
+        return TypedParameter(None, str)
+    return val
+
+
+def _spanner_capability_for_domain(domain: str, *, mode: str) -> MetadataCapability:
+    if mode not in {"googlesql", "postgresql"}:
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.UNKNOWN,
+            risks=(MetadataRisk.VERSION_GATED,),
+            warnings=(_SPANNER_POSTGRESQL_WARNING,),
+        )
+    if domain in _SPANNER_UNSUPPORTED_DOMAINS:
+        return MetadataCapability.unsupported(domain)
+    if domain == "ddl":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.NATIVE_API,
+            risks=(MetadataRisk.PRIVILEGED,),
+            warnings=_SPANNER_DDL_WARNINGS,
+        )
+    if domain == "system":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.EXPENSIVE),
+            warnings=_SPANNER_SYSTEM_WARNINGS,
+        )
+    if domain in _DEFAULT_METADATA_DOMAINS or domain in {"database", "sequences", "change_streams", "property_graphs"}:
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.INFORMATION_SCHEMA,
+            risks=(MetadataRisk.PRIVILEGED,),
+            warnings=_SPANNER_INFORMATION_SCHEMA_WARNINGS,
+        )
+    return MetadataCapability.unsupported(domain)
+
+
+def _normalize_spanner_metadata_mode(mode: "str | None") -> str:
+    normalized = (mode or "googlesql").lower()
+    if normalized in {"googlesql", "google_sql", "spanner_googlesql"}:
+        return "googlesql"
+    if normalized in {"postgres", "postgresql", "spangres", "spanner_postgresql"}:
+        return "postgresql"
+    return normalized
+
+
+def _get_spanner_ddl_statements(driver: Any) -> "tuple[str, ...]":
+    database = _get_spanner_database(driver)
+    if database is None:
+        return ()
+    admin_api = _get_spanner_database_admin_api(database)
+    database_name = getattr(database, "name", None)
+    if admin_api is None or database_name is None:
+        return ()
+    response = admin_api.get_database_ddl(database=database_name)
+    return tuple(str(statement) for statement in cast("Sequence[object]", response.statements))
+
+
+async def _get_spanner_ddl_statements_async(driver: Any) -> "tuple[str, ...]":
+    database = _get_spanner_database(driver)
+    if database is None:
+        return ()
+    admin_api = _get_spanner_database_admin_api(database)
+    database_name = getattr(database, "name", None)
+    if admin_api is None or database_name is None:
+        return ()
+    response = await admin_api.get_database_ddl(database=database_name)
+    return tuple(str(statement) for statement in cast("Sequence[object]", response.statements))
+
+
+def _get_spanner_database(driver: Any) -> Any:
+    database = getattr(driver, "database", None)
+    if database is not None:
+        return database
+    connection = getattr(driver, "connection", None)
+    session = getattr(connection, "_session", None)
+    return getattr(session, "_database", None)
+
+
+def _get_spanner_database_admin_api(database: Any) -> Any:
+    admin_api = getattr(database, "database_admin_api", None)
+    if admin_api is not None:
+        return admin_api
+    instance = getattr(database, "_instance", None)
+    client = getattr(instance, "_client", None)
+    return getattr(client, "database_admin_api", None)
+
+
+def _select_spanner_ddl_for_object(
+    statements: "tuple[str, ...]", object_name: str, *, object_type: str = "table"
+) -> str | None:
+    escaped_name = re.escape(object_name.strip('`"'))
+    normalized_type = object_type.strip().replace("_", r"\s+")
+    typed_pattern = re.compile(
+        rf"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:UNIQUE|NULL_FILTERED|SEARCH|VECTOR|PROPERTY)\s+)*"
+        rf"{normalized_type}\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[`\"]?\w+[`\"]?\.)?[`\"]?{escaped_name}[`\"]?(?=\s|\(|;|$)",
+        re.IGNORECASE,
+    )
+    for statement in statements:
+        if typed_pattern.search(statement):
+            return statement
+    return None

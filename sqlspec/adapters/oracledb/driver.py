@@ -449,6 +449,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         "_data_dictionary",
         "_fetch_kwargs",
         "_migration_schema_restore",
+        "_oracle_cache_hit_state",
         "_row_metadata_cache",
         "_session_tracing_enabled",
         "_sessionless_cleanup_error",
@@ -483,12 +484,13 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         self._session_tracing_enabled = bool(
             self.driver_features.get("enable_session_tracing", False) or self.statement_config.enable_sqlcommenter
         )
+        self._oracle_cache_hit_state = OracleCacheHitState(
+            self.driver_features, self._fetch_kwargs, self._row_metadata_cache, self._session_tracing_enabled
+        )
         self._cache_hit_executor = (
             execute_cache_hit if cache_hit_hooks_unchanged(type(self), OracleSyncDriver) else None
         )
-        self._cache_hit_state = OracleCacheHitState(
-            self.driver_features, self._fetch_kwargs, self._row_metadata_cache, self._session_tracing_enabled
-        )
+        self._cache_hit_state = self._oracle_cache_hit_state
 
     @property
     def sessionless_transaction_id(self) -> bytes | None:
@@ -497,19 +499,19 @@ class OracleSyncDriver(SyncDriverAdapterBase):
 
     @property
     def _oracle_version_cache(self) -> "OracleVersionCache | None":
-        return cast("OracleVersionCache | None", cast("OracleCacheHitState", self._cache_hit_state).version_cache)
+        return cast("OracleVersionCache | None", self._oracle_cache_hit_state.version_cache)
 
     @_oracle_version_cache.setter
     def _oracle_version_cache(self, value: "OracleVersionCache | None") -> None:
-        cast("OracleCacheHitState", self._cache_hit_state).version_cache = value
+        self._oracle_cache_hit_state.version_cache = value
 
     @property
     def _otel_tracing_enabled(self) -> bool:
-        return cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled
+        return self._oracle_cache_hit_state.otel_tracing_enabled
 
     @_otel_tracing_enabled.setter
     def _otel_tracing_enabled(self, value: bool) -> None:
-        cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled = bool(value)
+        self._oracle_cache_hit_state.otel_tracing_enabled = bool(value)
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Refresh trace propagation when the session receives its runtime."""
@@ -781,7 +783,12 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             )
 
         affected_rows = resolve_rowcount(cursor)
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+        last_inserted_id = (
+            self.resolve_last_inserted_id(cursor)
+            if statement.operation_type == "INSERT" and affected_rows > 0
+            else None
+        )
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
@@ -1438,8 +1445,23 @@ class OracleSyncDriver(SyncDriverAdapterBase):
     def _execute_cache_hit_with_cursor(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Execute a cached query through the compiled Oracle cache-hit executor."""
-        return execute_cache_hit(self.connection, sql, params, cached, self.statement_config, self._cache_hit_state)
+        """Execute a cached query through the compiled executor, or ``dispatch_execute`` when it is disabled.
+
+        A subclass that overrides a cache-hit hook, or a caller that clears the
+        executor, runs the cached statement through ``dispatch_execute`` so large
+        parameter coercion, fetch options, and LOB handling stay in effect.
+        """
+        if self._cache_hit_executor is not None:
+            return execute_cache_hit(
+                self.connection, sql, params, cached, self.statement_config, self._oracle_cache_hit_state
+            )
+        statement = self._cached_statement(
+            sql, params, cached, params, params_are_simple=True, compiled_sql=self._format_wire_sql(cached.compiled_sql)
+        )
+        try:
+            return self._execute_cached_statement_with_cursor(statement)
+        finally:
+            self._release_pooled_statement(statement)
 
     def _connection_in_transaction(self) -> bool:
         """Report whether a transaction is open on the connection.
@@ -1633,6 +1655,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         "_data_dictionary",
         "_fetch_kwargs",
         "_migration_schema_restore",
+        "_oracle_cache_hit_state",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
@@ -1668,12 +1691,13 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         self._session_tracing_enabled = bool(
             self.driver_features.get("enable_session_tracing", False) or self.statement_config.enable_sqlcommenter
         )
+        self._oracle_cache_hit_state = OracleCacheHitState(
+            self.driver_features, self._fetch_kwargs, self._row_metadata_cache, self._session_tracing_enabled
+        )
         self._cache_hit_executor = (
             execute_cache_hit_async if cache_hit_hooks_unchanged(type(self), OracleAsyncDriver) else None
         )
-        self._cache_hit_state = OracleCacheHitState(
-            self.driver_features, self._fetch_kwargs, self._row_metadata_cache, self._session_tracing_enabled
-        )
+        self._cache_hit_state = self._oracle_cache_hit_state
 
     @property
     def sessionless_transaction_id(self) -> bytes | None:
@@ -1682,19 +1706,19 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
 
     @property
     def _oracle_version_cache(self) -> "OracleVersionCache | None":
-        return cast("OracleVersionCache | None", cast("OracleCacheHitState", self._cache_hit_state).version_cache)
+        return cast("OracleVersionCache | None", self._oracle_cache_hit_state.version_cache)
 
     @_oracle_version_cache.setter
     def _oracle_version_cache(self, value: "OracleVersionCache | None") -> None:
-        cast("OracleCacheHitState", self._cache_hit_state).version_cache = value
+        self._oracle_cache_hit_state.version_cache = value
 
     @property
     def _otel_tracing_enabled(self) -> bool:
-        return cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled
+        return self._oracle_cache_hit_state.otel_tracing_enabled
 
     @_otel_tracing_enabled.setter
     def _otel_tracing_enabled(self, value: bool) -> None:
-        cast("OracleCacheHitState", self._cache_hit_state).otel_tracing_enabled = bool(value)
+        self._oracle_cache_hit_state.otel_tracing_enabled = bool(value)
 
     def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
         """Refresh trace propagation when the session receives its runtime."""
@@ -1970,7 +1994,12 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             )
 
         affected_rows = resolve_rowcount(cursor)
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+        last_inserted_id = (
+            self.resolve_last_inserted_id(cursor)
+            if statement.operation_type == "INSERT" and affected_rows > 0
+            else None
+        )
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
     async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
@@ -2686,10 +2715,23 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     async def _execute_cache_hit_with_cursor(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Execute an async cached query through the compiled Oracle cache-hit executor."""
-        return await execute_cache_hit_async(
-            self.connection, sql, params, cached, self.statement_config, self._cache_hit_state
+        """Execute an async cached query through the compiled executor, or ``dispatch_execute`` when it is disabled.
+
+        A subclass that overrides a cache-hit hook, or a caller that clears the
+        executor, runs the cached statement through ``dispatch_execute`` so large
+        parameter coercion, fetch options, and async LOB collection stay in effect.
+        """
+        if self._cache_hit_executor is not None:
+            return await execute_cache_hit_async(
+                self.connection, sql, params, cached, self.statement_config, self._oracle_cache_hit_state
+            )
+        statement = self._cached_statement(
+            sql, params, cached, params, params_are_simple=True, compiled_sql=self._format_wire_sql(cached.compiled_sql)
         )
+        try:
+            return await self._execute_cached_statement_with_cursor(statement)
+        finally:
+            self._release_pooled_statement(statement)
 
     def _connection_in_transaction(self) -> bool:
         """Report whether a transaction is open on the connection.

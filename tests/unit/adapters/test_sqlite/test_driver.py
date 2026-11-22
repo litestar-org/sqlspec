@@ -6,11 +6,14 @@ from unittest.mock import Mock
 import pytest
 from sqlglot import parse_one
 
+import sqlspec.adapters.sqlite.data_dictionary as sqlite_dd_module
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteCursor, SqliteDriver
 from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config, resolve_lastrowid
+from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import json_converter, register_type_handlers, unregister_type_handlers
 from sqlspec.core.compiler import OperationType
+from sqlspec.data_dictionary.dialects.sqlite import SqliteSyncDataDictionary
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
@@ -550,3 +553,22 @@ def test_cursor_context_closes_the_cursor_and_ignores_a_failing_close() -> None:
     with pytest.raises(ValueError, match="statement failed"), SqliteCursor(cast("Any", Connection())):
         raise ValueError("statement failed")
     assert closed == ["close", "close"]
+
+
+def test_sqlite_data_dictionary_subclass_contract() -> None:
+    """SqliteDataDictionary inherits directly from SqliteSyncDataDictionary."""
+    assert issubclass(SqliteDataDictionary, SqliteSyncDataDictionary)
+    assert SqliteDataDictionary.dialect == "sqlite"
+    assert sqlite_dd_module.__all__ == ("SqliteDataDictionary",)
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        driver = SqliteDriver(connection=connection)
+        assert isinstance(driver.data_dictionary, SqliteDataDictionary)
+        assert isinstance(driver.data_dictionary, SqliteSyncDataDictionary)
+        version = driver.data_dictionary.get_version(driver)
+        assert version is not None
+        expected_parts = tuple(int(part) for part in sqlite3.sqlite_version.split(".")[:3])
+        assert (version.major, version.minor, version.patch) == expected_parts
+    finally:
+        connection.close()

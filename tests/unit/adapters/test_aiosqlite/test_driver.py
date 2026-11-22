@@ -4,6 +4,7 @@ import threading
 import time
 from collections.abc import Iterator
 from threading import Thread
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock
 
@@ -12,6 +13,7 @@ import pytest
 from sqlglot import parse_one
 
 import sqlspec.adapters.aiosqlite as aiosqlite_adapter
+import sqlspec.adapters.aiosqlite.data_dictionary as aiosqlite_dd_module
 import sqlspec.adapters.aiosqlite.driver as aiosqlite_driver_module
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor
 from sqlspec.adapters.aiosqlite.core import (
@@ -24,10 +26,12 @@ from sqlspec.adapters.aiosqlite.core import (
     resolve_lastrowid,
     run_on_worker_thread,
 )
+from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.core import ParameterStyle
 from sqlspec.core.compiler import OperationType
+from sqlspec.data_dictionary.dialects.sqlite import SqliteAsyncDataDictionary
 from sqlspec.exceptions import SQLSpecError, UniqueViolationError
 
 
@@ -633,3 +637,77 @@ async def test_subclass_dispatch_override_still_receives_an_open_cursor() -> Non
         assert await driver.select_value("SELECT COUNT(*) FROM subclass_rows") == 3
     finally:
         await connection.close()
+
+
+class _FakeAsyncVersionDriver:
+    """Minimal async driver double tracking version queries."""
+
+    def __init__(self, version_value: Any) -> None:
+        self.version_value = version_value
+        self.calls: list[Any] = []
+
+    async def select_value_or_none(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        self.calls.append(statement)
+        return self.version_value
+
+
+def test_aiosqlite_data_dictionary_subclass_contract() -> None:
+    """AiosqliteDataDictionary inherits directly from SqliteAsyncDataDictionary."""
+    assert issubclass(AiosqliteDataDictionary, SqliteAsyncDataDictionary)
+    assert AiosqliteDataDictionary.dialect == "sqlite"
+    assert aiosqlite_dd_module.__all__ == ("AiosqliteDataDictionary",)
+    assert isinstance(AiosqliteDataDictionary(), SqliteAsyncDataDictionary)
+
+
+async def test_aiosqlite_data_dictionary_local_version_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_version reads sqlite3.sqlite_version without querying the driver and caches the result."""
+    monkeypatch.setattr(AiosqliteDataDictionary, "_shared_version_info", None)
+    driver1 = _FakeAsyncVersionDriver(version_value="9.9.9")
+    driver2 = _FakeAsyncVersionDriver(version_value="9.9.9")
+    dd = AiosqliteDataDictionary()
+
+    version1 = await dd.get_version(cast("Any", driver1))
+    version2 = await dd.get_version(cast("Any", driver2))
+
+    expected_parts = tuple(int(part) for part in sqlite3.sqlite_version.split(".")[:3])
+    assert version1 is not None
+    assert (version1.major, version1.minor, version1.patch) == expected_parts
+    assert version2 is version1
+    assert AiosqliteDataDictionary._shared_version_info is version1
+    assert driver1.calls == []
+    assert driver2.calls == []
+
+
+@pytest.mark.parametrize(
+    ("query_result", "expected_tuple"),
+    [("3.45.2", (3, 45, 2)), (None, None), ("unparseable-version", None)],
+    ids=["parsed_version", "missing_version", "invalid_version"],
+)
+async def test_aiosqlite_data_dictionary_version_driver_query_fallback(
+    monkeypatch: pytest.MonkeyPatch, query_result: str | None, expected_tuple: tuple[int, int, int] | None
+) -> None:
+    """get_version falls back to driver.select_value_or_none when sqlite3.sqlite_version is unavailable."""
+    monkeypatch.setattr(AiosqliteDataDictionary, "_shared_version_info", None)
+    monkeypatch.setattr(aiosqlite_dd_module, "sqlite3", SimpleNamespace(sqlite_version=None))
+
+    dd = AiosqliteDataDictionary()
+    driver = _FakeAsyncVersionDriver(version_value=query_result)
+    first = await dd.get_version(cast("Any", driver))
+    second = await dd.get_version(cast("Any", driver))
+
+    assert len(driver.calls) == 1
+    if expected_tuple is None:
+        assert first is None
+        assert second is None
+        assert AiosqliteDataDictionary._shared_version_info is None
+    else:
+        assert first is not None
+        assert (first.major, first.minor, first.patch) == expected_tuple
+        assert second is first
+        assert AiosqliteDataDictionary._shared_version_info is first
+
+        other_driver = _FakeAsyncVersionDriver(version_value="0.0.0")
+        cached = await dd.get_version(cast("Any", other_driver))
+        assert cached is first
+        assert other_driver.calls == []

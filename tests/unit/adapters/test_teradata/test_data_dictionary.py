@@ -4,7 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import sqlspec.adapters.teradata.data_dictionary as teradata_data_dictionary
+import sqlspec.data_dictionary.dialects.teradata as teradata_dialect
 from sqlspec.adapters.teradata.data_dictionary import TeradataDataDictionary
+from sqlspec.data_dictionary.dialects.teradata import dictionary as teradata_dialect_dictionary
 from sqlspec.exceptions import OperationalError
 
 
@@ -188,3 +191,39 @@ def test_view_fallback_enriches_type_and_unicode_length(code: str, udt_name: str
     assert column.get("is_nullable") is False
     if code == "CV":
         assert column.get("max_length") == 100
+
+
+def test_teradata_alias_and_lazy_facade_exports() -> None:
+    """Adapter dictionary preserves TeradataDataDictionary alias and subclasses the shared base."""
+    shared_dictionary = teradata_dialect_dictionary.TeradataSyncDataDictionary
+
+    assert teradata_data_dictionary.TeradataDataDictionary is teradata_data_dictionary.TeradataSyncDataDictionary
+    assert teradata_dialect.TeradataSyncDataDictionary is shared_dictionary
+    assert issubclass(teradata_data_dictionary.TeradataSyncDataDictionary, shared_dictionary)
+    assert teradata_data_dictionary.TeradataSyncDataDictionary is not shared_dictionary
+    assert "TeradataSyncDataDictionary" in dir(teradata_dialect)
+    with pytest.raises(AttributeError):
+        getattr(teradata_dialect, "_nonexistent_teradata_export")
+
+
+@pytest.mark.parametrize(
+    "symbol_name",
+    [
+        "TERADATA_CONFIG",
+        "TeradataVersionInfo",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_teradata_version",
+    ],
+)
+def test_teradata_shared_helper_identity(symbol_name: str) -> None:
+    """Adapter data_dictionary re-exports exact shared Teradata dialect config and helper objects."""
+    adapter_attr = getattr(teradata_data_dictionary, symbol_name)
+    dialect_attr = getattr(teradata_dialect, symbol_name)
+    assert adapter_attr is dialect_attr
+    assert symbol_name in teradata_data_dictionary.__all__
+    assert symbol_name in teradata_dialect.__all__
+    assert symbol_name in dir(teradata_dialect)
+    if symbol_name not in {"TERADATA_CONFIG", "TeradataVersionInfo"}:
+        assert dialect_attr is getattr(teradata_dialect_dictionary, symbol_name)

@@ -36,7 +36,7 @@ from sqlspec.exceptions import StoragePathTraversalError
 from sqlspec.protocols import AsyncWritableBytesSink, DirectStreamWriteProtocol, ObjectStoreProtocol, WritableBytesSink
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
 from sqlspec.storage.pipeline import AsyncStoragePipeline, StorageDestination, _encode_row_payload, _StoragePipelineBase
-from sqlspec.storage.registry import StorageRegistry, storage_registry
+from sqlspec.storage.registry import StorageBackendFactory, StorageRegistry, storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 from sqlspec.utils.type_guards import supports_direct_stream_write
 
@@ -699,9 +699,17 @@ def test_storage_bridge_diagnostics_include_serializer_metrics() -> None:
 class _ResolutionCountingRegistry(StorageRegistry):
     def __init__(self) -> None:
         super().__init__()
-        self.calls: list[tuple[str, str | None, dict[str, Any]]] = []
+        self.calls: list[
+            tuple[str, str | type[ObjectStoreProtocol] | StorageBackendFactory | None, dict[str, Any]]
+        ] = []
 
-    def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
+    def get(
+        self,
+        uri_or_alias: str | Path,
+        *,
+        backend: str | type[ObjectStoreProtocol] | StorageBackendFactory | None = None,
+        **kwargs: Any,
+    ) -> ObjectStoreProtocol:
         self.calls.append((str(uri_or_alias), backend, kwargs))
         return super().get(uri_or_alias, backend=backend, **kwargs)
 

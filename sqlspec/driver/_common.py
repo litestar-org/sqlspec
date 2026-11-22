@@ -1982,8 +1982,8 @@ class CommonDriverAttributesMixin:
 
         Called on cached ``INSERT`` statements that affect at least one row. The
         default implementation returns ``cursor.lastrowid`` when it is an ``int``
-        (excluding ``bool``) or ``str``, else ``None``. Adapters with custom
-        row-identifier semantics may override this method.
+        (excluding ``bool``) or non-empty ``str``, else ``None``. Adapters with
+        custom row-identifier semantics may override this method.
 
         Args:
             cursor: Database cursor with optional ``lastrowid`` metadata.
@@ -1994,7 +1994,9 @@ class CommonDriverAttributesMixin:
         last_id = getattr(cursor, "lastrowid", None)
         if isinstance(last_id, bool):
             return None
-        if isinstance(last_id, (int, str)):
+        if isinstance(last_id, str):
+            return last_id or None
+        if isinstance(last_id, int):
             return last_id
         return None
 

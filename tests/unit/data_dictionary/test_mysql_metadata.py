@@ -1,5 +1,7 @@
 """Unit tests for MySQL-family data-dictionary metadata."""
 
+import subprocess
+import sys
 from importlib import import_module
 from inspect import isawaitable
 from typing import Any, cast
@@ -23,8 +25,40 @@ from sqlspec.data_dictionary import (
     MetadataSupport,
     SystemMetadataRequest,
     SystemMetadataResult,
+    VersionInfo,
     get_dialect_config,
     normalize_dialect_name,
+)
+from sqlspec.data_dictionary.dialects.mariadb import MariaDBAsyncDataDictionary, MariaDBSyncDataDictionary
+from sqlspec.data_dictionary.dialects.mysql import (
+    MARIADB_CONFIG,
+    MySQLAsyncDataDictionary,
+    MySQLSyncDataDictionary,
+    make_mysql_ddl_result,
+    resolve_mysql_json_type,
+)
+from sqlspec.exceptions import SQLSpecError
+
+MYSQL_DIALECT_PACKAGE_EXPORTS: tuple[str, ...] = (
+    "MARIADB_CONFIG",
+    "MYSQL_CONFIG",
+    "MYSQL_VERSION_PATTERN",
+    "MySQLAsyncDataDictionary",
+    "MySQLEngineVersion",
+    "MySQLSyncDataDictionary",
+    "build_mysql_metadata_capability_profile",
+    "build_mysql_show_create_statement",
+    "build_mysql_system_metadata_capability",
+    "format_mysql_identifier",
+    "make_mysql_ddl_result",
+    "mysql_system_metadata_query_name",
+    "parse_mysql_engine_version",
+    "resolve_mysql_json_type",
+)
+MARIADB_DIALECT_PACKAGE_EXPORTS: tuple[str, ...] = (
+    "MARIADB_CONFIG",
+    "MariaDBAsyncDataDictionary",
+    "MariaDBSyncDataDictionary",
 )
 
 
@@ -365,3 +399,222 @@ async def test_mysql_get_constraints_binds_optional_table_name(
     if isawaitable(result):
         result = await result
     assert result.items == ({"table_name": "orders", "constraint_name": "pk_orders"},)
+
+
+@pytest.mark.parametrize(
+    ("package_name", "dictionary_module_name", "class_name", "expected_all"),
+    (
+        (
+            "sqlspec.data_dictionary.dialects.mysql",
+            "sqlspec.data_dictionary.dialects.mysql.dictionary",
+            "MySQLAsyncDataDictionary",
+            MYSQL_DIALECT_PACKAGE_EXPORTS,
+        ),
+        (
+            "sqlspec.data_dictionary.dialects.mysql",
+            "sqlspec.data_dictionary.dialects.mysql.dictionary",
+            "MySQLSyncDataDictionary",
+            MYSQL_DIALECT_PACKAGE_EXPORTS,
+        ),
+        (
+            "sqlspec.data_dictionary.dialects.mariadb",
+            "sqlspec.data_dictionary.dialects.mariadb.dictionary",
+            "MariaDBAsyncDataDictionary",
+            MARIADB_DIALECT_PACKAGE_EXPORTS,
+        ),
+        (
+            "sqlspec.data_dictionary.dialects.mariadb",
+            "sqlspec.data_dictionary.dialects.mariadb.dictionary",
+            "MariaDBSyncDataDictionary",
+            MARIADB_DIALECT_PACKAGE_EXPORTS,
+        ),
+    ),
+)
+def test_mysql_and_mariadb_package_lazy_exports(
+    package_name: str, dictionary_module_name: str, class_name: str, expected_all: tuple[str, ...]
+) -> None:
+    """MySQL and MariaDB dialect packages expose lazy PEP 562 dictionary re-exports."""
+    package = import_module(package_name)
+    dictionary_module = import_module(dictionary_module_name)
+
+    assert package.__all__ == expected_all
+    assert class_name in dir(package)
+    exported = getattr(package, class_name)
+    assert exported is getattr(dictionary_module, class_name)
+    assert package.__dict__[class_name] is exported
+
+    with pytest.raises(AttributeError, match="has no attribute 'NonExistentExport'"):
+        getattr(package, "NonExistentExport")
+
+
+def test_mariadb_dictionary_classes_inherit_mysql_bases() -> None:
+    """MariaDB sync and async data dictionary bases inherit the shared MySQL bases."""
+    assert issubclass(MariaDBSyncDataDictionary, MySQLSyncDataDictionary)
+    assert issubclass(MariaDBAsyncDataDictionary, MySQLAsyncDataDictionary)
+    assert MariaDBSyncDataDictionary.dialect == "mariadb"
+    assert MariaDBAsyncDataDictionary.dialect == "mariadb"
+
+
+def test_mariadb_and_mysql_packages_remain_lazy_on_bare_import() -> None:
+    """Bare dialect package imports do not eagerly load dictionary modules or sqlspec.driver."""
+    probe = (
+        "import sys; "
+        "import sqlspec.data_dictionary.dialects as dialects; "
+        "import sqlspec.data_dictionary.dialects.mysql as mysql_pkg; "
+        "import sqlspec.data_dictionary.dialects.mariadb as mariadb_pkg; "
+        "assert 'sqlspec.data_dictionary.dialects.mysql.dictionary' not in sys.modules; "
+        "assert 'sqlspec.data_dictionary.dialects.mariadb.dictionary' not in sys.modules; "
+        "assert 'sqlspec.driver' not in sys.modules; "
+        "assert 'MySQLSyncDataDictionary' in dir(mysql_pkg); "
+        "assert 'MySQLAsyncDataDictionary' in dir(mysql_pkg); "
+        "assert 'MariaDBSyncDataDictionary' in dir(mariadb_pkg); "
+        "assert 'MariaDBAsyncDataDictionary' in dir(mariadb_pkg); "
+        "assert 'sqlspec.data_dictionary.dialects.mysql.dictionary' not in sys.modules; "
+        "assert 'sqlspec.data_dictionary.dialects.mariadb.dictionary' not in sys.modules; "
+        "assert dialects.MARIADB_CONFIG is mariadb_pkg.MARIADB_CONFIG"
+    )
+    completed = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("version_info", "config", "expected"),
+    (
+        (VersionInfo(10, 1, 48), MARIADB_CONFIG, "TEXT"),
+        (VersionInfo(10, 2, 7), MARIADB_CONFIG, "JSON"),
+        (VersionInfo(5, 7, 8), MARIADB_CONFIG, "TEXT"),
+        (None, MARIADB_CONFIG, "TEXT"),
+        (VersionInfo(5, 7, 7), None, "TEXT"),
+        (VersionInfo(5, 7, 8), None, "JSON"),
+    ),
+)
+def test_mariadb_resolve_mysql_json_type_threshold(
+    version_info: VersionInfo | None, config: Any, expected: str
+) -> None:
+    """resolve_mysql_json_type enforces the supplied dialect config threshold."""
+    assert resolve_mysql_json_type(version_info, config=config) == expected
+
+
+def test_resolve_mysql_json_type_single_argument_compat() -> None:
+    """Single-argument resolve_mysql_json_type calls default to the MySQL 5.7.8 threshold."""
+    assert resolve_mysql_json_type(VersionInfo(5, 7, 8)) == "JSON"
+    assert resolve_mysql_json_type(VersionInfo(5, 7, 7)) == "TEXT"
+    assert resolve_mysql_json_type(None) == "TEXT"
+
+
+@pytest.mark.parametrize(
+    ("dictionary_type", "is_async", "version_text", "expected"),
+    (
+        (MariaDBSyncDataDictionary, False, "10.1.48-MariaDB", "TEXT"),
+        (MariaDBSyncDataDictionary, False, "10.2.7-MariaDB", "JSON"),
+        (MariaDBSyncDataDictionary, False, "5.7.8", "TEXT"),
+        (MariaDBSyncDataDictionary, False, None, "TEXT"),
+        (MariaDBAsyncDataDictionary, True, "10.1.48-MariaDB", "TEXT"),
+        (MariaDBAsyncDataDictionary, True, "10.2.7-MariaDB", "JSON"),
+        (MariaDBAsyncDataDictionary, True, "5.7.8", "TEXT"),
+        (MariaDBAsyncDataDictionary, True, None, "TEXT"),
+        (MySQLSyncDataDictionary, False, "5.7.7", "TEXT"),
+        (MySQLSyncDataDictionary, False, "5.7.8", "JSON"),
+        (MySQLAsyncDataDictionary, True, "5.7.7", "TEXT"),
+        (MySQLAsyncDataDictionary, True, "5.7.8", "JSON"),
+    ),
+)
+async def test_mariadb_and_mysql_get_optimal_type_json_threshold(
+    dictionary_type: type[Any], is_async: bool, version_text: str | None, expected: str
+) -> None:
+    """get_optimal_type uses each dictionary dialect's supports_json threshold."""
+    driver = Mock(
+        select_value_or_none=AsyncMock(return_value=version_text) if is_async else Mock(return_value=version_text)
+    )
+    result = dictionary_type().get_optimal_type(driver, "json")
+    if isawaitable(result):
+        result = await result
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("dictionary_type", "is_async"), ((MariaDBSyncDataDictionary, False), (MariaDBAsyncDataDictionary, True))
+)
+@pytest.mark.parametrize("raw_version", (None, "not-a-version"))
+async def test_mariadb_get_ddl_success_without_parsed_version(
+    dictionary_type: type[Any], is_async: bool, raw_version: str | None
+) -> None:
+    """Public get_ddl falls back to mariadb dialect when version cannot be parsed."""
+
+    def select_one(statement: str, **kwargs: Any) -> dict[str, object]:
+        _ = kwargs
+        if "SELECT VERSION()" in statement:
+            return {"raw_version": raw_version, "sql_mode": "STRICT_TRANS_TABLES", "sql_quote_show_create": "1"}
+        return {"View": "v_orders", "Create View": "CREATE VIEW `v_orders` AS SELECT 1"}
+
+    driver = Mock(select_one=AsyncMock(side_effect=select_one) if is_async else Mock(side_effect=select_one))
+    result = dictionary_type().get_ddl(driver, "v_orders", schema="shop", object_type="view")
+    if isawaitable(result):
+        result = await result
+
+    assert result.status == MetadataSupport.SUPPORTED
+    assert result.identity.dialect == "mariadb"
+    assert result.context["engine_family"] == "mariadb"
+    assert result.ddl == "CREATE VIEW `v_orders` AS SELECT 1"
+
+
+@pytest.mark.parametrize(
+    ("dictionary_type", "is_async"), ((MariaDBSyncDataDictionary, False), (MariaDBAsyncDataDictionary, True))
+)
+@pytest.mark.parametrize("raw_version", (None, "not-a-version"))
+async def test_mariadb_get_ddl_fallback_on_sqlspec_error(
+    dictionary_type: type[Any], is_async: bool, raw_version: str | None
+) -> None:
+    """Public get_ddl error fallback preserves mariadb dialect when version cannot be parsed."""
+
+    def select_one(statement: str, **kwargs: Any) -> dict[str, object]:
+        _ = kwargs
+        if "SELECT VERSION()" in statement:
+            return {"raw_version": raw_version, "sql_mode": "STRICT_TRANS_TABLES", "sql_quote_show_create": "1"}
+        msg = "View 'shop.v_orders' does not exist"
+        raise SQLSpecError(msg)
+
+    driver = Mock(select_one=AsyncMock(side_effect=select_one) if is_async else Mock(side_effect=select_one))
+    result = dictionary_type().get_ddl(driver, "v_orders", schema="shop", object_type="view")
+    if isawaitable(result):
+        result = await result
+
+    assert result.status == MetadataSupport.UNSUPPORTED
+    assert result.identity.dialect == "mariadb"
+
+
+def test_make_mysql_ddl_result_default_dialect() -> None:
+    """make_mysql_ddl_result defaults fallback dialect to mysql and accepts default_dialect override."""
+    row: dict[str, object] = {"View": "v_orders", "Create View": "CREATE VIEW `v_orders` AS SELECT 1"}
+    default_result = make_mysql_ddl_result("v_orders", "shop", "view", row, None, None, None)
+    mariadb_result = make_mysql_ddl_result("v_orders", "shop", "view", row, None, None, None, default_dialect="mariadb")
+
+    assert default_result.identity.dialect == "mysql"
+    assert default_result.context["engine_family"] == "mysql"
+    assert mariadb_result.identity.dialect == "mariadb"
+    assert mariadb_result.context["engine_family"] == "mariadb"
+
+
+@pytest.mark.parametrize("dictionary_type", (MariaDBSyncDataDictionary, MariaDBAsyncDataDictionary))
+def test_mariadb_dialect_config_lookup(dictionary_type: type[Any]) -> None:
+    """MariaDB dictionary bases resolve MARIADB_CONFIG from the dialect registry."""
+    config = dictionary_type().get_dialect_config()
+    assert config.name == "mariadb"
+    assert config is MARIADB_CONFIG
+
+
+@pytest.mark.parametrize(
+    ("dictionary_type", "is_async"), ((MariaDBSyncDataDictionary, False), (MariaDBAsyncDataDictionary, True))
+)
+@pytest.mark.parametrize("version_value", (None, "10.11.6-MariaDB"))
+async def test_mariadb_get_metadata_capabilities_reports_mariadb(
+    dictionary_type: type[Any], is_async: bool, version_value: str | None
+) -> None:
+    """get_metadata_capabilities reports mariadb with and without server version text."""
+    driver = Mock(
+        select_value_or_none=AsyncMock(return_value=version_value) if is_async else Mock(return_value=version_value)
+    )
+    profile = dictionary_type().get_metadata_capabilities(driver)
+    if isawaitable(profile):
+        profile = await profile
+    assert profile.dialect == "mariadb"

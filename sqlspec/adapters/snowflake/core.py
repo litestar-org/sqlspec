@@ -13,6 +13,7 @@ from sqlspec.adapters.snowflake.type_converter import SnowflakeOutputConverter
 from sqlspec.core.parameters._registry import build_statement_config_from_profile
 from sqlspec.core.parameters._types import DriverParameterProfile, ParameterStyle
 from sqlspec.core.statement import StatementConfig
+from sqlspec.data_dictionary.dialects.snowflake.config import format_snowflake_identifier
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -33,7 +34,6 @@ from sqlspec.exceptions import (
 )
 from sqlspec.typing import import_optional
 from sqlspec.utils.serializers._json import from_json, to_json
-from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 
 __all__ = (
@@ -73,9 +73,6 @@ POOL_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "pool_recycle_seconds",
     "health_check_interval",
 })
-_QUALIFIED_IDENTIFIER_PART: Final[re.Pattern[str]] = re.compile(
-    r'[ \t]*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)[ \t]*(\.|\Z)'
-)
 _AUTH_ALIASES: Final[dict[str, str]] = {
     "snowflake": "snowflake",
     "jwt": "SNOWFLAKE_JWT",
@@ -522,36 +519,6 @@ def build_empty_arrow_table_from_description(
             )
         )
     return pa.Table.from_batches([], schema=pa.schema(fields))
-
-
-def format_snowflake_identifier(identifier: str) -> str:
-    """Validate a 1- to 3-part identifier and quote each part under Snowflake folding.
-
-    Args:
-        identifier: Bare or double-quoted identifier, optionally database- and schema-qualified.
-
-    Returns:
-        Dot-joined, double-quoted identifier with bare parts folded to uppercase.
-
-    Raises:
-        SQLSpecError: If the identifier is empty or not a valid identifier sequence.
-    """
-    position = 0
-    parts: list[str] = []
-    while position < len(identifier):
-        matched = _QUALIFIED_IDENTIFIER_PART.match(identifier, position)
-        if matched is None:
-            msg = "Invalid Snowflake identifier"
-            raise SQLSpecError(msg)
-        parts.append(quote_identifier(normalize_identifier(matched.group(1), "snowflake")))
-        position = matched.end()
-        if matched.group(2) == "." and position == len(identifier):
-            msg = "Invalid Snowflake identifier"
-            raise SQLSpecError(msg)
-    if not parts:
-        msg = "Snowflake identifier must not be empty"
-        raise SQLSpecError(msg)
-    return ".".join(parts)
 
 
 def connection_paramstyle(connection: Any) -> str:
