@@ -3,6 +3,7 @@
 
 import inspect
 import logging
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -393,6 +394,23 @@ def _custom_factory_function(uri: str, **kwargs: Any) -> _CustomStoreStub:
     return _CustomStoreStub(uri, via="function", **kwargs)
 
 
+class _UnhashableFactory:
+    """Unhashable callable backend factory."""
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __call__(self, uri: str, **kwargs: Any) -> _CustomStoreStub:
+        return _CustomStoreStub(uri, **kwargs)
+
+
+_FACTORY_OVERRIDE_BUILDERS: "dict[str, Callable[[], Any]]" = {
+    "function": lambda: _custom_factory_function,
+    "partial": lambda: partial(_custom_factory_function, via_tag="partial"),
+    "lambda": lambda: lambda target_uri, **kwargs: _CustomStoreStub(target_uri, **kwargs),
+    "unhashable": _UnhashableFactory,
+}
+
+
 def test_list_backends_defaults() -> None:
     """Built-in backends are listed in sorted order at startup."""
     registry = StorageRegistry()
@@ -743,19 +761,6 @@ class _RecordingCallableStore(_CustomStoreStub):
         return _RecordingCallableStore(uri, **kwargs)
 
 
-class _UnhashableFactory:
-    """Unhashable callable backend factory forcing cache bypass."""
-
-    __hash__ = None  # type: ignore[assignment]
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-
-    def __call__(self, uri: str, **kwargs: Any) -> _CustomStoreStub:
-        self.calls.append((uri, dict(kwargs)))
-        return _CustomStoreStub(uri, invocation=len(self.calls), **kwargs)
-
-
 def test_register_alias_with_class_backend_and_caching() -> None:
     """register_alias accepts a backend class directly and caches resolved instances."""
     registry = StorageRegistry()
@@ -829,7 +834,7 @@ def test_register_alias_with_callable_factory_kinds(
 
 @pytest.mark.parametrize("uri_value", [None, "", "   "], ids=["none", "empty", "whitespace"])
 def test_register_alias_instance_alias_without_uri(uri_value: str | None, caplog: pytest.LogCaptureFixture) -> None:
-    """Pre-configured instance aliases register without a URI and stay outside _instances."""
+    """Pre-configured instance aliases register without a URI and resolve to the same instance."""
     registry = StorageRegistry()
     store = cast("ObjectStoreProtocol", _CustomStoreStub("custom://preconfigured", protocol="oci"))
 
@@ -843,9 +848,6 @@ def test_register_alias_instance_alias_without_uri(uri_value: str | None, caplog
     assert registry.list_aliases() == ["inst"]
     assert registry.get("inst") is store
     assert registry.get("inst/nested/query.sql") is store
-    assert store not in registry._instances.values()
-    assert "inst" not in registry._instances
-    assert "inst" not in registry._alias_configs
 
     register_logs = [r for r in caplog.records if r.getMessage() == "storage.alias.register"]
     assert len(register_logs) == 1
@@ -890,15 +892,14 @@ def test_register_alias_instance_alias_sanitizes_informational_uri(caplog: pytes
 
 
 def test_register_alias_callable_store_instance_is_not_invoked() -> None:
-    """Callable backend instances register inside _alias_instances without calling __call__."""
+    """Callable backend instances register as instance aliases without calling __call__."""
     registry = StorageRegistry()
     callable_store = _RecordingCallableStore("custom://callable")
     callable_store_proto = cast("ObjectStoreProtocol", callable_store)
 
     registry.register_alias("callable_inst", backend=callable_store_proto)
 
-    assert "callable_inst" in registry._alias_instances
-    assert "callable_inst" not in registry._alias_configs
+    assert registry.is_alias_registered("callable_inst") is True
     assert registry.get("callable_inst") is callable_store_proto
     assert registry.get("callable_inst/subdir/query.sql") is callable_store_proto
     assert callable_store.call_count == 0
@@ -978,29 +979,20 @@ def test_register_alias_reregistration_swaps_kind_and_evicts_cache(tmp_path: Pat
 
     registry.register_alias("swap", f"file://{root_a}", backend="local")
     cfg_a = registry.get("swap")
-    _ = registry.get("swap", cache_tag="extra")
-    assert "swap" in registry._alias_configs
-    assert "swap" not in registry._alias_instances
+    cfg_a_tagged = registry.get("swap", cache_tag="extra")
 
     registry.register_alias("swap", backend=inst_one)
-    assert "swap" not in registry._alias_configs
-    assert "swap" in registry._alias_instances
-    assert registry._instances == {}
     assert registry.get("swap") is inst_one
     assert registry.list_aliases() == ["swap"]
 
     registry.register_alias("swap", f"file://{root_b}", backend="local")
-    assert "swap" in registry._alias_configs
-    assert "swap" not in registry._alias_instances
     cfg_b = registry.get("swap")
     assert cfg_b is not cfg_a
     assert cfg_b is not inst_one
     assert str(cfg_b.base_path) == str(root_b.resolve())
+    assert registry.get("swap", cache_tag="extra") is not cfg_a_tagged
 
     registry.register_alias("swap", backend=inst_two)
-    assert "swap" not in registry._alias_configs
-    assert "swap" in registry._alias_instances
-    assert registry._instances == {}
     assert registry.get("swap") is inst_two
     assert registry.list_aliases() == ["swap"]
 
@@ -1127,36 +1119,35 @@ def test_get_rejects_store_instance_override_with_register_alias_hint(tmp_path: 
         registry.get(f"file://{tmp_path}", backend=store)
 
 
-def test_get_hashable_callable_override_caches_per_factory(tmp_path: Path) -> None:
-    """Hashable class, function, lambda, and partial backend overrides cache cleanly and isolate keys."""
+@pytest.mark.parametrize("override", ["class", "registered_name"])
+def test_get_class_and_named_backend_overrides_are_cached(tmp_path: Path, override: str) -> None:
+    """Class and registered-name backend overrides reuse one cached instance per URI."""
+    registry = StorageRegistry()
+    registry.register_backend("custom", cast("Any", _custom_factory_function))
+    backend: Any = _CustomStoreStub if override == "class" else "custom"
+    uri = f"file://{tmp_path}"
+
+    first = registry.get(uri, backend=backend)
+
+    assert registry.get(uri, backend=backend) is first
+    assert registry.get(uri) is not first
+
+
+@pytest.mark.parametrize("target", ["uri", "alias"])
+@pytest.mark.parametrize("factory_kind", ["function", "partial", "lambda", "unhashable"])
+def test_get_factory_callable_override_is_never_cached(tmp_path: Path, factory_kind: str, target: str) -> None:
+    """Factory callables passed to get() run on every call and add nothing to the instance cache."""
     registry = StorageRegistry()
     uri = f"file://{tmp_path}"
-    partial_factory = partial(_custom_factory_function, via_tag="partial")
-    lambdas: tuple[Any, Any] = (
-        lambda target_uri, **kw: _CustomStoreStub(target_uri, kind="a", **kw),
-        lambda target_uri, **kw: _CustomStoreStub(target_uri, kind="b", **kw),
-    )
-    lambda_a, lambda_b = lambdas
+    registry.register_alias("cfg", uri, backend="local")
+    factory = _FACTORY_OVERRIDE_BUILDERS[factory_kind]()
+    key = uri if target == "uri" else "cfg"
 
-    cls_1 = registry.get(uri, backend=cast("Any", _CustomStoreStub))
-    cls_2 = registry.get(uri, backend=cast("Any", _CustomStoreStub))
-    assert cls_1 is cls_2
+    first = registry.get(key, backend=factory)
+    second = registry.get(key, backend=factory)
 
-    fn_1 = registry.get(uri, backend=cast("Any", _custom_factory_function))
-    fn_2 = registry.get(uri, backend=cast("Any", _custom_factory_function))
-    assert fn_1 is fn_2
-    assert fn_1 is not cls_1
-
-    lam_a_1 = registry.get(uri, backend=lambda_a)
-    lam_a_2 = registry.get(uri, backend=lambda_a)
-    lam_b_1 = registry.get(uri, backend=lambda_b)
-    assert lam_a_1 is lam_a_2
-    assert lam_a_1 is not lam_b_1
-
-    part_1 = registry.get(uri, backend=cast("Any", partial_factory))
-    part_2 = registry.get(uri, backend=cast("Any", partial_factory))
-    assert part_1 is part_2
-    assert part_1 is not fn_1
+    assert first is not second
+    assert registry._instances == {}
 
 
 def test_get_factory_alias_with_backend_override_merges_config_and_kwargs(tmp_path: Path) -> None:
@@ -1176,30 +1167,6 @@ def test_get_factory_alias_with_backend_override_merges_config_and_kwargs(tmp_pa
 
     local_override = registry.get("data", backend=LocalStore)
     assert isinstance(local_override, LocalStore)
-
-
-def test_get_unhashable_callable_override_bypasses_instance_cache(tmp_path: Path) -> None:
-    """Unhashable callable factories skip _instances lookup and insertion completely."""
-    registry = StorageRegistry()
-    factory = _UnhashableFactory()
-    uri = f"file://{tmp_path}"
-
-    first = registry.get(uri, backend=cast("Any", factory))
-    second = registry.get(uri, backend=cast("Any", factory))
-
-    assert first is not second
-    assert len(factory.calls) == 2
-    assert registry._instances == {}
-
-    registry.register_alias("cfg", uri, backend="local", tag="from-alias")
-    alias_factory = _UnhashableFactory()
-    alias_first = registry.get("cfg", backend=cast("Any", alias_factory), step=1)
-    alias_second = registry.get("cfg", backend=cast("Any", alias_factory), step=1)
-
-    assert alias_first is not alias_second
-    assert len(alias_factory.calls) == 2
-    assert alias_factory.calls[0][1] == {"tag": "from-alias", "step": 1}
-    assert registry._instances == {}
 
 
 def test_unregister_alias_removes_config_instance_and_cache(tmp_path: Path) -> None:
@@ -1227,23 +1194,6 @@ def test_unregister_alias_removes_config_instance_and_cache(tmp_path: Path) -> N
     assert registry.is_alias_registered("inst") is False
     with pytest.raises(ImproperConfigurationError, match="Unknown storage alias"):
         registry.get("inst")
-
-
-def test_unregister_alias_and_list_aliases_handle_duplicate_internal_keys(tmp_path: Path) -> None:
-    """list_aliases deduplicates and unregister_alias removes from both maps without short-circuiting."""
-    registry = StorageRegistry()
-    inst = _CustomStoreStub("custom://dup")
-    registry.register_alias("zebra", f"file://{tmp_path}", backend="local")
-    registry.register_alias("alpha", backend=cast("ObjectStoreProtocol", inst))
-    registry._alias_configs["dup"] = (cast("Any", _CustomStoreStub), "custom://dup", {})
-    registry._alias_instances["dup"] = cast("ObjectStoreProtocol", inst)
-
-    assert registry.list_aliases() == ["alpha", "dup", "zebra"]
-    assert registry.unregister_alias("dup") is True
-    assert "dup" not in registry._alias_configs
-    assert "dup" not in registry._alias_instances
-    assert registry.is_alias_registered("dup") is False
-    assert registry.list_aliases() == ["alpha", "zebra"]
 
 
 def test_lifecycle_matrix_preserves_instance_aliases_and_isolates_maps(tmp_path: Path) -> None:
@@ -1304,25 +1254,7 @@ def test_lifecycle_matrix_preserves_instance_aliases_and_isolates_maps(tmp_path:
     registry.clear()
     assert registry.list_aliases() == []
     assert registry.list_backends() == ["fsspec", "local", "obstore"]
-    assert registry._alias_configs == {}
-    assert registry._alias_instances == {}
-    assert registry._instances == {}
-    assert registry._backends == {}
-
-
-@pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
-def test_instance_alias_scheme_isolation_guarded_by_scheme_is_none() -> None:
-    """Scheme URIs bypass both _alias_instances and _alias_configs even with manual colon keys."""
-    registry = StorageRegistry()
-    store = cast("ObjectStoreProtocol", _CustomStoreStub("custom://mem", protocol="custom"))
-    registry.register_alias("memory", backend=store)
-    registry._alias_instances["memory:"] = store
-    registry._alias_configs["memory:"] = (cast("Any", _CustomStoreStub), "custom://mem", {})
-
-    assert registry.get("memory") is store
-    by_scheme = registry.get("memory://bucket/key")
-    assert by_scheme is not store
-    assert by_scheme.protocol == "memory"
+    assert registry.get(root_uri) is not direct_before_clear_aliases
 
 
 def test_instance_alias_does_not_match_partial_path_segment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

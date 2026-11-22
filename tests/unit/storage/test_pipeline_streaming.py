@@ -1221,6 +1221,14 @@ async def test_pipeline_custom_backend_registration_modes(mode: str) -> None:
         assert created == [active_store]
 
 
+def _assert_pipe_delimited_csv(csv_bytes: bytes) -> None:
+    """Assert the payload is the four-row ``id``/``name`` table written with a pipe delimiter."""
+    assert b"|" in csv_bytes
+    parsed = pa_csv.read_csv(io.BytesIO(csv_bytes), parse_options=pa_csv.ParseOptions(delimiter="|"))
+    assert parsed.num_rows == 4
+    assert parsed.column_names == ["id", "name"]
+
+
 @pytest.mark.parametrize("via_pipeline_default", [False, True])
 async def test_pipeline_instance_alias_write_options_stripping(via_pipeline_default: bool) -> None:
     """Stripped write_options keep instance-backed aliases working for sync and async Arrow writes."""
@@ -1245,12 +1253,8 @@ async def test_pipeline_instance_alias_write_options_stripping(via_pipeline_defa
     assert t_sync_csv["backend"] == "custom_direct"
     assert t_async_csv["backend"] == "custom_direct"
 
-    for key in ("out_sync.csv", "out_async.csv"):
-        csv_bytes = store.objects[key]
-        assert b"|" in csv_bytes
-        parsed = pa_csv.read_csv(io.BytesIO(csv_bytes), parse_options=pa_csv.ParseOptions(delimiter="|"))
-        assert parsed.num_rows == 4
-        assert parsed.column_names == ["id", "name"]
+    _assert_pipe_delimited_csv(store.objects["out_sync.csv"])
+    _assert_pipe_delimited_csv(store.objects["out_async.csv"])
 
     t_sync_pq = sync_pipeline.write_arrow(
         table,

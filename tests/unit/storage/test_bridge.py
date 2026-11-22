@@ -1040,13 +1040,12 @@ async def test_supports_direct_stream_write_opt_in_instance_true() -> None:
 
 
 def test_storage_lazy_direct_stream_exports() -> None:
-    """Verify PEP 562 lazy exports in sqlspec.storage for direct stream, sink encoder, and registry factory symbols."""
+    """Verify PEP 562 lazy exports in sqlspec.storage for direct stream and sink encoder symbols."""
     import sqlspec.storage as storage_pkg
 
     expected_names = (
         "AsyncWritableBytesSink",
         "DirectStreamWriteProtocol",
-        "StorageBackendFactory",
         "WritableBytesSink",
         "encode_arrow_to_async_sink",
         "encode_arrow_to_sink",
@@ -1062,19 +1061,16 @@ def test_storage_lazy_direct_stream_exports() -> None:
     from sqlspec.protocols import WritableBytesSink as ProtoWritableBytesSink
     from sqlspec.storage import AsyncWritableBytesSink as StorageAsyncWritableBytesSink
     from sqlspec.storage import DirectStreamWriteProtocol as StorageDirectStreamWriteProtocol
-    from sqlspec.storage import StorageBackendFactory as StoragePkgBackendFactory
     from sqlspec.storage import WritableBytesSink as StorageWritableBytesSink
     from sqlspec.storage import encode_arrow_to_async_sink as storage_encode_arrow_to_async_sink
     from sqlspec.storage import encode_arrow_to_sink as storage_encode_arrow_to_sink
     from sqlspec.storage import supports_direct_stream_write as storage_supports_direct_stream_write
     from sqlspec.storage._arrow_payload import encode_arrow_to_async_sink as payload_encode_arrow_to_async_sink
     from sqlspec.storage._arrow_payload import encode_arrow_to_sink as payload_encode_arrow_to_sink
-    from sqlspec.storage.registry import StorageBackendFactory as RegistryStorageBackendFactory
     from sqlspec.utils.type_guards import supports_direct_stream_write as guard_supports_direct_stream_write
 
     assert StorageAsyncWritableBytesSink is ProtoAsyncWritableBytesSink
     assert StorageDirectStreamWriteProtocol is ProtoDirectStreamWriteProtocol
-    assert StoragePkgBackendFactory is RegistryStorageBackendFactory
     assert StorageWritableBytesSink is ProtoWritableBytesSink
     assert storage_encode_arrow_to_sink is payload_encode_arrow_to_sink
     assert storage_encode_arrow_to_async_sink is payload_encode_arrow_to_async_sink

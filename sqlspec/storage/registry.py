@@ -342,7 +342,9 @@ class StorageRegistry:
             uri_or_alias: URI to resolve directly OR named alias.
             backend: Force specific backend name (built-in ``"local"``, ``"fsspec"``,
                 ``"obstore"``, or a custom backend registered via ``register_backend``),
-                backend class, or factory callable instead of auto-selection.
+                backend class, or factory callable instead of auto-selection. Instances
+                resolved through a name or class are cached; a factory callable runs on
+                every call and is never cached.
             **kwargs: Additional backend-specific configuration options.
 
         Returns:
@@ -405,13 +407,10 @@ class StorageRegistry:
             resolved_factory = self._resolve_backend_factory(backend)
             if isinstance(backend, str):
                 cache_params["__backend__"] = _normalize_backend_name(backend)
+            elif isinstance(backend, type):
+                cache_params["__backend__"] = backend
             else:
-                try:
-                    hash(backend)
-                except TypeError:
-                    cacheable = False
-                else:
-                    cache_params["__backend__"] = backend
+                cacheable = False
 
         sanitized_log_uri = sanitize_uri_for_log(path_str)
         cache_key: str | tuple[str, tuple[tuple[str, Any], ...]] = base_uri
@@ -494,10 +493,8 @@ class StorageRegistry:
 
     def _evict_backend_instances(self, backend_names: set[str] | frozenset[str]) -> None:
         """Evict cached instances constructed with any of the given backend override names."""
-        if not backend_names or not self._instances:
-            return
         keys_to_remove: list[str | tuple[str, tuple[tuple[str, Any], ...]]] = []
-        for key in self._instances:
+        for key in list(self._instances):
             if isinstance(key, str):
                 continue
             _, params = key

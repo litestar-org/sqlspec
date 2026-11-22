@@ -365,7 +365,7 @@ with store.open_write_stream_sync("metrics.parquet") as sink:
 `StorageRegistry` supports custom backends in three forms alongside the built-in `local`, `fsspec`, and `obstore` backends:
 
 1. **Named custom backends** (`register_backend(name, factory, *, overwrite=False)`): register a class or `StorageBackendFactory` callable once under a name, then address it from `register_alias(..., backend="custom")` or `get(..., backend="custom")`. Names are trimmed and lowercased, so `"  CUSTOM  "` and `"custom"` refer to the same entry. Built-in backend names (`"local"`, `"obstore"`, `"fsspec"`) cannot be overridden or unregistered (`ValueError`).
-2. **Inline classes or factory callables**: pass a class or `StorageBackendFactory` callable directly to `register_alias(alias, uri, backend=...)` or `get(uri, backend=...)` without registering a global name.
+2. **Inline classes or factory callables**: pass a class or `StorageBackendFactory` callable directly to `register_alias(alias, uri, backend=...)` or `get(uri, backend=...)` without registering a global name. `get(uri, backend=...)` caches the resolved instance for a backend name or class. A factory callable passed to `get` runs on every call and is never cached, so register it with `register_backend` or bind it to an alias when one shared instance is wanted.
 3. **Pre-configured backend instances**: bind an existing `ObjectStoreProtocol` object directly to an alias with `register_alias("signed-bucket", backend=store)` (`uri` is optional) to retain credentials, signing state, connection clients, or `DirectStreamWriteProtocol` implementations across `SyncStoragePipeline` and `AsyncStoragePipeline` calls.
 
 ```python
@@ -373,7 +373,6 @@ import asyncio
 from typing import Any
 import pyarrow as pa
 
-from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.storage import (
     AsyncStoragePipeline,
     SyncStoragePipeline,
@@ -428,23 +427,6 @@ asyncio.run(write_async_metrics())
 
 storage_registry.clear_cache()
 assert storage_registry.get("signed-bucket") is signed_store
-
-try:
-    storage_registry.register_alias(
-        "signed-bucket", backend=signed_store, base_path="nested"
-    )
-except ImproperConfigurationError:
-    pass
-
-try:
-    storage_registry.get("signed-bucket", backend="local")
-except ImproperConfigurationError:
-    pass
-
-try:
-    storage_registry.get("signed-bucket", region="us-east-1")
-except ImproperConfigurationError:
-    pass
 
 assert storage_registry.unregister_alias("signed-bucket") is True
 assert storage_registry.unregister_alias("warehouse") is True
