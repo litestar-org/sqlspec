@@ -62,8 +62,6 @@ __all__ = (
     "AiosqliteSessionContext",
 )
 
-_execute_and_resolve_metadata = execute_and_resolve_metadata
-_execute_fetchall_with_metadata = execute_fetchall_with_metadata
 random = secrets.SystemRandom()
 _NO_CURSOR: Any = None
 _DISPATCH_HOOKS: Final[tuple[str, ...]] = (
@@ -141,7 +139,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
                 self.connection,
-                _execute_fetchall_with_metadata,
+                execute_fetchall_with_metadata,
                 self.connection,
                 sql,
                 normalized_parameters,
@@ -165,7 +163,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         affected_rows, last_inserted_id = await run_on_worker_thread(
             self.connection,
-            _execute_and_resolve_metadata,
+            execute_and_resolve_metadata,
             self.connection,
             sql,
             normalized_parameters,
@@ -385,7 +383,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         if cached.operation_profile.returns_rows:
             fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
                 self.connection,
-                _execute_fetchall_with_metadata,
+                execute_fetchall_with_metadata,
                 self.connection,
                 wire_sql,
                 normalized_parameters,
@@ -408,7 +406,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             )
         affected_rows, last_inserted_id = await run_on_worker_thread(
             self.connection,
-            _execute_and_resolve_metadata,
+            execute_and_resolve_metadata,
             self.connection,
             wire_sql,
             normalized_parameters,

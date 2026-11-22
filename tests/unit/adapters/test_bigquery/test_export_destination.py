@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.adapters.bigquery.core import _build_export_uri, _resolve_export_format
+from sqlspec.adapters.bigquery.core import build_export_uri, resolve_export_format
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -39,7 +39,7 @@ from sqlspec.exceptions import ImproperConfigurationError
     ],
 )
 def test_export_uri_has_one_leaf_wildcard(uri: str, expected: str) -> None:
-    assert _build_export_uri(uri) == expected
+    assert build_export_uri(uri) == expected
     assert expected.count("*") == 1
     assert "*" in expected.rsplit("/", 1)[-1]
 
@@ -55,21 +55,21 @@ def test_export_uri_has_one_leaf_wildcard(uri: str, expected: str) -> None:
     ],
 )
 def test_export_format_and_directory_extension(format_hint: Any, native_format: str, extension: str) -> None:
-    assert _resolve_export_format(format_hint) == native_format
-    assert _build_export_uri("gs://bucket/prefix/", format_hint) == f"gs://bucket/prefix/part-*.{extension}"
+    assert resolve_export_format(format_hint) == native_format
+    assert build_export_uri("gs://bucket/prefix/", format_hint) == f"gs://bucket/prefix/part-*.{extension}"
 
 
 def test_export_format_does_not_infer_encoding_from_filename() -> None:
-    assert _resolve_export_format(None) == "PARQUET"
-    assert _build_export_uri("gs://bucket/out.csv") == "gs://bucket/out-*.csv"
-    assert _build_export_uri("gs://bucket/out.parquet", "csv") == "gs://bucket/out-*.parquet"
+    assert resolve_export_format(None) == "PARQUET"
+    assert build_export_uri("gs://bucket/out.csv") == "gs://bucket/out-*.csv"
+    assert build_export_uri("gs://bucket/out.parquet", "csv") == "gs://bucket/out-*.parquet"
 
 
 @pytest.mark.parametrize("format_hint", ["arrow-ipc", "avro", "unknown"])
 def test_unsupported_native_export_format_selects_fallback(format_hint: Any) -> None:
-    assert _resolve_export_format(format_hint) is None
+    assert resolve_export_format(format_hint) is None
     with pytest.raises(ImproperConfigurationError, match="format"):
-        _build_export_uri("gs://bucket/", format_hint)
+        build_export_uri("gs://bucket/", format_hint)
 
 
 @pytest.mark.parametrize(
@@ -105,4 +105,4 @@ def test_unsupported_native_export_format_selects_fallback(format_hint: Any) -> 
 )
 def test_export_uri_rejects_invalid_or_unsafe_destination(uri: str) -> None:
     with pytest.raises(ImproperConfigurationError):
-        _build_export_uri(uri)
+        build_export_uri(uri)

@@ -8,7 +8,6 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.module_loader import ensure_fsspec, ensure_obstore, ensure_pyarrow
 
 __all__ = (
-    "_log_storage_event",
     "import_fsspec",
     "import_obstore",
     "import_obstore_store",
@@ -169,6 +168,3 @@ def log_storage_event(
     if exists is not None:
         fields["exists"] = exists
     log_with_context(logger, logging.DEBUG, event, **fields)
-
-
-_log_storage_event = log_storage_event

@@ -491,7 +491,21 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
-        """Return ``None`` to stay aligned with ``dispatch_execute`` and compiled cache hits."""
+        """Return ``None`` without reading ``cursor.lastrowid``.
+
+        ``pymssql.Cursor.lastrowid`` delegates to
+        ``_mssql.MSSQLConnection.identity``, which executes a live
+        ``SELECT SCOPE_IDENTITY()`` query on every access. That query is an
+        extra server round-trip on SQL Server (and unsupported on SAP ASE /
+        Sybase), so returning ``None`` avoids doubling DML latency and stays
+        aligned with ``dispatch_execute`` and compiled cache hits.
+
+        Args:
+            cursor: Unused ``pymssql`` cursor with optional ``lastrowid`` metadata.
+
+        Returns:
+            Always ``None``.
+        """
         _ = cursor
         return None
 

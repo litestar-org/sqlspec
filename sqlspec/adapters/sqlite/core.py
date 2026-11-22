@@ -293,7 +293,7 @@ def normalize_lastrowid(cursor: Any, operation_type: "OperationType", rowcount: 
         rowcount: Normalized affected-row count.
 
     Returns:
-        Integer lastrowid, or None for non-INSERT or unsuccessful operations.
+        Integer lastrowid (excluding ``bool``), or None for non-INSERT or unsuccessful operations.
     """
     if operation_type != "INSERT" or rowcount <= 0:
         return None
@@ -301,7 +301,7 @@ def normalize_lastrowid(cursor: Any, operation_type: "OperationType", rowcount: 
         lastrowid = cursor.lastrowid
     except AttributeError:
         return None
-    return lastrowid if isinstance(lastrowid, int) else None
+    return lastrowid if isinstance(lastrowid, int) and not isinstance(lastrowid, bool) else None
 
 
 def resolve_lastrowid(

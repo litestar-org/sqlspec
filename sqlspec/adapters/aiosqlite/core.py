@@ -39,7 +39,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.serializers._json import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
-from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error, resolve_row_format
+from sqlspec.utils.type_guards import has_rowcount, has_sqlite_error, resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -223,11 +223,74 @@ async def run_on_worker_thread(
     return await execute(function, *args, **kwargs)
 
 
+def execute_fetchall_with_metadata(
+    connection: "AiosqliteConnection",
+    sql: str,
+    parameters: Any,
+    operation_type: "OperationType",
+    expression: Any,
+    eligibility_cache: "dict[Any, bool]",
+    cache_key: "str | None" = None,
+) -> "tuple[list[Any], Any, int, int | None]":
+    """Execute a query and return rows plus execution metadata on the worker thread."""
+    raw_connection = connection._conn
+    cursor = cast("Any", raw_connection.execute(sql, normalize_execute_parameters(parameters)))
+    try:
+        fetched_data = cursor.fetchall()
+        rowcount = cursor.rowcount if isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+        effective_rowcount = rowcount or (len(fetched_data) if operation_type == "INSERT" else 0)
+        last_inserted_id = resolve_lastrowid(
+            raw_connection, cursor, operation_type, effective_rowcount, expression, eligibility_cache, cache_key
+        )
+        return fetched_data, cursor.description, rowcount, last_inserted_id
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
+
+
+def execute_and_resolve_metadata(
+    connection: "AiosqliteConnection",
+    sql: str,
+    parameters: Any,
+    operation_type: "OperationType",
+    expression: Any,
+    eligibility_cache: "dict[Any, bool]",
+    cache_key: "str | None" = None,
+) -> "tuple[int, int | None]":
+    """Execute a statement and resolve rowcount and lastrowid on the worker thread."""
+    raw_connection = connection._conn
+    cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
+    try:
+        rowcount = (
+            cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+        )
+        return rowcount, resolve_lastrowid(
+            raw_connection, cursor, operation_type, rowcount, expression, eligibility_cache, cache_key
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            cast("Any", cursor).close()
+
+
+def execute_many_on_worker_thread(connection: "AiosqliteConnection", sql: str, parameters: Any) -> int:
+    """Execute SQL with multiple parameter sets on the worker thread."""
+    raw_connection = connection._conn
+    cursor = raw_connection.cursor()
+    try:
+        cursor.executemany(sql, normalize_execute_many_parameters(parameters))
+        return (
+            cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            cast("Any", cursor).close()
+
+
 def execute_fetchall_with_description(
     connection: "AiosqliteConnection", sql: str, parameters: Any
 ) -> "tuple[list[Any], Any]":
     """Execute a query and return raw rows plus description on the worker thread."""
-    fetched_data, description, _rowcount, _last_inserted_id = _execute_fetchall_with_metadata(
+    fetched_data, description, _rowcount, _last_inserted_id = execute_fetchall_with_metadata(
         connection, sql, parameters, "SELECT", None, {}
     )
     return fetched_data, description
@@ -235,7 +298,7 @@ def execute_fetchall_with_description(
 
 def execute_and_resolve_rowcount(connection: "AiosqliteConnection", sql: str, parameters: Any) -> int:
     """Execute a statement and resolve rowcount on the worker thread."""
-    rowcount, _last_inserted_id = _execute_and_resolve_metadata(connection, sql, parameters, "COMMAND", None, {})
+    rowcount, _last_inserted_id = execute_and_resolve_metadata(connection, sql, parameters, "COMMAND", None, {})
     return rowcount
 
 
@@ -270,7 +333,7 @@ async def execute_cache_hit(
         if not cached.operation_profile.returns_rows:
             affected_rows, dml_last_inserted_id = await run_on_worker_thread(
                 connection,
-                _execute_and_resolve_metadata,
+                execute_and_resolve_metadata,
                 connection,
                 cached.compiled_sql,
                 params,
@@ -282,7 +345,7 @@ async def execute_cache_hit(
             return DMLResult(operation_type, affected_rows, dml_last_inserted_id)
         fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
             connection,
-            _execute_fetchall_with_metadata,
+            execute_fetchall_with_metadata,
             connection,
             cached.compiled_sql,
             params,
@@ -319,12 +382,12 @@ def normalize_lastrowid(cursor: Any, operation_type: "OperationType", rowcount: 
         rowcount: Normalized affected-row count.
 
     Returns:
-        Integer lastrowid, or None for non-INSERT or unsuccessful operations.
+        Integer lastrowid (excluding ``bool``), or None for non-INSERT or unsuccessful operations.
     """
-    if operation_type != "INSERT" or rowcount <= 0 or not has_lastrowid(cursor):
+    if operation_type != "INSERT" or rowcount <= 0:
         return None
-    lastrowid = cursor.lastrowid
-    return lastrowid if isinstance(lastrowid, int) else None
+    lastrowid = getattr(cursor, "lastrowid", None)
+    return lastrowid if isinstance(lastrowid, int) and not isinstance(lastrowid, bool) else None
 
 
 def resolve_lastrowid(
@@ -850,76 +913,6 @@ def _read_transaction_state_on_worker(raw_conn: Any) -> "tuple[bool, bool]":
         return getattr(raw_conn, "autocommit", False) is True, bool(getattr(raw_conn, "in_transaction", False))
     except (ValueError, sqlite3.ProgrammingError):
         return False, False
-
-
-def _execute_fetchall_with_metadata(
-    connection: "AiosqliteConnection",
-    sql: str,
-    parameters: Any,
-    operation_type: "OperationType",
-    expression: Any,
-    eligibility_cache: "dict[Any, bool]",
-    cache_key: "str | None" = None,
-) -> "tuple[list[Any], Any, int, int | None]":
-    """Execute a query and return rows plus execution metadata on the worker thread."""
-    raw_connection = connection._conn
-    cursor = cast("Any", raw_connection.execute(sql, normalize_execute_parameters(parameters)))
-    try:
-        fetched_data = cursor.fetchall()
-        rowcount = cursor.rowcount if isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
-        effective_rowcount = rowcount or (len(fetched_data) if operation_type == "INSERT" else 0)
-        last_inserted_id = resolve_lastrowid(
-            raw_connection, cursor, operation_type, effective_rowcount, expression, eligibility_cache, cache_key
-        )
-        return fetched_data, cursor.description, rowcount, last_inserted_id
-    finally:
-        with contextlib.suppress(Exception):
-            cursor.close()
-
-
-def _execute_and_resolve_metadata(
-    connection: "AiosqliteConnection",
-    sql: str,
-    parameters: Any,
-    operation_type: "OperationType",
-    expression: Any,
-    eligibility_cache: "dict[Any, bool]",
-    cache_key: "str | None" = None,
-) -> "tuple[int, int | None]":
-    """Execute a statement and resolve rowcount and lastrowid on the worker thread."""
-    raw_connection = connection._conn
-    cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
-    try:
-        rowcount = (
-            cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
-        )
-        return rowcount, resolve_lastrowid(
-            raw_connection, cursor, operation_type, rowcount, expression, eligibility_cache, cache_key
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            cast("Any", cursor).close()
-
-
-def _execute_many_on_worker_thread(connection: "AiosqliteConnection", sql: str, parameters: Any) -> int:
-    """Execute SQL with multiple parameter sets on the worker thread."""
-    raw_connection = connection._conn
-    cursor = raw_connection.cursor()
-    try:
-        cursor.executemany(sql, normalize_execute_many_parameters(parameters))
-        return (
-            cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            cast("Any", cursor).close()
-
-
-execute_and_resolve_metadata = _execute_and_resolve_metadata
-
-execute_fetchall_with_metadata = _execute_fetchall_with_metadata
-
-execute_many_on_worker_thread = _execute_many_on_worker_thread
 
 
 def _normalize_metadata_row(row: Any) -> Any:

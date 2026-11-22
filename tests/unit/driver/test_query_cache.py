@@ -22,8 +22,10 @@ import sqlspec.driver as driver_package
 from sqlspec import ObservabilityConfig
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.core import normalize_lastrowid as aiosqlite_normalize_lastrowid
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite.core import normalize_lastrowid as sqlite_normalize_lastrowid
 from sqlspec.base import SQLSpec
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import (
@@ -898,7 +900,7 @@ async def test_async_execute_cache_hit_re_raises_mapped_exception(
     def fail_on_worker(*_args: object, **_kwargs: object) -> object:
         raise aiosqlite.OperationalError("boom")
 
-    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver._execute_and_resolve_metadata", fail_on_worker)
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver.execute_and_resolve_metadata", fail_on_worker)
 
     cached = _make_cached(
         compiled_sql="INSERT INTO t (id) VALUES (?)",
@@ -2402,13 +2404,23 @@ def test_cached_statement_executor_driver_and_core_exports() -> None:
     [
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, 42, 42),
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, "row-9", "row-9"),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, "", None),
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 0, 42, None),
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, True, None),
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, object(), None),
         ("UPDATE", "UPDATE items SET name = ?", 2, 42, None),
         ("DELETE", "DELETE FROM items WHERE name = ?", 1, 42, None),
     ],
-    ids=["insert-int", "insert-str", "insert-zero-rc", "insert-bool", "insert-object", "update", "delete"],
+    ids=[
+        "insert-int",
+        "insert-str",
+        "insert-empty-str",
+        "insert-zero-rc",
+        "insert-bool",
+        "insert-object",
+        "update",
+        "delete",
+    ],
 )
 def test_sync_cache_hit_direct_cursor_preserves_last_inserted_id(
     operation: OperationType, sql: str, rowcount: int, lastrowid: Any, expected_last_id: int | str | None
@@ -2488,12 +2500,13 @@ def test_sync_cache_hit_custom_resolve_last_inserted_id_hook() -> None:
     [
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, 42, 42),
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, "row-9", "row-9"),
+        ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, "", None),
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 0, 42, None),
         ("INSERT", "INSERT INTO items (name) VALUES (?)", 1, True, None),
         ("UPDATE", "UPDATE items SET name = ?", 2, 42, None),
         ("DELETE", "DELETE FROM items WHERE name = ?", 1, 42, None),
     ],
-    ids=["insert-int", "insert-str", "insert-zero-rc", "insert-bool", "update", "delete"],
+    ids=["insert-int", "insert-str", "insert-empty-str", "insert-zero-rc", "insert-bool", "update", "delete"],
 )
 async def test_async_cache_hit_direct_cursor_preserves_last_inserted_id(
     operation: OperationType, sql: str, rowcount: int, lastrowid: Any, expected_last_id: int | str | None
@@ -2734,6 +2747,110 @@ def test_pymssql_and_sybase_resolve_last_inserted_id_returns_none() -> None:
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.adapters.sybase.driver import SybaseDriver
 
+    class _ExplodingLastRowIdCursor:
+        @property
+        def lastrowid(self) -> int:
+            msg = "cursor.lastrowid triggers SELECT SCOPE_IDENTITY() and must not be read"
+            raise AssertionError(msg)
+
     fake_cursor = _ExternalSyncCursor(rowcount=1, lastrowid=99)
     assert PymssqlDriver(cast("Any", object())).resolve_last_inserted_id(fake_cursor) is None
     assert SybaseDriver(cast("Any", object())).resolve_last_inserted_id(fake_cursor) is None
+    exploding_cursor = _ExplodingLastRowIdCursor()
+    assert PymssqlDriver(cast("Any", object())).resolve_last_inserted_id(exploding_cursor) is None
+    assert SybaseDriver(cast("Any", object())).resolve_last_inserted_id(exploding_cursor) is None
+
+
+@pytest.mark.parametrize(
+    ("lastrowid", "expected"),
+    [(42, 42), (0, 0), ("row-9", "row-9"), ("", None), (True, None), (False, None), (None, None), (object(), None)],
+    ids=["int", "zero", "str", "empty-str", "bool-true", "bool-false", "none", "object"],
+)
+def test_common_resolve_last_inserted_id_guards(lastrowid: Any, expected: int | str | None) -> None:
+    """CommonDriverAttributesMixin.resolve_last_inserted_id rejects bool and empty string values."""
+    driver = _ExternalSyncDriver(object())
+    cursor = _ExternalSyncCursor(rowcount=1, lastrowid=lastrowid)
+    result = driver.resolve_last_inserted_id(cursor)
+    assert type(result) is type(expected)
+    assert result == expected
+
+
+def test_common_resolve_last_inserted_id_missing_attribute() -> None:
+    """CommonDriverAttributesMixin.resolve_last_inserted_id returns None when cursor lacks lastrowid."""
+    driver = _ExternalSyncDriver(object())
+    assert driver.resolve_last_inserted_id(object()) is None
+
+
+@pytest.mark.parametrize(
+    ("lastrowid", "operation_type", "rowcount", "expected"),
+    [
+        (42, "INSERT", 1, 42),
+        (0, "INSERT", 1, 0),
+        (True, "INSERT", 1, None),
+        (False, "INSERT", 1, None),
+        ("42", "INSERT", 1, None),
+        (None, "INSERT", 1, None),
+        (42, "INSERT", 0, None),
+        (42, "UPDATE", 1, None),
+    ],
+    ids=["int", "zero", "bool-true", "bool-false", "str", "none", "zero-rowcount", "update"],
+)
+def test_sqlite_normalize_lastrowid_guards(
+    lastrowid: Any, operation_type: OperationType, rowcount: int, expected: int | None
+) -> None:
+    """sqlite.core.normalize_lastrowid rejects bool and non-integer lastrowid values."""
+    cursor = _ExternalSyncCursor(rowcount=rowcount, lastrowid=lastrowid)
+    result = sqlite_normalize_lastrowid(cursor, operation_type, rowcount)
+    assert type(result) is type(expected)
+    assert result == expected
+
+
+def test_sqlite_normalize_lastrowid_missing_attribute() -> None:
+    """sqlite.core.normalize_lastrowid returns None when cursor lacks lastrowid."""
+    assert sqlite_normalize_lastrowid(object(), "INSERT", 1) is None
+
+
+@pytest.mark.parametrize(
+    ("lastrowid", "operation_type", "rowcount", "expected"),
+    [
+        (42, "INSERT", 1, 42),
+        (0, "INSERT", 1, 0),
+        (True, "INSERT", 1, None),
+        (False, "INSERT", 1, None),
+        ("42", "INSERT", 1, None),
+        (None, "INSERT", 1, None),
+        (42, "INSERT", 0, None),
+        (42, "UPDATE", 1, None),
+    ],
+    ids=["int", "zero", "bool-true", "bool-false", "str", "none", "zero-rowcount", "update"],
+)
+def test_aiosqlite_normalize_lastrowid_guards(
+    lastrowid: Any, operation_type: OperationType, rowcount: int, expected: int | None
+) -> None:
+    """aiosqlite.core.normalize_lastrowid rejects bool and non-integer lastrowid values."""
+    cursor = _ExternalSyncCursor(rowcount=rowcount, lastrowid=lastrowid)
+    result = aiosqlite_normalize_lastrowid(cursor, operation_type, rowcount)
+    assert type(result) is type(expected)
+    assert result == expected
+
+
+def test_aiosqlite_normalize_lastrowid_missing_attribute() -> None:
+    """aiosqlite.core.normalize_lastrowid returns None when cursor lacks lastrowid."""
+    assert aiosqlite_normalize_lastrowid(object(), "INSERT", 1) is None
+
+
+def test_aiosqlite_normalize_lastrowid_reads_lastrowid_once() -> None:
+    """aiosqlite.core.normalize_lastrowid reads cursor.lastrowid at most once."""
+
+    class _CountingCursor:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        @property
+        def lastrowid(self) -> int:
+            self.reads += 1
+            return 7
+
+    cursor = _CountingCursor()
+    assert aiosqlite_normalize_lastrowid(cursor, "INSERT", 1) == 7
+    assert cursor.reads == 1
