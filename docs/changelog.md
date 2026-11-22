@@ -7,6 +7,16 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.74.1 - Async dialect data-dictionary bases and pre-v0.67.0 MD5 migration checksum compatibility
+
+**Added:**
+
+* Export shared asynchronous data-dictionary base classes `BigQueryAsyncDataDictionary`, `DuckDBAsyncDataDictionary`, and `MssqlAsyncDataDictionary` from `sqlspec.data_dictionary.dialects.bigquery`, `sqlspec.data_dictionary.dialects.duckdb`, and `sqlspec.data_dictionary.dialects.mssql` (both in `dictionary.py` and lazily via PEP 562 `__getattr__` in each package `__init__.py`), mirroring their synchronous counterparts against `AsyncDriverAdapterBase` so external async drivers can subclass them directly. ([#936](https://github.com/litestar-org/sqlspec/issues/936))
+
+**Fixed:**
+
+* Recognize pre-`v0.67.0` MD5 migration checksums (which retained `-- Version:` / `Version:` header lines) and pre-`#128` raw-content MD5 checksums in `BaseMigrationRunner.match_migration_checksum()` and `BaseMigrationRunner.verify_migration_checksum()` without widening SHA-256 verification, allowing `upgrade`, `downgrade`, and `verify` to accept unmodified migrations recorded on older SQLSpec releases and automatically upgrade those tracking rows to the SHA-256 marker digest. Reconcile timestamp-to-sequential renames (`auto_sync` and `fix`) against pre-`v0.67.0` and raw MD5 rows by checking with the prior version restored in header lines and upgrading the stored checksum to SHA-256. ([#937](https://github.com/litestar-org/sqlspec/issues/937))
+
 ### v0.74.0 - Custom storage backends, public extension helpers, shared dialect data dictionaries, and Oracle row IDs
 
 **Added:**

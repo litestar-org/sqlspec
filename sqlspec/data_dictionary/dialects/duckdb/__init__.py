@@ -6,12 +6,13 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.data_dictionary.dialects.duckdb.config import DUCKDB_CONFIG, DUCKDB_VERSION_PATTERN
 
 if TYPE_CHECKING:
-    from sqlspec.data_dictionary.dialects.duckdb.dictionary import DuckDBSyncDataDictionary
+    from sqlspec.data_dictionary.dialects.duckdb.dictionary import DuckDBAsyncDataDictionary, DuckDBSyncDataDictionary
 
-__all__ = ("DUCKDB_CONFIG", "DUCKDB_VERSION_PATTERN", "DuckDBSyncDataDictionary")
+__all__ = ("DUCKDB_CONFIG", "DUCKDB_VERSION_PATTERN", "DuckDBAsyncDataDictionary", "DuckDBSyncDataDictionary")
 
 _EXPORTS: dict[str, tuple[str, str]] = {
-    "DuckDBSyncDataDictionary": ("sqlspec.data_dictionary.dialects.duckdb.dictionary", "DuckDBSyncDataDictionary")
+    "DuckDBAsyncDataDictionary": ("sqlspec.data_dictionary.dialects.duckdb.dictionary", "DuckDBAsyncDataDictionary"),
+    "DuckDBSyncDataDictionary": ("sqlspec.data_dictionary.dialects.duckdb.dictionary", "DuckDBSyncDataDictionary"),
 }
 
 

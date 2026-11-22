@@ -2,7 +2,11 @@
 
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 
+import pytest
+
+import sqlspec.data_dictionary.dialects.bigquery as bigquery_dialect_pkg
 from sqlspec.adapters.bigquery import data_dictionary as bigquery_data_dictionary
 from sqlspec.adapters.spanner.data_dictionary import SpannerSyncDataDictionary
 from sqlspec.data_dictionary import (
@@ -13,6 +17,7 @@ from sqlspec.data_dictionary import (
     SystemMetadataRedactionPolicy,
     get_data_dictionary_loader,
 )
+from sqlspec.data_dictionary.dialects.bigquery import BigQueryAsyncDataDictionary, BigQuerySyncDataDictionary
 
 
 class _FakeBigQueryDriver:
@@ -206,3 +211,89 @@ def test_bigquery_tables_and_constraints_avoid_self_fk_recursion_and_cartesian_j
     assert constraints_sql is not None
     assert "pk_kcu.ordinal_position" in constraints_sql
     assert "ccu.column_name = kcu.column_name" in constraints_sql
+
+
+@pytest.mark.anyio
+async def test_bigquery_async_data_dictionary_parity() -> None:
+    """BigQueryAsyncDataDictionary mirrors BigQuerySyncDataDictionary against async drivers."""
+    assert "BigQueryAsyncDataDictionary" in bigquery_dialect_pkg.__all__
+    assert "BigQueryAsyncDataDictionary" in dir(bigquery_dialect_pkg)
+
+    sync_dict = BigQuerySyncDataDictionary()
+    async_dict = BigQueryAsyncDataDictionary()
+
+    async_driver = Mock()
+    async_driver._default_query_job_config = SimpleNamespace(default_dataset="proj.analytics")
+    async_driver.select = AsyncMock(
+        side_effect=[
+            [{"table_name": "events", "schema_name": "analytics"}],
+            [{"column_name": "id", "data_type": "INT64", "table_name": "events"}],
+            [{"index_name": "idx_search", "table_name": "events", "columns": ["body"]}],
+            [{"index_name": "idx_vec", "table_name": "events", "columns": ["embedding"]}],
+            [
+                {
+                    "table_name": "events",
+                    "column_name": "user_id",
+                    "referenced_table": "users",
+                    "referenced_column": "id",
+                }
+            ],
+            [
+                {
+                    "object_name": "events",
+                    "object_type": "table",
+                    "schema_name": "analytics",
+                    "catalog_name": "proj",
+                    "ddl": "CREATE TABLE `proj.analytics.events` (id INT64);",
+                }
+            ],
+            [
+                {
+                    "object_name": "events",
+                    "object_type": "BASE TABLE",
+                    "schema_name": "analytics",
+                    "ddl": "CREATE TABLE events (id INT64);",
+                },
+                {
+                    "object_name": "active_events",
+                    "object_type": "VIEW",
+                    "schema_name": "analytics",
+                    "ddl": "CREATE VIEW active_events AS SELECT * FROM events;",
+                },
+            ],
+        ]
+    )
+
+    assert await async_dict.get_version(async_driver) is None
+    assert await async_dict.get_feature_flag(async_driver, "supports_json") is sync_dict.get_feature_flag(
+        Mock(), "supports_json"
+    )
+    assert await async_dict.get_optimal_type(async_driver, "json") == sync_dict.get_optimal_type(Mock(), "json")
+
+    caps = await async_dict.get_metadata_capabilities(async_driver)
+    sync_caps = sync_dict.get_metadata_capabilities(Mock())
+    assert tuple(c.domain for c in caps.capabilities) == tuple(c.domain for c in sync_caps.capabilities)
+
+    tables = await async_dict.get_tables(async_driver)
+    assert tables == [{"table_name": "events", "schema_name": "analytics"}]
+
+    columns = await async_dict.get_columns(async_driver, table="events")
+    assert columns == [{"column_name": "id", "data_type": "INT64", "table_name": "events"}]
+
+    indexes = await async_dict.get_indexes(async_driver, table="events")
+    assert [idx["index_name"] for idx in indexes] == ["idx_search", "idx_vec"]
+
+    fks = await async_dict.get_foreign_keys(async_driver, table="events")
+    assert len(fks) == 1
+
+    ddl = await async_dict._get_native_object_ddl(
+        async_driver, "events", schema=None, object_type="table", include_dependencies=False, redact=False
+    )
+    assert ddl is not None
+    assert ddl.status == MetadataSupport.SUPPORTED
+    assert ddl.ddl == "CREATE TABLE `proj.analytics.events` (id INT64);"
+
+    schema_ddl = await async_dict._get_native_schema_ddl(async_driver, None, include_dependencies=True, redact=False)
+    assert schema_ddl is not None
+    assert len(schema_ddl) == 2
+    assert len(schema_ddl[1].dependencies) == 1

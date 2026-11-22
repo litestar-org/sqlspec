@@ -5959,7 +5959,7 @@ wheels = [
 
 [[package]]
 name = "sqlspec"
-version = "0.74.0"
+version = "0.74.1"
 source = { editable = "." }
 dependencies = [
     { name = "mypy-extensions" },

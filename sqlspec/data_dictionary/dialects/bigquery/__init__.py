@@ -11,11 +11,16 @@ from sqlspec.data_dictionary.dialects.bigquery.config import (
 )
 
 if TYPE_CHECKING:
-    from sqlspec.data_dictionary.dialects.bigquery.dictionary import BigQueryMetadataScope, BigQuerySyncDataDictionary
+    from sqlspec.data_dictionary.dialects.bigquery.dictionary import (
+        BigQueryAsyncDataDictionary,
+        BigQueryMetadataScope,
+        BigQuerySyncDataDictionary,
+    )
 
 __all__ = (
     "BIGQUERY_CONFIG",
     "BIGQUERY_VERSION_PATTERN",
+    "BigQueryAsyncDataDictionary",
     "BigQueryMetadataScope",
     "BigQuerySyncDataDictionary",
     "format_bigquery_information_schema_tables",
@@ -23,6 +28,10 @@ __all__ = (
 )
 
 _EXPORTS: dict[str, tuple[str, str]] = {
+    "BigQueryAsyncDataDictionary": (
+        "sqlspec.data_dictionary.dialects.bigquery.dictionary",
+        "BigQueryAsyncDataDictionary",
+    ),
     "BigQueryMetadataScope": ("sqlspec.data_dictionary.dialects.bigquery.dictionary", "BigQueryMetadataScope"),
     "BigQuerySyncDataDictionary": (
         "sqlspec.data_dictionary.dialects.bigquery.dictionary",

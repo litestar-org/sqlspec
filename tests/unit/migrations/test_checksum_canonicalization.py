@@ -457,3 +457,62 @@ def test_legacy_sha256_and_md5_rows_still_verify(
 
     assert BaseMigrationRunner.verify_migration_checksum(content, recorded) is True
     assert BaseMigrationRunner.match_migration_checksum(content, recorded) == form
+
+
+@pytest.mark.parametrize(("content", "kind"), [(LEGACY_SQL, "sql"), (LEGACY_PY, "py")], ids=["sql", "py"])
+@pytest.mark.parametrize("md5_form", ["pre_067", "raw"])
+def test_md5_checksum_with_version_header_and_raw_content_verify(content: str, kind: str, md5_form: str) -> None:
+    """Pre-v0.67.0 (Version-retained) and pre-#128 (raw) MD5 checksums match as legacy and reject tampering."""
+    _ = kind
+    if md5_form == "pre_067":
+        digest_input = re.sub(r"^--\s*name:\s*migrate-[^-]+-(?:up|down)\s*$", "", content, flags=re.MULTILINE)
+    else:
+        digest_input = content
+    md5_checksum = hashlib.md5(digest_input.encode("utf-8"), usedforsecurity=False).hexdigest()
+    sha256_same_input = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+
+    assert BaseMigrationRunner.match_migration_checksum(content, md5_checksum) == "legacy"
+    assert BaseMigrationRunner.verify_migration_checksum(content, md5_checksum) is True
+    assert BaseMigrationRunner.match_migration_checksum(content, md5_checksum.upper()) == "legacy"
+    assert BaseMigrationRunner.match_migration_checksum(content, sha256_same_input) is None
+
+    tampered_version = content.replace("Version: 0001", "Version: 0001 extra", 1)
+    assert BaseMigrationRunner.match_migration_checksum(tampered_version, md5_checksum) is None
+
+    tampered_body = content.replace("CREATE TABLE a (id INT)", "CREATE TABLE a (id INT, b TEXT)", 1)
+    assert BaseMigrationRunner.match_migration_checksum(tampered_body, md5_checksum) is None
+
+
+@pytest.mark.parametrize("md5_form", ["pre_067", "raw"])
+@pytest.mark.parametrize(
+    ("old_content", "new_content"),
+    [
+        (
+            "-- Version: 20251011120000\n-- name: migrate-20251011120000-up\nCREATE TABLE a (id INT);\n",
+            "-- Version: 0001\n-- name: migrate-0001-up\nCREATE TABLE a (id INT);\n",
+        ),
+        (
+            '"""Migration.\n\nVersion: 20251011120000\n"""\n\n\ndef up(context=None):\n    return ["CREATE TABLE a (id INT)"]\n',
+            '"""Migration.\n\nVersion: 0001\n"""\n\n\ndef up(context=None):\n    return ["CREATE TABLE a (id INT)"]\n',
+        ),
+    ],
+    ids=["sql", "py"],
+)
+def test_md5_checksum_matches_renamed_version_header(md5_form: str, old_content: str, new_content: str) -> None:
+    """Renamed files match pre-v0.67.0 and raw MD5 checksums when previous_version is supplied."""
+    digest_input = (
+        re.sub(r"^--\s*name:\s*migrate-[^-]+-(?:up|down)\s*$", "", old_content, flags=re.MULTILINE)
+        if md5_form == "pre_067"
+        else old_content
+    )
+    md5_checksum = hashlib.md5(digest_input.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+    assert BaseMigrationRunner.match_migration_checksum(new_content, md5_checksum) is None
+    assert (
+        BaseMigrationRunner.match_migration_checksum(new_content, md5_checksum, previous_version="20251011120000")
+        == "legacy"
+    )
+    assert (
+        BaseMigrationRunner.match_migration_checksum(new_content, md5_checksum, previous_version="20251011999999")
+        is None
+    )

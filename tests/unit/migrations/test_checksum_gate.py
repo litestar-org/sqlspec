@@ -260,3 +260,104 @@ async def test_upgrade_accepts_fix_renamed_files(tmp_path: Path, make_commands: 
     await _call(commands, "upgrade", echo=False)
 
     assert [version for version, _ in _ledger(_db(tmp_path, "sync"))] == ["0001"]
+
+
+@pytest.mark.parametrize("command", ["upgrade", "verify"])
+@pytest.mark.parametrize("md5_form", ["pre_067", "raw"])
+@pytest.mark.parametrize("file_kind", ["sql", "py"])
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_md5_checksum_with_version_header_passes_and_upgrades_to_sha256(
+    tmp_path: Path, make_commands: CommandsFactory, mode: str, file_kind: str, md5_form: str, command: str
+) -> None:
+    """Pre-v0.67.0 and raw MD5 rows with Version headers pass upgrade/verify and re-record to SHA-256."""
+    directory = _migrations_dir(tmp_path)
+    if file_kind == "sql":
+        content = (
+            "-- Version: 0001\n-- name: migrate-0001-up\nCREATE TABLE items (id INT);\n"
+            "-- name: migrate-0001-down\nDROP TABLE items;\n"
+        )
+        file_path = directory / "0001_items.sql"
+    else:
+        content = (
+            '"""Items.\n\nVersion: 0001\n"""\n\n\ndef up(context=None):\n    return ["CREATE TABLE items (id INT)"]\n'
+        )
+        file_path = directory / "0001_items.py"
+    file_path.write_text(content, encoding="utf-8")
+    commands = make_commands(mode)
+    await _call(commands, "upgrade", echo=False)
+
+    db_path = _db(tmp_path, mode)
+    digest_input = (
+        re.sub(r"^--\s*name:\s*migrate-[^-]+-(?:up|down)\s*$", "", content, flags=re.MULTILINE)
+        if md5_form == "pre_067"
+        else content
+    )
+    md5_checksum = hashlib.md5(digest_input.encode("utf-8"), usedforsecurity=False).hexdigest()
+    _set_checksum(db_path, "0001", md5_checksum)
+
+    await _call(commands, command, echo=False)
+
+    assert _ledger(db_path) == [("0001", _marker_digest(tmp_path, content))]
+
+
+@pytest.mark.parametrize("md5_form", ["pre_067", "raw"])
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_auto_sync_reconciles_renamed_timestamp_with_md5_checksum_and_upgrades_to_sha256(
+    tmp_path: Path, make_commands: CommandsFactory, mode: str, md5_form: str
+) -> None:
+    """Reconciling a renamed timestamp migration against an MD5 checksum restores Version: and upgrades to SHA-256."""
+    directory = _migrations_dir(tmp_path)
+    old_content = (
+        "-- Version: 20251011120000\n-- name: migrate-20251011120000-up\nCREATE TABLE items (id INT);\n"
+        "-- name: migrate-20251011120000-down\nDROP TABLE items;\n"
+    )
+    old_path = directory / "20251011120000_items.sql"
+    old_path.write_text(old_content, encoding="utf-8")
+    commands = make_commands(mode)
+    await _call(commands, "upgrade", echo=False)
+
+    db_path = _db(tmp_path, mode)
+    digest_input = (
+        re.sub(r"^--\s*name:\s*migrate-[^-]+-(?:up|down)\s*$", "", old_content, flags=re.MULTILINE)
+        if md5_form == "pre_067"
+        else old_content
+    )
+    md5_checksum = hashlib.md5(digest_input.encode("utf-8"), usedforsecurity=False).hexdigest()
+    _set_checksum(db_path, "20251011120000", md5_checksum)
+
+    new_content = (
+        "-- Version: 0001\n-- name: migrate-0001-up\nCREATE TABLE items (id INT);\n"
+        "-- name: migrate-0001-down\nDROP TABLE items;\n"
+    )
+    old_path.unlink()
+    (directory / "0001_items.sql").write_text(new_content, encoding="utf-8")
+
+    await _call(commands, "upgrade", echo=False)
+
+    assert _ledger(db_path) == [("0001", _marker_digest(tmp_path, new_content))]
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_fix_updates_md5_checksum_to_sha256_on_timestamp_rename(
+    tmp_path: Path, make_commands: CommandsFactory, mode: str
+) -> None:
+    """Running fix(update_database=True) on a pre-v0.67.0 MD5 row upgrades its checksum to SHA-256."""
+    directory = _migrations_dir(tmp_path)
+    old_content = (
+        "-- Version: 20251011120000\n-- name: migrate-20251011120000-up\nCREATE TABLE items (id INT);\n"
+        "-- name: migrate-20251011120000-down\nDROP TABLE items;\n"
+    )
+    (directory / "20251011120000_items.sql").write_text(old_content, encoding="utf-8")
+    commands = make_commands(mode)
+    await _call(commands, "upgrade", echo=False)
+
+    db_path = _db(tmp_path, mode)
+    digest_input = re.sub(r"^--\s*name:\s*migrate-[^-]+-(?:up|down)\s*$", "", old_content, flags=re.MULTILINE)
+    md5_checksum = hashlib.md5(digest_input.encode("utf-8"), usedforsecurity=False).hexdigest()
+    _set_checksum(db_path, "20251011120000", md5_checksum)
+
+    await _call(commands, "fix", yes=True)
+    await _call(commands, "upgrade", echo=False)
+
+    renamed_content = (directory / "0001_items.sql").read_text(encoding="utf-8")
+    assert _ledger(db_path) == [("0001", _marker_digest(tmp_path, renamed_content))]
