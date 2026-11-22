@@ -385,3 +385,30 @@ def test_unquoted_columns_reject_ambiguous_case_variants(snowflake_connection: A
 
     with pytest.raises(AmbiguousIdentifierError, match="ORDERS"):
         driver.data_dictionary.get_columns(driver, "orders")
+
+
+@pytest.mark.parametrize(
+    ("type_category", "expected_type"),
+    [("json", "VARIANT"), ("uuid", "VARCHAR(36)"), ("array", "ARRAY"), ("struct", "OBJECT")],
+)
+def test_shared_snowflake_dictionary_base_type_mapping(
+    snowflake_connection: Any, type_category: str, expected_type: str
+) -> None:
+    """Shared Snowflake base class is directly instantiable and maps logical types."""
+    import sqlspec.data_dictionary.dialects.snowflake as snowflake_dialect
+    from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
+    from sqlspec.data_dictionary.dialects.snowflake.dictionary import (
+        SnowflakeSyncDataDictionary as SharedSnowflakeSyncDataDictionary,
+    )
+
+    driver = SnowflakeDriver(snowflake_connection)
+    dictionary = SharedSnowflakeSyncDataDictionary()
+
+    assert dictionary.dialect == "snowflake"
+    assert dictionary.get_optimal_type(driver, type_category) == expected_type
+    assert snowflake_dialect.SnowflakeSyncDataDictionary is SharedSnowflakeSyncDataDictionary
+    assert issubclass(SnowflakeSyncDataDictionary, SharedSnowflakeSyncDataDictionary)
+    assert SnowflakeSyncDataDictionary is not SharedSnowflakeSyncDataDictionary
+    assert "SnowflakeSyncDataDictionary" in dir(snowflake_dialect)
+    with pytest.raises(AttributeError):
+        getattr(snowflake_dialect, "_nonexistent_snowflake_export")

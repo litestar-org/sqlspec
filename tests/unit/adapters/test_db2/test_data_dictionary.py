@@ -501,3 +501,48 @@ def test_all_authored_db2_dialect_queries_are_wired() -> None:
     assert dictionary.get_query("tables", "by_schema") is not None
     assert dictionary.get_query("tables", "all_by_schema") is not None
     assert dictionary.get_query("schemas", "by_schema") is not None
+
+
+@pytest.mark.parametrize(
+    "symbol_name",
+    [
+        "DB2_CONFIG",
+        "Db2VersionInfo",
+        "parse_db2_version",
+        "build_column_metadata",
+        "build_index_metadata",
+        "build_foreign_key_metadata",
+    ],
+)
+def test_db2_shared_helper_and_config_identity(symbol_name: str) -> None:
+    """Adapter data_dictionary re-exports exact shared Db2 dialect config and helper objects."""
+    import sqlspec.adapters.db2.data_dictionary as adapter_data_dictionary
+    import sqlspec.data_dictionary.dialects.db2 as dialect_pkg
+    from sqlspec.data_dictionary.dialects.db2 import dictionary as dialect_dictionary
+
+    adapter_attr = getattr(adapter_data_dictionary, symbol_name)
+    dialect_attr = getattr(dialect_pkg, symbol_name)
+    assert adapter_attr is dialect_attr
+    assert symbol_name in adapter_data_dictionary.__all__
+    assert symbol_name in dialect_pkg.__all__
+    assert symbol_name in dir(dialect_pkg)
+    if symbol_name not in {"DB2_CONFIG", "Db2VersionInfo"}:
+        assert dialect_attr is getattr(dialect_dictionary, symbol_name)
+
+
+def test_db2_dialect_lazy_facade_exports_and_subclasses() -> None:
+    """Adapter classes subclass the shared dialect bases and package facade raises on missing attrs."""
+    import sqlspec.data_dictionary.dialects.db2 as dialect_pkg
+    from sqlspec.data_dictionary.dialects.db2.dictionary import Db2AsyncDataDictionary as SharedDb2AsyncDataDictionary
+    from sqlspec.data_dictionary.dialects.db2.dictionary import Db2SyncDataDictionary as SharedDb2SyncDataDictionary
+
+    assert dialect_pkg.Db2SyncDataDictionary is SharedDb2SyncDataDictionary
+    assert dialect_pkg.Db2AsyncDataDictionary is SharedDb2AsyncDataDictionary
+    assert issubclass(Db2SyncDataDictionary, SharedDb2SyncDataDictionary)
+    assert issubclass(Db2AsyncDataDictionary, SharedDb2AsyncDataDictionary)
+    assert Db2SyncDataDictionary is not SharedDb2SyncDataDictionary
+    assert Db2AsyncDataDictionary is not SharedDb2AsyncDataDictionary
+    assert "Db2SyncDataDictionary" in dir(dialect_pkg)
+    assert "Db2AsyncDataDictionary" in dir(dialect_pkg)
+    with pytest.raises(AttributeError):
+        getattr(dialect_pkg, "_nonexistent_db2_export")

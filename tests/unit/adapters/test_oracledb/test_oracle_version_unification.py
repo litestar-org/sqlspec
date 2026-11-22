@@ -11,8 +11,11 @@ Covers the C1 contract:
 - a single ``JSONStorageType`` object across the events/adk surfaces.
 """
 
+import ast
 import importlib
 import logging
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -508,3 +511,134 @@ async def test_oracle_adk_prepare_schema_handles_slotted_driver_without_cache_sl
         await async_store.prepare_schema_async(async_driver)
         assert async_cfg._oracle_version_cache.resolved is True
         assert async_cfg._oracle_version_cache.version == expected_version
+
+
+def test_oracle_version_cache_helpers_reexported_with_identity() -> None:
+    """Oracle version cache helpers live in dialect config and preserve identity on re-export."""
+    from sqlspec.adapters.oracledb import core as core_module
+    from sqlspec.adapters.oracledb import data_dictionary as dd_module
+    from sqlspec.data_dictionary.dialects import oracle as oracle_dialect
+    from sqlspec.data_dictionary.dialects.oracle import OracleVersionCache as dialect_cache
+    from sqlspec.data_dictionary.dialects.oracle import config as oracle_dialect_config
+    from sqlspec.data_dictionary.dialects.oracle import (
+        resolve_oracle_connection_compatible_major as dialect_resolve_compatible,
+    )
+    from sqlspec.data_dictionary.dialects.oracle import resolve_oracle_connection_major as dialect_resolve_major
+
+    assert dialect_cache is oracle_dialect_config.OracleVersionCache
+    assert dialect_cache is core_module.OracleVersionCache
+    assert dialect_cache is dd_module.OracleVersionCache
+
+    assert dialect_resolve_major is oracle_dialect_config.resolve_oracle_connection_major
+    assert dialect_resolve_major is core_module.resolve_oracle_connection_major
+    assert dialect_resolve_major is dd_module.resolve_oracle_connection_major
+
+    assert dialect_resolve_compatible is oracle_dialect_config.resolve_oracle_connection_compatible_major
+    assert dialect_resolve_compatible is core_module.resolve_oracle_connection_compatible_major
+    assert dialect_resolve_compatible is dd_module.resolve_oracle_connection_compatible_major
+
+    expected_exports = (
+        "OracleVersionCache",
+        "resolve_oracle_connection_compatible_major",
+        "resolve_oracle_connection_major",
+    )
+    for export_name in expected_exports:
+        assert export_name in oracle_dialect.__all__
+        assert export_name in oracle_dialect_config.__all__
+        assert export_name in core_module.__all__
+
+    cache = dialect_cache()
+    assert cache.resolved is False
+    assert cache.version is None
+    cache.resolved = True
+    cache.version = OracleVersionInfo(23, 4, 0, compatible="23.4.0")
+    cache.reset()
+    assert cache.resolved is False
+    assert cache.version is None
+
+
+@pytest.mark.parametrize(
+    ("resolved", "cached_version", "connection_attrs", "expected_major"),
+    [
+        (
+            True,
+            OracleVersionInfo(21, 3, 0, compatible="21.0.0"),
+            {"_sqlspec_oracle_major": 19, "version": "18.0.0"},
+            21,
+        ),
+        (True, None, {"_sqlspec_oracle_major": 19}, 19),
+        (False, OracleVersionInfo(21, 3, 0, compatible="21.0.0"), {"_sqlspec_oracle_major": 19}, 19),
+        (False, None, {"_sqlspec_oracle_major": 23}, 23),
+        (False, None, {"_sqlspec_oracle_major": True, "version": "23.4.0.24.05"}, 23),
+        (False, None, {"_sqlspec_oracle_major": False}, None),
+        (False, None, {"version": "23.4.0.24.05"}, 23),
+        (False, None, {"version": "unknown"}, None),
+        (False, None, {"version": ""}, None),
+        (False, None, {}, None),
+    ],
+)
+def test_resolve_oracle_connection_major_fallbacks(
+    resolved: bool,
+    cached_version: "OracleVersionInfo | None",
+    connection_attrs: dict[str, Any],
+    expected_major: "int | None",
+) -> None:
+    """resolve_oracle_connection_major uses cache, then int attribute (rejecting bool), then version string."""
+    from sqlspec.data_dictionary.dialects.oracle import OracleVersionCache as dialect_cache_cls
+    from sqlspec.data_dictionary.dialects.oracle import resolve_oracle_connection_major as dialect_resolve_major
+
+    cache = dialect_cache_cls()
+    cache.resolved = resolved
+    cache.version = cached_version
+    connection = SimpleNamespace(**connection_attrs)
+
+    assert dialect_resolve_major(connection, cache) == expected_major
+
+
+@pytest.mark.parametrize(
+    ("resolved", "cached_version", "connection_attrs", "expected_compatible"),
+    [
+        (True, OracleVersionInfo(21, 3, 0, compatible="20.0.0"), {"_sqlspec_oracle_compatible_major": 19}, 20),
+        (True, OracleVersionInfo(21, 3, 0, compatible=None), {"_sqlspec_oracle_compatible_major": 19}, None),
+        (True, None, {"_sqlspec_oracle_compatible_major": 19}, 19),
+        (False, OracleVersionInfo(21, 3, 0, compatible="20.0.0"), {"_sqlspec_oracle_compatible_major": 19}, 19),
+        (False, None, {"_sqlspec_oracle_compatible_major": 23}, 23),
+        (False, None, {"_sqlspec_oracle_compatible_major": True}, None),
+        (False, None, {"_sqlspec_oracle_compatible_major": False}, None),
+        (False, None, {}, None),
+    ],
+)
+def test_resolve_oracle_connection_compatible_major_fallbacks(
+    resolved: bool,
+    cached_version: "OracleVersionInfo | None",
+    connection_attrs: dict[str, Any],
+    expected_compatible: "int | None",
+) -> None:
+    """resolve_oracle_connection_compatible_major uses cache then int attribute while rejecting bool values."""
+    from sqlspec.data_dictionary.dialects.oracle import OracleVersionCache as dialect_cache_cls
+    from sqlspec.data_dictionary.dialects.oracle import (
+        resolve_oracle_connection_compatible_major as dialect_resolve_compatible,
+    )
+
+    cache = dialect_cache_cls()
+    cache.resolved = resolved
+    cache.version = cached_version
+    connection = SimpleNamespace(**connection_attrs)
+
+    assert dialect_resolve_compatible(connection, cache) == expected_compatible
+
+
+def test_oracle_dialect_config_has_no_adapter_imports() -> None:
+    """sqlspec/data_dictionary/dialects/oracle/config.py stays isolated from adapters and oracledb."""
+    config_path = (
+        Path(__file__).resolve().parents[4] / "sqlspec" / "data_dictionary" / "dialects" / "oracle" / "config.py"
+    )
+    tree = ast.parse(config_path.read_text(encoding="utf-8"))
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module)
+
+    assert not any(mod == "oracledb" or mod.startswith(("oracledb.", "sqlspec.adapters")) for mod in imported_modules)

@@ -24,6 +24,12 @@ from sqlspec.adapters.snowflake.core import (
     resolve_column_names,
 )
 from sqlspec.adapters.snowflake.type_converter import SnowflakeOutputConverter
+from sqlspec.data_dictionary.dialects.snowflake import (
+    format_snowflake_identifier as dialect_format_snowflake_identifier,
+)
+from sqlspec.data_dictionary.dialects.snowflake.config import (
+    format_snowflake_identifier as config_format_snowflake_identifier,
+)
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
@@ -307,4 +313,44 @@ def test_snowflake_column_folding_rejects_trailing_newlines() -> None:
 def test_snowflake_identifiers_reject_trailing_newlines(bad_identifier: str) -> None:
     """Snowflake qualified identifier formatting rejects embedded and trailing newlines."""
     with pytest.raises(SQLSpecError, match="Invalid Snowflake identifier"):
+        format_snowflake_identifier(bad_identifier)
+
+
+def test_format_snowflake_identifier_reexport_identity() -> None:
+    """Snowflake dialect package, config module, and adapter core share identical helper object."""
+    assert dialect_format_snowflake_identifier is config_format_snowflake_identifier
+    assert format_snowflake_identifier is dialect_format_snowflake_identifier
+
+
+@pytest.mark.parametrize(
+    ("identifier", "expected"),
+    [
+        ("orders", '"ORDERS"'),
+        ("sales.orders", '"SALES"."ORDERS"'),
+        ('db."Sales".orders', '"DB"."Sales"."ORDERS"'),
+        ('"Mixed"."Col"', '"Mixed"."Col"'),
+        (' "a""b" . item$1 ', '"a""b"."ITEM$1"'),
+    ],
+)
+def test_format_snowflake_identifier_valid(identifier: str, expected: str) -> None:
+    """Snowflake identifier formatting quotes each part using dialect folding rules."""
+    assert dialect_format_snowflake_identifier(identifier) == expected
+    assert format_snowflake_identifier(identifier) == expected
+
+
+@pytest.mark.parametrize(
+    ("bad_identifier", "match"),
+    [
+        ("", "Snowflake identifier must not be empty"),
+        ("sales.", "Invalid Snowflake identifier"),
+        ("orders\n", "Invalid Snowflake identifier"),
+        ("sales.orders\n", "Invalid Snowflake identifier"),
+        ("1bad", "Invalid Snowflake identifier"),
+    ],
+)
+def test_format_snowflake_identifier_rejects_invalid(bad_identifier: str, match: str) -> None:
+    """Snowflake identifier formatting rejects empty, trailing-dot, and malformed identifiers."""
+    with pytest.raises(SQLSpecError, match=match):
+        dialect_format_snowflake_identifier(bad_identifier)
+    with pytest.raises(SQLSpecError, match=match):
         format_snowflake_identifier(bad_identifier)

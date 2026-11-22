@@ -6,6 +6,8 @@ from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 
 Runtime introspection, DDL extraction, and column profiling methods provided by `driver.data_dictionary` on [`SyncDriverAdapterBase`](../driver/sync.md) and [`AsyncDriverAdapterBase`](../driver/async.md). For dialect-specific system catalog SQL queries (`-- name: ...`) and capability profiles, see [Dialect SQL Catalogs](dialects/index.md).
 
+Adapter authors building for one of SQLSpec's 15 supported engines should subclass the matching shared dialect base from `sqlspec.data_dictionary.dialects.<dialect>` rather than subclassing `SyncDataDictionaryBase` or `AsyncDataDictionaryBase` directly (see [Shared Dialect Base Classes](index.md#shared-dialect-base-classes)). Direct subclassing of `SyncDataDictionaryBase` or `AsyncDataDictionaryBase` is intended for new dialects and multi-dialect transport adapters such as `adbc` and `arrow_odbc`.
+
 ## Synchronous Introspection
 
 ::: sqlspec.driver._sync.SyncDataDictionaryBase

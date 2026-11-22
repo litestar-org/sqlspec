@@ -1,6 +1,9 @@
 """Unit tests for data dictionary functionality."""
 
+from importlib import import_module
 from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
 from sqlspec.adapters.aiomysql.data_dictionary import AiomysqlDataDictionary
@@ -25,6 +28,7 @@ from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.adapters.spanner.data_dictionary import SpannerSyncDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.data_dictionary import VersionInfo
+from sqlspec.data_dictionary.dialects.postgres import PostgresAsyncDataDictionary, PostgresSyncDataDictionary
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import DataDictionaryDialectMixin, DataDictionaryMixin
 from tests.conftest import requires_interpreted
@@ -544,11 +548,83 @@ async def test_postgres_async_json_type_selection_matches_before_jsonb() -> None
     psycopg_driver.select_value_or_none = AsyncMock(return_value="PostgreSQL 9.3 on x86_64-pc-linux-gnu")
 
     psqlpy_driver = Mock()
-    psqlpy_driver.select_value = AsyncMock(return_value="PostgreSQL 9.3 on x86_64-pc-linux-gnu")
+    psqlpy_driver.select_value_or_none = AsyncMock(return_value="PostgreSQL 9.3 on x86_64-pc-linux-gnu")
 
     assert await AsyncpgDataDictionary().get_optimal_type(asyncpg_driver, "json") == "JSON"
     assert await PsycopgAsyncDataDictionary().get_optimal_type(psycopg_driver, "json") == "JSON"
     assert await PsqlpyDataDictionary().get_optimal_type(psqlpy_driver, "json") == "JSON"
+
+
+@pytest.mark.parametrize(
+    ("adapter_cls", "expected_base"),
+    [
+        pytest.param(AsyncpgDataDictionary, PostgresAsyncDataDictionary, id="asyncpg"),
+        pytest.param(PsqlpyDataDictionary, PostgresAsyncDataDictionary, id="psqlpy"),
+        pytest.param(PsycopgAsyncDataDictionary, PostgresAsyncDataDictionary, id="psycopg_async"),
+        pytest.param(PsycopgSyncDataDictionary, PostgresSyncDataDictionary, id="psycopg_sync"),
+    ],
+)
+def test_postgres_adapter_data_dictionaries_subclass_shared_base(
+    adapter_cls: type[PostgresAsyncDataDictionary | PostgresSyncDataDictionary],
+    expected_base: type[PostgresAsyncDataDictionary | PostgresSyncDataDictionary],
+) -> None:
+    """PostgreSQL adapter data dictionaries inherit from shared Postgres base classes."""
+    assert issubclass(adapter_cls, expected_base)
+    assert adapter_cls.dialect == "postgres"
+
+
+@pytest.mark.parametrize(
+    ("module_path", "expected_all"),
+    [
+        pytest.param("sqlspec.adapters.asyncpg.data_dictionary", ("AsyncpgDataDictionary",), id="asyncpg"),
+        pytest.param("sqlspec.adapters.psqlpy.data_dictionary", ("PsqlpyDataDictionary",), id="psqlpy"),
+        pytest.param(
+            "sqlspec.adapters.psycopg.data_dictionary",
+            ("PsycopgAsyncDataDictionary", "PsycopgSyncDataDictionary"),
+            id="psycopg",
+        ),
+    ],
+)
+def test_postgres_adapter_data_dictionary_all_exports(module_path: str, expected_all: tuple[str, ...]) -> None:
+    """PostgreSQL adapter data dictionary modules preserve exact __all__ tuples."""
+    module = import_module(module_path)
+    assert module.__all__ == expected_all
+
+
+def test_psycopg_sync_get_indexes_with_none_schema_uses_search_path() -> None:
+    """PsycopgSyncDataDictionary.get_indexes passes schema_name=None when schema is None."""
+    driver = Mock(spec=SyncDriverAdapterBase)
+    driver.select.return_value = []
+
+    PsycopgSyncDataDictionary().get_indexes(driver, table="users", schema=None)
+
+    driver.select.assert_called_once()
+    kwargs = driver.select.call_args.kwargs
+    assert kwargs["schema_name"] is None
+    assert kwargs["table_name"] == "users"
+
+
+@pytest.mark.parametrize(
+    "data_dictionary_cls",
+    [
+        pytest.param(AsyncpgDataDictionary, id="asyncpg"),
+        pytest.param(PsqlpyDataDictionary, id="psqlpy"),
+        pytest.param(PsycopgAsyncDataDictionary, id="psycopg_async"),
+    ],
+)
+async def test_postgres_async_get_indexes_with_none_schema_uses_search_path(
+    data_dictionary_cls: type[PostgresAsyncDataDictionary],
+) -> None:
+    """Async PostgreSQL data dictionaries pass schema_name=None when schema is None."""
+    driver = Mock()
+    driver.select = AsyncMock(return_value=[])
+
+    await data_dictionary_cls().get_indexes(driver, table="users", schema=None)
+
+    driver.select.assert_awaited_once()
+    kwargs = driver.select.call_args.kwargs
+    assert kwargs["schema_name"] is None
+    assert kwargs["table_name"] == "users"
 
 
 def test_cockroach_dialect_resolves_json_type_by_version() -> None:
@@ -625,7 +701,7 @@ def test_bigquery_dialect_formats_unqualified_information_schema_identifiers() -
 def test_bigquery_family_uses_dialect_information_schema_helpers(monkeypatch) -> None:
     """BigQuery and ADBC-as-BigQuery should delegate shared INFORMATION_SCHEMA formatting."""
     from sqlspec.adapters.adbc import data_dictionary as adbc_data_dictionary_module
-    from sqlspec.adapters.bigquery import data_dictionary as bigquery_data_dictionary_module
+    from sqlspec.data_dictionary.dialects.bigquery import dictionary as bigquery_data_dictionary_module
 
     def fake_tables(schema_name: "str | None") -> "tuple[str, str, str]":
         assert schema_name == "project.dataset"
@@ -664,6 +740,39 @@ def test_bigquery_family_uses_dialect_information_schema_helpers(monkeypatch) ->
     assert "BIGQUERY_RC_SENTINEL" in adbc_tables_query
     assert "BIGQUERY_PREFIX_SENTINEL.INFORMATION_SCHEMA.COLUMNS" in native_columns_query
     assert "BIGQUERY_PREFIX_SENTINEL.INFORMATION_SCHEMA.COLUMNS" in adbc_columns_query
+
+
+def test_bigquery_metadata_scope_identity_and_lazy_export() -> None:
+    """BigQuery dialect facade lazily exposes the same scope and base class used by the adapter."""
+    from sqlspec.adapters.bigquery import data_dictionary as adapter_module
+    from sqlspec.data_dictionary.dialects import bigquery as dialect_module
+    from sqlspec.data_dictionary.dialects.bigquery import BigQueryMetadataScope, BigQuerySyncDataDictionary
+
+    assert adapter_module.BigQueryMetadataScope is BigQueryMetadataScope
+    assert issubclass(BigQueryDataDictionary, BigQuerySyncDataDictionary)
+    assert "BigQueryMetadataScope" in dir(dialect_module)
+    assert "BigQuerySyncDataDictionary" in dir(dialect_module)
+    missing_attr = "_missing_bigquery_export"
+    with pytest.raises(AttributeError):
+        getattr(dialect_module, missing_attr)
+
+
+@pytest.mark.parametrize(
+    ("data_dictionary_path", "expected_adapter"),
+    [
+        ("sqlspec.data_dictionary.dialects.bigquery:BigQuerySyncDataDictionary", "BigQuerySyncDataDictionary"),
+        ("sqlspec.adapters.bigquery.data_dictionary:BigQueryDataDictionary", "BigQueryDataDictionary"),
+    ],
+)
+def test_bigquery_capability_profile_adapter_name(data_dictionary_path: str, expected_adapter: str) -> None:
+    """BigQuery shared base and adapter subclass report their own class name in capability profiles."""
+    module_path, class_name = data_dictionary_path.split(":")
+    data_dictionary_cls = getattr(import_module(module_path), class_name)
+
+    profile = data_dictionary_cls().get_metadata_capabilities(None)
+
+    assert profile.dialect == "bigquery"
+    assert profile.adapter == expected_adapter
 
 
 def test_adbc_unknown_feature_flag() -> None:

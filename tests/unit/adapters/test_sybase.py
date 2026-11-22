@@ -2109,3 +2109,58 @@ def test_sybase_cache_hit_declines_empty_parameters_and_literal_percent() -> Non
 
     assert result.get_data() == [{"id": 1, "name": "Ada"}]
     assert cursor.calls[-1] == ("SELECT id, name FROM dbo.users WHERE name LIKE '50%%' AND id = %s", (3,))
+
+
+@pytest.mark.parametrize(
+    "symbol_name",
+    [
+        "SYBASE_CONFIG",
+        "SybaseVersionInfo",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_sybase_version",
+    ],
+)
+def test_sybase_data_dictionary_shared_helper_identity(symbol_name: str) -> None:
+    """Adapter data_dictionary re-exports exact shared Sybase dialect config and helper objects."""
+    import sqlspec.adapters.sybase.data_dictionary as adapter_data_dictionary
+    import sqlspec.data_dictionary.dialects.sybase as dialect_pkg
+    from sqlspec.data_dictionary.dialects.sybase import dictionary as dialect_dictionary
+
+    adapter_attr = getattr(adapter_data_dictionary, symbol_name)
+    dialect_attr = getattr(dialect_pkg, symbol_name)
+    assert adapter_attr is dialect_attr
+    assert symbol_name in adapter_data_dictionary.__all__
+    assert symbol_name in dialect_pkg.__all__
+    assert symbol_name in dir(dialect_pkg)
+    if symbol_name not in {"SYBASE_CONFIG", "SybaseVersionInfo"}:
+        assert dialect_attr is getattr(dialect_dictionary, symbol_name)
+
+
+def test_sybase_data_dictionary_alias_and_lazy_facade() -> None:
+    """Adapter keeps SybaseDataDictionary alias identity and subclasses the shared base."""
+    import sqlspec.adapters.sybase.data_dictionary as adapter_data_dictionary
+    import sqlspec.data_dictionary.dialects.sybase as dialect_pkg
+    from sqlspec.data_dictionary.dialects.sybase.dictionary import (
+        SybaseSyncDataDictionary as SharedSybaseSyncDataDictionary,
+    )
+
+    assert adapter_data_dictionary.SybaseDataDictionary is adapter_data_dictionary.SybaseSyncDataDictionary
+    assert SybaseDataDictionary is SybaseSyncDataDictionary
+    assert dialect_pkg.SybaseSyncDataDictionary is SharedSybaseSyncDataDictionary
+    assert issubclass(adapter_data_dictionary.SybaseSyncDataDictionary, SharedSybaseSyncDataDictionary)
+    assert adapter_data_dictionary.SybaseSyncDataDictionary is not SharedSybaseSyncDataDictionary
+    assert "SybaseSyncDataDictionary" in dir(dialect_pkg)
+    assert set(adapter_data_dictionary.__all__) == {
+        "SYBASE_CONFIG",
+        "SybaseDataDictionary",
+        "SybaseSyncDataDictionary",
+        "SybaseVersionInfo",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_sybase_version",
+    }
+    with pytest.raises(AttributeError):
+        getattr(dialect_pkg, "_nonexistent_sybase_export")

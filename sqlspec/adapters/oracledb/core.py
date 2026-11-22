@@ -30,7 +30,9 @@ from sqlspec.core.sqlcommenter import SQLCommenterContext, format_wire_sqlcommen
 from sqlspec.core.statement import StatementConfig
 from sqlspec.data_dictionary.dialects.oracle.config import (
     ORACLE_JSON_STORAGE_NATIVE,
-    parse_oracle_version_components,
+    OracleVersionCache,
+    resolve_oracle_connection_compatible_major,
+    resolve_oracle_connection_major,
     resolve_oracle_json_storage,
 )
 from sqlspec.driver._stream import rows_to_dicts
@@ -200,62 +202,6 @@ __all__ = (
     "validate_sessionless_execution_options",
     "validate_sessionless_transaction_args",
 )
-
-
-@mypyc_attr(allow_interpreted_subclasses=False)
-class OracleVersionCache:
-    """Pool-scoped cache for the resolved Oracle server version.
-
-    One instance is created per config and shared with every driver spawned from
-    that config's pool, so the server version is resolved once per pool lifetime
-    rather than once per acquired session. The cache lives and dies with the
-    pool; a server upgrade under a live pool is out of scope and picked up on the
-    next pool restart.
-    """
-
-    __slots__ = ("resolved", "version")
-
-    def __init__(self) -> None:
-        self.resolved: bool = False
-        self.version: Any | None = None
-
-    def reset(self) -> None:
-        """Clear the cached version so the next resolution re-queries the server."""
-        self.resolved = False
-        self.version = None
-
-
-def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
-    """Resolve an Oracle server major without issuing a metadata query.
-
-    Pool-scoped data-dictionary metadata is authoritative when it has already
-    been resolved. Otherwise, use the connection callback cache and finally
-    python-oracledb's connection ``version`` string. The final fallback matters
-    for reacquired pool wrappers that do not retain dynamic attributes.
-    """
-    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
-        return int(version_cache.version.major)
-    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
-    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
-        return cached_major
-    version = getattr(connection, "version", None)
-    if not version:
-        return None
-    components = parse_oracle_version_components(str(version))
-    return components[0] if components is not None else None
-
-
-def resolve_oracle_connection_compatible_major(
-    connection: Any, version_cache: "OracleVersionCache | None" = None
-) -> "int | None":
-    """Resolve an Oracle server compatible major version without issuing a metadata query."""
-    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
-        comp = version_cache.version.compatible_major
-        return int(comp) if comp is not None else None
-    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
-    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
-        return cached_compatible
-    return None
 
 
 def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:

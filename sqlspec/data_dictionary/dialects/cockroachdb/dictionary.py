@@ -1,0 +1,620 @@
+"""Shared CockroachDB data dictionary implementations for sync and async drivers."""
+
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from mypy_extensions import mypyc_attr
+
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    DDLResult,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    MetadataCapability,
+    MetadataCapabilityProfile,
+    MetadataFidelity,
+    MetadataResult,
+    MetadataRisk,
+    MetadataSource,
+    MetadataSupport,
+    ObjectIdentity,
+    SystemMetadataCapability,
+    SystemMetadataRequest,
+    SystemMetadataResult,
+    TableMetadata,
+    VersionInfo,
+    ensure_system_metadata_request,
+    get_data_dictionary_loader,
+    system_metadata_gated_result,
+    unsupported_system_metadata_capability,
+)
+from sqlspec.data_dictionary.dialects.cockroachdb.config import (
+    COCKROACH_METADATA_DOMAINS,
+    COCKROACH_SUPPORTED_DOMAINS,
+    resolve_cockroachdb_json_type,
+)
+from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+
+if TYPE_CHECKING:
+    from sqlspec.core import SQL
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+
+__all__ = ("CockroachDBAsyncDataDictionary", "CockroachDBSyncDataDictionary")
+
+
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class CockroachDBSyncDataDictionary(SyncDataDictionaryBase):
+    """CockroachDB-specific sync data dictionary base."""
+
+    dialect: ClassVar[str] = "cockroachdb"
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_metadata_capabilities(
+        self, driver: "SyncDriverAdapterBase", domains: Sequence[str] | None = None
+    ) -> MetadataCapabilityProfile:
+        """Get CockroachDB data-dictionary capability profile."""
+        return _cockroach_metadata_profile(type(self).__name__, domains)
+
+    def get_system_metadata_capabilities(
+        self, driver: "SyncDriverAdapterBase", domains: Sequence[str] | None = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get CockroachDB opt-in system metadata capability disclosures."""
+        _ = driver
+        requested_domains = ("system",) if domains is None else tuple(domains)
+        return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
+
+    def get_schemas(self, driver: "SyncDriverAdapterBase") -> MetadataResult:
+        """Get schema metadata."""
+        return self._select_domain(driver, "schemas", "list")
+
+    def get_objects(self, driver: "SyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+        """Get database object metadata."""
+        return self._select_domain(driver, "objects", "by_schema", schema_name=self.resolve_schema(schema))
+
+    def get_table_details(
+        self, driver: "SyncDriverAdapterBase", table: str, schema: str | None = None
+    ) -> MetadataResult:
+        """Get rich table metadata."""
+        return self._select_domain(
+            driver,
+            "tables",
+            "by_schema",
+            schema_name=self.resolve_schema(schema),
+            table_name=self.resolve_identifier(table),
+        )
+
+    def get_constraints(
+        self, driver: "SyncDriverAdapterBase", table: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get constraint metadata."""
+        table_name = self.resolve_identifier(table) if table is not None else None
+        return self._select_domain(
+            driver, "constraints", "by_schema", schema_name=self.resolve_schema(schema), table_name=table_name
+        )
+
+    def get_views(self, driver: "SyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+        """Get view metadata."""
+        return self._select_domain(driver, "views", "by_schema", schema_name=self.resolve_schema(schema))
+
+    def get_routines(self, driver: "SyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+        """Get routine metadata."""
+        return _metadata_result("routines", MetadataCapability.unsupported("routines"))
+
+    def get_privileges(
+        self, driver: "SyncDriverAdapterBase", object_name: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get privilege metadata."""
+        resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
+        return self._select_domain(
+            driver, "privileges", "by_schema", schema_name=self.resolve_schema(schema), object_name=resolved_object
+        )
+
+    def get_dependencies(
+        self, driver: "SyncDriverAdapterBase", object_name: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get stable dependency metadata."""
+        resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
+        return self._select_domain(
+            driver, "dependencies", "by_schema", schema_name=self.resolve_schema(schema), object_name=resolved_object
+        )
+
+    def get_sequences(self, driver: "SyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+        """Get sequence metadata."""
+        return self._select_domain(driver, "sequences", "by_schema", schema_name=self.resolve_schema(schema))
+
+    def get_system_metadata(
+        self, driver: "SyncDriverAdapterBase", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
+        """Get opt-in CockroachDB system metadata."""
+        _ = driver
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = unsupported_system_metadata_capability(metadata_request.domain)
+        return system_metadata_gated_result(metadata_request, capability)
+
+    def get_version(self, driver: "SyncDriverAdapterBase") -> "VersionInfo | None":
+        """Get CockroachDB version information."""
+        driver_id = id(getattr(driver, "connection", None) or driver)
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+
+        version_value = driver.select_value_or_none(self.get_query("version", "current"))
+        if not version_value:
+            self._log_version_unavailable(type(self).dialect, "missing")
+            self.cache_version(driver_id, None)
+            return None
+
+        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
+        if version_info is None:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
+            self.cache_version(driver_id, None)
+            return None
+
+        self._log_version_detected(type(self).dialect, version_info)
+        self.cache_version(driver_id, version_info)
+        return version_info
+
+    def get_feature_flag(self, driver: "SyncDriverAdapterBase", feature: str) -> bool:
+        """Check if CockroachDB supports a specific feature."""
+        version_info = self.get_version(driver)
+        return self.resolve_feature_flag(feature, version_info)
+
+    def get_optimal_type(self, driver: "SyncDriverAdapterBase", type_category: str) -> str:
+        """Get optimal CockroachDB type for a category."""
+        config = self.get_dialect_config()
+        if type_category == "json":
+            return resolve_cockroachdb_json_type(self.get_version(driver))
+        return config.get_optimal_type(type_category)
+
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables sorted by dependency order."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
+        return driver.select(
+            _cockroach_domain_sql("tables", "by_schema"),
+            schema_name=schema_name,
+            table_name=None,
+            schema_type=TableMetadata,
+        )
+
+    def get_columns(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+            return driver.select(
+                _cockroach_domain_sql("columns", "by_schema"),
+                schema_name=schema_name,
+                table_name=None,
+                schema_type=ColumnMetadata,
+            )
+
+        table_name = self.resolve_identifier(table)
+        table_schema_name = None if schema is None else schema_name
+        self._log_table_describe(driver, schema_name=table_schema_name, table_name=table_name, operation="columns")
+        return driver.select(
+            _cockroach_domain_sql("columns", "by_table"),
+            schema_name=table_schema_name,
+            table_name=table_name,
+            schema_type=ColumnMetadata,
+        )
+
+    def get_indexes(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+            return driver.select(
+                _cockroach_domain_sql("indexes", "by_schema"),
+                schema_name=schema_name,
+                table_name=None,
+                schema_type=IndexMetadata,
+            )
+
+        table_name = self.resolve_identifier(table)
+        table_schema_name = None if schema is None else schema_name
+        self._log_table_describe(driver, schema_name=table_schema_name, table_name=table_name, operation="indexes")
+        return driver.select(
+            _cockroach_domain_sql("indexes", "by_table"),
+            schema_name=table_schema_name,
+            table_name=table_name,
+            schema_type=IndexMetadata,
+        )
+
+    def get_foreign_keys(
+        self, driver: "SyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata, including ON DELETE / ON UPDATE actions."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+            rows = driver.select(self.get_query("foreign_keys", "by_schema"), schema_name=schema_name)
+        else:
+            table_name = self.resolve_identifier(table)
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
+            rows = driver.select(
+                self.get_query("foreign_keys", "by_table"), table_name=table_name, schema_name=schema_name
+            )
+        return [ForeignKeyMetadata.from_row(row) for row in rows]
+
+    def _get_native_object_ddl(
+        self,
+        driver: "SyncDriverAdapterBase",
+        object_name: str,
+        *,
+        schema: str | None,
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> DDLResult | None:
+        """Return CockroachDB DDL for one object from the stable query pack.
+
+        The stable pack cannot emit ``SHOW CREATE`` output, so it reports lossy DDL with a warning
+        and the base class synthesizes table DDL from stable catalog metadata.
+        """
+        _ = include_dependencies, redact
+        result = self._select_domain(
+            driver, "ddl", "by_object", schema_name=schema, object_name=object_name, object_type=object_type
+        )
+        return _cockroach_ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=object_name,
+            object_type=object_type,
+            schema=schema,
+            rows=result.items,
+            warnings=result.warnings,
+        )
+
+    def _select_domain(
+        self, driver: "SyncDriverAdapterBase", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
+
+
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class CockroachDBAsyncDataDictionary(AsyncDataDictionaryBase):
+    """CockroachDB-specific async data dictionary base."""
+
+    dialect: ClassVar[str] = "cockroachdb"
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    async def get_metadata_capabilities(
+        self, driver: "AsyncDriverAdapterBase", domains: Sequence[str] | None = None
+    ) -> MetadataCapabilityProfile:
+        """Get CockroachDB data-dictionary capability profile."""
+        return _cockroach_metadata_profile(type(self).__name__, domains)
+
+    async def get_system_metadata_capabilities(
+        self, driver: "AsyncDriverAdapterBase", domains: Sequence[str] | None = None
+    ) -> tuple[SystemMetadataCapability, ...]:
+        """Get CockroachDB opt-in system metadata capability disclosures."""
+        _ = driver
+        requested_domains = ("system",) if domains is None else tuple(domains)
+        return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
+
+    async def get_schemas(self, driver: "AsyncDriverAdapterBase") -> MetadataResult:
+        """Get schema metadata."""
+        return await self._select_domain(driver, "schemas", "list")
+
+    async def get_objects(self, driver: "AsyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+        """Get database object metadata."""
+        return await self._select_domain(driver, "objects", "by_schema", schema_name=self.resolve_schema(schema))
+
+    async def get_table_details(
+        self, driver: "AsyncDriverAdapterBase", table: str, schema: str | None = None
+    ) -> MetadataResult:
+        """Get rich table metadata."""
+        return await self._select_domain(
+            driver,
+            "tables",
+            "by_schema",
+            schema_name=self.resolve_schema(schema),
+            table_name=self.resolve_identifier(table),
+        )
+
+    async def get_constraints(
+        self, driver: "AsyncDriverAdapterBase", table: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get constraint metadata."""
+        table_name = self.resolve_identifier(table) if table is not None else None
+        return await self._select_domain(
+            driver, "constraints", "by_schema", schema_name=self.resolve_schema(schema), table_name=table_name
+        )
+
+    async def get_views(self, driver: "AsyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+        """Get view metadata."""
+        return await self._select_domain(driver, "views", "by_schema", schema_name=self.resolve_schema(schema))
+
+    async def get_routines(self, driver: "AsyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+        """Get routine metadata."""
+        return _metadata_result("routines", MetadataCapability.unsupported("routines"))
+
+    async def get_privileges(
+        self, driver: "AsyncDriverAdapterBase", object_name: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get privilege metadata."""
+        resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
+        return await self._select_domain(
+            driver, "privileges", "by_schema", schema_name=self.resolve_schema(schema), object_name=resolved_object
+        )
+
+    async def get_dependencies(
+        self, driver: "AsyncDriverAdapterBase", object_name: str | None = None, schema: str | None = None
+    ) -> MetadataResult:
+        """Get stable dependency metadata."""
+        resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
+        return await self._select_domain(
+            driver, "dependencies", "by_schema", schema_name=self.resolve_schema(schema), object_name=resolved_object
+        )
+
+    async def get_sequences(self, driver: "AsyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+        """Get sequence metadata."""
+        return await self._select_domain(driver, "sequences", "by_schema", schema_name=self.resolve_schema(schema))
+
+    async def get_system_metadata(
+        self, driver: "AsyncDriverAdapterBase", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+    ) -> SystemMetadataResult:
+        """Get opt-in CockroachDB system metadata."""
+        _ = driver
+        metadata_request = ensure_system_metadata_request(request, **kwargs)
+        capability = unsupported_system_metadata_capability(metadata_request.domain)
+        return system_metadata_gated_result(metadata_request, capability)
+
+    async def get_version(self, driver: "AsyncDriverAdapterBase") -> "VersionInfo | None":
+        """Get CockroachDB version information."""
+        driver_id = id(getattr(driver, "connection", None) or driver)
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
+
+        version_value = await driver.select_value_or_none(self.get_query("version", "current"))
+        if not version_value:
+            self._log_version_unavailable(type(self).dialect, "missing")
+            self.cache_version(driver_id, None)
+            return None
+
+        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
+        if version_info is None:
+            self._log_version_unavailable(type(self).dialect, "parse_failed")
+            self.cache_version(driver_id, None)
+            return None
+
+        self._log_version_detected(type(self).dialect, version_info)
+        self.cache_version(driver_id, version_info)
+        return version_info
+
+    async def get_feature_flag(self, driver: "AsyncDriverAdapterBase", feature: str) -> bool:
+        """Check if CockroachDB supports a specific feature."""
+        version_info = await self.get_version(driver)
+        return self.resolve_feature_flag(feature, version_info)
+
+    async def get_optimal_type(self, driver: "AsyncDriverAdapterBase", type_category: str) -> str:
+        """Get optimal CockroachDB type for a category."""
+        config = self.get_dialect_config()
+        if type_category == "json":
+            return resolve_cockroachdb_json_type(await self.get_version(driver))
+        return config.get_optimal_type(type_category)
+
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables sorted by dependency order."""
+        schema_name = self.resolve_schema(schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
+        return await driver.select(
+            _cockroach_domain_sql("tables", "by_schema"),
+            schema_name=schema_name,
+            table_name=None,
+            schema_type=TableMetadata,
+        )
+
+    async def get_columns(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+            return await driver.select(
+                _cockroach_domain_sql("columns", "by_schema"),
+                schema_name=schema_name,
+                table_name=None,
+                schema_type=ColumnMetadata,
+            )
+
+        table_name = self.resolve_identifier(table)
+        table_schema_name = None if schema is None else schema_name
+        self._log_table_describe(driver, schema_name=table_schema_name, table_name=table_name, operation="columns")
+        return await driver.select(
+            _cockroach_domain_sql("columns", "by_table"),
+            schema_name=table_schema_name,
+            table_name=table_name,
+            schema_type=ColumnMetadata,
+        )
+
+    async def get_indexes(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+            return await driver.select(
+                _cockroach_domain_sql("indexes", "by_schema"),
+                schema_name=schema_name,
+                table_name=None,
+                schema_type=IndexMetadata,
+            )
+
+        table_name = self.resolve_identifier(table)
+        table_schema_name = None if schema is None else schema_name
+        self._log_table_describe(driver, schema_name=table_schema_name, table_name=table_name, operation="indexes")
+        return await driver.select(
+            _cockroach_domain_sql("indexes", "by_table"),
+            schema_name=table_schema_name,
+            table_name=table_name,
+            schema_type=IndexMetadata,
+        )
+
+    async def get_foreign_keys(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata, including ON DELETE / ON UPDATE actions."""
+        schema_name = self.resolve_schema(schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+            rows = await driver.select(self.get_query("foreign_keys", "by_schema"), schema_name=schema_name)
+        else:
+            table_name = self.resolve_identifier(table)
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
+            rows = await driver.select(
+                self.get_query("foreign_keys", "by_table"), table_name=table_name, schema_name=schema_name
+            )
+        return [ForeignKeyMetadata.from_row(row) for row in rows]
+
+    async def _get_native_object_ddl(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        object_name: str,
+        *,
+        schema: str | None,
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> DDLResult | None:
+        """Return CockroachDB DDL for one object from the stable query pack.
+
+        The stable pack cannot emit ``SHOW CREATE`` output, so it reports lossy DDL with a warning
+        and the base class synthesizes table DDL from stable catalog metadata.
+        """
+        _ = include_dependencies, redact
+        result = await self._select_domain(
+            driver, "ddl", "by_object", schema_name=schema, object_name=object_name, object_type=object_type
+        )
+        return _cockroach_ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=object_name,
+            object_type=object_type,
+            schema=schema,
+            rows=result.items,
+            warnings=result.warnings,
+        )
+
+    async def _select_domain(
+        self, driver: "AsyncDriverAdapterBase", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = await driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
+
+
+def _cockroach_metadata_capability(domain: str) -> MetadataCapability:
+    if domain == "ddl":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.LOSSY,
+            source=MetadataSource.INFORMATION_SCHEMA,
+            warnings=(
+                "CockroachDB DDL metadata is lossy unless SHOW-derived SQL is requested with quoted identifiers.",
+            ),
+        )
+    if domain == "crdb_internal":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.VERSION_GATED, MetadataRisk.PRIVILEGED),
+            warnings=("crdb_internal metadata is disabled by default.",),
+        )
+    if domain == "system":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.EXPENSIVE, MetadataRisk.PRIVILEGED),
+            warnings=("System metadata is opt-in and disabled by default.",),
+        )
+    if domain in COCKROACH_SUPPORTED_DOMAINS:
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.INFORMATION_SCHEMA,
+        )
+    return MetadataCapability.unsupported(domain)
+
+
+def _cockroach_metadata_profile(adapter: str, domains: Sequence[str] | None) -> MetadataCapabilityProfile:
+    requested_domains = COCKROACH_METADATA_DOMAINS if domains is None else tuple(domains)
+    return MetadataCapabilityProfile(
+        "cockroachdb",
+        adapter=adapter,
+        capabilities=tuple(_cockroach_metadata_capability(domain) for domain in requested_domains),
+    )
+
+
+def _metadata_result(
+    domain: str, capability: MetadataCapability, rows: list[Any] | tuple[Any, ...] = ()
+) -> MetadataResult:
+    return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
+
+
+def _row_value(row: object, key: str) -> object | None:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _cockroach_ddl_result_from_rows(
+    *,
+    dialect: str,
+    object_name: str,
+    object_type: str,
+    schema: str | None,
+    rows: tuple[object, ...],
+    warnings: tuple[str, ...] = (),
+) -> DDLResult:
+    row = rows[0] if rows else None
+    resolved_schema = _row_value(row, "schema_name") if row is not None else schema
+    ddl = _row_value(row, "ddl") if row is not None else None
+    row_warning = _row_value(row, "warning") if row is not None else None
+    result_warnings = warnings + ((str(row_warning),) if row_warning else ())
+    identity = ObjectIdentity(
+        name=object_name,
+        object_type=object_type,
+        schema=str(resolved_schema) if resolved_schema is not None else None,
+        dialect=dialect,
+        source=MetadataSource.INFORMATION_SCHEMA,
+    )
+    if ddl is not None:
+        row_fidelity = _row_value(row, "fidelity") if row is not None else None
+        return DDLResult(
+            identity=identity,
+            status=MetadataSupport.SUPPORTED,
+            fidelity=str(row_fidelity) if row_fidelity is not None else MetadataFidelity.NATIVE,
+            source=MetadataSource.INFORMATION_SCHEMA,
+            ddl=str(ddl),
+            warnings=result_warnings,
+        )
+    return DDLResult.lossy(identity, ddl=None, source=MetadataSource.INFORMATION_SCHEMA, warnings=result_warnings)
+
+
+def _cockroach_domain_sql(domain: str, query_name: str) -> "SQL":
+    query = get_data_dictionary_loader().get_domain_query("cockroachdb", domain, query_name)
+    if query.sql is None:
+        msg = f"Missing CockroachDB data-dictionary query: {domain}/{query_name}"
+        raise RuntimeError(msg)
+    return query.sql

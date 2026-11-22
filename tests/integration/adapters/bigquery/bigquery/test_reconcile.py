@@ -8,7 +8,7 @@ from google.api_core import exceptions as api_exceptions
 from google.api_core.client_options import ClientOptions
 from google.auth.credentials import AnonymousCredentials, Credentials
 
-from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
+from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.adk import BigQueryADKStore
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary, BigQueryMetadataScope
 from sqlspec.adapters.bigquery.litestar import BigQueryStore
@@ -22,6 +22,8 @@ from sqlspec.migrations.context import MigrationContext
 
 if TYPE_CHECKING:
     from pytest_databases.docker.bigquery import BigQueryService
+
+    from sqlspec.driver import SyncDriverAdapterBase
 
 pytestmark = [pytest.mark.bigquery, pytest.mark.integration, pytest.mark.xdist_group("bigquery")]
 
@@ -41,7 +43,7 @@ class _EmulatorBigQueryDataDictionary(BigQueryDataDictionary):
         self._tables_cache: dict[str | None, list[TableMetadata]] = {}
         self._columns_cache: dict[tuple[str | None, str | None], list[ColumnMetadata]] = {}
 
-    def _ensure_loaded(self, driver: BigQueryDriver, schema: str | None) -> None:
+    def _ensure_loaded(self, driver: "SyncDriverAdapterBase", schema: str | None) -> None:
         if schema in self._tables_cache:
             return
         scope = BigQueryMetadataScope.from_schema(schema)
@@ -72,12 +74,12 @@ class _EmulatorBigQueryDataDictionary(BigQueryDataDictionary):
         for t_name, cols in by_table.items():
             self._columns_cache[(schema, t_name)] = cols
 
-    def get_tables(self, driver: BigQueryDriver, schema: str | None = None) -> list[TableMetadata]:
+    def get_tables(self, driver: "SyncDriverAdapterBase", schema: str | None = None) -> list[TableMetadata]:
         self._ensure_loaded(driver, schema)
         return list(self._tables_cache.get(schema, ()))
 
     def get_columns(
-        self, driver: BigQueryDriver, table: str | None = None, schema: str | None = None
+        self, driver: "SyncDriverAdapterBase", table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
         self._ensure_loaded(driver, schema)
         return list(self._columns_cache.get((schema, table), ()))

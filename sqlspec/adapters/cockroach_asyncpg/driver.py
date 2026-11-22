@@ -152,9 +152,9 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         self._cache_hit_state = self.driver_features
 
     @property
-    def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":
+    def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":  # type: ignore[override]
         if self._data_dictionary is None:
-            self._data_dictionary = CockroachAsyncpgDataDictionary()
+            self._data_dictionary = CockroachAsyncpgDataDictionary()  # type: ignore[assignment]
         return cast("CockroachAsyncpgDataDictionary", self._data_dictionary)
 
     async def select_to_storage(

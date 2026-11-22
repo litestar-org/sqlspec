@@ -30,6 +30,7 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncSessionContext,
     build_connection_config,
 )
+from sqlspec.adapters.cockroach_psycopg import data_dictionary as cockroach_psycopg_dd_module
 from sqlspec.adapters.cockroach_psycopg.adk.store import (
     CockroachPsycopgAsyncADKMemoryStore,
     CockroachPsycopgAsyncADKStore,
@@ -38,8 +39,13 @@ from sqlspec.adapters.cockroach_psycopg.adk.store import (
 )
 from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 from sqlspec.adapters.cockroach_psycopg.core import build_native_export
+from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
+    CockroachPsycopgAsyncDataDictionary,
+    CockroachPsycopgSyncDataDictionary,
+)
 from sqlspec.adapters.cockroach_psycopg.litestar.store import CockroachPsycopgSyncStore
 from sqlspec.core import SQL
+from sqlspec.data_dictionary.dialects.cockroachdb import CockroachDBAsyncDataDictionary, CockroachDBSyncDataDictionary
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
@@ -1228,6 +1234,29 @@ async def test_cockroach_psycopg_async_get_columns_and_indexes_by_table() -> Non
     assert len(calls) == 1
     assert calls[0][1]["table_name"] == "users"
     assert calls[0][1]["schema_name"] is None
+
+
+@pytest.mark.parametrize(
+    ("dictionary_type", "expected_base", "driver_type"),
+    [
+        (CockroachPsycopgSyncDataDictionary, CockroachDBSyncDataDictionary, CockroachPsycopgSyncDriver),
+        (CockroachPsycopgAsyncDataDictionary, CockroachDBAsyncDataDictionary, CockroachPsycopgAsyncDriver),
+    ],
+)
+def test_cockroach_psycopg_data_dictionary_subclasses_shared_base(
+    dictionary_type: type[Any], expected_base: type[Any], driver_type: type[Any]
+) -> None:
+    """CockroachPsycopg data dictionaries inherit from the shared CockroachDB dialect bases."""
+    assert issubclass(dictionary_type, expected_base)
+    assert dictionary_type.dialect == "cockroachdb"
+    assert cockroach_psycopg_dd_module.__all__ == (
+        "CockroachPsycopgAsyncDataDictionary",
+        "CockroachPsycopgSyncDataDictionary",
+    )
+    driver = driver_type(connection=MagicMock())
+    first_dd = driver.data_dictionary
+    assert isinstance(first_dd, dictionary_type)
+    assert driver.data_dictionary is first_dd
 
 
 def test_cockroach_psycopg_sync_execute_native_storage_under_active_exception() -> None:

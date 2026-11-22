@@ -258,6 +258,75 @@ DRIVER_OWNED_OPTIONAL_IMPORTS: dict[str, frozenset[str]] = {
 }
 """Optional modules the driver SDK imports on its own when installed; sqlspec code does not import them."""
 
+DIALECT_DICTIONARY_PACKAGES: tuple[str, ...] = (
+    "bigquery",
+    "cockroachdb",
+    "db2",
+    "duckdb",
+    "mariadb",
+    "mssql",
+    "mysql",
+    "oracle",
+    "postgres",
+    "snowflake",
+    "spanner",
+    "sqlanywhere",
+    "sqlite",
+    "sybase",
+    "teradata",
+)
+"""Shared data-dictionary dialect packages exposing PEP 562 lazy dictionary exports."""
+
+DIALECT_DICTIONARY_LAZY_EXPORTS: dict[str, tuple[str, ...]] = {
+    "bigquery": ("BigQueryMetadataScope", "BigQuerySyncDataDictionary"),
+    "cockroachdb": ("CockroachDBAsyncDataDictionary", "CockroachDBSyncDataDictionary"),
+    "db2": (
+        "Db2AsyncDataDictionary",
+        "Db2SyncDataDictionary",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_db2_version",
+    ),
+    "duckdb": ("DuckDBSyncDataDictionary",),
+    "mariadb": ("MariaDBAsyncDataDictionary", "MariaDBSyncDataDictionary"),
+    "mssql": ("MssqlSyncDataDictionary",),
+    "mysql": ("MySQLAsyncDataDictionary", "MySQLSyncDataDictionary"),
+    "oracle": (
+        "JSONStorageType",
+        "OracleAsyncDataDictionary",
+        "OracleSyncDataDictionary",
+        "OracleVersionInfo",
+        "storage_type_from_version",
+    ),
+    "postgres": ("PostgresAsyncDataDictionary", "PostgresSyncDataDictionary"),
+    "snowflake": ("SnowflakeSyncDataDictionary",),
+    "spanner": ("SpannerAsyncDataDictionary", "SpannerSyncDataDictionary"),
+    "sqlanywhere": (
+        "SqlanywhereSyncDataDictionary",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_sqlanywhere_version",
+    ),
+    "sqlite": ("SqliteAsyncDataDictionary", "SqliteSyncDataDictionary"),
+    "sybase": (
+        "SybaseSyncDataDictionary",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_sybase_version",
+    ),
+    "teradata": (
+        "TeradataSyncDataDictionary",
+        "build_column_metadata",
+        "build_foreign_key_metadata",
+        "build_index_metadata",
+        "parse_teradata_version",
+    ),
+}
+"""Lazy PEP 562 ``dictionary.py`` exports declared by each shared dialect package."""
+
 
 def test_every_adapter_package_is_registered() -> None:
     """Every adapter package declares its driver so the import-contract gates cover it."""
@@ -370,6 +439,166 @@ def test_adapter_import_does_not_load_secondary_optional_modules(adapter: str) -
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
     leaked = [name for name in result.stdout.strip().split(",") if name]
     assert not leaked, f"import sqlspec.adapters.{adapter} eagerly imported: {leaked}"
+
+
+def test_dialects_package_import_stays_lazy() -> None:
+    """Importing sqlspec.data_dictionary.dialects does not eagerly load dictionary or driver modules."""
+    blocked = _blocked_dialect_drivers()
+    script = f"""
+import importlib.abc
+import sys
+
+blocked = {blocked!r}
+
+class BlockAllDrivers(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if any(fullname == name or fullname.startswith(name + ".") for name in blocked):
+            raise ModuleNotFoundError(f"No module named {{fullname!r}}", name=fullname)
+        return None
+
+sys.meta_path.insert(0, BlockAllDrivers())
+
+import sqlspec.data_dictionary.dialects
+
+loaded_dicts = [
+    name
+    for name in sys.modules
+    if name.startswith("sqlspec.data_dictionary.dialects.") and name.endswith(".dictionary")
+]
+assert not loaded_dicts, f"eagerly loaded dialect dictionaries: {{loaded_dicts}}"
+loaded_drivers = [name for name in sys.modules if name == "sqlspec.driver" or name.startswith("sqlspec.driver.")]
+assert not loaded_drivers, f"eagerly loaded sqlspec.driver modules: {{loaded_drivers}}"
+loaded_adapters = [
+    name for name in sys.modules if name == "sqlspec.adapters" or name.startswith("sqlspec.adapters.")
+]
+assert not loaded_adapters, f"eagerly loaded adapter modules: {{loaded_adapters}}"
+loaded_blocked = [
+    name
+    for name in sys.modules
+    if any(name == driver or name.startswith(driver + ".") for driver in blocked)
+]
+assert not loaded_blocked, f"eagerly loaded blocked drivers: {{loaded_blocked}}"
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("dialect", DIALECT_DICTIONARY_PACKAGES)
+def test_dialect_dictionary_imports_with_all_drivers_blocked(dialect: str) -> None:
+    """Dialect package lazy exports load cleanly without any optional adapter driver installed."""
+    blocked = _blocked_dialect_drivers()
+    lazy_exports = DIALECT_DICTIONARY_LAZY_EXPORTS[dialect]
+    script = f"""
+import concurrent.futures
+import importlib
+import importlib.abc
+import sys
+import threading
+
+blocked = {blocked!r}
+dialect = {dialect!r}
+lazy_exports = {lazy_exports!r}
+
+class BlockAllDrivers(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if any(fullname == name or fullname.startswith(name + ".") for name in blocked):
+            raise ModuleNotFoundError(f"No module named {{fullname!r}}", name=fullname)
+        return None
+
+sys.meta_path.insert(0, BlockAllDrivers())
+
+pkg_name = f"sqlspec.data_dictionary.dialects.{{dialect}}"
+dict_mod_name = f"{{pkg_name}}.dictionary"
+pkg = importlib.import_module(pkg_name)
+
+loaded_dicts = [
+    name
+    for name in sys.modules
+    if name.startswith("sqlspec.data_dictionary.dialects.") and name.endswith(".dictionary")
+]
+loaded_driver = [name for name in sys.modules if name == "sqlspec.driver" or name.startswith("sqlspec.driver.")]
+assert not loaded_dicts, f"bare import eagerly loaded dictionaries: {{loaded_dicts}}"
+assert not loaded_driver, f"bare import eagerly loaded sqlspec.driver: {{loaded_driver}}"
+
+names = dir(pkg)
+assert len(names) == len(set(names)), f"duplicate dir() entries before load: {{names}}"
+assert set(pkg.__all__).issubset(set(names)), (
+    f"missing __all__ export in dir({{pkg_name}}): {{sorted(set(pkg.__all__) - set(names))}}"
+)
+for export_name in lazy_exports:
+    assert export_name in names, f"missing lazy export {{export_name!r}} in dir({{pkg_name}})"
+eager_exports = sorted(set(pkg.__all__) - set(lazy_exports))
+for eager_name in eager_exports:
+    assert eager_name in vars(pkg), f"eager export {{eager_name!r}} not already loaded in {{pkg_name}}"
+    getattr(pkg, eager_name)
+assert not [
+    name
+    for name in sys.modules
+    if name.startswith("sqlspec.data_dictionary.dialects.") and name.endswith(".dictionary")
+]
+assert not [name for name in sys.modules if name == "sqlspec.driver" or name.startswith("sqlspec.driver.")]
+
+try:
+    getattr(pkg, "__missing_lazy_attr__")
+except AttributeError:
+    pass
+else:
+    raise AssertionError("unknown lazy attribute did not raise AttributeError")
+assert not [
+    name
+    for name in sys.modules
+    if name.startswith("sqlspec.data_dictionary.dialects.") and name.endswith(".dictionary")
+]
+assert not [name for name in sys.modules if name == "sqlspec.driver" or name.startswith("sqlspec.driver.")]
+
+worker_count = 4
+for export_name in lazy_exports:
+    barrier = threading.Barrier(worker_count)
+
+    def _load_attr(target: str = export_name):
+        barrier.wait(timeout=5.0)
+        return getattr(pkg, target)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(_load_attr) for _ in range(worker_count)]
+        resolved = [future.result() for future in futures]
+
+    first = resolved[0]
+    assert all(item is first for item in resolved), f"concurrent getattr mismatch for {{export_name}}"
+    assert dict_mod_name in sys.modules
+    assert export_name in vars(pkg)
+    dict_mod = sys.modules[dict_mod_name]
+    assert getattr(pkg, export_name) is getattr(dict_mod, export_name)
+    assert first is getattr(dict_mod, export_name)
+    after_names = dir(pkg)
+    assert export_name in after_names
+    assert set(pkg.__all__).issubset(set(after_names))
+    assert len(after_names) == len(set(after_names)), f"duplicate dir() entries after load: {{after_names}}"
+    from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
+    if isinstance(first, type) and issubclass(first, (SyncDataDictionaryBase, AsyncDataDictionaryBase)):
+        instance = first()
+        assert instance.dialect == dialect
+
+loaded_adapters = [
+    name for name in sys.modules if name == "sqlspec.adapters" or name.startswith("sqlspec.adapters.")
+]
+assert not loaded_adapters, f"loaded adapter modules: {{loaded_adapters}}"
+loaded_blocked = [
+    name
+    for name in sys.modules
+    if any(name == driver or name.startswith(driver + ".") for driver in blocked)
+]
+assert not loaded_blocked, f"loaded blocked drivers: {{loaded_blocked}}"
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def _blocked_dialect_drivers() -> list[str]:
+    return sorted(
+        {name for drivers in ADAPTER_DRIVERS.values() for name in drivers}
+        | {"google.cloud.spanner", "google.cloud.spanner_v1", "google.cloud.spanner_admin_database_v1", "teradatasql"}
+    )
 
 
 def _is_type_checking_guard(test: ast.expr) -> bool:

@@ -248,10 +248,12 @@ def make_mysql_ddl_result(
     raw_version: str | None,
     sql_mode: str | None,
     sql_quote_show_create: str | None,
+    *,
+    default_dialect: str = "mysql",
 ) -> DDLResult:
     """Create a DDLResult from a SHOW CREATE row and replay-sensitive session context."""
     parsed_version = parse_mysql_engine_version(raw_version or "")
-    engine_family = parsed_version.engine_family if parsed_version is not None else "mysql"
+    engine_family = parsed_version.engine_family if parsed_version is not None else default_dialect
     server_version = str(parsed_version.version) if parsed_version is not None else raw_version
     ddl_text = _extract_show_create_text(ddl_row, object_type)
     identity = ObjectIdentity(
@@ -302,9 +304,10 @@ def mysql_system_metadata_query_name(domain: str) -> str | None:
     return None
 
 
-def resolve_mysql_json_type(version_info: "VersionInfo | None") -> str:
+def resolve_mysql_json_type(version_info: "VersionInfo | None", *, config: "DialectConfig | None" = None) -> str:
     """Resolve the best MySQL JSON storage type for a database version."""
-    json_version = MYSQL_CONFIG.get_feature_version("supports_json")
+    dialect_config = MYSQL_CONFIG if config is None else config
+    json_version = dialect_config.get_feature_version("supports_json")
     if version_info and json_version and version_info >= json_version:
         return "JSON"
     return "TEXT"
