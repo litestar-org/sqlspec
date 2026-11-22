@@ -51,7 +51,6 @@ from sqlspec.adapters.oracledb.core import (
     execute_cache_hit,
     execute_cache_hit_async,
     normalize_column_names,
-    normalize_lastrowid,
     resolve_dbms_cloud_source_uri,
     resolve_row_metadata,
     resolve_rowcount,
@@ -785,7 +784,9 @@ class OracleSyncDriver(SyncDriverAdapterBase):
 
         affected_rows = resolve_rowcount(cursor)
         last_inserted_id = (
-            normalize_lastrowid(cursor) if statement.operation_type == "INSERT" and affected_rows > 0 else None
+            self.resolve_last_inserted_id(cursor)
+            if statement.operation_type == "INSERT" and affected_rows > 0
+            else None
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
@@ -1437,10 +1438,6 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """Resolve rowcount from Oracle cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
-    def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
-        """Resolve the last inserted Oracle ``ROWID`` for the direct execution path."""
-        return normalize_lastrowid(cursor)
-
     def _pipeline_native_supported(self) -> bool:
         """Sync Oracle connections do not support native pipelining."""
         return False
@@ -1448,12 +1445,23 @@ class OracleSyncDriver(SyncDriverAdapterBase):
     def _execute_cache_hit_with_cursor(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Execute a cached query through the compiled Oracle cache-hit executor."""
-        if self._cache_hit_executor is None:
-            return super()._execute_cache_hit_with_cursor(sql, params, cached)
-        return execute_cache_hit(
-            self.connection, sql, params, cached, self.statement_config, self._oracle_cache_hit_state
+        """Execute a cached query through the compiled executor, or ``dispatch_execute`` when it is disabled.
+
+        A subclass that overrides a cache-hit hook, or a caller that clears the
+        executor, runs the cached statement through ``dispatch_execute`` so large
+        parameter coercion, fetch options, and LOB handling stay in effect.
+        """
+        if self._cache_hit_executor is not None:
+            return execute_cache_hit(
+                self.connection, sql, params, cached, self.statement_config, self._oracle_cache_hit_state
+            )
+        statement = self._cached_statement(
+            sql, params, cached, params, params_are_simple=True, compiled_sql=self._format_wire_sql(cached.compiled_sql)
         )
+        try:
+            return self._execute_cached_statement_with_cursor(statement)
+        finally:
+            self._release_pooled_statement(statement)
 
     def _connection_in_transaction(self) -> bool:
         """Report whether a transaction is open on the connection.
@@ -1987,7 +1995,9 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
 
         affected_rows = resolve_rowcount(cursor)
         last_inserted_id = (
-            normalize_lastrowid(cursor) if statement.operation_type == "INSERT" and affected_rows > 0 else None
+            self.resolve_last_inserted_id(cursor)
+            if statement.operation_type == "INSERT" and affected_rows > 0
+            else None
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
@@ -2663,10 +2673,6 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """Resolve rowcount from Oracle cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
-    def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
-        """Resolve the last inserted Oracle ``ROWID`` for the direct execution path."""
-        return normalize_lastrowid(cursor)
-
     async def _select_for_storage(
         self,
         statement: "Statement | QueryBuilder | SQL | str",
@@ -2709,12 +2715,23 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     async def _execute_cache_hit_with_cursor(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        """Execute an async cached query through the compiled Oracle cache-hit executor."""
-        if self._cache_hit_executor is None:
-            return await super()._execute_cache_hit_with_cursor(sql, params, cached)
-        return await execute_cache_hit_async(
-            self.connection, sql, params, cached, self.statement_config, self._oracle_cache_hit_state
+        """Execute an async cached query through the compiled executor, or ``dispatch_execute`` when it is disabled.
+
+        A subclass that overrides a cache-hit hook, or a caller that clears the
+        executor, runs the cached statement through ``dispatch_execute`` so large
+        parameter coercion, fetch options, and async LOB collection stay in effect.
+        """
+        if self._cache_hit_executor is not None:
+            return await execute_cache_hit_async(
+                self.connection, sql, params, cached, self.statement_config, self._oracle_cache_hit_state
+            )
+        statement = self._cached_statement(
+            sql, params, cached, params, params_are_simple=True, compiled_sql=self._format_wire_sql(cached.compiled_sql)
         )
+        try:
+            return await self._execute_cached_statement_with_cursor(statement)
+        finally:
+            self._release_pooled_statement(statement)
 
     def _connection_in_transaction(self) -> bool:
         """Report whether a transaction is open on the connection.

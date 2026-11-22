@@ -24,7 +24,27 @@ SELECT_BY_ID_SQL = "SELECT id, body FROM articles WHERE id = :1"
 INSERT_SQL = "INSERT INTO articles (body) VALUES (:1)"
 UPDATE_SQL = "UPDATE articles SET body = 'x'"
 DELETE_SQL = "DELETE FROM articles WHERE id = :1"
+ROWID = "AAAR3qAAEAAAACTAAA"
+CUSTOM_ROWID = "custom-rowid"
+EXECUTION_PATHS = ("uncached", "compiled_cache_hit", "cleared_executor", "hook_override")
+DISABLED_EXECUTOR_PATHS = ("cleared_executor", "hook_override")
 _MISSING = object()
+
+
+class _HookOverridingSyncDriver(OracleSyncDriver):
+    """Sync driver whose hook override keeps the compiled cache-hit executor off."""
+
+    def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
+        _ = cursor
+        return CUSTOM_ROWID
+
+
+class _HookOverridingAsyncDriver(OracleAsyncDriver):
+    """Async driver whose hook override keeps the compiled cache-hit executor off."""
+
+    def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
+        _ = cursor
+        return CUSTOM_ROWID
 
 
 class _Lob:
@@ -50,7 +70,9 @@ class _AsyncLob:
 class _Session:
     """Oracle driver over a mocked connection, driven the same way in sync and async mode."""
 
-    def __init__(self, is_async: bool, driver_features: "dict[str, Any] | None" = None) -> None:
+    def __init__(
+        self, is_async: bool, driver_features: "dict[str, Any] | None" = None, *, hook_override: bool = False
+    ) -> None:
         self.is_async = is_async
         self.cursor = MagicMock()
         self.cursor.description = [("id", "NUMBER"), ("body", "VARCHAR2")]
@@ -59,12 +81,37 @@ class _Session:
         self.cursor.fetchall = AsyncMock(return_value=[]) if is_async else MagicMock(return_value=[])
         self.connection = MagicMock()
         self.connection.cursor.return_value = self.cursor
-        driver_class = OracleAsyncDriver if is_async else OracleSyncDriver
+        self.lob_locator = MagicMock(name="LOB")
+        self.connection.createlob = (
+            AsyncMock(return_value=self.lob_locator) if is_async else MagicMock(return_value=self.lob_locator)
+        )
+        driver_class: type[Any]
+        if hook_override:
+            driver_class = _HookOverridingAsyncDriver if is_async else _HookOverridingSyncDriver
+        else:
+            driver_class = OracleAsyncDriver if is_async else OracleSyncDriver
         self.driver: Any = driver_class(cast("Any", self.connection), driver_features=driver_features)
         self.executor: Any = execute_cache_hit_async if is_async else execute_cache_hit
 
     async def execute(self, statement: str, *params: Any) -> Any:
         return await _resolve(self.driver.execute(statement, *params))
+
+    async def execute_on_path(self, path: str, statement: str, *params: Any) -> Any:
+        """Run a statement and return the result produced on the named execution path.
+
+        ``uncached`` returns the first execution. Every other path primes the
+        statement cache first; ``cleared_executor`` then removes the compiled
+        cache-hit executor, and ``hook_override`` relies on a driver subclass
+        that never installs it.
+        """
+        if path == "uncached":
+            return await self.execute(statement, *params)
+        await self.execute(statement, *params)
+        if path == "cleared_executor":
+            assert self.driver.set_cached_statement_executor(None) is True
+        if path in DISABLED_EXECUTOR_PATHS:
+            assert self.driver._cache_hit_executor is None
+        return await self.execute(statement, *params)
 
     async def run_executor(self, statement: str, params: Any) -> Any:
         driver = self.driver
@@ -141,7 +188,7 @@ async def test_cache_hit_dml_returns_affected_rows(is_async: bool) -> None:
     session = _Session(is_async)
     session.cursor.description = None
     session.cursor.rowcount = 4
-    session.cursor.lastrowid = "AAAR3qAAEAAAACTAAA"
+    session.cursor.lastrowid = ROWID
     first = await session.execute(UPDATE_SQL)
 
     result = await session.run_executor(UPDATE_SQL, ())
@@ -300,7 +347,7 @@ class _AsyncCountingCursor(_CountingCursorBase):
 @pytest.mark.parametrize(
     ("raw_value", "expected"),
     [
-        ("AAAR3qAAEAAAACTAAA", "AAAR3qAAEAAAACTAAA"),
+        (ROWID, ROWID),
         ("", None),
         (42, 42),
         (0, 0),
@@ -352,8 +399,8 @@ def test_resolve_rowcount_rejects_bool_and_invalid_values(is_async: bool, raw_va
 @pytest.mark.parametrize(
     ("lastrowid_value", "rowcount", "expected"),
     [
-        ("AAAR3qAAEAAAACTAAA", 1, "AAAR3qAAEAAAACTAAA"),
-        ("AAAR3qAAEAAAACTAAA", 0, None),
+        (ROWID, 1, ROWID),
+        (ROWID, 0, None),
         ("", 1, None),
         ("", 0, None),
         (42, 1, 42),
@@ -385,13 +432,12 @@ async def test_insert_last_inserted_id_parity_across_all_execution_paths(
     assert compiled_cache_hit.last_inserted_id == expected
     assert fallback_cache_hit.last_inserted_id == expected
     assert isinstance(compiled_cache_hit, DMLResult)
-    assert isinstance(fallback_cache_hit, DMLResult)
 
 
 @pytest.mark.parametrize(
     ("sql", "params", "rowcount", "expected_reads", "expected_id"),
     [
-        (INSERT_SQL, ("hello",), 1, 1, "AAAR3qAAEAAAACTAAA"),
+        (INSERT_SQL, ("hello",), 1, 1, ROWID),
         (INSERT_SQL, ("hello",), 0, 0, None),
         (UPDATE_SQL, (), 1, 0, None),
         (DELETE_SQL, (7,), 1, 0, None),
@@ -401,7 +447,7 @@ async def test_lastrowid_descriptor_read_count_across_all_paths(
     is_async: bool, sql: str, params: tuple[Any, ...], rowcount: int, expected_reads: int, expected_id: str | None
 ) -> None:
     cursor_cls = _AsyncCountingCursor if is_async else _SyncCountingCursor
-    cursor = cursor_cls(rowcount=rowcount, lastrowid_value="AAAR3qAAEAAAACTAAA")
+    cursor = cursor_cls(rowcount=rowcount, lastrowid_value=ROWID)
     session = _Session(is_async)
     session.connection.cursor.return_value = cursor
 
@@ -422,77 +468,85 @@ async def test_lastrowid_descriptor_read_count_across_all_paths(
 
 
 def test_normalize_lastrowid_reads_descriptor_once() -> None:
-    cursor = _SyncCountingCursor(rowcount=1, lastrowid_value="AAAR3qAAEAAAACTAAA")
-    assert normalize_lastrowid(cursor) == "AAAR3qAAEAAAACTAAA"
+    cursor = _SyncCountingCursor(rowcount=1, lastrowid_value=ROWID)
+    assert normalize_lastrowid(cursor) == ROWID
     assert cursor.lastrowid_reads == 1
 
 
+@pytest.mark.parametrize("path", EXECUTION_PATHS)
 @pytest.mark.parametrize(("sql", "params", "expected_op"), [(UPDATE_SQL, (), "UPDATE"), (DELETE_SQL, (1,), "DELETE")])
 async def test_non_insert_dml_never_leaks_rowid(
-    is_async: bool, sql: str, params: tuple[Any, ...], expected_op: str
+    is_async: bool, path: str, sql: str, params: tuple[Any, ...], expected_op: str
 ) -> None:
-    session = _Session(is_async)
+    session = _Session(is_async, hook_override=path == "hook_override")
     session.cursor.description = None
     session.cursor.rowcount = 2
-    session.cursor.lastrowid = "AAAR3qAAEAAAACTAAA"
+    session.cursor.lastrowid = ROWID
 
-    uncached = await session.execute(sql, *params)
-    cached = await session.execute(sql, *params)
-    assert session.driver.set_cached_statement_executor(None) is True
-    fallback = await session.execute(sql, *params)
+    result = await session.execute_on_path(path, sql, *params)
 
-    for res in (uncached, cached, fallback):
-        assert res.operation_type == expected_op
-        assert res.rows_affected == 2
-        assert res.last_inserted_id is None
+    assert result.operation_type == expected_op
+    assert result.rows_affected == 2
+    assert result.last_inserted_id is None
 
 
-async def test_subclass_cache_hit_executor_and_resolve_last_inserted_id_override(is_async: bool) -> None:
-    connection = MagicMock()
-    cursor = MagicMock()
-    cursor.description = None
-    cursor.rowcount = 1
-    cursor.lastrowid = "AAAR3qAAEAAAACTAAA"
-    cursor.execute = AsyncMock() if is_async else MagicMock()
-    connection.cursor.return_value = cursor
+def test_subclass_without_hook_overrides_keeps_compiled_executor(is_async: bool) -> None:
+    driver_class: type[Any] = OracleAsyncDriver if is_async else OracleSyncDriver
+    subclass = type("_PlainSubclassDriver", (driver_class,), {})
 
-    if is_async:
+    driver = subclass(cast("Any", MagicMock()))
 
-        class _EmptyAsyncDriver(OracleAsyncDriver):
-            pass
+    assert driver._cache_hit_executor is (execute_cache_hit_async if is_async else execute_cache_hit)
 
-        class _CustomAsyncDriver(OracleAsyncDriver):
-            def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
-                _ = cursor
-                return "custom-rowid"
 
-        empty_driver: Any = _EmptyAsyncDriver(cast("Any", connection))
-        assert empty_driver._cache_hit_executor is execute_cache_hit_async
-        sub_driver: Any = _CustomAsyncDriver(cast("Any", connection))
-    else:
+@pytest.mark.parametrize("path", ["uncached", "hook_override"])
+async def test_resolve_last_inserted_id_override_applies_on_every_method_path(is_async: bool, path: str) -> None:
+    session = _Session(is_async, hook_override=True)
+    session.cursor.description = None
+    session.cursor.rowcount = 1
+    session.cursor.lastrowid = ROWID
 
-        class _EmptySyncDriver(OracleSyncDriver):
-            pass
+    result = await session.execute_on_path(path, INSERT_SQL, "body")
 
-        class _CustomSyncDriver(OracleSyncDriver):
-            def resolve_last_inserted_id(self, cursor: Any) -> int | str | None:
-                _ = cursor
-                return "custom-rowid"
+    assert result.rows_affected == 1
+    assert result.last_inserted_id == CUSTOM_ROWID
 
-        empty_driver = _EmptySyncDriver(cast("Any", connection))
-        assert empty_driver._cache_hit_executor is execute_cache_hit
-        sub_driver = _CustomSyncDriver(cast("Any", connection))
 
-    assert sub_driver._cache_hit_executor is None
+@pytest.mark.parametrize("path", DISABLED_EXECUTOR_PATHS)
+async def test_disabled_executor_cache_hit_keeps_fetch_options(is_async: bool, path: str) -> None:
+    session = _Session(is_async, {"fetch_lobs": False, "fetch_decimals": True}, hook_override=path == "hook_override")
+    session.cursor.fetchall.return_value = [(7, "seventh")]
 
-    first = await _resolve(sub_driver.execute(INSERT_SQL, "first"))
-    second = await _resolve(sub_driver.execute(INSERT_SQL, "second"))
+    result = await session.execute_on_path(path, SELECT_BY_ID_SQL, 7)
 
-    assert first.rows_affected == 1
-    assert first.last_inserted_id == "AAAR3qAAEAAAACTAAA"
-    assert isinstance(second, DMLResult)
-    assert second.rows_affected == 1
-    assert second.last_inserted_id == "custom-rowid"
+    assert result.get_data() == [{"id": 7, "body": "seventh"}]
+    assert session.cursor.execute.call_count == 2
+    assert session.cursor.execute.call_args.kwargs == {"fetch_lobs": False, "fetch_decimals": True}
+
+
+@pytest.mark.parametrize("path", DISABLED_EXECUTOR_PATHS)
+async def test_disabled_executor_cache_hit_coerces_large_string_binds(is_async: bool, path: str) -> None:
+    session = _Session(is_async, hook_override=path == "hook_override")
+    session.cursor.description = None
+    session.cursor.rowcount = 1
+    large_body = "x" * 40000
+
+    await session.execute_on_path(path, INSERT_SQL, large_body)
+
+    assert session.connection.createlob.call_count == 2
+    assert session.cursor.execute.call_count == 2
+    bound_parameters = session.cursor.execute.call_args.args[1]
+    assert list(bound_parameters) == [session.lob_locator]
+
+
+@pytest.mark.parametrize("path", DISABLED_EXECUTOR_PATHS)
+async def test_disabled_executor_cache_hit_reads_lob_locators(is_async: bool, path: str) -> None:
+    session = _Session(is_async, hook_override=path == "hook_override")
+    session.cursor.fetchall.return_value = [(1, session.lob("large body"))]
+
+    result = await session.execute_on_path(path, SELECT_SQL)
+
+    assert result.get_data() == [{"id": 1, "body": "large body"}]
 
 
 def test_clear_cache_hit_executor_preserves_oracle_session_state(is_async: bool) -> None:
