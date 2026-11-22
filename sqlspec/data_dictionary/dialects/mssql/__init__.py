@@ -29,12 +29,13 @@ from sqlspec.data_dictionary.dialects.mssql.config import (
 )
 
 if TYPE_CHECKING:
-    from sqlspec.data_dictionary.dialects.mssql.dictionary import MssqlSyncDataDictionary
+    from sqlspec.data_dictionary.dialects.mssql.dictionary import MssqlAsyncDataDictionary, MssqlSyncDataDictionary
 
 __all__ = (
     "MSSQL_CONFIG",
     "MSSQL_PRODUCT_VERSION_PATTERN",
     "MSSQL_VERSION_PATTERN",
+    "MssqlAsyncDataDictionary",
     "MssqlSyncDataDictionary",
     "MssqlVersionInfo",
     "build_mssql_metadata_capability_profile",
@@ -58,7 +59,8 @@ __all__ = (
 )
 
 _EXPORTS: dict[str, tuple[str, str]] = {
-    "MssqlSyncDataDictionary": ("sqlspec.data_dictionary.dialects.mssql.dictionary", "MssqlSyncDataDictionary")
+    "MssqlAsyncDataDictionary": ("sqlspec.data_dictionary.dialects.mssql.dictionary", "MssqlAsyncDataDictionary"),
+    "MssqlSyncDataDictionary": ("sqlspec.data_dictionary.dialects.mssql.dictionary", "MssqlSyncDataDictionary"),
 }
 
 

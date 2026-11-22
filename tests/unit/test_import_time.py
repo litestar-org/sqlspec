@@ -259,7 +259,7 @@ DRIVER_OWNED_OPTIONAL_IMPORTS: dict[str, frozenset[str]] = {
 """Optional modules the driver SDK imports on its own when installed; sqlspec code does not import them."""
 
 DIALECT_DICTIONARY_LAZY_EXPORTS: dict[str, tuple[str, ...]] = {
-    "bigquery": ("BigQueryMetadataScope", "BigQuerySyncDataDictionary"),
+    "bigquery": ("BigQueryAsyncDataDictionary", "BigQueryMetadataScope", "BigQuerySyncDataDictionary"),
     "cockroachdb": ("CockroachDBAsyncDataDictionary", "CockroachDBSyncDataDictionary"),
     "db2": (
         "Db2AsyncDataDictionary",
@@ -269,9 +269,9 @@ DIALECT_DICTIONARY_LAZY_EXPORTS: dict[str, tuple[str, ...]] = {
         "build_index_metadata",
         "parse_db2_version",
     ),
-    "duckdb": ("DuckDBSyncDataDictionary",),
+    "duckdb": ("DuckDBAsyncDataDictionary", "DuckDBSyncDataDictionary"),
     "mariadb": ("MariaDBAsyncDataDictionary", "MariaDBSyncDataDictionary"),
-    "mssql": ("MssqlSyncDataDictionary",),
+    "mssql": ("MssqlAsyncDataDictionary", "MssqlSyncDataDictionary"),
     "mysql": ("MySQLAsyncDataDictionary", "MySQLSyncDataDictionary"),
     "oracle": (
         "JSONStorageType",

@@ -54,9 +54,9 @@ _SCHEMA_DIRECTIVE_PATTERN = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILIN
 _SCHEMA_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _MD5_HEX_LENGTH: Final[int] = 32
 _CHECKSUM_HEADER_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^(?:(?P<name>(?i:--[ \t]*name:[ \t]*migrate-(?P<version>[\w-]+)-(?P<direction>up|down)))"
-    r"|(?i:--[ \t]*version:)[ \t]*[A-Za-z0-9_.]*"
-    r"|Version:[ \t]*[A-Za-z0-9_.]+)\s*$",
+    r"^(?:(?P<name>(?P<name_prefix>(?i:--[ \t]*name:[ \t]*migrate-))(?P<version>[\w-]+)-(?P<direction>(?i:up|down)))"
+    r"|(?P<sql_version>(?i:--[ \t]*version:)[ \t]*)(?P<sql_version_value>[A-Za-z0-9_.]*)"
+    r"|(?P<py_version>Version:[ \t]*)(?P<py_version_value>[A-Za-z0-9_.]+))(?P<trailing>\s*)$",
     re.MULTILINE,
 )
 
@@ -95,7 +95,7 @@ async def _driver_in_transaction_async(driver: Any) -> bool:
         return False
 
 
-def _checksum_substitution(strip_names: bool) -> "Callable[[re.Match[str]], str]":
+def _checksum_substitution(strip_names: bool, *, strip_version: bool = True) -> "Callable[[re.Match[str]], str]":
     """Build a header substitution bound to the first name header's version.
 
     Only name headers carrying the file's own version are canonicalized; any other
@@ -103,6 +103,7 @@ def _checksum_substitution(strip_names: bool) -> "Callable[[re.Match[str]], str]
 
     Args:
         strip_names: Whether canonicalized name headers are dropped instead of replaced by a marker.
+        strip_version: Whether single-line ``Version:`` headers are stripped.
 
     Returns:
         A substitution callable for ``_CHECKSUM_HEADER_PATTERN.sub``.
@@ -111,7 +112,7 @@ def _checksum_substitution(strip_names: bool) -> "Callable[[re.Match[str]], str]
 
     def substitute(match: "re.Match[str]") -> str:
         if match.group("name") is None:
-            return ""
+            return "" if strip_version else match.group(0)
         version = match.group("version")
         if not own_version:
             own_version.append(version)
@@ -122,6 +123,32 @@ def _checksum_substitution(strip_names: bool) -> "Callable[[re.Match[str]], str]
         return f"-- name:{match.group('direction').lower()}"
 
     return substitute
+
+
+def _restore_header_version(content: str, version: str) -> str:
+    """Restore own-version ``-- name:`` and ``Version:`` headers to a previous version string.
+
+    Used when reconciling a renamed migration file against an MD5 checksum recorded
+    before ``Version:`` headers were excluded from digest calculation.
+    """
+    own_version: list[str] = []
+
+    def substitute(match: "re.Match[str]") -> str:
+        trailing = match.group("trailing")
+        if match.group("name") is not None:
+            current_version = match.group("version")
+            if not own_version:
+                own_version.append(current_version)
+            if current_version != own_version[0]:
+                return match.group(0)
+            return f"{match.group('name_prefix')}{version}-{match.group('direction')}{trailing}"
+        if match.group("sql_version") is not None:
+            if not match.group("sql_version_value"):
+                return match.group(0)
+            return f"{match.group('sql_version')}{version}{trailing}"
+        return f"{match.group('py_version')}{version}{trailing}"
+
+    return _CHECKSUM_HEADER_PATTERN.sub(substitute, content)
 
 
 class BaseMigrationRunner:
@@ -170,31 +197,42 @@ class BaseMigrationRunner:
         self.use_logger = use_logger
 
     @staticmethod
-    def verify_migration_checksum(content: str, recorded_checksum: str) -> bool:
-        """Verify migration content against a stored SHA-256 or legacy MD5 checksum.
+    def verify_migration_checksum(
+        content: str, recorded_checksum: str, *, previous_version: "str | None" = None
+    ) -> bool:
+        """Verify migration content against a stored SHA-256 or MD5 checksum.
 
         Args:
             content: The migration file content.
             recorded_checksum: Hex digest recorded in the migration tracking table.
+            previous_version: Optional prior version string when reconciling a renamed migration.
 
         Returns:
             True when the canonicalized content digest matches ``recorded_checksum``.
         """
-        return BaseMigrationRunner.match_migration_checksum(content, recorded_checksum) is not None
+        return (
+            BaseMigrationRunner.match_migration_checksum(content, recorded_checksum, previous_version=previous_version)
+            is not None
+        )
 
     @staticmethod
-    def match_migration_checksum(content: str, recorded_checksum: str) -> "Literal['marker', 'legacy'] | None":
+    def match_migration_checksum(
+        content: str, recorded_checksum: str, *, previous_version: "str | None" = None
+    ) -> "Literal['marker', 'legacy'] | None":
         """Identify which canonical form of migration content matches a recorded checksum.
 
-        The version-free marker form is compared first. Only when it fails is the legacy
-        single-line form, which drops header lines entirely, compared.
+        The version-free marker form is compared first. When it does not match, the stripped-header
+        form is checked, followed (for 32-character hex MD5 digests only) by the pre-v0.67.0
+        form that retained ``Version:`` headers and the raw content form.
 
         Args:
             content: The migration file content.
             recorded_checksum: Hex digest recorded in the migration tracking table.
+            previous_version: Optional prior version string when reconciling a renamed migration
+                against an MD5 checksum that retained header versions.
 
         Returns:
-            ``"marker"`` or ``"legacy"`` for the matching form, or None when neither matches.
+            ``"marker"`` or ``"legacy"`` for the matching form, or None when no form matches.
         """
         if not recorded_checksum or not recorded_checksum.isascii():
             return None
@@ -213,6 +251,8 @@ class BaseMigrationRunner:
         if hmac.compare_digest(marker_digest.encode("ascii"), recorded):
             return "marker"
         if hmac.compare_digest(legacy_digest.encode("ascii"), recorded):
+            return "legacy"
+        if use_md5 and BaseMigrationRunner._matches_md5_checksum(content, recorded, previous_version=previous_version):
             return "legacy"
         return None
 
@@ -347,6 +387,27 @@ class BaseMigrationRunner:
     def _canonicalize_legacy_migration_content(content: str) -> str:
         """Strip version-dependent single-line headers entirely, matching earlier recorded digests."""
         return _CHECKSUM_HEADER_PATTERN.sub(_checksum_substitution(True), content)
+
+    @staticmethod
+    def _canonicalize_md5_with_version_header(content: str) -> str:
+        """Strip own-version name headers while retaining ``Version:`` header lines."""
+        return _CHECKSUM_HEADER_PATTERN.sub(_checksum_substitution(True, strip_version=False), content)
+
+    @staticmethod
+    def _matches_md5_checksum(content: str, recorded: bytes, *, previous_version: "str | None" = None) -> bool:
+        """Check historical MD5 digest forms that retained ``Version:`` headers or raw content."""
+        candidates = [BaseMigrationRunner._canonicalize_md5_with_version_header(content), content]
+        if previous_version:
+            restored = _restore_header_version(content, previous_version)
+            if restored != content:
+                candidates.append(BaseMigrationRunner._canonicalize_md5_with_version_header(restored))
+                candidates.append(restored)
+        return any(
+            hmac.compare_digest(
+                hashlib.md5(candidate.encode("utf-8"), usedforsecurity=False).hexdigest().encode("ascii"), recorded
+            )
+            for candidate in candidates
+        )
 
     def _log_migration_event(self, level: int, event: str, **extra_fields: Any) -> None:
         """Log migration events, respecting use_logger and summary_only settings."""

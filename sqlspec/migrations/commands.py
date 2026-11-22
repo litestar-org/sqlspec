@@ -234,12 +234,14 @@ class VersionRename(NamedTuple):
     """Tracking-table change that renames an applied version to the version of its migration file on disk.
 
     ``claimed_versions`` is the set of versions already accounted for when the rename was planned; the tracker uses
-    it to recognise a rename that another process already performed.
+    it to recognise a rename that another process already performed. ``checksum`` is set when the stored digest
+    matched an older MD5 or stripped-header form and should be upgraded to the current SHA-256 marker digest.
     """
 
     old_version: str
     new_version: str
     claimed_versions: frozenset[str]
+    checksum: str | None = None
 
 
 class VersionReconciliationPlan(NamedTuple):
@@ -770,12 +772,20 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             if renamed_migration is None:
                 continue
             reconciled_old_versions.add(old_version)
-            if not BaseMigrationRunner.verify_migration_checksum(
-                renamed_migration["content"], str(applied_map[old_version].get("checksum") or "")
-            ):
+            recorded_checksum = str(applied_map[old_version].get("checksum") or "")
+            checksum_match = BaseMigrationRunner.match_migration_checksum(
+                renamed_migration["content"], recorded_checksum, previous_version=old_version
+            )
+            if checksum_match is None:
                 checksum_mismatches.append((old_version, new_version))
                 continue
-            renames.append(VersionRename(old_version, new_version, frozenset(claimed_versions)))
+            target_checksum = renamed_migration["checksum"]
+            upgraded_checksum = (
+                target_checksum
+                if checksum_match == "legacy" or recorded_checksum.lower() != target_checksum.lower()
+                else None
+            )
+            renames.append(VersionRename(old_version, new_version, frozenset(claimed_versions), upgraded_checksum))
             claimed_versions.discard(old_version)
             claimed_versions.add(new_version)
             applied_versions = [new_version if v == old_version else v for v in applied_versions]
@@ -787,14 +797,24 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
                 or applied_version in reconciled_old_versions
             ):
                 continue
+            recorded_checksum = str(applied_record.get("checksum") or "")
             for file_version, _ in core_migrations:
                 file_migration = loaded_files.get(file_version)
                 if file_migration is None or file_version in claimed_versions:
                     continue
-                if BaseMigrationRunner.verify_migration_checksum(
-                    file_migration["content"], str(applied_record.get("checksum") or "")
-                ):
-                    renames.append(VersionRename(applied_version, file_version, frozenset(claimed_versions)))
+                checksum_match = BaseMigrationRunner.match_migration_checksum(
+                    file_migration["content"], recorded_checksum, previous_version=applied_version
+                )
+                if checksum_match is not None:
+                    target_checksum = file_migration["checksum"]
+                    upgraded_checksum = (
+                        target_checksum
+                        if checksum_match == "legacy" or recorded_checksum.lower() != target_checksum.lower()
+                        else None
+                    )
+                    renames.append(
+                        VersionRename(applied_version, file_version, frozenset(claimed_versions), upgraded_checksum)
+                    )
                     claimed_versions.discard(applied_version)
                     claimed_versions.add(file_version)
                     applied_versions = [file_version if v == applied_version else v for v in applied_versions]
@@ -2088,10 +2108,12 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
 
             if update_database:
+                renamed_paths = {rename.old_version: rename.new_path for rename in renames}
                 with self.config.provide_session() as driver, self._hold_migration_lock(driver):
                     self.tracker.ensure_tracking_table(driver)
                     applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
-                    applied_versions = {m["version_num"] for m in applied_migrations}
+                    applied_by_version = {m["version_num"]: m for m in applied_migrations}
+                    applied_versions = set(applied_by_version)
 
                     updated_count = 0
                     for old_version, new_version in conversion_map.items():
@@ -2099,6 +2121,18 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                             self.tracker.update_version_record(
                                 driver, old_version, new_version, applied_versions=applied_versions
                             )
+                            new_path = renamed_paths.get(old_version)
+                            recorded_checksum = str(applied_by_version[old_version].get("checksum") or "")
+                            if new_path is not None and new_path.exists():
+                                new_content = new_path.read_text(encoding="utf-8")
+                                match = BaseMigrationRunner.match_migration_checksum(
+                                    new_content, recorded_checksum, previous_version=old_version
+                                )
+                                new_checksum = self.runner.calculate_checksum(new_content)
+                                if match is not None and (
+                                    match == "legacy" or recorded_checksum.lower() != new_checksum.lower()
+                                ):
+                                    self.tracker.update_checksum(driver, new_version, new_checksum)
                             updated_count += 1
 
                     if updated_count > 0:
@@ -2384,6 +2418,8 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             self.tracker.update_version_record(
                 driver, rename.old_version, rename.new_version, applied_versions=set(rename.claimed_versions)
             )
+            if rename.checksum is not None:
+                self.tracker.update_checksum(driver, rename.new_version, rename.checksum)
 
     def _apply_single_migration(
         self,
@@ -3393,10 +3429,12 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
 
             if update_database:
+                renamed_paths = {rename.old_version: rename.new_path for rename in renames}
                 async with self.config.provide_session() as driver, self._hold_migration_lock(driver):
                     await self.tracker.ensure_tracking_table(driver)
                     applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
-                    applied_versions = {m["version_num"] for m in applied_migrations}
+                    applied_by_version = {m["version_num"]: m for m in applied_migrations}
+                    applied_versions = set(applied_by_version)
 
                     updated_count = 0
                     for old_version, new_version in conversion_map.items():
@@ -3404,6 +3442,18 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                             await self.tracker.update_version_record(
                                 driver, old_version, new_version, applied_versions=applied_versions
                             )
+                            new_path = renamed_paths.get(old_version)
+                            recorded_checksum = str(applied_by_version[old_version].get("checksum") or "")
+                            if new_path is not None and new_path.exists():
+                                new_content = new_path.read_text(encoding="utf-8")
+                                match = BaseMigrationRunner.match_migration_checksum(
+                                    new_content, recorded_checksum, previous_version=old_version
+                                )
+                                new_checksum = self.runner.calculate_checksum(new_content)
+                                if match is not None and (
+                                    match == "legacy" or recorded_checksum.lower() != new_checksum.lower()
+                                ):
+                                    await self.tracker.update_checksum(driver, new_version, new_checksum)
                             updated_count += 1
 
                     if updated_count > 0:
@@ -3691,6 +3741,8 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             await self.tracker.update_version_record(
                 driver, rename.old_version, rename.new_version, applied_versions=set(rename.claimed_versions)
             )
+            if rename.checksum is not None:
+                await self.tracker.update_checksum(driver, rename.new_version, rename.checksum)
 
     def _create_squash_runner(self) -> SyncMigrationRunner:
         """Create the synchronous runner the squasher uses to load migration files.

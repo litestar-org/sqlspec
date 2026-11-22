@@ -1,4 +1,4 @@
-"""Shared BigQuery data dictionary implementation for sync drivers."""
+"""Shared BigQuery data dictionary implementations for sync and async drivers."""
 
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -27,14 +27,14 @@ from sqlspec.data_dictionary.dialects.bigquery.config import (
     format_bigquery_information_schema_tables,
     format_bigquery_schema_prefix,
 )
-from sqlspec.driver import SyncDataDictionaryBase
+from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.driver import SyncDriverAdapterBase
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
-__all__ = ("BigQueryMetadataScope", "BigQuerySyncDataDictionary")
+__all__ = ("BigQueryAsyncDataDictionary", "BigQueryMetadataScope", "BigQuerySyncDataDictionary")
 
 _DEFAULT_METADATA_DOMAINS = (
     "schemas",
@@ -321,7 +321,192 @@ class BigQuerySyncDataDictionary(SyncDataDictionaryBase):
         )
 
 
-def _resolve_bigquery_schema(driver: "SyncDriverAdapterBase", schema: "str | None") -> "str | None":
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class BigQueryAsyncDataDictionary(AsyncDataDictionaryBase):
+    """BigQuery-specific async data dictionary base."""
+
+    dialect: ClassVar[str] = "bigquery"
+
+    async def get_version(self, driver: "AsyncDriverAdapterBase") -> "VersionInfo | None":
+        """Return BigQuery version information.
+
+        Args:
+            driver: Async BigQuery driver instance.
+
+        Returns:
+            None because BigQuery does not expose version info.
+        """
+        _ = driver
+        return None
+
+    async def get_feature_flag(self, driver: "AsyncDriverAdapterBase", feature: str) -> bool:
+        """Check if BigQuery supports a specific feature.
+
+        Args:
+            driver: Async BigQuery driver instance.
+            feature: Feature name to check.
+
+        Returns:
+            True if feature is supported, False otherwise.
+        """
+        _ = driver
+        return self.resolve_feature_flag(feature, None)
+
+    async def get_optimal_type(self, driver: "AsyncDriverAdapterBase", type_category: str) -> str:
+        """Get optimal BigQuery type for a category.
+
+        Args:
+            driver: Async BigQuery driver instance.
+            type_category: Type category.
+
+        Returns:
+            BigQuery-specific type name.
+        """
+        _ = driver
+        return self.get_dialect_config().get_optimal_type(type_category)
+
+    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> "list[TableMetadata]":
+        """Get tables sorted by topological dependency order using BigQuery catalog."""
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
+        self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="tables")
+        tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(resolved_schema)
+
+        query_text = self.get_query_text("tables", "by_schema").format(
+            tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
+        )
+        return await driver.select(query_text, schema_name=scope.schema_name, schema_type=TableMetadata)
+
+    async def get_columns(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
+        """Get column information for a table or schema."""
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
+        schema_prefix = format_bigquery_schema_prefix(resolved_schema)
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="columns")
+            query_text = self.get_query_text("columns", "by_schema").format(schema_prefix=schema_prefix)
+            return await driver.select(query_text, schema_name=scope.schema_name, schema_type=ColumnMetadata)
+
+        self._log_table_describe(driver, schema_name=scope.schema_name, table_name=table, operation="columns")
+        query_text = self.get_query_text("columns", "by_table").format(schema_prefix=schema_prefix)
+        return await driver.select(
+            query_text, table_name=table, schema_name=scope.schema_name, schema_type=ColumnMetadata
+        )
+
+    async def get_indexes(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
+        """Get index metadata for a table or schema."""
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
+        if scope.dataset is None:
+            return []
+        if table is None:
+            self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="indexes")
+        else:
+            self._log_table_describe(driver, schema_name=scope.schema_name, table_name=table, operation="indexes")
+
+        search_query = _get_domain_query_text("indexes", "search_by_dataset").format(
+            search_indexes_table=scope.dataset_information_schema_table("SEARCH_INDEXES"),
+            search_index_columns_table=scope.dataset_information_schema_table("SEARCH_INDEX_COLUMNS"),
+        )
+        vector_query = _get_domain_query_text("indexes", "vector_by_dataset").format(
+            vector_indexes_table=scope.dataset_information_schema_table("VECTOR_INDEXES"),
+            vector_index_columns_table=scope.dataset_information_schema_table("VECTOR_INDEX_COLUMNS"),
+        )
+        search_indexes = await driver.select(
+            search_query, table_name=table, schema_name=scope.schema_name, schema_type=IndexMetadata
+        )
+        vector_indexes = await driver.select(
+            vector_query, table_name=table, schema_name=scope.schema_name, schema_type=IndexMetadata
+        )
+        return [*search_indexes, *vector_indexes]
+
+    async def get_foreign_keys(
+        self, driver: "AsyncDriverAdapterBase", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
+        """Get foreign key metadata."""
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
+        if table is None:
+            self._log_schema_introspect(
+                driver, schema_name=scope.schema_name, table_name=None, operation="foreign_keys"
+            )
+        else:
+            self._log_table_describe(driver, schema_name=scope.schema_name, table_name=table, operation="foreign_keys")
+        kcu_table = scope.dataset_information_schema_table("KEY_COLUMN_USAGE")
+        rc_table = scope.dataset_information_schema_table("REFERENTIAL_CONSTRAINTS")
+
+        if table is None:
+            query_text = self.get_query_text("foreign_keys", "by_schema").format(kcu_table=kcu_table, rc_table=rc_table)
+            return await driver.select(query_text, schema_name=scope.schema_name, schema_type=ForeignKeyMetadata)
+
+        query_text = self.get_query_text("foreign_keys", "by_table").format(kcu_table=kcu_table, rc_table=rc_table)
+        return await driver.select(
+            query_text, table_name=table, schema_name=scope.schema_name, schema_type=ForeignKeyMetadata
+        )
+
+    async def get_metadata_capabilities(
+        self, driver: Any, domains: "Sequence[str] | None" = None
+    ) -> "MetadataCapabilityProfile":
+        """Get BigQuery data-dictionary capability profile."""
+        _ = driver
+        requested_domains = tuple(domains) if domains is not None else _DEFAULT_METADATA_DOMAINS
+        capabilities = tuple(_bigquery_capability_for_domain(domain) for domain in requested_domains)
+        return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
+
+    async def _get_native_object_ddl(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        object_name: str,
+        *,
+        schema: "str | None",
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> "DDLResult | None":
+        """Return native BigQuery DDL for a table, view, or routine from INFORMATION_SCHEMA."""
+        _ = include_dependencies, redact
+        norm_type = object_type.lower()
+        if norm_type not in {"table", "view", "materialized_view", "routine", "function", "procedure"}:
+            return None
+        scope = BigQueryMetadataScope.from_schema(_resolve_bigquery_schema(driver, schema))
+        if norm_type in {"routine", "function", "procedure"}:
+            routines_table = scope.dataset_information_schema_table("ROUTINES")
+            query_text = _get_domain_query_text("routines", "by_dataset").format(routines_table=routines_table)
+            rows = await driver.select(query_text, schema_name=scope.schema_name, routine_name=object_name)
+        else:
+            tables_table = scope.dataset_information_schema_table("TABLES")
+            query_text = _get_domain_query_text("ddl", "by_object").format(tables_table=tables_table)
+            rows = await driver.select(query_text, schema_name=scope.schema_name, table_name=object_name)
+        return _bigquery_ddl_result_from_rows(
+            dialect=type(self).dialect,
+            object_name=object_name,
+            object_type=object_type,
+            schema=scope.schema_name,
+            rows=rows,
+        )
+
+    async def _get_native_schema_ddl(
+        self, driver: "AsyncDriverAdapterBase", schema: "str | None", *, include_dependencies: bool, redact: bool
+    ) -> "list[DDLResult] | None":
+        """Return native BigQuery DDL for every dataset object."""
+        _ = include_dependencies, redact
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
+        query_text = _get_domain_query_text("ddl", "by_schema").format(
+            schema_prefix=format_bigquery_schema_prefix(resolved_schema)
+        )
+        return _bigquery_schema_ddl_results(
+            await driver.select(query_text, schema_name=scope.schema_name), schema=scope.schema_name
+        )
+
+
+def _resolve_bigquery_schema(
+    driver: "SyncDriverAdapterBase | AsyncDriverAdapterBase", schema: "str | None"
+) -> "str | None":
     if schema is not None:
         return schema
     default_job_config = getattr(driver, "_default_query_job_config", None)

@@ -17,7 +17,7 @@ from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.data_dictionary import DataDictionaryLoader, DependencyMetadata, MetadataSupport, VersionInfo
-from sqlspec.data_dictionary.dialects.duckdb import DuckDBSyncDataDictionary
+from sqlspec.data_dictionary.dialects.duckdb import DuckDBAsyncDataDictionary, DuckDBSyncDataDictionary
 from sqlspec.data_dictionary.dialects.sqlite import SqliteAsyncDataDictionary, SqliteSyncDataDictionary
 from sqlspec.data_dictionary.dialects.sqlite import dictionary as sqlite_dictionary_module
 from sqlspec.exceptions import SQLFileNotFoundError
@@ -1022,17 +1022,136 @@ def test_duckdb_dictionary_module_has_no_driver_or_adapter_imports() -> None:
 
 
 def test_duckdb_dialect_package_lazy_exports(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PEP 562 lazy package exports expose DuckDBSyncDataDictionary and keep config exports eager."""
-    assert duckdb_dialect_pkg.__all__ == ("DUCKDB_CONFIG", "DUCKDB_VERSION_PATTERN", "DuckDBSyncDataDictionary")
+    """PEP 562 lazy package exports expose DuckDB sync/async bases and keep config exports eager."""
+    assert duckdb_dialect_pkg.__all__ == (
+        "DUCKDB_CONFIG",
+        "DUCKDB_VERSION_PATTERN",
+        "DuckDBAsyncDataDictionary",
+        "DuckDBSyncDataDictionary",
+    )
     assert "DUCKDB_CONFIG" in duckdb_dialect_pkg.__dict__
     assert "DUCKDB_VERSION_PATTERN" in duckdb_dialect_pkg.__dict__
     assert "DuckDBSyncDataDictionary" in dir(duckdb_dialect_pkg)
+    assert "DuckDBAsyncDataDictionary" in dir(duckdb_dialect_pkg)
 
     dictionary_module = import_module("sqlspec.data_dictionary.dialects.duckdb.dictionary")
-    monkeypatch.delitem(duckdb_dialect_pkg.__dict__, "DuckDBSyncDataDictionary", raising=False)
-    resolved = getattr(duckdb_dialect_pkg, "DuckDBSyncDataDictionary")
-    assert resolved is dictionary_module.DuckDBSyncDataDictionary
-    assert duckdb_dialect_pkg.__dict__["DuckDBSyncDataDictionary"] is resolved
+    for class_name in ("DuckDBSyncDataDictionary", "DuckDBAsyncDataDictionary"):
+        monkeypatch.delitem(duckdb_dialect_pkg.__dict__, class_name, raising=False)
+        resolved = getattr(duckdb_dialect_pkg, class_name)
+        assert resolved is getattr(dictionary_module, class_name)
+        assert duckdb_dialect_pkg.__dict__[class_name] is resolved
 
     with pytest.raises(AttributeError, match="has no attribute 'MissingDuckDBExport'"):
         getattr(duckdb_dialect_pkg, "MissingDuckDBExport")
+
+
+async def test_duckdb_async_data_dictionary_parity() -> None:
+    """DuckDBAsyncDataDictionary mirrors DuckDBSyncDataDictionary against async drivers."""
+    sync_dict = DuckDBSyncDataDictionary()
+    async_dict = DuckDBAsyncDataDictionary()
+
+    driver = Mock()
+    driver.select_value_or_none = AsyncMock(return_value="v1.2.1")
+    driver.select = AsyncMock(
+        side_effect=[
+            [{"table_name": "items", "schema_name": "main"}],
+            [{"column_name": "id", "data_type": "INTEGER", "table_name": "items"}],
+            [
+                {
+                    "index_name": "idx_items_code",
+                    "table_name": "items",
+                    "schema_name": "main",
+                    "columns": "[code]",
+                    "is_unique": True,
+                    "is_primary": False,
+                }
+            ],
+            [
+                {
+                    "table_name": "child",
+                    "column_name": "parent_id",
+                    "referenced_table": "parent",
+                    "referenced_column": "id",
+                }
+            ],
+            [
+                {
+                    "schema_name": "main",
+                    "table_name": "items",
+                    "constraint_name": "items_qty_check",
+                    "constraint_type": "CHECK",
+                    "constraint_column_names": ["qty"],
+                    "expression": "qty >= 0",
+                }
+            ],
+            [{"view_name": "active_items", "schema_name": "main"}],
+            [{"sequence_name": "seq_items", "schema_name": "main"}],
+            [{"type_name": "mood", "schema_name": "main"}],
+            [{"object_name": "active_items", "object_type": "view", "schema_name": "main"}],
+            [
+                {
+                    "object_name": "items",
+                    "object_type": "table",
+                    "schema_name": "main",
+                    "ddl": "CREATE TABLE items (id INT);",
+                }
+            ],
+            [
+                {
+                    "object_name": "items",
+                    "object_type": "table",
+                    "schema_name": "main",
+                    "ddl": "CREATE TABLE items (id INT);",
+                },
+                {
+                    "object_name": "active_items",
+                    "object_type": "view",
+                    "schema_name": "main",
+                    "ddl": "CREATE VIEW active_items AS SELECT * FROM items;",
+                },
+            ],
+        ]
+    )
+
+    version = await async_dict.get_version(driver)
+    assert version is not None
+    assert (version.major, version.minor, version.patch) == (1, 2, 1)
+    assert await async_dict.get_version(driver) is version
+    assert driver.select_value_or_none.await_count == 1
+    assert await async_dict.get_feature_flag(driver, "supports_json") is True
+    assert await async_dict.get_optimal_type(driver, "json") == sync_dict.get_optimal_type(Mock(), "json")
+
+    caps = await async_dict.get_metadata_capabilities(driver)
+    sync_caps = sync_dict.get_metadata_capabilities(Mock())
+    assert tuple(c.domain for c in caps.capabilities) == tuple(c.domain for c in sync_caps.capabilities)
+
+    sys_caps = await async_dict.get_system_metadata_capabilities(driver)
+    assert len(sys_caps) == len(sync_dict.get_system_metadata_capabilities(Mock()))
+
+    assert await async_dict.get_tables(driver) == [{"table_name": "items", "schema_name": "main"}]
+    assert await async_dict.get_columns(driver, table="items") == [
+        {"column_name": "id", "data_type": "INTEGER", "table_name": "items"}
+    ]
+    indexes = await async_dict.get_indexes(driver, table="items")
+    assert indexes[0]["columns"] == ["code"]
+    fks = await async_dict.get_foreign_keys(driver, table="child")
+    assert len(fks) == 1
+    assert fks[0].referenced_table == "parent"
+    constraints = await async_dict.get_constraints(driver, table="items")
+    assert len(constraints.items) == 1
+    assert cast("dict[str, object]", constraints.items[0])["check_clause"] == "qty >= 0"
+    assert len((await async_dict.get_views(driver)).items) == 1
+    assert len((await async_dict.get_sequences(driver)).items) == 1
+    assert len((await async_dict.get_types(driver)).items) == 1
+    assert len((await async_dict.get_dependencies(driver, object_name="active_items")).items) == 1
+
+    table_ddl = await async_dict._get_native_object_ddl(
+        driver, "items", schema="main", object_type="table", include_dependencies=False, redact=False
+    )
+    assert table_ddl is not None
+    assert table_ddl.ddl == "CREATE TABLE items (id INT);"
+
+    schema_ddl = await async_dict._get_native_schema_ddl(driver, "main", include_dependencies=True, redact=False)
+    assert schema_ddl is not None
+    assert len(schema_ddl) == 2
+    assert len(schema_ddl[1].dependencies) == 1

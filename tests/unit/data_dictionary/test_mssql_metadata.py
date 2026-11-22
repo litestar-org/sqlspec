@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -23,7 +24,7 @@ from sqlspec.data_dictionary import (
     SystemMetadataResult,
 )
 from sqlspec.data_dictionary.dialects import mssql as mssql_pkg
-from sqlspec.data_dictionary.dialects.mssql import MssqlSyncDataDictionary, MssqlVersionInfo
+from sqlspec.data_dictionary.dialects.mssql import MssqlAsyncDataDictionary, MssqlSyncDataDictionary, MssqlVersionInfo
 from sqlspec.data_dictionary.dialects.mssql.dictionary import MssqlSyncDataDictionary as DirectMssqlSyncDataDictionary
 from sqlspec.driver import SyncDataDictionaryBase
 
@@ -658,3 +659,73 @@ def _ddl_table_rows() -> list[dict[str, Any]]:
             "primary_key_ordinal": None,
         },
     ]
+
+
+@pytest.mark.anyio
+async def test_mssql_async_data_dictionary_parity() -> None:
+    """MssqlAsyncDataDictionary mirrors MssqlSyncDataDictionary and resolves connection schema in get_object_ddl."""
+    assert "MssqlAsyncDataDictionary" in mssql_pkg.__all__
+    assert "MssqlAsyncDataDictionary" in dir(mssql_pkg)
+
+    sync_dict = MssqlSyncDataDictionary()
+    async_dict = MssqlAsyncDataDictionary()
+
+    driver = Mock()
+    driver.driver_features = {}
+    driver.select_value_or_none = AsyncMock(return_value="app")
+    driver.select_one_or_none = AsyncMock(
+        return_value={"product_version": "17.0.1000.7", "edition": "Developer Edition", "engine_edition": 3}
+    )
+    driver.select = AsyncMock(
+        side_effect=[
+            [{"table_name": "accounts", "schema_name": "app"}],
+            [{"table_name": "accounts", "schema_name": "app"}, {"table_name": "audit", "schema_name": "app"}],
+            [{"column_name": "id", "data_type": "int", "table_name": "accounts"}],
+            [{"index_name": "pk_accounts", "table_name": "accounts", "columns": ["id"]}],
+            [
+                {
+                    "table_name": "orders",
+                    "column_name": "account_id",
+                    "referenced_table": "accounts",
+                    "referenced_column": "id",
+                }
+            ],
+            [{"constraint_name": "pk_accounts", "constraint_type": "PRIMARY KEY"}],
+            _ddl_table_rows(),
+            [],
+            [],
+            [],
+        ]
+    )
+
+    version = await async_dict.get_version(driver)
+    assert version is not None
+    assert version.major == 17
+    assert await async_dict.get_feature_flag(driver, "supports_native_json") is True
+    assert await async_dict.get_optimal_type(driver, "json") == "JSON"
+    assert async_dict.list_available_features() == sync_dict.list_available_features()
+
+    caps = await async_dict.get_metadata_capabilities(driver)
+    sync_caps = sync_dict.get_metadata_capabilities(Mock())
+    assert tuple(c.domain for c in caps.capabilities) == tuple(c.domain for c in sync_caps.capabilities)
+
+    tables = await async_dict.get_tables(driver)
+    assert [t["table_name"] for t in tables] == ["accounts", "audit"]
+
+    columns = await async_dict.get_columns(driver, table="accounts")
+    assert columns == [{"column_name": "id", "data_type": "int", "table_name": "accounts"}]
+
+    indexes = await async_dict.get_indexes(driver, table="accounts")
+    assert indexes == [{"index_name": "pk_accounts", "table_name": "accounts", "columns": ["id"]}]
+
+    fks = await async_dict.get_foreign_keys(driver, table="orders")
+    assert len(fks) == 1
+
+    constraints = await async_dict.get_constraints(driver, table="accounts")
+    assert len(constraints.items) == 1
+
+    ddl = await async_dict.get_object_ddl(driver, "accounts")
+    assert ddl.status == MetadataSupport.SUPPORTED
+    assert ddl.ddl is not None
+    assert "accounts" in ddl.ddl
+    assert driver.select_value_or_none.await_count >= 1
