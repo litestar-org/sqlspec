@@ -18,7 +18,7 @@ import zipfile
 from datetime import UTC, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from uuid import UUID
 
@@ -30,6 +30,9 @@ from sqlspec.adapters.db2.data_dictionary import build_column_metadata as build_
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core.parameters import TypedParameter
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.protocols import ObjectStoreProtocol
+from sqlspec.storage.registry import storage_registry
 from sqlspec.utils.fixtures import (
     _async_compress,
     _async_read_compressed,
@@ -497,6 +500,150 @@ async def test_write_fixture_async_custom_backend(mock_registry: Mock) -> None:
     # Verify storage backend was called correctly
     mock_registry.get.assert_called_once_with("gcs://bucket", custom_param="async_value")
     mock_storage.write_text_async.assert_called_once()
+
+
+class _InMemoryFixtureStore:
+    """In-memory ObjectStoreProtocol double recording sync and async fixture writes."""
+
+    protocol: str = "inmem"
+    backend_type: ClassVar[str] = "inmem"
+
+    def __init__(self, base_uri: str = "inmem://fixtures") -> None:
+        self.base_uri = base_uri.rstrip("/")
+        self.text_files: dict[str, str] = {}
+        self.byte_files: dict[str, bytes] = {}
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve_uri(self, path: str | Path) -> str:
+        return f"{self.base_uri}/{path}"
+
+    def read_bytes_sync(self, path: str | Path, **_kwargs: Any) -> bytes:
+        key = str(path)
+        if key in self.byte_files:
+            return self.byte_files[key]
+        if key in self.text_files:
+            return self.text_files[key].encode("utf-8")
+        raise FileNotFoundError(key)
+
+    def write_bytes_sync(self, path: str | Path, data: bytes, *, overwrite: bool = True, **_kwargs: Any) -> None:
+        _ = overwrite
+        key = str(path)
+        self.byte_files[key] = data
+        self.calls.append(("write_bytes_sync", key))
+
+    def write_text_sync(
+        self, path: str | Path, data: str, encoding: str = "utf-8", *, overwrite: bool = True, **_kwargs: Any
+    ) -> None:
+        _ = (encoding, overwrite)
+        key = str(path)
+        self.text_files[key] = data
+        self.calls.append(("write_text_sync", key))
+
+    def exists_sync(self, path: str | Path, **_kwargs: Any) -> bool:
+        key = str(path)
+        return key in self.byte_files or key in self.text_files
+
+    async def write_bytes_async(self, path: str | Path, data: bytes, *, overwrite: bool = True, **_kwargs: Any) -> None:
+        _ = overwrite
+        key = str(path)
+        self.byte_files[key] = data
+        self.calls.append(("write_bytes_async", key))
+
+    async def write_text_async(
+        self, path: str | Path, data: str, encoding: str = "utf-8", *, overwrite: bool = True, **_kwargs: Any
+    ) -> None:
+        _ = (encoding, overwrite)
+        key = str(path)
+        self.text_files[key] = data
+        self.calls.append(("write_text_async", key))
+
+
+@pytest.mark.parametrize("compress", [False, True], ids=["plain", "gzip"])
+def test_write_fixture_sync_instance_alias(compress: bool) -> None:
+    """write_fixture_sync writes plain and gzip payloads into a pre-configured instance alias."""
+    alias = "fixture_inst_sync"
+    store = _InMemoryFixtureStore()
+    payload: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    storage_registry.register_alias(alias, backend=cast("ObjectStoreProtocol", store))
+    try:
+        write_fixture_sync("/unused", "users", payload, storage_backend=alias, compress=compress)
+    finally:
+        removed = storage_registry.unregister_alias(alias)
+
+    assert removed is True
+    assert not storage_registry.is_alias_registered(alias)
+    if compress:
+        assert store.calls == [("write_bytes_sync", "users.json.gz")]
+        assert json.loads(gzip.decompress(store.byte_files["users.json.gz"]).decode("utf-8")) == payload
+        assert store.text_files == {}
+    else:
+        assert store.calls == [("write_text_sync", "users.json")]
+        assert json.loads(store.text_files["users.json"]) == payload
+        assert store.byte_files == {}
+
+
+@pytest.mark.parametrize("compress", [False, True], ids=["plain", "gzip"])
+async def test_write_fixture_async_instance_alias(compress: bool) -> None:
+    """write_fixture_async writes plain and gzip payloads into a pre-configured instance alias."""
+    alias = "fixture_inst_async"
+    store = _InMemoryFixtureStore()
+    payload: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    storage_registry.register_alias(alias, backend=cast("ObjectStoreProtocol", store))
+    try:
+        await write_fixture_async("/unused", "users", payload, storage_backend=alias, compress=compress)
+    finally:
+        removed = storage_registry.unregister_alias(alias)
+
+    assert removed is True
+    assert not storage_registry.is_alias_registered(alias)
+    if compress:
+        assert store.calls == [("write_bytes_async", "users.json.gz")]
+        assert json.loads(gzip.decompress(store.byte_files["users.json.gz"]).decode("utf-8")) == payload
+        assert store.text_files == {}
+    else:
+        assert store.calls == [("write_text_async", "users.json")]
+        assert json.loads(store.text_files["users.json"]) == payload
+        assert store.byte_files == {}
+
+
+def test_write_fixture_sync_instance_alias_rejects_storage_kwargs() -> None:
+    """Extra storage_kwargs on an instance-backed alias raise ValueError chained from ImproperConfigurationError."""
+    alias = "fixture_inst_sync_kwargs"
+    store = _InMemoryFixtureStore()
+    payload: list[dict[str, Any]] = [{"id": 1}]
+
+    storage_registry.register_alias(alias, backend=cast("ObjectStoreProtocol", store))
+    try:
+        with pytest.raises(ValueError, match="Failed to get storage backend") as exc_info:
+            write_fixture_sync("/unused", "users", payload, storage_backend=alias, region="us-east-1")
+    finally:
+        removed = storage_registry.unregister_alias(alias)
+
+    assert removed is True
+    assert not storage_registry.is_alias_registered(alias)
+    assert isinstance(exc_info.value.__cause__, ImproperConfigurationError)
+    assert store.calls == []
+
+
+async def test_write_fixture_async_instance_alias_rejects_storage_kwargs() -> None:
+    """Async extra storage_kwargs on an instance-backed alias chain ImproperConfigurationError inside ValueError."""
+    alias = "fixture_inst_async_kwargs"
+    store = _InMemoryFixtureStore()
+    payload: list[dict[str, Any]] = [{"id": 1}]
+
+    storage_registry.register_alias(alias, backend=cast("ObjectStoreProtocol", store))
+    try:
+        with pytest.raises(ValueError, match="Failed to get storage backend") as exc_info:
+            await write_fixture_async("/unused", "users", payload, storage_backend=alias, region="us-east-1")
+    finally:
+        removed = storage_registry.unregister_alias(alias)
+
+    assert removed is True
+    assert not storage_registry.is_alias_registered(alias)
+    assert isinstance(exc_info.value.__cause__, ImproperConfigurationError)
+    assert store.calls == []
 
 
 async def test_write_fixture_async_imports_without_anyio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

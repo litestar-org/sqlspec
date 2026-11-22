@@ -7,6 +7,7 @@ from sqlspec.storage import (
     DirectStreamWriteProtocol,
     PartitionStrategyConfig,
     ResolvedStorageTarget,
+    StorageBackendFactory,
     StorageBridgeJob,
     StorageCapabilities,
     StorageDestination,
@@ -27,7 +28,7 @@ from sqlspec.storage import (
 )
 ```
 
-Multi-backend object storage registry (`local`, `fsspec`, `obstore`) and Apache Arrow / Parquet / JSONL streaming storage pipelines. See [Arrow & Storage](../learn/arrow-and-storage.md) for configuration and usage examples.
+Multi-backend object storage registry supporting built-in backends (`local`, `fsspec`, `obstore`), named custom backends (`register_backend`), class or factory callables (`StorageBackendFactory`), and pre-configured `ObjectStoreProtocol` instance aliases (`register_alias`), plus Apache Arrow / Parquet / JSONL streaming storage pipelines. See [Arrow & Storage](../learn/arrow-and-storage.md) for configuration and usage examples.
 
 ## Storage Registry
 
@@ -38,6 +39,10 @@ Multi-backend object storage registry (`local`, `fsspec`, `obstore`) and Apache 
       show_docstring_parameters: false
       show_docstring_returns: false
       show_docstring_raises: false
+
+::: sqlspec.storage.registry.StorageBackendFactory
+    options:
+      heading_level: 4
 
 ::: sqlspec.storage.registry.storage_registry
     options:

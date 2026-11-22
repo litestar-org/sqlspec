@@ -33,7 +33,7 @@ if TYPE_CHECKING:
         get_storage_bridge_metrics,
         reset_storage_bridge_metrics,
     )
-    from sqlspec.storage.registry import StorageRegistry, storage_registry
+    from sqlspec.storage.registry import StorageBackendFactory, StorageRegistry, storage_registry
     from sqlspec.utils.type_guards import supports_direct_stream_write
 
 __all__ = (
@@ -42,6 +42,7 @@ __all__ = (
     "DirectStreamWriteProtocol",
     "PartitionStrategyConfig",
     "ResolvedStorageTarget",
+    "StorageBackendFactory",
     "StorageBridgeJob",
     "StorageCapabilities",
     "StorageDestination",
@@ -68,6 +69,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "DirectStreamWriteProtocol": ("sqlspec.protocols", "DirectStreamWriteProtocol"),
     "PartitionStrategyConfig": ("sqlspec.storage.pipeline", "PartitionStrategyConfig"),
     "ResolvedStorageTarget": ("sqlspec.storage.pipeline", "ResolvedStorageTarget"),
+    "StorageBackendFactory": ("sqlspec.storage.registry", "StorageBackendFactory"),
     "StorageBridgeJob": ("sqlspec.storage.pipeline", "StorageBridgeJob"),
     "StorageCapabilities": ("sqlspec.storage.pipeline", "StorageCapabilities"),
     "StorageDestination": ("sqlspec.storage.pipeline", "StorageDestination"),

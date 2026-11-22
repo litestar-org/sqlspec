@@ -36,7 +36,7 @@ from sqlspec.exceptions import StoragePathTraversalError
 from sqlspec.protocols import AsyncWritableBytesSink, DirectStreamWriteProtocol, ObjectStoreProtocol, WritableBytesSink
 from sqlspec.storage import SyncStoragePipeline, get_storage_bridge_diagnostics, reset_storage_bridge_metrics
 from sqlspec.storage.pipeline import AsyncStoragePipeline, StorageDestination, _encode_row_payload, _StoragePipelineBase
-from sqlspec.storage.registry import StorageRegistry, storage_registry
+from sqlspec.storage.registry import StorageBackendFactory, StorageRegistry, storage_registry
 from sqlspec.utils.serializers import reset_serializer_cache, serialize_collection
 from sqlspec.utils.type_guards import supports_direct_stream_write
 
@@ -699,9 +699,17 @@ def test_storage_bridge_diagnostics_include_serializer_metrics() -> None:
 class _ResolutionCountingRegistry(StorageRegistry):
     def __init__(self) -> None:
         super().__init__()
-        self.calls: list[tuple[str, str | None, dict[str, Any]]] = []
+        self.calls: list[
+            tuple[str, str | type[ObjectStoreProtocol] | StorageBackendFactory | None, dict[str, Any]]
+        ] = []
 
-    def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
+    def get(
+        self,
+        uri_or_alias: str | Path,
+        *,
+        backend: str | type[ObjectStoreProtocol] | StorageBackendFactory | None = None,
+        **kwargs: Any,
+    ) -> ObjectStoreProtocol:
         self.calls.append((str(uri_or_alias), backend, kwargs))
         return super().get(uri_or_alias, backend=backend, **kwargs)
 
@@ -1032,12 +1040,13 @@ async def test_supports_direct_stream_write_opt_in_instance_true() -> None:
 
 
 def test_storage_lazy_direct_stream_exports() -> None:
-    """Verify PEP 562 lazy exports in sqlspec.storage for direct stream and sink encoder symbols."""
+    """Verify PEP 562 lazy exports in sqlspec.storage for direct stream, sink encoder, and registry factory symbols."""
     import sqlspec.storage as storage_pkg
 
     expected_names = (
         "AsyncWritableBytesSink",
         "DirectStreamWriteProtocol",
+        "StorageBackendFactory",
         "WritableBytesSink",
         "encode_arrow_to_async_sink",
         "encode_arrow_to_sink",
@@ -1053,16 +1062,19 @@ def test_storage_lazy_direct_stream_exports() -> None:
     from sqlspec.protocols import WritableBytesSink as ProtoWritableBytesSink
     from sqlspec.storage import AsyncWritableBytesSink as StorageAsyncWritableBytesSink
     from sqlspec.storage import DirectStreamWriteProtocol as StorageDirectStreamWriteProtocol
+    from sqlspec.storage import StorageBackendFactory as StoragePkgBackendFactory
     from sqlspec.storage import WritableBytesSink as StorageWritableBytesSink
     from sqlspec.storage import encode_arrow_to_async_sink as storage_encode_arrow_to_async_sink
     from sqlspec.storage import encode_arrow_to_sink as storage_encode_arrow_to_sink
     from sqlspec.storage import supports_direct_stream_write as storage_supports_direct_stream_write
     from sqlspec.storage._arrow_payload import encode_arrow_to_async_sink as payload_encode_arrow_to_async_sink
     from sqlspec.storage._arrow_payload import encode_arrow_to_sink as payload_encode_arrow_to_sink
+    from sqlspec.storage.registry import StorageBackendFactory as RegistryStorageBackendFactory
     from sqlspec.utils.type_guards import supports_direct_stream_write as guard_supports_direct_stream_write
 
     assert StorageAsyncWritableBytesSink is ProtoAsyncWritableBytesSink
     assert StorageDirectStreamWriteProtocol is ProtoDirectStreamWriteProtocol
+    assert StoragePkgBackendFactory is RegistryStorageBackendFactory
     assert StorageWritableBytesSink is ProtoWritableBytesSink
     assert storage_encode_arrow_to_sink is payload_encode_arrow_to_sink
     assert storage_encode_arrow_to_async_sink is payload_encode_arrow_to_async_sink

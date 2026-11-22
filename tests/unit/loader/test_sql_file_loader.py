@@ -25,7 +25,8 @@ from sqlspec.loader import (
     _normalize_dialect,
     _normalize_query_name,
 )
-from sqlspec.storage.registry import StorageRegistry
+from sqlspec.protocols import ObjectStoreProtocol
+from sqlspec.storage.registry import StorageBackendFactory, StorageRegistry
 from tests.conftest import requires_interpreted, requires_patchable_internals
 
 
@@ -854,7 +855,13 @@ def test_file_read_error_handling() -> None:
     loader = SQLFileLoader()
 
     class MissingBackendRegistry(StorageRegistry):
-        def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> Any:
+        def get(
+            self,
+            uri_or_alias: str | Path,
+            *,
+            backend: str | type[ObjectStoreProtocol] | StorageBackendFactory | None = None,
+            **kwargs: Any,
+        ) -> Any:
             raise KeyError("Backend not found")
 
     loader.storage_registry = MissingBackendRegistry()

@@ -16,7 +16,8 @@ import pytest
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import SQLFileLoader
-from sqlspec.storage.registry import StorageRegistry
+from sqlspec.protocols import ObjectStoreProtocol
+from sqlspec.storage.registry import StorageBackendFactory, StorageRegistry
 
 
 @pytest.fixture
@@ -365,7 +366,13 @@ def test_invalid_uri_handling() -> None:
     loader = SQLFileLoader()
 
     class UnsupportedRegistry(StorageRegistry):
-        def get(self, uri_or_alias: str | Path, *, backend: str | None = None, **kwargs: Any) -> Any:
+        def get(
+            self,
+            uri_or_alias: str | Path,
+            *,
+            backend: str | type[ObjectStoreProtocol] | StorageBackendFactory | None = None,
+            **kwargs: Any,
+        ) -> Any:
             raise KeyError("Unsupported URI scheme")
 
     loader.storage_registry = UnsupportedRegistry()
