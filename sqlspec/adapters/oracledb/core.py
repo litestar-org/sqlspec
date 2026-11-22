@@ -170,6 +170,7 @@ __all__ = (
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
+    "normalize_lastrowid",
     "normalize_oracle_appcontext",
     "normalize_oracle_config_dsn",
     "normalize_oracle_purity",
@@ -1724,9 +1725,31 @@ def resolve_rowcount(cursor: Any) -> int:
     if not has_rowcount(cursor):
         return 0
     rowcount = cursor.rowcount
-    if isinstance(rowcount, int) and rowcount >= 0:
+    if isinstance(rowcount, int) and not isinstance(rowcount, bool) and rowcount >= 0:
         return rowcount
     return 0
+
+
+def normalize_lastrowid(cursor: Any) -> int | str | None:
+    """Resolve and normalize ``cursor.lastrowid`` with a single lookup.
+
+    Reads ``cursor.lastrowid`` once via ``getattr`` so Oracle's computed
+    ``lastrowid`` descriptor is evaluated at most once per statement.
+
+    Args:
+        cursor: Oracle cursor with optional ``lastrowid`` metadata.
+
+    Returns:
+        Normalized ``ROWID`` string or integer identifier, or ``None`` when unavailable.
+    """
+    last_id = getattr(cursor, "lastrowid", None)
+    if isinstance(last_id, bool):
+        return None
+    if isinstance(last_id, str):
+        return last_id or None
+    if isinstance(last_id, int):
+        return last_id
+    return None
 
 
 ORACLE_CLIENT_INFO_MAX_BYTES: int = 64
@@ -2501,7 +2524,11 @@ def execute_cache_hit(
                         len(data),
                         "tuple",
                     )
-            return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            affected_rows = resolve_rowcount(cursor)
+            last_inserted_id = (
+                normalize_lastrowid(cursor) if cached.operation_type == "INSERT" and affected_rows > 0 else None
+            )
+            return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
         finally:
             _close_cache_hit_cursor(cursor)
     except oracledb_module.DatabaseError as exc:
@@ -2589,7 +2616,11 @@ async def execute_cache_hit_async(
                         len(data),
                         "tuple",
                     )
-            return DMLResult(cached.operation_type, resolve_rowcount(cursor))
+            affected_rows = resolve_rowcount(cursor)
+            last_inserted_id = (
+                normalize_lastrowid(cursor) if cached.operation_type == "INSERT" and affected_rows > 0 else None
+            )
+            return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
         finally:
             _close_cache_hit_cursor(cursor)
     except oracledb_module.DatabaseError as exc:
