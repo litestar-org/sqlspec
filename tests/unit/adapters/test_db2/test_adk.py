@@ -13,8 +13,7 @@ from sqlspec.adapters.db2.adk.store import _create_index_sql, _datetime_value, _
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, create_mapped_exception
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
-from sqlspec.extensions.adk import StoredEvent
-from sqlspec.extensions.adk._config_utils import _adk_adapter_store_class
+from sqlspec.extensions.adk import StoredEvent, resolve_adk_store_class
 from sqlspec.extensions.adk.memory import StoredMemory
 from tests.unit.adapters.test_db2._fakes import (
     DriverMode,
@@ -624,8 +623,8 @@ def test_adk_stores_resolve_by_config_name(config_class: Any, session_store: Any
     """The ADK extension resolves the session and memory stores matching each Db2 config."""
     config = config_class(connection_config={"database": "d"})
 
-    assert _adk_adapter_store_class(config, "ADKStore") is session_store
-    assert _adk_adapter_store_class(config, "ADKMemoryStore") is memory_store
+    assert resolve_adk_store_class(config, "ADKStore") is session_store
+    assert resolve_adk_store_class(config, "ADKMemoryStore") is memory_store
 
 
 @pytest.mark.parametrize(

@@ -398,7 +398,7 @@ async def test_adk_reconcile_store_resolution_and_disabled_feature_edges(monkeyp
     )
     try:
         with monkeypatch.context() as m:
-            m.setattr(reconcile_mod, "_adk_memory_migration_store_class", lambda _cfg: None)
+            m.setattr(reconcile_mod, "resolve_adk_memory_store_class", lambda _cfg: None)
             with pytest.raises(MigrationError, match="ADKMemoryStore"):
                 reconcile_mod.reconcile(MigrationContext(config=missing_mem_cfg, dialect="sqlite", driver=driver))
 
@@ -477,13 +477,13 @@ def test_adk_reconcile_artifact_table_gated_by_setting_and_adapter(monkeypatch: 
     )
     unset_driver = MagicMock()
     resolver_calls: list[Any] = []
-    original_resolver = reconcile_mod._adk_artifact_migration_store_class
+    original_resolver = reconcile_mod.resolve_adk_artifact_store_class
 
     def _track_resolver(cfg: Any) -> Any:
         resolver_calls.append(cfg)
         return original_resolver(cfg)
 
-    monkeypatch.setattr(reconcile_mod, "_adk_artifact_migration_store_class", _track_resolver)
+    monkeypatch.setattr(reconcile_mod, "resolve_adk_artifact_store_class", _track_resolver)
     assert reconcile_mod.reconcile(MigrationContext(config=unset_cfg, dialect="spanner", driver=unset_driver)) is None
     assert resolver_calls == []
     assert unset_driver.mock_calls == []

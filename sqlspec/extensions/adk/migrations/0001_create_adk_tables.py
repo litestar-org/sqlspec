@@ -18,11 +18,11 @@ import re
 from typing import TYPE_CHECKING, NoReturn, cast
 
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.extensions.adk._config_utils import (
-    _adk_adapter_store_class,
-    _adk_memory_migration_enabled,
-    _adk_memory_migration_store_class,
-    _adk_sessions_migration_enabled,
+from sqlspec.extensions.adk import (
+    adk_memory_migration_enabled,
+    adk_sessions_migration_enabled,
+    resolve_adk_memory_store_class,
+    resolve_adk_store_class,
 )
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
@@ -128,7 +128,7 @@ def _raise_missing_config() -> NoReturn:
 def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKStore | BaseSyncADKStore]":
     if not context or not context.config:
         _raise_missing_config()
-    return cast("type[BaseAsyncADKStore | BaseSyncADKStore]", _adk_adapter_store_class(context.config, "ADKStore"))
+    return cast("type[BaseAsyncADKStore | BaseSyncADKStore]", resolve_adk_store_class(context.config, "ADKStore"))
 
 
 async def _resolve_sql(value: "str | Awaitable[str]") -> str:
@@ -162,7 +162,7 @@ def _get_memory_store_class(
 ) -> "type[BaseAsyncADKMemoryStore | BaseSyncADKMemoryStore] | None":
     if not context or not context.config:
         return None
-    store_class = _adk_memory_migration_store_class(context.config)
+    store_class = resolve_adk_memory_store_class(context.config)
     if store_class is None:
         log_with_context(logger, logging.DEBUG, "adk.migration.create.memory_store.missing")
         return None
@@ -172,10 +172,10 @@ def _get_memory_store_class(
 def _is_memory_enabled(context: "MigrationContext | None") -> bool:
     if not context or not context.config:
         return False
-    return _adk_memory_migration_enabled(context.config)
+    return adk_memory_migration_enabled(context.config)
 
 
 def _is_sessions_enabled(context: "MigrationContext | None") -> bool:
     if not context or not context.config:
         return False
-    return _adk_sessions_migration_enabled(context.config)
+    return adk_sessions_migration_enabled(context.config)

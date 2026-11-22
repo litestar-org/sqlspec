@@ -13,6 +13,7 @@ if TYPE_CHECKING:
         SyncEventChannel,
         SyncEventListener,
         load_native_backend,
+        resolve_backend_name,
         resolve_event_poll_interval,
         resolve_poll_interval,
     )
@@ -68,6 +69,7 @@ __all__ = (
     "normalize_queue_table_name",
     "parse_event_timestamp",
     "resolve_adapter_name",
+    "resolve_backend_name",
     "resolve_event_poll_interval",
     "resolve_poll_interval",
     "row_limit_clause",
@@ -103,6 +105,7 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "normalize_queue_table_name": ("sqlspec.extensions.events._store", "normalize_queue_table_name"),
     "parse_event_timestamp": ("sqlspec.extensions.events._payload", "parse_event_timestamp"),
     "resolve_adapter_name": ("sqlspec.extensions.events._hints", "resolve_adapter_name"),
+    "resolve_backend_name": ("sqlspec.extensions.events._channel", "resolve_backend_name"),
     "resolve_event_poll_interval": ("sqlspec.extensions.events._channel", "resolve_event_poll_interval"),
     "resolve_poll_interval": ("sqlspec.extensions.events._channel", "resolve_poll_interval"),
     "row_limit_clause": ("sqlspec.extensions.events.primitives", "row_limit_clause"),

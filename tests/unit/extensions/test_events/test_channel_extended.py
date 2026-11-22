@@ -15,7 +15,7 @@ from sqlspec import ObservabilityRuntime
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.spanner import SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, MigrationError
 from sqlspec.extensions.events import (
     AsyncEventChannel,
     AsyncEventListener,
@@ -647,3 +647,207 @@ async def test_async_iter_events_drops_and_logs_malformed_payloads(caplog: pytes
         assert channel.metrics_snapshot().get("AiosqliteConfig.events.dequeue.error") == pytest.approx(2.0)
     finally:
         await config.close_pool()
+
+
+def test_resolve_backend_name_public_export() -> None:
+    """resolve_backend_name is publicly exported from sqlspec.extensions.events and _channel."""
+    import sqlspec.extensions.events as events_pkg
+    from sqlspec.extensions.events import _channel, resolve_backend_name
+
+    assert "resolve_backend_name" in events_pkg.__all__
+    assert "resolve_backend_name" in dir(events_pkg)
+    assert "resolve_backend_name" in _channel.__all__
+    assert resolve_backend_name is _channel.resolve_backend_name
+    assert not hasattr(_channel, "_resolve_backend_name")
+    assert not hasattr(_channel, "_get_default_backend")
+
+
+@pytest.mark.parametrize("backend", ("notify", "notify_queue", "poll_queue", "aq", "txeventq"))
+def test_resolve_backend_name_explicit_setting_override(backend: str) -> None:
+    """Explicit extension_settings['backend'] wins over driver_features and adapter defaults."""
+    from sqlspec.extensions.events import resolve_backend_name
+
+    fallback_feature = "poll_queue" if backend == "notify" else "notify"
+
+    class _StubConfig:
+        driver_features = {"events_backend": fallback_feature}
+
+    assert resolve_backend_name(_StubConfig(), {"backend": backend}, "sqlite") == backend
+
+
+@pytest.mark.parametrize("backend", ("notify", "notify_queue", "poll_queue", "aq", "txeventq"))
+def test_resolve_backend_name_driver_features_fallback(backend: str) -> None:
+    """driver_features['events_backend'] is used when extension_settings omits 'backend'."""
+    from sqlspec.extensions.events import resolve_backend_name
+
+    class _StubConfig:
+        driver_features = {"events_backend": backend}
+
+    assert resolve_backend_name(_StubConfig(), {}, "sqlite") == backend
+
+
+def test_resolve_backend_name_extension_setting_beats_driver_features() -> None:
+    """extension_settings['backend'] takes precedence over driver_features['events_backend']."""
+    from sqlspec.extensions.events import resolve_backend_name
+
+    class _StubConfig:
+        driver_features = {"events_backend": "notify"}
+
+    assert resolve_backend_name(_StubConfig(), {"backend": "poll_queue"}, "asyncpg") == "poll_queue"
+
+
+@pytest.mark.parametrize("driver_features", (None, "notify", ["notify"], 42, "MISSING"))
+def test_resolve_backend_name_ignores_non_dict_driver_features(driver_features: Any) -> None:
+    """Non-dict or missing driver_features attribute falls back cleanly to adapter default."""
+    from sqlspec.extensions.events import resolve_backend_name
+
+    class _ConfigWithoutFeatures:
+        pass
+
+    config: Any = _ConfigWithoutFeatures()
+    if driver_features != "MISSING":
+        config.driver_features = driver_features
+
+    assert resolve_backend_name(config, {}, "sqlite") == "poll_queue"
+    assert resolve_backend_name(config, {}, "asyncpg") == "notify"
+
+
+@pytest.mark.parametrize(
+    ("adapter_name", "expected"),
+    (
+        ("asyncpg", "notify"),
+        ("psycopg", "notify"),
+        ("psqlpy", "notify"),
+        ("sqlite", "poll_queue"),
+        ("oracledb", "poll_queue"),
+        ("cockroach_asyncpg", "poll_queue"),
+        ("", "poll_queue"),
+    ),
+)
+def test_resolve_backend_name_explicit_adapter_defaults_skip_mro(
+    monkeypatch: pytest.MonkeyPatch, adapter_name: str, expected: str
+) -> None:
+    """Explicit adapter_name selects default without running MRO adapter lookup."""
+    from sqlspec.extensions.events import resolve_backend_name
+
+    def _fail_resolve(_config: Any) -> str:
+        msg = "resolve_adapter_name must not be called when adapter_name is provided"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr("sqlspec.extensions.events._channel.resolve_adapter_name", _fail_resolve)
+
+    class _StubConfig:
+        driver_features: dict[str, Any] = {}
+
+    assert resolve_backend_name(_StubConfig(), {}, adapter_name) == expected
+
+
+@pytest.mark.parametrize("pass_explicit_none", (False, True))
+@pytest.mark.parametrize(
+    ("config_kind", "expected"),
+    (("asyncpg", "notify"), ("psycopg", "notify"), ("sqlite", "poll_queue"), ("custom", "poll_queue")),
+)
+def test_resolve_backend_name_auto_resolves_adapter_when_none_or_omitted(
+    config_kind: str, expected: str, pass_explicit_none: bool
+) -> None:
+    """Omitted or None adapter_name auto-resolves PostgreSQL vs default adapters via MRO."""
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
+    from sqlspec.adapters.psycopg import PsycopgSyncConfig
+    from sqlspec.extensions.events import resolve_backend_name
+
+    config: Any
+    if config_kind == "asyncpg":
+        config = AsyncpgConfig(driver_features={"events_backend": None})
+    elif config_kind == "psycopg":
+        config = PsycopgSyncConfig()
+    elif config_kind == "sqlite":
+        config = SqliteConfig()
+    else:
+
+        class _UnknownConfig:
+            driver_features: dict[str, Any] = {}
+
+        _UnknownConfig.__module__ = "myapp.database.config"
+        config = _UnknownConfig()
+
+    if pass_explicit_none:
+        assert resolve_backend_name(config, {}, adapter_name=None) == expected
+    else:
+        assert resolve_backend_name(config, {}) == expected
+
+
+@pytest.mark.parametrize(("adapter_name", "expected"), (("sqlite", "poll_queue"), ("", "poll_queue")))
+def test_resolve_backend_name_explicit_adapter_overrides_mro(adapter_name: str, expected: str) -> None:
+    """An explicit adapter_name overrides MRO resolution on PostgreSQL configs."""
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
+    from sqlspec.adapters.psycopg import PsycopgSyncConfig
+    from sqlspec.extensions.events import resolve_backend_name
+
+    asyncpg_config = AsyncpgConfig(driver_features={"events_backend": None})
+    psycopg_config = PsycopgSyncConfig()
+
+    assert resolve_backend_name(asyncpg_config, {}, adapter_name=adapter_name) == expected
+    assert resolve_backend_name(psycopg_config, {}, adapter_name=adapter_name) == expected
+
+
+@pytest.mark.parametrize("source", ("extension_settings", "driver_features"))
+@pytest.mark.parametrize(
+    ("retired", "replacement"),
+    (("listen_notify", "notify"), ("listen_notify_durable", "notify_queue"), ("table_queue", "poll_queue")),
+)
+def test_resolve_backend_name_rejects_retired_backends(retired: str, replacement: str, source: str) -> None:
+    """Retired backend names raise ImproperConfigurationError pointing to replacement."""
+    from sqlspec.extensions.events import resolve_backend_name
+
+    class _StubConfig:
+        driver_features: dict[str, Any] = {}
+
+    config = _StubConfig()
+    settings: dict[str, Any] = {}
+    if source == "extension_settings":
+        settings = {"backend": retired}
+    else:
+        config.driver_features = {"events_backend": retired}
+
+    with pytest.raises(ImproperConfigurationError, match=rf"use '{replacement}'"):
+        resolve_backend_name(config, settings, "sqlite")
+
+
+@pytest.mark.parametrize("source", ("extension_settings", "driver_features"))
+@pytest.mark.parametrize("bad_backend", ("unknown", "", 123, True, ["notify"], {"backend": "notify"}))
+def test_resolve_backend_name_rejects_unknown_or_non_string_backend(bad_backend: Any, source: str) -> None:
+    """Unknown strings and non-string backend values raise ImproperConfigurationError."""
+    from sqlspec.extensions.events import resolve_backend_name
+
+    class _StubConfig:
+        driver_features: dict[str, Any] = {}
+
+    config = _StubConfig()
+    settings: dict[str, Any] = {}
+    if source == "extension_settings":
+        settings = {"backend": bad_backend}
+    else:
+        config.driver_features = {"events_backend": bad_backend}
+
+    with pytest.raises(ImproperConfigurationError, match="Unknown event backend"):
+        resolve_backend_name(config, settings, "sqlite")
+
+
+@pytest.mark.parametrize(
+    ("bad_backend", "expected_pattern"),
+    (("unknown", "Unknown event backend"), ("listen_notify", "use 'notify'"), (["notify"], "Unknown event backend")),
+)
+def test_events_reconcile_wraps_resolve_backend_name_error_in_migration_error(
+    tmp_path, bad_backend: Any, expected_pattern: str
+) -> None:
+    """events.migrations.reconcile wraps invalid backend ImproperConfigurationError in MigrationError."""
+    from sqlspec.extensions.events.migrations.reconcile import reconcile
+
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "bad_backend.db")},
+        extension_config={"events": {"backend": bad_backend}},
+    )
+    with config.provide_session() as driver:
+        context = MigrationContext(config=config, driver=driver)
+        with pytest.raises(MigrationError, match=expected_pattern):
+            reconcile(context)

@@ -86,3 +86,101 @@ else:
     if result.stdout.strip() == "missing":
         pytest.skip("litestar is not installed")
     assert result.stdout.strip() == "ok"
+
+
+@pytest.mark.parametrize(
+    "helper_name",
+    [
+        "resolve_adk_config",
+        "resolve_adk_store_class",
+        "resolve_adk_memory_store_class",
+        "resolve_adk_artifact_store_class",
+        "adk_sessions_migration_enabled",
+        "adk_memory_migration_enabled",
+    ],
+)
+def test_adk_migration_helper_lazy_import_isolates_optional_dependencies(helper_name: str) -> None:
+    """ADK migration helpers must load lazily without importing google.adk or pydantic."""
+    forbidden = (
+        "google.adk",
+        "pydantic",
+        "sqlspec.extensions.adk.service",
+        "sqlspec.extensions.adk.store",
+        "sqlspec.extensions.adk.memory",
+        "sqlspec.extensions.adk.artifact",
+        "sqlspec.extensions.adk.maintenance",
+    )
+    script = f"""
+import importlib.abc
+import sys
+
+
+class _BlockedImportFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if any(fullname == prefix or fullname.startswith(prefix + ".") for prefix in ("google.adk", "pydantic")):
+            raise ModuleNotFoundError(f"blocked optional dependency: {{fullname}}", name=fullname)
+        return None
+
+
+sys.meta_path.insert(0, _BlockedImportFinder())
+from sqlspec.extensions.adk import {helper_name} as exported_helper
+import sqlspec.extensions.adk as adk_pkg
+import sqlspec.extensions.adk._config_utils as config_utils
+
+assert exported_helper is getattr(config_utils, {helper_name!r})
+assert {helper_name!r} in adk_pkg.__all__
+assert {helper_name!r} in dir(adk_pkg)
+forbidden = {forbidden!r}
+loaded = [
+    name for name in sys.modules if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+]
+assert not loaded, f"Unexpected modules loaded: {{loaded!r}}"
+print("ok")
+"""
+    result = _run_import_probe(script)
+    assert result.stdout.strip() == "ok"
+
+
+def test_events_runtime_hints_import_leaves_channel_and_migrations_unloaded() -> None:
+    """Bare EventRuntimeHints import should list resolve_backend_name without loading _channel or migrations."""
+    forbidden = ("sqlspec.extensions.events._channel", "sqlspec.migrations")
+    script = f"""
+import sys
+from sqlspec.extensions.events import EventRuntimeHints
+import sqlspec.extensions.events as events_pkg
+
+assert EventRuntimeHints is not None
+assert "resolve_backend_name" in events_pkg.__all__
+assert "resolve_backend_name" in dir(events_pkg)
+forbidden = {forbidden!r}
+loaded = [
+    name for name in sys.modules if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+]
+assert not loaded, f"Unexpected modules loaded: {{loaded!r}}"
+print("ok")
+"""
+    result = _run_import_probe(script)
+    assert result.stdout.strip() == "ok"
+
+
+def test_events_resolve_backend_name_import_isolates_cli_and_migrations() -> None:
+    """Importing resolve_backend_name should return _channel.resolve_backend_name without CLI or migration loaders."""
+    forbidden = ("sqlspec.migrations.commands", "sqlspec.extensions.events.migrations", "rich")
+    script = f"""
+import sys
+from sqlspec.extensions.events import resolve_backend_name
+import sqlspec.extensions.events as events_pkg
+import sqlspec.extensions.events._channel as channel_mod
+
+assert resolve_backend_name is channel_mod.resolve_backend_name
+assert "resolve_backend_name" in events_pkg.__all__
+assert "resolve_backend_name" in dir(events_pkg)
+forbidden = {forbidden!r}
+loaded = [
+    name for name in sys.modules if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+]
+assert not loaded, f"Unexpected modules loaded: {{loaded!r}}"
+print("ok")
+"""
+    result = _run_import_probe(script)
+    assert result.stdout.strip() == "ok"

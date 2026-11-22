@@ -17,6 +17,12 @@ Public API exports:
     - BaseSyncADKArtifactStore: Base class for sync artifact metadata stores
     - SessionOrderBy: Literal of the timestamp columns a session listing may order by
     - normalize_session_list_options: Shared validator for session list ordering and paging
+    - resolve_adk_config: Return a validated, mutable copy of a config's ADK extension settings
+    - resolve_adk_store_class: Resolve an adapter-specific ADK store class for a config
+    - resolve_adk_memory_store_class: Resolve the ADK memory store class for a config, if available
+    - resolve_adk_artifact_store_class: Resolve the ADK artifact store class for a config, if available
+    - adk_sessions_migration_enabled: Return whether ADK session migrations are enabled for a config
+    - adk_memory_migration_enabled: Return whether ADK memory migrations are enabled for a config
     - StoredSession: TypedDict for session database records
     - StoredEvent: TypedDict for event database records
     - StoredMemory: TypedDict for memory database records
@@ -28,6 +34,14 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlspec.config import ADKConfig
+    from sqlspec.extensions.adk._config_utils import (
+        adk_memory_migration_enabled,
+        adk_sessions_migration_enabled,
+        resolve_adk_artifact_store_class,
+        resolve_adk_config,
+        resolve_adk_memory_store_class,
+        resolve_adk_store_class,
+    )
     from sqlspec.extensions.adk._types import SessionOrderBy, StoredEvent, StoredSession
     from sqlspec.extensions.adk.artifact import (
         BaseAsyncADKArtifactStore,
@@ -76,6 +90,8 @@ __all__ = (
     "StoredEvent",
     "StoredMemory",
     "StoredSession",
+    "adk_memory_migration_enabled",
+    "adk_sessions_migration_enabled",
     "normalize_session_list_options",
     "prune_artifacts",
     "prune_artifacts_sync",
@@ -87,6 +103,10 @@ __all__ = (
     "prune_sessions_sync",
     "prune_user_state",
     "prune_user_state_sync",
+    "resolve_adk_artifact_store_class",
+    "resolve_adk_config",
+    "resolve_adk_memory_store_class",
+    "resolve_adk_store_class",
 )
 
 _EXPORTS: dict[str, tuple[str, str]] = {
@@ -107,6 +127,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "StoredEvent": ("sqlspec.extensions.adk._types", "StoredEvent"),
     "StoredMemory": ("sqlspec.extensions.adk.memory", "StoredMemory"),
     "StoredSession": ("sqlspec.extensions.adk._types", "StoredSession"),
+    "adk_memory_migration_enabled": ("sqlspec.extensions.adk._config_utils", "adk_memory_migration_enabled"),
+    "adk_sessions_migration_enabled": ("sqlspec.extensions.adk._config_utils", "adk_sessions_migration_enabled"),
     "normalize_session_list_options": ("sqlspec.extensions.adk.store", "normalize_session_list_options"),
     "prune_artifacts": ("sqlspec.extensions.adk.maintenance", "prune_artifacts"),
     "prune_artifacts_sync": ("sqlspec.extensions.adk.maintenance", "prune_artifacts_sync"),
@@ -118,6 +140,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "prune_sessions_sync": ("sqlspec.extensions.adk.maintenance", "prune_sessions_sync"),
     "prune_user_state": ("sqlspec.extensions.adk.maintenance", "prune_user_state"),
     "prune_user_state_sync": ("sqlspec.extensions.adk.maintenance", "prune_user_state_sync"),
+    "resolve_adk_artifact_store_class": ("sqlspec.extensions.adk._config_utils", "resolve_adk_artifact_store_class"),
+    "resolve_adk_config": ("sqlspec.extensions.adk._config_utils", "resolve_adk_config"),
+    "resolve_adk_memory_store_class": ("sqlspec.extensions.adk._config_utils", "resolve_adk_memory_store_class"),
+    "resolve_adk_store_class": ("sqlspec.extensions.adk._config_utils", "resolve_adk_store_class"),
 }
 
 

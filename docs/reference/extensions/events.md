@@ -19,6 +19,7 @@ from sqlspec.extensions.events import (
     fits_notify_payload,
     get_runtime_hints,
     measure_notify_payload,
+    resolve_backend_name,
 )
 ```
 
@@ -106,6 +107,12 @@ Database-native pub/sub (`LISTEN/NOTIFY`, Oracle Advanced Queuing) and durable t
       members: false
 
 ::: sqlspec.extensions.events._hints.get_runtime_hints
+    options:
+      heading_level: 4
+
+Use `resolve_backend_name` in standalone schema migrations and custom adapter tooling to resolve and validate the active event channel backend from `extension_config["events"]`, `driver_features["events_backend"]`, or the adapter default.
+
+::: sqlspec.extensions.events._channel.resolve_backend_name
     options:
       heading_level: 4
 

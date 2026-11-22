@@ -1,6 +1,7 @@
 """ADK store configuration helpers."""
 
 import importlib
+from collections.abc import Mapping
 from typing import Any, NoReturn, NotRequired, Protocol, cast
 
 from typing_extensions import TypedDict
@@ -13,16 +14,17 @@ __all__ = (
     "_ADKArtifactStoreConfig",
     "_ADKMemoryStoreConfig",
     "_ADKSessionStoreConfig",
-    "_adk_adapter_store_class",
     "_adk_artifact_store_config",
-    "_adk_config_from_extension",
     "_adk_feature_enabled",
-    "_adk_memory_migration_enabled",
-    "_adk_memory_migration_store_class",
     "_adk_memory_store_config",
     "_adk_session_store_config",
-    "_adk_sessions_migration_enabled",
     "_ensure_adk_store_registration",
+    "adk_memory_migration_enabled",
+    "adk_sessions_migration_enabled",
+    "resolve_adk_artifact_store_class",
+    "resolve_adk_config",
+    "resolve_adk_memory_store_class",
+    "resolve_adk_store_class",
 )
 
 
@@ -67,18 +69,210 @@ class _ADKConfigSource(Protocol):
         ...
 
 
-def _adk_config_from_extension(config: _ADKConfigSource) -> dict[str, Any]:
-    """Return a mutable copy of the ADK extension config."""
+def resolve_adk_config(config: Any) -> dict[str, Any]:
+    """Return a validated, mutable copy of the ADK extension configuration.
 
-    adk_config = dict(cast("dict[str, Any]", config.extension_config.get("adk", {})))
+    Reads ``config.extension_config["adk"]`` when present, treats missing or
+    ``None`` values as an empty mapping, rejects non-mapping values, and
+    validates ``migration_mode`` and accepted option keys against ``ADKConfig``,
+    the adapter's ``*ADKConfig`` TypedDicts, and any explicit store overrides.
+
+    Args:
+        config: Database configuration instance, config class, or object
+            exposing an optional ``extension_config`` mapping.
+
+    Returns:
+        A newly copied ``dict[str, Any]`` containing the ADK settings so
+        caller mutations never modify ``config.extension_config["adk"]``.
+
+    Raises:
+        ImproperConfigurationError: If the ``adk`` extension entry is not a
+            mapping or contains unsupported configuration keys.
+        MigrationError: If ``migration_mode`` is set to an invalid value.
+    """
+    extension_config = getattr(config, "extension_config", None)
+    raw_adk: Any = extension_config.get("adk", {}) if isinstance(extension_config, Mapping) else {}
+    if raw_adk is None:
+        adk_config: dict[str, Any] = {}
+    elif isinstance(raw_adk, Mapping):
+        adk_config = dict(raw_adk)
+    else:
+        msg = f"Invalid ADK extension config: expected a mapping, got {type(raw_adk).__name__}"
+        raise ImproperConfigurationError(msg)
     _validate_adk_extension_config(config, adk_config)
     return adk_config
 
 
+def resolve_adk_store_class(config: Any, store_suffix: str) -> type[Any]:
+    """Resolve the adapter-specific ADK store class for a database config.
+
+    Checks for an explicit ``adk_memory_store_class`` (when ``store_suffix`` is
+    ``"ADKMemoryStore"``) or ``adk_store_class`` override first, then imports
+    the adapter's store class using its config class name and exported module
+    fallback.
+
+    Args:
+        config: Database configuration instance or class.
+        store_suffix: Store class suffix to resolve (for example ``"ADKStore"``
+            or ``"ADKMemoryStore"``).
+
+    Returns:
+        The resolved ADK store class.
+
+    Raises:
+        SQLSpecError: If ``config`` cannot be mapped to an adapter name or the
+            corresponding store class cannot be imported.
+    """
+    store_attr = "adk_memory_store_class" if store_suffix == "ADKMemoryStore" else "adk_store_class"
+    explicit_store = _adk_explicit_store_class(config, store_attr)
+    if explicit_store is not None:
+        return explicit_store
+
+    store_path = _adk_store_path(config, store_suffix)
+    try:
+        return cast("type[Any]", import_string(store_path))
+    except ImportError as e:
+        store_class = _adk_exported_store_class(config, store_suffix)
+        if store_class is not None:
+            return store_class
+        _raise_store_import_failed(store_path, e)
+
+
+def resolve_adk_memory_store_class(config: Any) -> type[Any] | None:
+    """Resolve the ADK memory store class when the adapter provides one.
+
+    Returns ``None`` instead of raising when the adapter is known but does not
+    export an ``ADKMemoryStore`` implementation.
+
+    Args:
+        config: Database configuration instance or class.
+
+    Returns:
+        The resolved ADK memory store class, or ``None`` if the adapter does
+        not provide a memory store.
+
+    Raises:
+        SQLSpecError: If ``config`` has no explicit ``adk_memory_store_class``
+            and cannot be mapped to an adapter name.
+    """
+    explicit_store = _adk_explicit_store_class(config, "adk_memory_store_class")
+    if explicit_store is not None:
+        return explicit_store
+
+    store_path = _adk_store_path(config, "ADKMemoryStore")
+    try:
+        return cast("type[Any]", import_string(store_path))
+    except ImportError:
+        return _adk_exported_store_class(config, "ADKMemoryStore")
+
+
+def resolve_adk_artifact_store_class(config: Any) -> type[Any] | None:
+    """Resolve the ADK artifact store class when the adapter provides one.
+
+    Checks for an explicit ``adk_artifact_store_class`` attribute before
+    importing ``sqlspec.adapters.<adapter>.adk.artifact_store``. Missing
+    adapter or ``artifact_store`` modules return ``None``; missing transitive
+    third-party dependencies inside an existing ``artifact_store`` module are
+    re-raised.
+
+    Args:
+        config: Database configuration instance or class.
+
+    Returns:
+        The resolved ADK artifact store class, or ``None`` when no artifact
+        store is available for ``config``.
+
+    Raises:
+        ModuleNotFoundError: If importing an adapter's ``artifact_store``
+            module fails because of a missing third-party or internal
+            dependency.
+    """
+    explicit_store = _adk_explicit_store_class(config, "adk_artifact_store_class")
+    if explicit_store is not None:
+        return explicit_store
+
+    adapter_name = resolve_adapter_name(config)
+    if adapter_name is None:
+        return None
+
+    adapter_prefix = f"sqlspec.adapters.{adapter_name}"
+    module_name = f"{adapter_prefix}.adk.artifact_store"
+    try:
+        artifact_module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name in {"sqlspec.adapters", adapter_prefix, f"{adapter_prefix}.adk", module_name}:
+            return None
+        raise
+
+    store_suffix = "ADKArtifactStore"
+    exported = tuple(
+        name
+        for name in getattr(artifact_module, "__all__", ())
+        if isinstance(name, str)
+        and name.endswith(store_suffix)
+        and isinstance(getattr(artifact_module, name, None), type)
+    )
+    target_cls = config if isinstance(config, type) else type(config)
+    for cls in target_cls.__mro__:
+        cls_name = cls.__name__
+        if cls_name.endswith("Config"):
+            expected_prefix = cls_name.removesuffix("Config").lower()
+            for exported_name in exported:
+                if exported_name[: -len(store_suffix)].lower() == expected_prefix:
+                    return cast("type[Any]", getattr(artifact_module, exported_name))
+    if len(exported) == 1:
+        return cast("type[Any]", getattr(artifact_module, exported[0]))
+    if len(exported) > 1:
+        mode_suffix = f"Async{store_suffix}" if bool(getattr(config, "is_async", False)) else f"Sync{store_suffix}"
+        for exported_name in exported:
+            if exported_name.endswith(mode_suffix):
+                return cast("type[Any]", getattr(artifact_module, exported_name))
+    return None
+
+
+def adk_sessions_migration_enabled(config: Any) -> bool:
+    """Return whether ADK session DDL should be included for this config.
+
+    Reads ``enable_sessions`` from the validated ADK extension configuration
+    and defaults to ``True`` when unset or ``None``.
+
+    Args:
+        config: Database configuration instance or object exposing optional
+            ``extension_config``.
+
+    Returns:
+        ``True`` if ADK session migrations are enabled, ``False`` otherwise.
+
+    Raises:
+        ImproperConfigurationError: If the ``adk`` extension entry is invalid.
+        MigrationError: If ``migration_mode`` is invalid.
+    """
+    return _adk_feature_enabled(config, "enable_sessions")
+
+
+def adk_memory_migration_enabled(config: Any) -> bool:
+    """Return whether ADK memory DDL should be included for this config.
+
+    Reads ``enable_memory`` from the validated ADK extension configuration
+    and defaults to ``True`` when unset or ``None``.
+
+    Args:
+        config: Database configuration instance or object exposing optional
+            ``extension_config``.
+
+    Returns:
+        ``True`` if ADK memory migrations are enabled, ``False`` otherwise.
+
+    Raises:
+        ImproperConfigurationError: If the ``adk`` extension entry is invalid.
+        MigrationError: If ``migration_mode`` is invalid.
+    """
+    return _adk_feature_enabled(config, "enable_memory")
+
+
 def _adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreConfig:
     """Return normalized session store table settings."""
-
-    adk_config = _adk_config_from_extension(config)
+    adk_config = resolve_adk_config(config)
     result: _ADKSessionStoreConfig = {
         "session_table": str(adk_config.get("session_table") or "adk_session"),
         "events_table": str(adk_config.get("events_table") or "adk_event"),
@@ -92,8 +286,7 @@ def _adk_session_store_config(config: _ADKConfigSource) -> _ADKSessionStoreConfi
 
 def _adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreConfig:
     """Return normalized memory store settings."""
-
-    adk_config = _adk_config_from_extension(config)
+    adk_config = resolve_adk_config(config)
     enable_memory = adk_config.get("enable_memory")
     max_results = adk_config.get("memory_max_results")
     result: _ADKMemoryStoreConfig = {
@@ -113,8 +306,7 @@ def _adk_memory_store_config(config: _ADKConfigSource) -> _ADKMemoryStoreConfig:
 
 def _adk_artifact_store_config(config: _ADKConfigSource) -> _ADKArtifactStoreConfig:
     """Return normalized artifact store settings."""
-
-    adk_config = _adk_config_from_extension(config)
+    adk_config = resolve_adk_config(config)
     return {"artifact_table": str(adk_config.get("artifact_table") or "adk_artifact")}
 
 
@@ -127,8 +319,7 @@ def _apply_owner_id(result: "_ADKSessionStoreConfig | _ADKMemoryStoreConfig", ad
 
 def _adk_store_path(config: Any, store_suffix: str) -> str:
     """Return the adapter-specific ADK store import path."""
-
-    config_class = type(config)
+    config_class = config if isinstance(config, type) else type(config)
     config_module = config_class.__module__
     config_name = config_class.__name__
     adapter_name = resolve_adapter_name(config)
@@ -140,41 +331,8 @@ def _adk_store_path(config: Any, store_suffix: str) -> str:
     return f"sqlspec.adapters.{adapter_name}.adk.{store_class_name}"
 
 
-def _adk_adapter_store_class(config: Any, store_suffix: str) -> Any:
-    """Import an adapter-specific ADK store class for a config."""
-
-    store_attr = "adk_memory_store_class" if store_suffix == "ADKMemoryStore" else "adk_store_class"
-    explicit_store = _adk_explicit_store_class(config, store_attr)
-    if explicit_store is not None:
-        return explicit_store
-
-    store_path = _adk_store_path(config, store_suffix)
-    try:
-        return import_string(store_path)
-    except ImportError as e:
-        store_class = _adk_exported_store_class(config, store_suffix)
-        if store_class is not None:
-            return store_class
-        _raise_store_import_failed(store_path, e)
-
-
-def _adk_memory_migration_store_class(config: Any) -> Any | None:
-    """Import the ADK memory store class when the adapter provides one."""
-
-    explicit_store = _adk_explicit_store_class(config, "adk_memory_store_class")
-    if explicit_store is not None:
-        return explicit_store
-
-    store_path = _adk_store_path(config, "ADKMemoryStore")
-    try:
-        return import_string(store_path)
-    except ImportError:
-        return _adk_exported_store_class(config, "ADKMemoryStore")
-
-
-def _adk_exported_store_class(config: Any, store_suffix: str) -> Any | None:
+def _adk_exported_store_class(config: Any, store_suffix: str) -> type[Any] | None:
     """Return an ADK store export that matches a config name or sync/async mode."""
-
     store_attr = "adk_memory_store_class" if store_suffix == "ADKMemoryStore" else "adk_store_class"
     try:
         resolved = resolve_extension_store_class(
@@ -195,7 +353,8 @@ def _adk_exported_store_class(config: Any, store_suffix: str) -> Any | None:
     except ImportError:
         return None
 
-    config_name = type(config).__name__
+    config_class = config if isinstance(config, type) else type(config)
+    config_name = config_class.__name__
     expected_prefix = config_name.removesuffix("Config").lower()
     store_names = tuple(
         name
@@ -205,41 +364,27 @@ def _adk_exported_store_class(config: Any, store_suffix: str) -> Any | None:
 
     for store_name in store_names:
         if store_name[: -len(store_suffix)].lower() == expected_prefix:
-            return getattr(module, store_name)
+            return cast("type[Any]", getattr(module, store_name))
 
-    return getattr(module, store_names[0]) if len(store_names) == 1 else None
+    return cast("type[Any]", getattr(module, store_names[0])) if len(store_names) == 1 else None
 
 
 def _adk_feature_enabled(config: Any, feature_key: str) -> bool:
     """Return whether an ADK feature flag enables its store and DDL."""
-
-    adk_config = _adk_config_from_extension(cast("_ADKConfigSource", config))
+    adk_config = resolve_adk_config(config)
     enabled = adk_config.get(feature_key)
     return bool(enabled) if enabled is not None else True
 
 
-def _adk_sessions_migration_enabled(config: Any) -> bool:
-    """Return whether ADK session DDL should be included for this config."""
-
-    return _adk_feature_enabled(config, "enable_sessions")
-
-
-def _adk_memory_migration_enabled(config: Any) -> bool:
-    """Return whether ADK memory DDL should be included for this config."""
-
-    return _adk_feature_enabled(config, "enable_memory")
-
-
 def _ensure_adk_store_registration(config: Any) -> None:
     """Validate ADK store class resolution before extension migrations run."""
+    if adk_sessions_migration_enabled(config):
+        resolve_adk_store_class(config, "ADKStore")
+    if adk_memory_migration_enabled(config):
+        resolve_adk_store_class(config, "ADKMemoryStore")
 
-    if _adk_sessions_migration_enabled(config):
-        _adk_adapter_store_class(config, "ADKStore")
-    if _adk_memory_migration_enabled(config):
-        _adk_adapter_store_class(config, "ADKMemoryStore")
 
-
-def _validate_adk_extension_config(config: _ADKConfigSource, settings: dict[str, Any]) -> None:
+def _validate_adk_extension_config(config: Any, settings: dict[str, Any]) -> None:
     """Reject ADK options that the adapter and explicit stores do not accept."""
     from sqlspec.config import ADKConfig
     from sqlspec.migrations.utils import resolve_extension_migration_mode
@@ -268,7 +413,7 @@ def _validate_adk_extension_config(config: _ADKConfigSource, settings: dict[str,
         raise ImproperConfigurationError(msg)
 
 
-def _adk_adapter_config_keys(adapter_name: "str | None") -> "set[str] | None":
+def _adk_adapter_config_keys(adapter_name: str | None) -> set[str] | None:
     """Return keys from a built-in adapter's ADK TypedDicts, or None when it has no ADK store module."""
     if adapter_name is None:
         return None
@@ -288,11 +433,14 @@ def _adk_adapter_config_keys(adapter_name: "str | None") -> "set[str] | None":
     return keys
 
 
-def _adk_explicit_store_class(config: Any, store_attr: str) -> "type[Any] | None":
+def _adk_explicit_store_class(config: Any, store_attr: str) -> type[Any] | None:
     """Return the store class set on a config instance or its class."""
-    explicit_store = getattr(config, store_attr, None)
+    if config is None:
+        return None
+    explicit_store = None if isinstance(config, type) else getattr(config, store_attr, None)
     if not isinstance(explicit_store, type):
-        explicit_store = getattr(type(config), store_attr, None)
+        target_cls = config if isinstance(config, type) else type(config)
+        explicit_store = getattr(target_cls, store_attr, None)
     return explicit_store if isinstance(explicit_store, type) else None
 
 

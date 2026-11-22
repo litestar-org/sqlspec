@@ -22,8 +22,13 @@ from sqlspec.adapters.bigquery.core import build_dml_rowcount, create_mapped_exc
 from sqlspec.adapters.bigquery.events.store import _bigquery_additive_target
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import SerializationConflictError
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
-from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
+from sqlspec.extensions.adk import (
+    BaseSyncADKStore,
+    StoredEvent,
+    StoredSession,
+    normalize_session_list_options,
+    resolve_adk_config,
+)
 from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.serializers import from_json, to_json
@@ -92,7 +97,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             config: BigQuery config with ``extension_config["adk"]`` settings.
         """
         super().__init__(config, read_config=read_config)
-        adk_config = _adk_config_from_extension(config)
+        adk_config = resolve_adk_config(config)
         retention_config = cast("dict[str, Any]", adk_config.get("retention") or {})
 
         self._lookup_window_days: int = int(adk_config.get("session_lookup_window_days") or _DEFAULT_LOOKUP_WINDOW_DAYS)

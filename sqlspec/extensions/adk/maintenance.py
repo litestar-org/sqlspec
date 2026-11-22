@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from typing_extensions import TypedDict
 
-from sqlspec.extensions.adk._config_utils import _adk_adapter_store_class
+from sqlspec.extensions.adk import resolve_adk_store_class
 from sqlspec.utils.sync_tools import await_
 
 __all__ = (
@@ -193,7 +193,7 @@ def _resolve_session_store(target: Any) -> Any:
     if hasattr(target, "delete_idle_sessions") or hasattr(target, "delete_expired_events"):
         return target
     if hasattr(target, "extension_config") or hasattr(target, "provide_session"):
-        store_cls = _adk_adapter_store_class(target, "ADKStore")
+        store_cls = resolve_adk_store_class(target, "ADKStore")
         return store_cls(target)
     msg = f"Cannot resolve ADK session store from target of type {type(target).__name__}"
     raise TypeError(msg)
@@ -204,7 +204,7 @@ def _resolve_memory_store(target: Any) -> Any:
     if hasattr(target, "delete_entries_older_than"):
         return target
     if hasattr(target, "extension_config") or hasattr(target, "provide_session"):
-        store_cls = _adk_adapter_store_class(target, "ADKMemoryStore")
+        store_cls = resolve_adk_store_class(target, "ADKMemoryStore")
         return store_cls(target)
     msg = f"Cannot resolve ADK memory store from target of type {type(target).__name__}"
     raise TypeError(msg)
