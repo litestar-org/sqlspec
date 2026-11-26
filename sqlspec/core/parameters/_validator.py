@@ -257,19 +257,28 @@ _TSQL_STATEMENT_BOUNDARY_KEYWORDS: Final[frozenset[str]] = frozenset({
     "WITH",
 })
 _TSQL_DECLARE_SCAN_REGEX: Final[re.Pattern[str]] = re.compile(
-    r"""
+    rf"""
+    (?P<comment>--[^\r\n]* | /\*(?:[^*]|\*(?!/))*(?:\*/|\Z)) |
     "(?:""|[^"])*(?:"|\Z) |
+    (?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*(?:'|\\?\Z) |
+    (?<![A-Za-z0-9_])N?Q'(?:
+        \[[\s\S]*?(?:\]'|\Z) |
+        \{{[\s\S]*?(?:\}}'|\Z) |
+        \([\s\S]*?(?:\)'|\Z) |
+        <[\s\S]*?(?:>'|\Z) |
+        (?P<q_delimiter>[^\s\[{{(<'])[\s\S]*?(?:(?P=q_delimiter)'|\Z)
+    ) |
     '(?:''|[^'])*(?:'|\Z) |
     \[(?:\]\]|[^\]])*(?:\]|\Z) |
-    --[^\r\n]* |
-    /\*(?:[^*]|\*(?!/))*(?:\*/|\Z) |
-    @@[A-Za-z_]\w* |
+    {_DOLLAR_QUOTED_PATTERN} |
+    @@\w+ |
     \.[A-Za-z_][A-Za-z0-9_$]* |
-    (?P<at_var>(?<![A-Za-z0-9_])@(?!sqlspec_)\w+) |
+    (?P<at_var>(?<![A-Za-z0-9_@])@(?!sqlspec_)\w+) |
     (?P<word>[A-Za-z_][A-Za-z0-9_$]*) |
-    (?P<punct>[(),;])
+    (?P<punct>[(),;]) |
+    [^\s]
     """,
-    re.VERBOSE,
+    _REGEX_FLAGS,
 )
 
 
@@ -478,7 +487,7 @@ class ParameterValidator:
         skipped_at_positions: frozenset[int] | set[int] = _EMPTY_INT_FROZENSET
         if normalized_dialect == _SCANNER_MYSQL:
             skipped_at_positions = _mysql_variable_assignment_positions(sql)
-        elif normalized_dialect is None or normalized_dialect == _SCANNER_TSQL:
+        elif normalized_dialect == _SCANNER_TSQL:
             skipped_at_positions = _tsql_declared_variable_positions(sql)
         parameters: list[ParameterInfo] = []
         for match in _iter_matches(regex, sql, nested_comments=normalized_dialect == _SCANNER_NESTED):
@@ -740,11 +749,10 @@ def _tsql_declared_variable_positions(sql: str) -> "frozenset[int] | set[int]":
     case_depth = 0
     for match in _TSQL_DECLARE_SCAN_REGEX.finditer(sql):
         group_name = match.lastgroup
-        if group_name is None:
+        if group_name == "comment":
             continue
-        lexeme = match.group(0)
         if group_name == "at_var":
-            var_name = lexeme[1:].lower()
+            var_name = match.group(0)[1:].lower()
             if in_declare and expecting_decl_var:
                 declared_vars.add(var_name)
                 skip_positions.add(match.start())
@@ -752,49 +760,42 @@ def _tsql_declared_variable_positions(sql: str) -> "frozenset[int] | set[int]":
             elif var_name in declared_vars:
                 skip_positions.add(match.start())
             continue
-        if group_name == "punct":
-            if lexeme == ";":
-                in_declare = False
-                expecting_decl_var = False
-                paren_depth = 0
-                case_depth = 0
-            elif lexeme == "(":
-                paren_depth += 1
-                expecting_decl_var = False
-            elif lexeme == ")":
-                if paren_depth > 0:
-                    paren_depth -= 1
-                expecting_decl_var = False
-            elif lexeme == ",":
-                if expecting_decl_var:
-                    in_declare = False
-                    expecting_decl_var = False
-                elif in_declare and paren_depth == 0:
-                    expecting_decl_var = True
-            continue
-        upper = lexeme.upper()
-        if expecting_decl_var:
+        if group_name == "word":
+            upper = match.group(0).upper()
             if upper == "DECLARE" and paren_depth == 0:
                 in_declare = True
                 expecting_decl_var = True
                 case_depth = 0
-            else:
+            elif expecting_decl_var:
                 in_declare = False
                 expecting_decl_var = False
-        elif upper == "DECLARE" and paren_depth == 0:
-            in_declare = True
-            expecting_decl_var = True
-            case_depth = 0
-        elif in_declare and paren_depth == 0:
-            if upper == "CASE":
-                case_depth += 1
-            elif upper == "END" and case_depth > 0:
-                case_depth -= 1
-            elif upper == "ELSE" and case_depth > 0:
-                continue
-            elif upper in _TSQL_STATEMENT_BOUNDARY_KEYWORDS:
-                in_declare = False
                 case_depth = 0
+            elif in_declare and paren_depth == 0:
+                if upper == "CASE":
+                    case_depth += 1
+                elif upper == "END" and case_depth > 0:
+                    case_depth -= 1
+                elif upper in _TSQL_STATEMENT_BOUNDARY_KEYWORDS and not (upper == "ELSE" and case_depth > 0):
+                    in_declare = False
+                    case_depth = 0
+            continue
+        if expecting_decl_var:
+            in_declare = False
+            expecting_decl_var = False
+            case_depth = 0
+        if group_name == "punct":
+            lexeme = match.group(0)
+            if lexeme == ";":
+                in_declare = False
+                paren_depth = 0
+                case_depth = 0
+            elif lexeme == "(":
+                paren_depth += 1
+            elif lexeme == ")":
+                if paren_depth > 0:
+                    paren_depth -= 1
+            elif lexeme == "," and in_declare and paren_depth == 0 and case_depth == 0:
+                expecting_decl_var = True
     return skip_positions
 
 
@@ -809,8 +810,10 @@ def _resolve_scanner(dialect: str | None) -> str | None:
     """Select the lexical grammar for a dialect.
 
     Dialects whose string literals treat backslashes literally use the ANSI
-    grammar. MySQL-family dialects add ``#`` comments and backtick identifiers.
-    Unknown dialects keep the permissive default grammar.
+    grammar; SQLite and T-SQL-family dialects add bracket identifiers (with
+    T-SQL also preserving declared local variables). MySQL-family dialects add
+    ``#`` comments and backtick identifiers. Unknown dialects keep the
+    permissive default grammar.
     """
     normalized = _normalize_dialect(dialect)
     if normalized is None:

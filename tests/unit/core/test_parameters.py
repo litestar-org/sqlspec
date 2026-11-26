@@ -3383,8 +3383,10 @@ def test_non_snowflake_dialects_share_parameter_cache_entries() -> None:
     validator.extract_parameters("SELECT ?", dialect="cockroach")
     validator.extract_parameters("SELECT ?", dialect="sqlite")
     validator.extract_parameters("SELECT ?", dialect="tsql")
+    validator.extract_parameters("SELECT ?", dialect="mssql")
+    validator.extract_parameters("SELECT ?", dialect="sybase")
 
-    assert validator.cache_stats()["size"] == 4
+    assert validator.cache_stats()["size"] == 5
 
 
 @pytest.mark.parametrize(
