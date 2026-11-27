@@ -1385,11 +1385,11 @@ def test_expression_override_skips_reparse_on_placeholder_conversion(
 @pytest.mark.parametrize(
     ("sql", "dialect"),
     [
-        ("SELECT (@ -5) AS d0, $1::text AS c0", "postgres"),
-        ("-- leading comment\nSELECT (@ -5) AS d0", "postgres"),
-        ("/* outer /* inner */ outer */\n((SELECT (@ -5) AS d0))", "postgres"),
-        ("WITH cte AS (SELECT (@ -5) AS d0) SELECT * FROM cte", "postgres"),
-        ("VALUES (1, (@ -5))", "postgres"),
+        ("SELECT (SELECT FROM) AS d0, $1::text AS c0", "postgres"),
+        ("-- leading comment\nSELECT (SELECT FROM) AS d0", "postgres"),
+        ("/* outer /* inner */ outer */\n((SELECT (SELECT FROM) AS d0))", "postgres"),
+        ("WITH cte AS (SELECT (SELECT FROM) AS d0) SELECT * FROM cte", "postgres"),
+        ("VALUES (1, (SELECT FROM))", "postgres"),
     ],
 )
 def test_unparsable_row_returning_statements_stay_non_read_only(sql: str, dialect: str) -> None:

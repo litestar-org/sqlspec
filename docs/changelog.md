@@ -7,6 +7,16 @@ important operational fixes.
 
 ## Recent Updates
 
+### v0.74.2 - Preserved declared T-SQL local variables and dependency updates
+
+**Fixed:**
+
+* Preserve `@var` local variables declared via T-SQL `DECLARE` statements (including multi-variable declarations, `TABLE` variables, `CASE` initializers, and non-semicolon statement boundaries) during parameter extraction and compilation across T-SQL-family dialects (`tsql`, `mssql`, `sqlserver`, `sybase`, `ase`, `sqlanywhere`) without rewriting them as bind placeholders, while keeping external bind parameters in RHS initializers and queries intact. Split T-SQL dialects into a dedicated `ParameterValidator` scanner cache partition so SQLite and T-SQL lexical rules stay isolated. ([#939](https://github.com/litestar-org/sqlspec/issues/939), [#940](https://github.com/litestar-org/sqlspec/pull/940))
+
+**Changed:**
+
+* Upgrade locked dependencies (`sqlglot` 30.35.0, `mssql-python` 1.18.0, `arrow-odbc` 10.7.1, `fastapi` 0.165.0, `ruff` 0.17.6, and companion packages) and Prek hook revisions.
+
 ### v0.74.1 - Async dialect data-dictionary bases and pre-v0.67.0 MD5 migration checksum compatibility
 
 **Added:**
