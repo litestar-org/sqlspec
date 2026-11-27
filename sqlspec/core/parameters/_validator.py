@@ -170,6 +170,7 @@ _SCANNER_BRACKET: Final = "bracket"
 _SCANNER_NESTED: Final = "ansi_nested"
 _SCANNER_MYSQL: Final = "mysql"
 _SCANNER_SNOWFLAKE: Final = "snowflake"
+_SCANNER_TSQL: Final = "tsql"
 _ANSI_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
     "postgres",
     "postgresql",
@@ -185,15 +186,8 @@ _ANSI_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
     "teradata",
     "vantage",
 })
-_BRACKET_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
-    "sqlite",
-    "tsql",
-    "mssql",
-    "sqlserver",
-    "sybase",
-    "ase",
-    "sqlanywhere",
-})
+_BRACKET_STRING_DIALECTS: Final[frozenset[str]] = frozenset({"sqlite"})
+_TSQL_STRING_DIALECTS: Final[frozenset[str]] = frozenset({"tsql", "mssql", "sqlserver", "sybase", "ase", "sqlanywhere"})
 _NESTED_COMMENT_DIALECTS: Final[frozenset[str]] = frozenset({
     "postgres",
     "postgresql",
@@ -225,6 +219,66 @@ _MYSQL_ASSIGN_SCAN_REGEX: Final[re.Pattern[str]] = re.compile(
     (?P<punct>[(),;=])
     """,
     re.VERBOSE,
+)
+_TSQL_STATEMENT_BOUNDARY_KEYWORDS: Final[frozenset[str]] = frozenset({
+    "ALTER",
+    "BEGIN",
+    "BREAK",
+    "CLOSE",
+    "COMMIT",
+    "CONTINUE",
+    "CREATE",
+    "DEALLOCATE",
+    "DELETE",
+    "DROP",
+    "ELSE",
+    "END",
+    "EXEC",
+    "EXECUTE",
+    "FETCH",
+    "GO",
+    "IF",
+    "INSERT",
+    "MERGE",
+    "OPEN",
+    "PRINT",
+    "RAISERROR",
+    "RETURN",
+    "ROLLBACK",
+    "SAVE",
+    "SELECT",
+    "SET",
+    "THROW",
+    "TRUNCATE",
+    "UPDATE",
+    "USE",
+    "WAITFOR",
+    "WHILE",
+    "WITH",
+})
+_TSQL_DECLARE_SCAN_REGEX: Final[re.Pattern[str]] = re.compile(
+    rf"""
+    (?P<comment>--[^\r\n]* | /\*(?:[^*]|\*(?!/))*(?:\*/|\Z)) |
+    "(?:""|[^"])*(?:"|\Z) |
+    (?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*(?:'|\\?\Z) |
+    (?<![A-Za-z0-9_])N?Q'(?:
+        \[[\s\S]*?(?:\]'|\Z) |
+        \{{[\s\S]*?(?:\}}'|\Z) |
+        \([\s\S]*?(?:\)'|\Z) |
+        <[\s\S]*?(?:>'|\Z) |
+        (?P<q_delimiter>[^\s\[{{(<'])[\s\S]*?(?:(?P=q_delimiter)'|\Z)
+    ) |
+    '(?:''|[^'])*(?:'|\Z) |
+    \[(?:\]\]|[^\]])*(?:\]|\Z) |
+    {_DOLLAR_QUOTED_PATTERN} |
+    @@\w+ |
+    \.[A-Za-z_][A-Za-z0-9_$]* |
+    (?P<at_var>(?<![A-Za-z0-9_@])@(?!sqlspec_)\w+) |
+    (?P<word>[A-Za-z_][A-Za-z0-9_$]*) |
+    (?P<punct>[(),;]) |
+    [^\s]
+    """,
+    _REGEX_FLAGS,
 )
 
 
@@ -430,9 +484,11 @@ class ParameterValidator:
         if not _PARAM_CHARS.intersection(sql):
             return []
         regex = _scanner_regex(normalized_dialect)
-        mysql_variable_assignment_positions = (
-            _mysql_variable_assignment_positions(sql) if normalized_dialect == _SCANNER_MYSQL else ()
-        )
+        skipped_at_positions: frozenset[int] | set[int] = _EMPTY_INT_FROZENSET
+        if normalized_dialect == _SCANNER_MYSQL:
+            skipped_at_positions = _mysql_variable_assignment_positions(sql)
+        elif normalized_dialect == _SCANNER_TSQL:
+            skipped_at_positions = _tsql_declared_variable_positions(sql)
         parameters: list[ParameterInfo] = []
         for match in _iter_matches(regex, sql, nested_comments=normalized_dialect == _SCANNER_NESTED):
             lastgroup = match.lastgroup
@@ -450,7 +506,7 @@ class ParameterValidator:
                 continue
             if style is ParameterStyle.POSITIONAL_COLON and _is_positional_array_slice(sql, match.start()):
                 continue
-            if style is ParameterStyle.NAMED_AT and match.start() in mysql_variable_assignment_positions:
+            if style is ParameterStyle.NAMED_AT and match.start() in skipped_at_positions:
                 continue
             name = match.group(name_group) if name_group is not None else None
             parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
@@ -466,7 +522,7 @@ def _scanner_regex(scanner: str | None) -> "re.Pattern[str]":
         return SNOWFLAKE_PARAMETER_REGEX
     if scanner in {_SCANNER_ANSI, _SCANNER_NESTED}:
         return ANSI_PARAMETER_REGEX
-    if scanner == _SCANNER_BRACKET:
+    if scanner in {_SCANNER_BRACKET, _SCANNER_TSQL}:
         return BRACKET_PARAMETER_REGEX
     if scanner == _SCANNER_MYSQL:
         return MYSQL_PARAMETER_REGEX
@@ -669,6 +725,80 @@ def _mysql_variable_assignment_positions(sql: str) -> "frozenset[int] | set[int]
     return lhs_positions
 
 
+def _tsql_declared_variable_positions(sql: str) -> "frozenset[int] | set[int]":
+    """Return character offsets of ``@var`` tokens bound by T-SQL ``DECLARE`` statements.
+
+    Scans outside string literals, comments, and quoted or bracketed identifiers for
+    ``DECLARE @var ...`` declarations and collects the start positions of each declared
+    variable and its subsequent references so they are preserved rather than rewritten
+    as bind placeholders.
+
+    Args:
+        sql: SQL text to scan.
+
+    Returns:
+        Offsets of ``@var`` occurrences belonging to declared local variables.
+    """
+    if "@" not in sql or "declare" not in sql.lower():
+        return _EMPTY_INT_FROZENSET
+    declared_vars: set[str] = set()
+    skip_positions: set[int] = set()
+    in_declare = False
+    expecting_decl_var = False
+    paren_depth = 0
+    case_depth = 0
+    for match in _TSQL_DECLARE_SCAN_REGEX.finditer(sql):
+        group_name = match.lastgroup
+        if group_name == "comment":
+            continue
+        if group_name == "at_var":
+            var_name = match.group(0)[1:].lower()
+            if in_declare and expecting_decl_var:
+                declared_vars.add(var_name)
+                skip_positions.add(match.start())
+                expecting_decl_var = False
+            elif var_name in declared_vars:
+                skip_positions.add(match.start())
+            continue
+        if group_name == "word":
+            upper = match.group(0).upper()
+            if upper == "DECLARE" and paren_depth == 0:
+                in_declare = True
+                expecting_decl_var = True
+                case_depth = 0
+            elif expecting_decl_var:
+                in_declare = False
+                expecting_decl_var = False
+                case_depth = 0
+            elif in_declare and paren_depth == 0:
+                if upper == "CASE":
+                    case_depth += 1
+                elif upper == "END" and case_depth > 0:
+                    case_depth -= 1
+                elif upper in _TSQL_STATEMENT_BOUNDARY_KEYWORDS and not (upper == "ELSE" and case_depth > 0):
+                    in_declare = False
+                    case_depth = 0
+            continue
+        if expecting_decl_var:
+            in_declare = False
+            expecting_decl_var = False
+            case_depth = 0
+        if group_name == "punct":
+            lexeme = match.group(0)
+            if lexeme == ";":
+                in_declare = False
+                paren_depth = 0
+                case_depth = 0
+            elif lexeme == "(":
+                paren_depth += 1
+            elif lexeme == ")":
+                if paren_depth > 0:
+                    paren_depth -= 1
+            elif lexeme == "," and in_declare and paren_depth == 0 and case_depth == 0:
+                expecting_decl_var = True
+    return skip_positions
+
+
 def _normalize_dialect(dialect: str | None) -> str | None:
     """Normalize an optional dialect identifier for lexical selection and caching."""
     if dialect is None:
@@ -680,8 +810,10 @@ def _resolve_scanner(dialect: str | None) -> str | None:
     """Select the lexical grammar for a dialect.
 
     Dialects whose string literals treat backslashes literally use the ANSI
-    grammar. MySQL-family dialects add ``#`` comments and backtick identifiers.
-    Unknown dialects keep the permissive default grammar.
+    grammar; SQLite and T-SQL-family dialects add bracket identifiers (with
+    T-SQL also preserving declared local variables). MySQL-family dialects add
+    ``#`` comments and backtick identifiers. Unknown dialects keep the
+    permissive default grammar.
     """
     normalized = _normalize_dialect(dialect)
     if normalized is None:
@@ -690,6 +822,8 @@ def _resolve_scanner(dialect: str | None) -> str | None:
         return _SCANNER_SNOWFLAKE
     if normalized in _NESTED_COMMENT_DIALECTS:
         return _SCANNER_NESTED
+    if normalized in _TSQL_STRING_DIALECTS:
+        return _SCANNER_TSQL
     if normalized in _BRACKET_STRING_DIALECTS:
         return _SCANNER_BRACKET
     if normalized in _ANSI_STRING_DIALECTS:
